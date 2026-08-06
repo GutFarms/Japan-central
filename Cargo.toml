@@ -38,6 +38,7 @@ esp = [
     "dep:mipidsi",
     "dep:embedded-graphics",
     "dep:embedded-hal",
+    "dep:embedded-io",
     "dep:log",
 ]
 # Desktop demo / benchmarking of the same miner core
@@ -57,7 +58,9 @@ esp-rtos = { version = "0.3.0", features = ["embassy", "esp-alloc", "esp32s3", "
 esp-bootloader-esp-idf = { version = "0.5.0", features = ["esp32s3", "log-04"], optional = true }
 esp-alloc = { version = "0.10.0", optional = true }
 esp-backtrace = { version = "0.19.0", features = ["esp32s3", "panic-handler", "println"], optional = true }
-esp-println = { version = "0.17.0", features = ["esp32s3", "log-04"], optional = true }
+# uart output so USB Serial/JTAG can be used for post-boot credential entry
+esp-println = { version = "0.17.0", features = ["esp32s3", "log-04", "uart"], optional = true }
+embedded-io = { version = "0.6", optional = true }
 embassy-executor = { version = "0.10.0", features = ["log"], optional = true }
 embassy-time = { version = "0.5.1", features = ["log"], optional = true }
 embassy-sync = { version = "0.8.0", optional = true }

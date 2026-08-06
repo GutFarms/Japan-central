@@ -19,6 +19,7 @@ use mipidsi::models::ST7789;
 use mipidsi::options::{ColorInversion, Orientation, Rotation};
 use mipidsi::{Builder, Display as MipiDisplay};
 
+use crate::config::{PoolConfig, SetupField};
 use crate::miner::{hash_to_hex, MinerStats, SCRYPT_LOG_N, SCRYPT_N};
 
 pub const DISPLAY_WIDTH: u16 = 320;
@@ -182,8 +183,98 @@ impl<'a, D: DelayNs> Display<'a, D> {
         )
     }
 
-    /// Redraw dynamic mining stats.
-    pub fn draw_stats(&mut self, stats: &MinerStats, mining: bool) -> Result<(), Error> {
+    /// Full-screen post-boot setup prompt for one credential field.
+    pub fn draw_setup(&mut self, field: SetupField, typed: &str) -> Result<(), Error> {
+        self.backlight.set_high();
+        self.display
+            .wake(&mut self.delay)
+            .map_err(|_| Error::InitError)?;
+        self.display
+            .clear(Rgb565::BLACK)
+            .map_err(|_| Error::DisplayInterface("clear"))?;
+        self.ready = false;
+
+        self.draw_ok(
+            Rectangle::new(Point::new(0, 0), Size::new(DISPLAY_WIDTH as u32, 4))
+                .into_styled(PrimitiveStyle::with_fill(ACCENT))
+                .draw(&mut self.display),
+        )?;
+
+        self.draw_ok(Text::new("SCRYPT", Point::new(12, 22), BRAND_STYLE).draw(&mut self.display))?;
+        self.draw_ok(
+            Text::new("SETUP", Point::new(240, 22), SHARE_STYLE).draw(&mut self.display),
+        )?;
+
+        let mut step: String<32> = String::new();
+        let step_n = match field {
+            SetupField::Address => 1,
+            SetupField::Password => 2,
+            SetupField::Stratum => 3,
+        };
+        let _ = write!(step, "step {step_n}/3  {}", field.label());
+        self.draw_ok(Text::new(&step, Point::new(12, 52), LABEL_STYLE).draw(&mut self.display))?;
+
+        self.draw_ok(
+            Text::new(field.prompt(), Point::new(12, 78), VALUE_STYLE).draw(&mut self.display),
+        )?;
+
+        self.draw_ok(
+            Text::new("Enter via USB serial, then Enter", Point::new(12, 110), LABEL_STYLE)
+                .draw(&mut self.display),
+        )?;
+
+        let shown = if field == SetupField::Password && !typed.is_empty() {
+            PoolConfig::ellipsize("********", 40)
+        } else {
+            PoolConfig::ellipsize(typed, 40)
+        };
+        self.draw_ok(Text::new(&shown, Point::new(12, 140), VALUE_STYLE).draw(&mut self.display))?;
+
+        Ok(())
+    }
+
+    /// Summary of credentials before mining starts.
+    pub fn draw_config_summary(&mut self, cfg: &PoolConfig) -> Result<(), Error> {
+        self.backlight.set_high();
+        self.display
+            .wake(&mut self.delay)
+            .map_err(|_| Error::InitError)?;
+        self.display
+            .clear(Rgb565::BLACK)
+            .map_err(|_| Error::DisplayInterface("clear"))?;
+        self.ready = false;
+
+        self.draw_ok(
+            Rectangle::new(Point::new(0, 0), Size::new(DISPLAY_WIDTH as u32, 4))
+                .into_styled(PrimitiveStyle::with_fill(ACCENT))
+                .draw(&mut self.display),
+        )?;
+        self.draw_ok(Text::new("SCRYPT", Point::new(12, 22), BRAND_STYLE).draw(&mut self.display))?;
+        self.draw_ok(
+            Text::new("READY", Point::new(240, 22), SHARE_STYLE).draw(&mut self.display),
+        )?;
+
+        let addr = PoolConfig::ellipsize(cfg.address.as_str(), 28);
+        let pass = cfg.password_masked();
+        let stratum = PoolConfig::ellipsize(cfg.stratum.as_str(), 28);
+
+        self.draw_ok(Text::new("address", Point::new(12, 55), LABEL_STYLE).draw(&mut self.display))?;
+        self.draw_ok(Text::new(&addr, Point::new(80, 55), VALUE_STYLE).draw(&mut self.display))?;
+        self.draw_ok(Text::new("password", Point::new(12, 90), LABEL_STYLE).draw(&mut self.display))?;
+        self.draw_ok(Text::new(&pass, Point::new(80, 90), VALUE_STYLE).draw(&mut self.display))?;
+        self.draw_ok(Text::new("stratum", Point::new(12, 125), LABEL_STYLE).draw(&mut self.display))?;
+        self.draw_ok(Text::new(&stratum, Point::new(80, 125), VALUE_STYLE).draw(&mut self.display))?;
+
+        Ok(())
+    }
+
+    /// Redraw dynamic mining stats (includes truncated address / stratum).
+    pub fn draw_stats(
+        &mut self,
+        stats: &MinerStats,
+        cfg: &PoolConfig,
+        mining: bool,
+    ) -> Result<(), Error> {
         self.ensure_ready()?;
 
         let mut rate: String<32> = String::new();
@@ -217,7 +308,7 @@ impl<'a, D: DelayNs> Display<'a, D> {
         self.clear_value(78, 70, 200)?;
         self.draw_ok(Text::new(&nonce, Point::new(70, 88), VALUE_STYLE).draw(&mut self.display))?;
 
-        self.clear_value(108, 70, 200)?;
+        self.clear_value(108, 70, 120)?;
         let share_style = if stats.shares > 0 {
             SHARE_STYLE
         } else {
@@ -225,16 +316,18 @@ impl<'a, D: DelayNs> Display<'a, D> {
         };
         self.draw_ok(Text::new(&shares, Point::new(70, 118), share_style).draw(&mut self.display))?;
 
-        if let Some(n) = stats.last_share_nonce {
-            let mut share_n: String<32> = String::new();
-            let _ = write!(share_n, "@{:08x}", n);
-            self.draw_ok(
-                Text::new(&share_n, Point::new(160, 118), LABEL_STYLE).draw(&mut self.display),
-            )?;
-        }
+        let addr = PoolConfig::ellipsize(cfg.address.as_str(), 14);
+        self.clear_value(108, 160, 150)?;
+        self.draw_ok(Text::new(&addr, Point::new(160, 122), LABEL_STYLE).draw(&mut self.display))?;
 
-        self.clear_value(138, 70, 240)?;
+        self.clear_value(138, 70, 100)?;
         self.draw_ok(Text::new(&best, Point::new(70, 148), VALUE_STYLE).draw(&mut self.display))?;
+
+        let stratum = PoolConfig::ellipsize(cfg.stratum.as_str(), 18);
+        self.clear_value(138, 180, 130)?;
+        self.draw_ok(
+            Text::new(&stratum, Point::new(180, 152), LABEL_STYLE).draw(&mut self.display),
+        )?;
 
         Ok(())
     }

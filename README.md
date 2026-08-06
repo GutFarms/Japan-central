@@ -6,10 +6,27 @@ Bare-metal Rust firmware that mines **scrypt** proof-of-work on an **ESP32-S3** 
 
 - Runs Litecoin-style scrypt: `N=1024` (`2^10`), `r=1`, `p=1`, 32-byte digest
 - Reuses ROMix buffers across hashes (≈128 KiB working set)
-- Paints hashrate, nonce, shares, and best hash on the T-Display-S3
+- **After boot**, prompts over USB serial for **address**, **password**, and **stratum** (one field at a time)
+- Paints hashrate, nonce, shares, best hash, and truncated address/stratum on the T-Display-S3
 - Includes a host CLI (`host-miner`) and unit tests for the same miner core
 
 This is an educational / demo miner. An ESP32-S3 will only manage a few hashes per second at full Litecoin parameters — far below profitable network mining.
+
+## Post-boot credentials
+
+On first run (and every boot), open the serial monitor and enter:
+
+1. `address` — wallet address or worker name  
+2. `password` — pool password (often `x`)  
+3. `stratum` — pool location, e.g. `stratum.example.com:3333`
+
+You can also send prefixed lines in any order:
+
+```text
+address LYourWalletAddress
+password x
+stratum stratum.example.com:3333
+```
 
 ## Hardware
 
@@ -46,8 +63,9 @@ No ESP toolchain required:
 ```bash
 cargo test --no-default-features
 cargo run --no-default-features --features host --bin host-miner --release
-# optional difficulty (leading zero nibbles), default 4:
-cargo run --no-default-features --features host --bin host-miner --release -- 5
+# with credentials + difficulty:
+cargo run --no-default-features --features host --bin host-miner --release -- \
+  --address LWallet --password x --stratum stratum.example.com:3333 --difficulty 5
 ```
 
 ## On-screen UI
