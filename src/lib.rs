@@ -3,12 +3,13 @@
 //! The mining engine is `no_std` + `alloc` so it can run on bare-metal ESP32-S3
 //! firmware and also be unit-tested on a desktop host.
 
-#![cfg_attr(not(test), no_std)]
+#![cfg_attr(not(any(test, feature = "host")), no_std)]
 
 extern crate alloc;
 
 pub mod config;
 pub mod miner;
+pub mod persist;
 
 #[cfg(feature = "esp")]
 pub mod display;

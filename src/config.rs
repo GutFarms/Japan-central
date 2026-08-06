@@ -1,4 +1,6 @@
 //! Post-boot mining identity: wallet address, pool password, stratum location.
+//!
+//! Credentials can be serialized to a fixed flash/host blob and restored on boot.
 
 use core::fmt;
 use heapless::String;
@@ -6,6 +8,11 @@ use heapless::String;
 pub const ADDRESS_MAX: usize = 96;
 pub const PASSWORD_MAX: usize = 64;
 pub const STRATUM_MAX: usize = 96;
+
+/// On-disk / flash blob size (fits in one 4 KiB flash sector with room to spare).
+pub const CONFIG_BLOB_SIZE: usize = 320;
+const CONFIG_MAGIC: &[u8; 4] = b"SCFG";
+const CONFIG_VERSION: u8 = 1;
 
 pub type AddressString = String<ADDRESS_MAX>;
 pub type PasswordString = String<PASSWORD_MAX>;
@@ -65,6 +72,7 @@ pub enum ConfigError {
     TooLong,
     InvalidChar,
     UnknownField,
+    Corrupt,
 }
 
 impl fmt::Display for ConfigError {
@@ -74,6 +82,7 @@ impl fmt::Display for ConfigError {
             ConfigError::TooLong => write!(f, "value too long"),
             ConfigError::InvalidChar => write!(f, "invalid character"),
             ConfigError::UnknownField => write!(f, "unknown field"),
+            ConfigError::Corrupt => write!(f, "saved config corrupt or missing"),
         }
     }
 }
@@ -172,6 +181,96 @@ impl PoolConfig {
         let _ = out.push_str("...");
         out
     }
+
+    /// Pack credentials into a fixed-size blob for flash / host storage.
+    pub fn to_blob(&self) -> Result<[u8; CONFIG_BLOB_SIZE], ConfigError> {
+        if !self.is_complete() {
+            return Err(ConfigError::Empty);
+        }
+        let mut blob = [0u8; CONFIG_BLOB_SIZE];
+        blob[0..4].copy_from_slice(CONFIG_MAGIC);
+        blob[4] = CONFIG_VERSION;
+
+        write_field(&mut blob, 12, self.address.as_str(), ADDRESS_MAX)?;
+        write_field(&mut blob, 12 + 1 + ADDRESS_MAX, self.password.as_str(), PASSWORD_MAX)?;
+        write_field(
+            &mut blob,
+            12 + 1 + ADDRESS_MAX + 1 + PASSWORD_MAX,
+            self.stratum.as_str(),
+            STRATUM_MAX,
+        )?;
+
+        let crc = crc32(&blob[12..]);
+        blob[8..12].copy_from_slice(&crc.to_le_bytes());
+        Ok(blob)
+    }
+
+    /// Restore credentials from a previously saved blob.
+    pub fn from_blob(blob: &[u8]) -> Result<Self, ConfigError> {
+        if blob.len() < CONFIG_BLOB_SIZE {
+            return Err(ConfigError::Corrupt);
+        }
+        if &blob[0..4] != CONFIG_MAGIC || blob[4] != CONFIG_VERSION {
+            return Err(ConfigError::Corrupt);
+        }
+        let stored_crc = u32::from_le_bytes(blob[8..12].try_into().unwrap());
+        if stored_crc != crc32(&blob[12..CONFIG_BLOB_SIZE]) {
+            return Err(ConfigError::Corrupt);
+        }
+
+        let mut cfg = Self::new();
+        let addr = read_field(blob, 12, ADDRESS_MAX)?;
+        let pass = read_field(blob, 12 + 1 + ADDRESS_MAX, PASSWORD_MAX)?;
+        let stratum = read_field(blob, 12 + 1 + ADDRESS_MAX + 1 + PASSWORD_MAX, STRATUM_MAX)?;
+        cfg.set(SetupField::Address, addr)?;
+        cfg.set(SetupField::Password, pass)?;
+        cfg.set(SetupField::Stratum, stratum)?;
+        if !cfg.is_complete() {
+            return Err(ConfigError::Corrupt);
+        }
+        Ok(cfg)
+    }
+}
+
+fn write_field(
+    blob: &mut [u8],
+    offset: usize,
+    value: &str,
+    max_len: usize,
+) -> Result<(), ConfigError> {
+    let bytes = value.as_bytes();
+    if bytes.len() > max_len {
+        return Err(ConfigError::TooLong);
+    }
+    blob[offset] = bytes.len() as u8;
+    blob[offset + 1..offset + 1 + bytes.len()].copy_from_slice(bytes);
+    Ok(())
+}
+
+fn read_field(blob: &[u8], offset: usize, max_len: usize) -> Result<&str, ConfigError> {
+    let len = blob[offset] as usize;
+    if len == 0 || len > max_len {
+        return Err(ConfigError::Corrupt);
+    }
+    let start = offset + 1;
+    let end = start + len;
+    if end > blob.len() {
+        return Err(ConfigError::Corrupt);
+    }
+    core::str::from_utf8(&blob[start..end]).map_err(|_| ConfigError::Corrupt)
+}
+
+/// CRC-32/ISO-HDLC (poly 0xEDB88320), enough to detect corrupt flash pages.
+fn crc32(data: &[u8]) -> u32 {
+    let mut crc = 0xFFFF_FFFFu32;
+    for &b in data {
+        crc ^= u32::from(b);
+        for _ in 0..8 {
+            let mask = (crc & 1).wrapping_neg();
+            crc = (crc >> 1) ^ (0xEDB8_8320 & mask);
+        }
+    }
+    !crc
 }
 
 fn normalize_value(raw: &str) -> Result<&str, ConfigError> {
@@ -248,5 +347,30 @@ mod tests {
         assert_eq!(cfg.password_masked().as_str(), "********");
         let short = PoolConfig::ellipsize("ABCDE12345", 8);
         assert_eq!(short.as_str(), "ABCDE...");
+    }
+
+    #[test]
+    fn blob_roundtrip_and_detects_corruption() {
+        let mut cfg = PoolConfig::new();
+        cfg.set(SetupField::Address, "LWallet123").unwrap();
+        cfg.set(SetupField::Password, "x").unwrap();
+        cfg.set(SetupField::Stratum, "pool.example:3333").unwrap();
+
+        let blob = cfg.to_blob().unwrap();
+        let restored = PoolConfig::from_blob(&blob).unwrap();
+        assert_eq!(restored.address.as_str(), "LWallet123");
+        assert_eq!(restored.password.as_str(), "x");
+        assert_eq!(restored.stratum.as_str(), "pool.example:3333");
+
+        let mut bad = blob;
+        bad[20] ^= 0xFF;
+        assert!(matches!(
+            PoolConfig::from_blob(&bad),
+            Err(ConfigError::Corrupt)
+        ));
+        assert!(matches!(
+            PoolConfig::from_blob(&[0u8; 16]),
+            Err(ConfigError::Corrupt)
+        ));
     }
 }

@@ -234,7 +234,8 @@ impl<'a, D: DelayNs> Display<'a, D> {
     }
 
     /// Summary of credentials before mining starts.
-    pub fn draw_config_summary(&mut self, cfg: &PoolConfig) -> Result<(), Error> {
+    /// `from_flash` shows whether values were restored from saved storage.
+    pub fn draw_config_summary(&mut self, cfg: &PoolConfig, from_flash: bool) -> Result<(), Error> {
         self.backlight.set_high();
         self.display
             .wake(&mut self.delay)
@@ -250,20 +251,26 @@ impl<'a, D: DelayNs> Display<'a, D> {
                 .draw(&mut self.display),
         )?;
         self.draw_ok(Text::new("SCRYPT", Point::new(12, 22), BRAND_STYLE).draw(&mut self.display))?;
-        self.draw_ok(
-            Text::new("READY", Point::new(240, 22), SHARE_STYLE).draw(&mut self.display),
-        )?;
+        let badge = if from_flash { "SAVED" } else { "READY" };
+        self.draw_ok(Text::new(badge, Point::new(240, 22), SHARE_STYLE).draw(&mut self.display))?;
 
         let addr = PoolConfig::ellipsize(cfg.address.as_str(), 28);
         let pass = cfg.password_masked();
         let stratum = PoolConfig::ellipsize(cfg.stratum.as_str(), 28);
 
-        self.draw_ok(Text::new("address", Point::new(12, 55), LABEL_STYLE).draw(&mut self.display))?;
-        self.draw_ok(Text::new(&addr, Point::new(80, 55), VALUE_STYLE).draw(&mut self.display))?;
-        self.draw_ok(Text::new("password", Point::new(12, 90), LABEL_STYLE).draw(&mut self.display))?;
-        self.draw_ok(Text::new(&pass, Point::new(80, 90), VALUE_STYLE).draw(&mut self.display))?;
-        self.draw_ok(Text::new("stratum", Point::new(12, 125), LABEL_STYLE).draw(&mut self.display))?;
-        self.draw_ok(Text::new(&stratum, Point::new(80, 125), VALUE_STYLE).draw(&mut self.display))?;
+        self.draw_ok(Text::new("address", Point::new(12, 50), LABEL_STYLE).draw(&mut self.display))?;
+        self.draw_ok(Text::new(&addr, Point::new(80, 50), VALUE_STYLE).draw(&mut self.display))?;
+        self.draw_ok(Text::new("password", Point::new(12, 80), LABEL_STYLE).draw(&mut self.display))?;
+        self.draw_ok(Text::new(&pass, Point::new(80, 80), VALUE_STYLE).draw(&mut self.display))?;
+        self.draw_ok(Text::new("stratum", Point::new(12, 110), LABEL_STYLE).draw(&mut self.display))?;
+        self.draw_ok(Text::new(&stratum, Point::new(80, 110), VALUE_STYLE).draw(&mut self.display))?;
+
+        let hint = if from_flash {
+            "auto-loaded  serial: clear = re-setup"
+        } else {
+            "saved to flash for next boot"
+        };
+        self.draw_ok(Text::new(hint, Point::new(12, 145), LABEL_STYLE).draw(&mut self.display))?;
 
         Ok(())
     }

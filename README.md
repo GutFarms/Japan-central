@@ -12,13 +12,15 @@ Bare-metal Rust firmware that mines **scrypt** proof-of-work on an **ESP32-S3** 
 
 This is an educational / demo miner. An ESP32-S3 will only manage a few hashes per second at full Litecoin parameters — far below profitable network mining.
 
-## Post-boot credentials
+## Post-boot credentials (saved to flash)
 
-On first run (and every boot), open the serial monitor and enter:
+On **first boot** (or after clearing), open the serial monitor and enter:
 
 1. `address` — wallet address or worker name  
 2. `password` — pool password (often `x`)  
 3. `stratum` — pool location, e.g. `stratum.example.com:3333`
+
+Values are **written to flash** and **auto-loaded on every later boot** (LCD shows `SAVED`).
 
 You can also send prefixed lines in any order:
 
@@ -27,6 +29,11 @@ address LYourWalletAddress
 password x
 stratum stratum.example.com:3333
 ```
+
+### Re-enter credentials
+- Type `clear` (or `reset` / `factory`) within 5 seconds of the saved-config screen, **or**
+- Hold the **BOOT** button (GPIO0) while powering on
+
 
 ## Hardware
 

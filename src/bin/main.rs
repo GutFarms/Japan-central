@@ -1,17 +1,15 @@
 //! ESP32-S3 scrypt miner firmware for LilyGO T-Display-S3.
 //!
-//! After boot, enter wallet **address**, pool **password**, and **stratum**
-//! location one at a time over USB serial, then mining starts.
+//! After first boot, enter wallet **address**, pool **password**, and **stratum**
+//! over USB serial. Values are saved to flash and auto-loaded on later boots.
+//!
+//! Re-run setup: hold BOOT (GPIO0) at power-on, or type `clear` when the saved
+//! config summary is shown.
 //!
 //! Flash (ESP Rust toolchain + espflash required):
 //! ```text
-//! cargo +esp build --release --target xtensa-esp32s3-none-elf --features esp
-//! cargo +esp run --release --target xtensa-esp32s3-none-elf --features esp
-//! ```
-//!
-//! Optional lighter params (less RAM, higher demo H/s):
-//! ```text
-//! --features esp,lite
+//! cargo +esp run -Zbuild-std=core,alloc --release \
+//!   --target xtensa-esp32s3-none-elf --features esp
 //! ```
 
 #![no_std]
@@ -29,7 +27,7 @@ use embedded_io::{Read, Write};
 use esp_backtrace as _;
 use esp_hal::clock::CpuClock;
 use esp_hal::delay::Delay;
-use esp_hal::gpio::Pin;
+use esp_hal::gpio::{Input, InputConfig, Pin, Pull};
 use esp_hal::timer::timg::TimerGroup;
 use esp_hal::usb_serial_jtag::UsbSerialJtag;
 use heapless::String;
@@ -38,14 +36,14 @@ use log::info;
 use esp32_s3_scrypt_miner::config::{PoolConfig, SetupField};
 use esp32_s3_scrypt_miner::display::{Display, DisplayPeripherals};
 use esp32_s3_scrypt_miner::miner::ScryptMiner;
+use esp32_s3_scrypt_miner::persist::ConfigStore;
 
 esp_bootloader_esp_idf::esp_app_desc!();
 
-/// Hashes between on-screen refresh updates.
 const BATCH_SIZE: usize = 4;
-/// Demo difficulty: leading zero nibbles of the scrypt hash (hex).
-/// 4 ≈ find shares occasionally on-device; raise for harder work.
 const DEMO_ZERO_NIBBLES: u8 = 4;
+/// How long to show the saved-config screen and accept a `clear` command.
+const SAVED_CONFIRM_SECS: u64 = 5;
 
 #[esp_rtos::main]
 async fn main(_spawner: Spawner) -> ! {
@@ -55,7 +53,6 @@ async fn main(_spawner: Spawner) -> ! {
     let config = esp_hal::Config::default().with_cpu_clock(CpuClock::max());
     let peripherals = esp_hal::init(config);
 
-    // Litecoin scrypt needs ~128 KiB for ROMix V; keep extra for UI/runtime.
     esp_alloc::heap_allocator!(size: 192 * 1024);
 
     let timg0 = TimerGroup::new(peripherals.TIMG0);
@@ -64,6 +61,14 @@ async fn main(_spawner: Spawner) -> ! {
     esp_rtos::start(timg0.timer0, sw_interrupt.software_interrupt0);
 
     let mut usb = UsbSerialJtag::new(peripherals.USB_DEVICE);
+    let mut store = ConfigStore::new(peripherals.FLASH);
+
+    // BOOT button (GPIO0): hold at power-on to force credential re-entry.
+    let boot_btn = Input::new(
+        peripherals.GPIO0,
+        InputConfig::default().with_pull(Pull::Up),
+    );
+    let force_setup = boot_btn.is_low();
 
     let dp = DisplayPeripherals {
         rst: peripherals.GPIO5.degrade(),
@@ -94,10 +99,16 @@ async fn main(_spawner: Spawner) -> ! {
         }
     };
 
-    let pool = collect_pool_config(&mut usb, &mut display).await;
-    let _ = display.draw_config_summary(&pool);
+    let (pool, from_flash) =
+        resolve_pool_config(&mut usb, &mut display, &mut store, force_setup).await;
+
+    let _ = display.draw_config_summary(&pool, from_flash);
     serial_writeln(&mut usb, "");
-    serial_writeln(&mut usb, "Config accepted. Starting miner...");
+    if from_flash {
+        serial_writeln(&mut usb, "Loaded saved credentials from flash.");
+    } else {
+        serial_writeln(&mut usb, "Credentials saved to flash for next boot.");
+    }
     serial_write(&mut usb, "  address = ");
     serial_writeln(&mut usb, pool.address.as_str());
     serial_write(&mut usb, "  password = ");
@@ -107,10 +118,11 @@ async fn main(_spawner: Spawner) -> ! {
     Timer::after(Duration::from_secs(2)).await;
 
     info!(
-        "miner ready (N={}, log_n={}) stratum={}",
+        "miner ready (N={}, log_n={}) stratum={} from_flash={}",
         esp32_s3_scrypt_miner::SCRYPT_N,
         esp32_s3_scrypt_miner::SCRYPT_LOG_N,
-        pool.stratum
+        pool.stratum,
+        from_flash
     );
 
     let mut miner = ScryptMiner::new_demo(DEMO_ZERO_NIBBLES);
@@ -170,7 +182,93 @@ async fn main(_spawner: Spawner) -> ! {
     }
 }
 
-/// Prompt for address, password, and stratum individually over USB serial.
+/// Load saved credentials, or prompt + save on first run / after clear.
+async fn resolve_pool_config<D: embedded_hal::delay::DelayNs>(
+    usb: &mut UsbSerialJtag<'_>,
+    display: &mut Display<'_, D>,
+    store: &mut ConfigStore<'_>,
+    force_setup: bool,
+) -> (PoolConfig, bool) {
+    if force_setup {
+        serial_writeln(usb, "BOOT held — clearing saved credentials.");
+        let _ = store.clear();
+    } else if let Ok(saved) = store.load() {
+        serial_writeln(usb, "");
+        serial_writeln(usb, "=== Saved credentials found ===");
+        serial_write(usb, "  address = ");
+        serial_writeln(usb, saved.address.as_str());
+        serial_write(usb, "  password = ");
+        serial_writeln(usb, saved.password_masked().as_str());
+        serial_write(usb, "  stratum  = ");
+        serial_writeln(usb, saved.stratum.as_str());
+        serial_writeln(
+            usb,
+            "Type 'clear' within 5s to wipe and re-enter, or wait to continue.",
+        );
+
+        let _ = display.draw_config_summary(&saved, true);
+        if !wait_for_clear(usb, Duration::from_secs(SAVED_CONFIRM_SECS)).await {
+            return (saved, true);
+        }
+
+        serial_writeln(usb, "Clearing saved credentials...");
+        let _ = store.clear();
+    } else {
+        serial_writeln(usb, "No saved credentials — starting setup.");
+    }
+
+    let cfg = collect_pool_config(usb, display).await;
+    match store.save(&cfg) {
+        Ok(()) => serial_writeln(usb, "Saved credentials to flash."),
+        Err(_) => serial_writeln(usb, "WARNING: failed to save credentials to flash."),
+    }
+    (cfg, false)
+}
+
+/// Returns true if the user typed `clear` / `reset` / `factory` before timeout.
+async fn wait_for_clear(usb: &mut UsbSerialJtag<'_>, timeout: Duration) -> bool {
+    let deadline = Instant::now() + timeout;
+    let mut line: String<32> = String::new();
+    let mut byte = [0u8; 1];
+
+    while Instant::now() < deadline {
+        match usb.read(&mut byte) {
+            Ok(0) | Err(_) => {
+                Timer::after(Duration::from_millis(20)).await;
+            }
+            Ok(_) => {
+                let c = byte[0];
+                match c {
+                    b'\n' | b'\r' => {
+                        if !line.is_empty() {
+                            let cmd = line.as_str().trim();
+                            if eq_ignore_ascii_case(cmd, "clear")
+                                || eq_ignore_ascii_case(cmd, "reset")
+                                || eq_ignore_ascii_case(cmd, "factory")
+                            {
+                                return true;
+                            }
+                            line.clear();
+                        }
+                    }
+                    c if (32..127).contains(&c) => {
+                        let _ = line.push(c as char);
+                    }
+                    _ => {}
+                }
+            }
+        }
+    }
+    false
+}
+
+fn eq_ignore_ascii_case(a: &str, b: &str) -> bool {
+    a.len() == b.len()
+        && a.bytes()
+            .zip(b.bytes())
+            .all(|(x, y)| x.to_ascii_lowercase() == y.to_ascii_lowercase())
+}
+
 async fn collect_pool_config<D: embedded_hal::delay::DelayNs>(
     usb: &mut UsbSerialJtag<'_>,
     display: &mut Display<'_, D>,
@@ -221,12 +319,24 @@ async fn collect_pool_config<D: embedded_hal::delay::DelayNs>(
                 }
                 Err(e) => {
                     serial_write(usb, "  error: ");
-                    serial_writeln(usb, match e {
-                        esp32_s3_scrypt_miner::config::ConfigError::Empty => "value cannot be empty",
-                        esp32_s3_scrypt_miner::config::ConfigError::TooLong => "value too long",
-                        esp32_s3_scrypt_miner::config::ConfigError::InvalidChar => "invalid character",
-                        esp32_s3_scrypt_miner::config::ConfigError::UnknownField => "unknown field",
-                    });
+                    serial_writeln(
+                        usb,
+                        match e {
+                            esp32_s3_scrypt_miner::config::ConfigError::Empty => {
+                                "value cannot be empty"
+                            }
+                            esp32_s3_scrypt_miner::config::ConfigError::TooLong => "value too long",
+                            esp32_s3_scrypt_miner::config::ConfigError::InvalidChar => {
+                                "invalid character"
+                            }
+                            esp32_s3_scrypt_miner::config::ConfigError::UnknownField => {
+                                "unknown field"
+                            }
+                            esp32_s3_scrypt_miner::config::ConfigError::Corrupt => {
+                                "corrupt value"
+                            }
+                        },
+                    );
                     serial_writeln(usb, " — try again");
                 }
             }

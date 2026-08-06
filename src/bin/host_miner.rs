@@ -1,12 +1,10 @@
 //! Desktop demo of the same scrypt miner core (no ESP hardware required).
 //!
-//! Prompts for address, password, and stratum location after start (or pass
-//! them as flags).
+//! Credentials are saved to `scrypt-miner-config.bin` and auto-loaded next run.
 //!
 //! ```text
 //! cargo run --no-default-features --features host --bin host-miner --release
-//! cargo run --no-default-features --features host --bin host-miner --release -- \
-//!   --address LWallet --password x --stratum stratum.example.com:3333
+//! cargo run --no-default-features --features host --bin host-miner --release -- --clear
 //! ```
 
 use std::io::{self, Write as _};
@@ -14,10 +12,13 @@ use std::time::Instant;
 
 use esp32_s3_scrypt_miner::config::{PoolConfig, SetupField};
 use esp32_s3_scrypt_miner::miner::{hash_to_hex, ScryptMiner, SCRYPT_LOG_N, SCRYPT_N};
+use esp32_s3_scrypt_miner::persist::{self, HOST_CONFIG_PATH};
 
 fn main() {
     let mut difficulty = 4u8;
     let mut cfg = PoolConfig::new();
+    let mut clear_saved = false;
+    let mut skip_save = false;
 
     let mut args = std::env::args().skip(1);
     while let Some(arg) = args.next() {
@@ -42,6 +43,8 @@ fn main() {
                     difficulty = v.parse().unwrap_or(4);
                 }
             }
+            "--clear" | "--factory" => clear_saved = true,
+            "--no-save" => skip_save = true,
             other if other.parse::<u8>().is_ok() => {
                 difficulty = other.parse().unwrap();
             }
@@ -54,7 +57,23 @@ fn main() {
     println!("SCRYPT host miner");
     println!("  N={SCRYPT_N} (2^{SCRYPT_LOG_N})  r=1  p=1");
     println!("  demo difficulty: {difficulty} leading zero nibbles");
+    println!("  config file: {HOST_CONFIG_PATH}");
     println!();
+
+    if clear_saved {
+        let _ = persist::clear();
+        println!("Cleared saved credentials.");
+    }
+
+    let from_file = if cfg.is_complete() {
+        false
+    } else if let Ok(saved) = persist::load() {
+        println!("Loaded saved credentials from {HOST_CONFIG_PATH}");
+        cfg = saved;
+        true
+    } else {
+        false
+    };
 
     if !cfg.is_complete() {
         println!("Enter pool credentials (required before mining):");
@@ -63,8 +82,19 @@ fn main() {
         prompt_field(&mut cfg, SetupField::Stratum);
     }
 
+    if !skip_save && !from_file {
+        match persist::save(&cfg) {
+            Ok(()) => println!("Saved credentials to {HOST_CONFIG_PATH}"),
+            Err(e) => eprintln!("WARNING: could not save credentials: {e}"),
+        }
+    } else if from_file && cfg.is_complete() {
+        // Refresh file if CLI overrode some fields after load — only when user passed flags.
+        // Keep simple: always re-save complete config so edits stick.
+        let _ = persist::save(&cfg);
+    }
+
     println!();
-    println!("Using:");
+    println!("Using{}:", if from_file { " (from save)" } else { "" });
     println!("  address  = {}", cfg.address);
     println!("  password = {}", cfg.password_masked());
     println!("  stratum  = {}", cfg.stratum);
