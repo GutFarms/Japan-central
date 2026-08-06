@@ -1,0 +1,12 @@
+[target.xtensa-esp32s3-none-elf]
+runner = "espflash flash --monitor"
+rustflags = ["-C", "link-arg=-nostartfiles"]
+
+[env]
+ESP_LOG = "info"
+
+# Firmware:
+#   cargo +esp build --release --target xtensa-esp32s3-none-elf --features esp
+# Host tests / demo (no ESP toolchain):
+#   cargo test --no-default-features
+#   cargo run --no-default-features --features host --bin host-miner --release

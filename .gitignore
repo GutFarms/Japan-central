@@ -1,1 +1,7 @@
-target/
+/target/
+**/*.rs.bk
+.embuild/
+.vscode/
+.idea/
+*.bin
+*.elf
