@@ -73,6 +73,7 @@ pub enum ConfigError {
     InvalidChar,
     UnknownField,
     Corrupt,
+    BadPassword,
 }
 
 impl fmt::Display for ConfigError {
@@ -83,6 +84,7 @@ impl fmt::Display for ConfigError {
             ConfigError::InvalidChar => write!(f, "invalid character"),
             ConfigError::UnknownField => write!(f, "unknown field"),
             ConfigError::Corrupt => write!(f, "saved config corrupt or missing"),
+            ConfigError::BadPassword => write!(f, "incorrect password"),
         }
     }
 }
@@ -94,6 +96,29 @@ impl PoolConfig {
 
     pub fn is_complete(&self) -> bool {
         !self.address.is_empty() && !self.password.is_empty() && !self.stratum.is_empty()
+    }
+
+    /// Constant-time-ish check of the stored pool/setup password.
+    pub fn verify_password(&self, attempt: &str) -> bool {
+        let attempt = attempt.trim().as_bytes();
+        let stored = self.password.as_bytes();
+        let mut diff = if attempt.len() == stored.len() { 0u8 } else { 1u8 };
+        let max = core::cmp::max(attempt.len(), stored.len());
+        for i in 0..max {
+            let a = *attempt.get(i).unwrap_or(&0);
+            let b = *stored.get(i).unwrap_or(&0);
+            diff |= a ^ b;
+        }
+        diff == 0
+    }
+
+    /// Verify password or return [`ConfigError::BadPassword`].
+    pub fn authorize(&self, attempt: &str) -> Result<(), ConfigError> {
+        if self.verify_password(attempt) {
+            Ok(())
+        } else {
+            Err(ConfigError::BadPassword)
+        }
     }
 
     pub fn get(&self, field: SetupField) -> &str {
@@ -347,6 +372,20 @@ mod tests {
         assert_eq!(cfg.password_masked().as_str(), "********");
         let short = PoolConfig::ellipsize("ABCDE12345", 8);
         assert_eq!(short.as_str(), "ABCDE...");
+    }
+
+    #[test]
+    fn password_authorize_gates_changes() {
+        let mut cfg = PoolConfig::new();
+        cfg.set(SetupField::Address, "LWallet").unwrap();
+        cfg.set(SetupField::Password, "secret").unwrap();
+        cfg.set(SetupField::Stratum, "pool:3333").unwrap();
+
+        assert!(cfg.verify_password("secret"));
+        assert!(!cfg.verify_password("wrong"));
+        assert!(!cfg.verify_password("secre"));
+        assert!(cfg.authorize("secret").is_ok());
+        assert_eq!(cfg.authorize("nope"), Err(ConfigError::BadPassword));
     }
 
     #[test]

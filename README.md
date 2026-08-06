@@ -30,9 +30,14 @@ password x
 stratum stratum.example.com:3333
 ```
 
-### Re-enter credentials
-- Type `clear` (or `reset` / `factory`) within 5 seconds of the saved-config screen, **or**
-- Hold the **BOOT** button (GPIO0) while powering on
+### Change credentials later (password required)
+Saved info can only be edited after entering the **current password**:
+
+- At the saved-config screen: type `change` (or `edit` / `update` / `clear`) within 8 seconds  
+- While mining: type `change` on the serial monitor  
+- Or hold **BOOT** (GPIO0) at power-on to open the same gated flow  
+
+You get 3 password attempts; on failure the previous credentials are kept.
 
 
 ## Hardware
@@ -73,6 +78,8 @@ cargo run --no-default-features --features host --bin host-miner --release
 # with credentials + difficulty:
 cargo run --no-default-features --features host --bin host-miner --release -- \
   --address LWallet --password x --stratum stratum.example.com:3333 --difficulty 5
+# later: change saved info (prompts for current password):
+cargo run --no-default-features --features host --bin host-miner --release -- --change
 ```
 
 ## On-screen UI

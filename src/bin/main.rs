@@ -3,8 +3,9 @@
 //! After first boot, enter wallet **address**, pool **password**, and **stratum**
 //! over USB serial. Values are saved to flash and auto-loaded on later boots.
 //!
-//! Re-run setup: hold BOOT (GPIO0) at power-on, or type `clear` when the saved
-//! config summary is shown.
+//! To change saved info later, type `change` and enter the **current password**
+//! first (also works while mining). Hold BOOT at power-on to jump into that
+//! password-gated change flow.
 //!
 //! Flash (ESP Rust toolchain + espflash required):
 //! ```text
@@ -33,7 +34,7 @@ use esp_hal::usb_serial_jtag::UsbSerialJtag;
 use heapless::String;
 use log::info;
 
-use esp32_s3_scrypt_miner::config::{PoolConfig, SetupField};
+use esp32_s3_scrypt_miner::config::{ConfigError, PoolConfig, SetupField};
 use esp32_s3_scrypt_miner::display::{Display, DisplayPeripherals};
 use esp32_s3_scrypt_miner::miner::ScryptMiner;
 use esp32_s3_scrypt_miner::persist::ConfigStore;
@@ -42,8 +43,9 @@ esp_bootloader_esp_idf::esp_app_desc!();
 
 const BATCH_SIZE: usize = 4;
 const DEMO_ZERO_NIBBLES: u8 = 4;
-/// How long to show the saved-config screen and accept a `clear` command.
-const SAVED_CONFIRM_SECS: u64 = 5;
+/// How long to show the saved-config screen and accept a `change` command.
+const SAVED_CONFIRM_SECS: u64 = 8;
+const MAX_PASSWORD_ATTEMPTS: u8 = 3;
 
 #[esp_rtos::main]
 async fn main(_spawner: Spawner) -> ! {
@@ -63,12 +65,12 @@ async fn main(_spawner: Spawner) -> ! {
     let mut usb = UsbSerialJtag::new(peripherals.USB_DEVICE);
     let mut store = ConfigStore::new(peripherals.FLASH);
 
-    // BOOT button (GPIO0): hold at power-on to force credential re-entry.
+    // BOOT button (GPIO0): hold at power-on to open password-gated change flow.
     let boot_btn = Input::new(
         peripherals.GPIO0,
         InputConfig::default().with_pull(Pull::Up),
     );
-    let force_setup = boot_btn.is_low();
+    let force_change = boot_btn.is_low();
 
     let dp = DisplayPeripherals {
         rst: peripherals.GPIO5.degrade(),
@@ -99,13 +101,17 @@ async fn main(_spawner: Spawner) -> ! {
         }
     };
 
-    let (pool, from_flash) =
-        resolve_pool_config(&mut usb, &mut display, &mut store, force_setup).await;
+    let (mut pool, from_flash) =
+        resolve_pool_config(&mut usb, &mut display, &mut store, force_change).await;
 
     let _ = display.draw_config_summary(&pool, from_flash);
     serial_writeln(&mut usb, "");
     if from_flash {
         serial_writeln(&mut usb, "Loaded saved credentials from flash.");
+        serial_writeln(
+            &mut usb,
+            "While mining, type 'change' to edit (requires current password).",
+        );
     } else {
         serial_writeln(&mut usb, "Credentials saved to flash for next boot.");
     }
@@ -128,11 +134,29 @@ async fn main(_spawner: Spawner) -> ! {
     let mut miner = ScryptMiner::new_demo(DEMO_ZERO_NIBBLES);
     let mut window_start = Instant::now();
     let mut window_hashes: u64 = 0;
+    let mut cmd_line: String<32> = String::new();
 
     let mut stats = miner.stats();
     let _ = display.draw_stats(&stats, &pool, true);
 
     loop {
+        // Non-blocking serial command poll (password-gated change while mining).
+        if poll_command_byte(&mut usb, &mut cmd_line) {
+            if is_change_command(cmd_line.as_str().trim()) {
+                if let Some(updated) =
+                    password_gated_change(&mut usb, &mut display, &mut store, &pool).await
+                {
+                    pool = updated;
+                    let _ = display.draw_config_summary(&pool, true);
+                    Timer::after(Duration::from_secs(2)).await;
+                    let _ = display.draw_stats(&stats, &pool, true);
+                }
+            } else if !cmd_line.is_empty() {
+                serial_writeln(&mut usb, "Unknown command. Type 'change' to edit credentials.");
+            }
+            cmd_line.clear();
+        }
+
         let (last, found_share) = miner.mine_batch(BATCH_SIZE);
         window_hashes = window_hashes.saturating_add(BATCH_SIZE as u64);
 
@@ -182,51 +206,104 @@ async fn main(_spawner: Spawner) -> ! {
     }
 }
 
-/// Load saved credentials, or prompt + save on first run / after clear.
+/// Load saved credentials, or prompt + save on first run / after authorized change.
 async fn resolve_pool_config<D: embedded_hal::delay::DelayNs>(
     usb: &mut UsbSerialJtag<'_>,
     display: &mut Display<'_, D>,
     store: &mut ConfigStore<'_>,
-    force_setup: bool,
+    force_change: bool,
 ) -> (PoolConfig, bool) {
-    if force_setup {
-        serial_writeln(usb, "BOOT held — clearing saved credentials.");
-        let _ = store.clear();
-    } else if let Ok(saved) = store.load() {
-        serial_writeln(usb, "");
-        serial_writeln(usb, "=== Saved credentials found ===");
-        serial_write(usb, "  address = ");
-        serial_writeln(usb, saved.address.as_str());
-        serial_write(usb, "  password = ");
-        serial_writeln(usb, saved.password_masked().as_str());
-        serial_write(usb, "  stratum  = ");
-        serial_writeln(usb, saved.stratum.as_str());
-        serial_writeln(
-            usb,
-            "Type 'clear' within 5s to wipe and re-enter, or wait to continue.",
-        );
+    match store.load() {
+        Ok(saved) => {
+            serial_writeln(usb, "");
+            serial_writeln(usb, "=== Saved credentials found ===");
+            serial_write(usb, "  address = ");
+            serial_writeln(usb, saved.address.as_str());
+            serial_write(usb, "  password = ");
+            serial_writeln(usb, saved.password_masked().as_str());
+            serial_write(usb, "  stratum  = ");
+            serial_writeln(usb, saved.stratum.as_str());
+            serial_writeln(
+                usb,
+                "Type 'change' within 8s to edit (current password required), or wait.",
+            );
 
-        let _ = display.draw_config_summary(&saved, true);
-        if !wait_for_clear(usb, Duration::from_secs(SAVED_CONFIRM_SECS)).await {
-            return (saved, true);
+            let _ = display.draw_config_summary(&saved, true);
+
+            let want_change = force_change
+                || wait_for_change_command(usb, Duration::from_secs(SAVED_CONFIRM_SECS)).await;
+
+            if want_change {
+                if force_change {
+                    serial_writeln(usb, "BOOT held — password required to change credentials.");
+                }
+                if let Some(updated) = password_gated_change(usb, display, store, &saved).await {
+                    return (updated, true);
+                }
+                serial_writeln(usb, "Keeping previously saved credentials.");
+            }
+            (saved, true)
         }
-
-        serial_writeln(usb, "Clearing saved credentials...");
-        let _ = store.clear();
-    } else {
-        serial_writeln(usb, "No saved credentials — starting setup.");
+        Err(_) => {
+            serial_writeln(usb, "No saved credentials — starting setup.");
+            let cfg = collect_pool_config(usb, display).await;
+            match store.save(&cfg) {
+                Ok(()) => serial_writeln(usb, "Saved credentials to flash."),
+                Err(_) => serial_writeln(usb, "WARNING: failed to save credentials to flash."),
+            }
+            (cfg, false)
+        }
     }
-
-    let cfg = collect_pool_config(usb, display).await;
-    match store.save(&cfg) {
-        Ok(()) => serial_writeln(usb, "Saved credentials to flash."),
-        Err(_) => serial_writeln(usb, "WARNING: failed to save credentials to flash."),
-    }
-    (cfg, false)
 }
 
-/// Returns true if the user typed `clear` / `reset` / `factory` before timeout.
-async fn wait_for_clear(usb: &mut UsbSerialJtag<'_>, timeout: Duration) -> bool {
+/// Prompt for current password, then collect and persist new credentials.
+async fn password_gated_change<D: embedded_hal::delay::DelayNs>(
+    usb: &mut UsbSerialJtag<'_>,
+    display: &mut Display<'_, D>,
+    store: &mut ConfigStore<'_>,
+    current: &PoolConfig,
+) -> Option<PoolConfig> {
+    serial_writeln(usb, "");
+    serial_writeln(usb, "=== Change credentials (password required) ===");
+
+    for attempt in 1..=MAX_PASSWORD_ATTEMPTS {
+        serial_write(usb, "current password");
+        if attempt > 1 {
+            serial_write(usb, " (retry)");
+        }
+        serial_write(usb, ": ");
+        let _ = usb.flush();
+
+        let mut line: String<128> = String::new();
+        read_line_secret(usb, &mut line).await;
+
+        match current.authorize(line.as_str()) {
+            Ok(()) => {
+                serial_writeln(usb, "  ok — enter new values");
+                let cfg = collect_pool_config(usb, display).await;
+                match store.save(&cfg) {
+                    Ok(()) => {
+                        serial_writeln(usb, "Updated credentials saved to flash.");
+                        return Some(cfg);
+                    }
+                    Err(_) => {
+                        serial_writeln(usb, "WARNING: auth ok but flash save failed.");
+                        return Some(cfg);
+                    }
+                }
+            }
+            Err(ConfigError::BadPassword) => {
+                serial_writeln(usb, "  incorrect password");
+            }
+            Err(_) => serial_writeln(usb, "  auth error"),
+        }
+    }
+
+    serial_writeln(usb, "Too many failed attempts — change cancelled.");
+    None
+}
+
+async fn wait_for_change_command(usb: &mut UsbSerialJtag<'_>, timeout: Duration) -> bool {
     let deadline = Instant::now() + timeout;
     let mut line: String<32> = String::new();
     let mut byte = [0u8; 1];
@@ -236,30 +313,47 @@ async fn wait_for_clear(usb: &mut UsbSerialJtag<'_>, timeout: Duration) -> bool 
             Ok(0) | Err(_) => {
                 Timer::after(Duration::from_millis(20)).await;
             }
-            Ok(_) => {
-                let c = byte[0];
-                match c {
-                    b'\n' | b'\r' => {
-                        if !line.is_empty() {
-                            let cmd = line.as_str().trim();
-                            if eq_ignore_ascii_case(cmd, "clear")
-                                || eq_ignore_ascii_case(cmd, "reset")
-                                || eq_ignore_ascii_case(cmd, "factory")
-                            {
-                                return true;
-                            }
-                            line.clear();
+            Ok(_) => match byte[0] {
+                b'\n' | b'\r' => {
+                    if !line.is_empty() {
+                        let hit = is_change_command(line.as_str().trim());
+                        line.clear();
+                        if hit {
+                            return true;
                         }
                     }
-                    c if (32..127).contains(&c) => {
-                        let _ = line.push(c as char);
-                    }
-                    _ => {}
                 }
-            }
+                c if (32..127).contains(&c) => {
+                    let _ = line.push(c as char);
+                }
+                _ => {}
+            },
         }
     }
     false
+}
+
+/// Returns true when a full line was completed.
+fn poll_command_byte(usb: &mut UsbSerialJtag<'_>, line: &mut String<32>) -> bool {
+    let mut byte = [0u8; 1];
+    match usb.read(&mut byte) {
+        Ok(0) | Err(_) => false,
+        Ok(_) => match byte[0] {
+            b'\n' | b'\r' => !line.is_empty(),
+            c if (32..127).contains(&c) => {
+                let _ = line.push(c as char);
+                false
+            }
+            _ => false,
+        },
+    }
+}
+
+fn is_change_command(cmd: &str) -> bool {
+    eq_ignore_ascii_case(cmd, "change")
+        || eq_ignore_ascii_case(cmd, "edit")
+        || eq_ignore_ascii_case(cmd, "update")
+        || eq_ignore_ascii_case(cmd, "clear")
 }
 
 fn eq_ignore_ascii_case(a: &str, b: &str) -> bool {
@@ -298,7 +392,11 @@ async fn collect_pool_config<D: embedded_hal::delay::DelayNs>(
             let _ = usb.flush();
 
             let mut line: String<128> = String::new();
-            read_line(usb, &mut line).await;
+            if field == SetupField::Password {
+                read_line_secret(usb, &mut line).await;
+            } else {
+                read_line(usb, &mut line).await;
+            }
 
             let (target, value) =
                 if let Ok((parsed_field, value)) = PoolConfig::parse_assignment(line.as_str()) {
@@ -319,24 +417,7 @@ async fn collect_pool_config<D: embedded_hal::delay::DelayNs>(
                 }
                 Err(e) => {
                     serial_write(usb, "  error: ");
-                    serial_writeln(
-                        usb,
-                        match e {
-                            esp32_s3_scrypt_miner::config::ConfigError::Empty => {
-                                "value cannot be empty"
-                            }
-                            esp32_s3_scrypt_miner::config::ConfigError::TooLong => "value too long",
-                            esp32_s3_scrypt_miner::config::ConfigError::InvalidChar => {
-                                "invalid character"
-                            }
-                            esp32_s3_scrypt_miner::config::ConfigError::UnknownField => {
-                                "unknown field"
-                            }
-                            esp32_s3_scrypt_miner::config::ConfigError::Corrupt => {
-                                "corrupt value"
-                            }
-                        },
-                    );
+                    serial_writeln(usb, config_error_msg(e));
                     serial_writeln(usb, " — try again");
                 }
             }
@@ -344,6 +425,17 @@ async fn collect_pool_config<D: embedded_hal::delay::DelayNs>(
     }
 
     cfg
+}
+
+fn config_error_msg(e: ConfigError) -> &'static str {
+    match e {
+        ConfigError::Empty => "value cannot be empty",
+        ConfigError::TooLong => "value too long",
+        ConfigError::InvalidChar => "invalid character",
+        ConfigError::UnknownField => "unknown field",
+        ConfigError::Corrupt => "corrupt value",
+        ConfigError::BadPassword => "incorrect password",
+    }
 }
 
 fn serial_write(usb: &mut UsbSerialJtag<'_>, text: &str) {
@@ -356,6 +448,15 @@ fn serial_writeln(usb: &mut UsbSerialJtag<'_>, text: &str) {
 }
 
 async fn read_line(usb: &mut UsbSerialJtag<'_>, line: &mut String<128>) {
+    read_line_inner(usb, line, false).await;
+}
+
+/// Echo `*` instead of characters (for password entry).
+async fn read_line_secret(usb: &mut UsbSerialJtag<'_>, line: &mut String<128>) {
+    read_line_inner(usb, line, true).await;
+}
+
+async fn read_line_inner(usb: &mut UsbSerialJtag<'_>, line: &mut String<128>, secret: bool) {
     line.clear();
     let mut byte = [0u8; 1];
     loop {
@@ -379,7 +480,11 @@ async fn read_line(usb: &mut UsbSerialJtag<'_>, line: &mut String<128>) {
                     }
                     c if (32..127).contains(&c) => {
                         if line.push(c as char).is_ok() {
-                            let _ = usb.write_all(&[c]);
+                            if secret {
+                                let _ = usb.write_all(b"*");
+                            } else {
+                                let _ = usb.write_all(&[c]);
+                            }
                         }
                     }
                     _ => {}

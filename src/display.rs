@@ -266,7 +266,7 @@ impl<'a, D: DelayNs> Display<'a, D> {
         self.draw_ok(Text::new(&stratum, Point::new(80, 110), VALUE_STYLE).draw(&mut self.display))?;
 
         let hint = if from_flash {
-            "auto-loaded  serial: clear = re-setup"
+            "serial: change = edit (needs password)"
         } else {
             "saved to flash for next boot"
         };

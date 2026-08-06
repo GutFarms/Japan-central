@@ -1,10 +1,11 @@
 //! Desktop demo of the same scrypt miner core (no ESP hardware required).
 //!
 //! Credentials are saved to `scrypt-miner-config.bin` and auto-loaded next run.
+//! Changing them later requires the **current password**.
 //!
 //! ```text
 //! cargo run --no-default-features --features host --bin host-miner --release
-//! cargo run --no-default-features --features host --bin host-miner --release -- --clear
+//! cargo run --no-default-features --features host --bin host-miner --release -- --change
 //! ```
 
 use std::io::{self, Write as _};
@@ -17,8 +18,9 @@ use esp32_s3_scrypt_miner::persist::{self, HOST_CONFIG_PATH};
 fn main() {
     let mut difficulty = 4u8;
     let mut cfg = PoolConfig::new();
-    let mut clear_saved = false;
+    let mut want_change = false;
     let mut skip_save = false;
+    let mut current_password: Option<String> = None;
 
     let mut args = std::env::args().skip(1);
     while let Some(arg) = args.next() {
@@ -43,7 +45,10 @@ fn main() {
                     difficulty = v.parse().unwrap_or(4);
                 }
             }
-            "--clear" | "--factory" => clear_saved = true,
+            "--change" | "--edit" | "--clear" | "--factory" => want_change = true,
+            "--current-password" => {
+                current_password = args.next();
+            }
             "--no-save" => skip_save = true,
             other if other.parse::<u8>().is_ok() => {
                 difficulty = other.parse().unwrap();
@@ -60,37 +65,58 @@ fn main() {
     println!("  config file: {HOST_CONFIG_PATH}");
     println!();
 
-    if clear_saved {
-        let _ = persist::clear();
-        println!("Cleared saved credentials.");
+    let mut from_file = false;
+    if let Ok(saved) = persist::load() {
+        if want_change {
+            println!("Change saved credentials (current password required).");
+            if !authorize_change(&saved, current_password.as_deref()) {
+                eprintln!("Change cancelled.");
+                std::process::exit(1);
+            }
+            println!("Authorized. Enter new values:");
+            cfg = PoolConfig::new();
+            prompt_field(&mut cfg, SetupField::Address);
+            prompt_field(&mut cfg, SetupField::Password);
+            prompt_field(&mut cfg, SetupField::Stratum);
+            match persist::save(&cfg) {
+                Ok(()) => println!("Updated credentials saved to {HOST_CONFIG_PATH}"),
+                Err(e) => eprintln!("WARNING: could not save credentials: {e}"),
+            }
+            from_file = true;
+        } else if cfg.is_complete() {
+            // CLI provided a full new config — still require current password to overwrite.
+            println!("Saved credentials exist; password required to overwrite.");
+            if !authorize_change(&saved, current_password.as_deref()) {
+                eprintln!("Keeping saved credentials (auth failed).");
+                cfg = saved;
+                from_file = true;
+            } else if !skip_save {
+                match persist::save(&cfg) {
+                    Ok(()) => println!("Overwrote saved credentials."),
+                    Err(e) => eprintln!("WARNING: could not save credentials: {e}"),
+                }
+            }
+        } else {
+            println!("Loaded saved credentials from {HOST_CONFIG_PATH}");
+            cfg = saved;
+            from_file = true;
+        }
+    } else if want_change {
+        eprintln!("No saved credentials to change.");
+        std::process::exit(1);
     }
-
-    let from_file = if cfg.is_complete() {
-        false
-    } else if let Ok(saved) = persist::load() {
-        println!("Loaded saved credentials from {HOST_CONFIG_PATH}");
-        cfg = saved;
-        true
-    } else {
-        false
-    };
 
     if !cfg.is_complete() {
         println!("Enter pool credentials (required before mining):");
         prompt_field(&mut cfg, SetupField::Address);
         prompt_field(&mut cfg, SetupField::Password);
         prompt_field(&mut cfg, SetupField::Stratum);
-    }
-
-    if !skip_save && !from_file {
-        match persist::save(&cfg) {
-            Ok(()) => println!("Saved credentials to {HOST_CONFIG_PATH}"),
-            Err(e) => eprintln!("WARNING: could not save credentials: {e}"),
+        if !skip_save {
+            match persist::save(&cfg) {
+                Ok(()) => println!("Saved credentials to {HOST_CONFIG_PATH}"),
+                Err(e) => eprintln!("WARNING: could not save credentials: {e}"),
+            }
         }
-    } else if from_file && cfg.is_complete() {
-        // Refresh file if CLI overrode some fields after load — only when user passed flags.
-        // Keep simple: always re-save complete config so edits stick.
-        let _ = persist::save(&cfg);
     }
 
     println!();
@@ -135,6 +161,40 @@ fn main() {
             window_hashes = 0;
         }
     }
+}
+
+fn authorize_change(saved: &PoolConfig, provided: Option<&str>) -> bool {
+    for attempt in 1..=3 {
+        let pass = if let Some(p) = provided {
+            if attempt > 1 {
+                return false;
+            }
+            p.to_string()
+        } else {
+            prompt_secret(if attempt == 1 {
+                "current password"
+            } else {
+                "current password (retry)"
+            })
+        };
+        if saved.authorize(&pass).is_ok() {
+            println!("  ok");
+            return true;
+        }
+        eprintln!("  incorrect password");
+        if provided.is_some() {
+            return false;
+        }
+    }
+    false
+}
+
+fn prompt_secret(label: &str) -> String {
+    print!("{label}: ");
+    let _ = io::stdout().flush();
+    let mut line = String::new();
+    let _ = io::stdin().read_line(&mut line);
+    line.trim().to_string()
 }
 
 fn prompt_field(cfg: &mut PoolConfig, field: SetupField) {
