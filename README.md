@@ -4,12 +4,13 @@ Bare-metal Rust firmware that mines **scrypt** proof-of-work on an **ESP32-S3** 
 
 ## What it does
 
-- Runs Litecoin-style scrypt: `N=1024` (`2^10`), `r=1`, `p=1`, 32-byte digest
-- Reuses ROMix buffers across hashes (≈128 KiB working set)
+- Runs scrypt with **`N=64`** by default (`2^6`, `r=1`, `p=1`, 32-byte digest)
+- Optional `litecoin` feature for `N=1024` (Litecoin-compatible)
+- Reuses ROMix buffers across hashes (≈8 KiB at N=64; ≈128 KiB at N=1024)
 - Paints hashrate, nonce, shares, and best hash on the T-Display-S3
 - Includes a host CLI (`host-miner`) and unit tests for the same miner core
 
-This is an educational / demo miner. An ESP32-S3 will only manage a few hashes per second at full Litecoin parameters — far below profitable network mining.
+This is an educational / demo miner — not profitable network mining.
 
 ## Hardware
 
@@ -32,11 +33,11 @@ cargo +esp run -Zbuild-std=core,alloc --release \
   --target xtensa-esp32s3-none-elf --features esp
 ```
 
-Faster demo / less RAM (`N=64`):
+Litecoin-compatible params (`N=1024`):
 
 ```bash
 cargo +esp run -Zbuild-std=core,alloc --release \
-  --target xtensa-esp32s3-none-elf --features esp,lite
+  --target xtensa-esp32s3-none-elf --features esp,litecoin
 ```
 
 ## Host demo & tests

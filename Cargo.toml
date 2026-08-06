@@ -42,8 +42,8 @@ esp = [
 ]
 # Desktop demo / benchmarking of the same miner core
 host = []
-# Lighter scrypt params (N=64) for tighter RAM / faster demo hashrate
-lite = []
+# Litecoin-compatible params (N=1024). Default is N=64 for ESP32 demos.
+litecoin = []
 
 [dependencies]
 heapless = "0.8"
