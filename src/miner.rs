@@ -11,11 +11,11 @@ use sha2::Sha256;
 
 type HmacSha256 = Hmac<Sha256>;
 
-/// log2(N). Default is 6 (N=64) for ESP32 demos; `litecoin` uses 10 (N=1024).
-#[cfg(feature = "litecoin")]
-pub const SCRYPT_LOG_N: u8 = 10;
-#[cfg(not(feature = "litecoin"))]
+/// log2(N). Litecoin uses 10 (N=1024). `lite` feature uses 6 (N=64).
+#[cfg(feature = "lite")]
 pub const SCRYPT_LOG_N: u8 = 6;
+#[cfg(not(feature = "lite"))]
+pub const SCRYPT_LOG_N: u8 = 10;
 
 pub const SCRYPT_N: usize = 1 << SCRYPT_LOG_N;
 pub const SCRYPT_R: usize = 1;

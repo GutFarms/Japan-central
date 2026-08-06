@@ -6,9 +6,9 @@
 //! cargo +esp run --release --target xtensa-esp32s3-none-elf --features esp
 //! ```
 //!
-//! Optional Litecoin params (N=1024, more RAM, slower):
+//! Optional lighter params (less RAM, higher demo H/s):
 //! ```text
-//! --features esp,litecoin
+//! --features esp,lite
 //! ```
 
 #![no_std]
@@ -48,7 +48,7 @@ async fn main(_spawner: Spawner) -> ! {
     let config = esp_hal::Config::default().with_cpu_clock(CpuClock::max());
     let peripherals = esp_hal::init(config);
 
-    // N=64 needs ~8 KiB for ROMix V; N=1024 (`litecoin`) needs ~128 KiB.
+    // Litecoin scrypt needs ~128 KiB for ROMix V; keep extra for UI/runtime.
     esp_alloc::heap_allocator!(size: 192 * 1024);
 
     let timg0 = TimerGroup::new(peripherals.TIMG0);
