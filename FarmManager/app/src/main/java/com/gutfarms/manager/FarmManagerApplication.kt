@@ -22,6 +22,7 @@ class FarmManagerApplication : Application() {
             animalDao = database.animalDao(),
             feedingScheduleDao = database.feedingScheduleDao(),
             breedingScheduleDao = database.breedingScheduleDao(),
+            animalArrivalDao = database.animalArrivalDao(),
             transactionDao = database.transactionDao()
         )
         appScope.launch {

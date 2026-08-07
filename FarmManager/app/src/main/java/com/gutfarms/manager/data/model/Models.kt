@@ -155,3 +155,58 @@ data class ProfitSummary(
     val netProfit: Double,
     val marginPercent: Double
 )
+
+enum class ArrivalOrigin {
+    PURCHASED,
+    BORN_ON_FARM,
+    TRANSFERRED_IN,
+    OTHER
+}
+
+enum class RegistrationStatus {
+    NOT_REQUIRED,
+    PENDING,
+    REGISTERED,
+    EXPIRED
+}
+
+@Entity(
+    tableName = "animal_arrivals",
+    foreignKeys = [
+        ForeignKey(
+            entity = Animal::class,
+            parentColumns = ["id"],
+            childColumns = ["groupAnimalId"],
+            onDelete = ForeignKey.SET_NULL
+        )
+    ],
+    indices = [Index("groupAnimalId"), Index("eventDateMillis")]
+)
+data class AnimalArrival(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    val name: String = "",
+    val type: AnimalType,
+    val origin: ArrivalOrigin,
+    val eventDateMillis: Long,
+    val registrationStatus: RegistrationStatus = RegistrationStatus.PENDING,
+    val registrationId: String = "",
+    val groupAnimalId: Long? = null,
+    val notes: String = "",
+    val createdAt: Long = System.currentTimeMillis()
+) {
+    val displayName: String
+        get() = name.ifBlank { "Unnamed ${type.name.lowercase()}" }
+
+    val eventDateLabel: String
+        get() = when (origin) {
+            ArrivalOrigin.BORN_ON_FARM -> "Birth"
+            ArrivalOrigin.PURCHASED -> "Acquire"
+            ArrivalOrigin.TRANSFERRED_IN -> "Transfer"
+            ArrivalOrigin.OTHER -> "Arrival"
+        }
+}
+
+data class AnimalArrivalWithGroup(
+    val arrival: AnimalArrival,
+    val groupName: String?
+)

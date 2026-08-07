@@ -18,6 +18,7 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.outlined.Delete
+import androidx.compose.material3.Button
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.Icon
@@ -57,7 +58,8 @@ import kotlinx.coroutines.flow.StateFlow
 fun AnimalsScreen(
     animals: StateFlow<List<Animal>>,
     onSave: (Animal) -> Unit,
-    onDelete: (Animal) -> Unit
+    onDelete: (Animal) -> Unit,
+    onOpenArrivals: () -> Unit = {}
 ) {
     val list by animals.collectAsState()
     var showSheet by remember { mutableStateOf(false) }
@@ -87,6 +89,15 @@ fun AnimalsScreen(
                 title = "Livestock",
                 subtitle = "Groups and herds across the farm."
             )
+
+            Button(
+                onClick = onOpenArrivals,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp, vertical = 8.dp)
+            ) {
+                Text("New animal arrivals")
+            }
 
             LazyColumn(
                 contentPadding = PaddingValues(16.dp),

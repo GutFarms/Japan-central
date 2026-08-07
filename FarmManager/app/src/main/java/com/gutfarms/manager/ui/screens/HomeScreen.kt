@@ -31,9 +31,11 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.unit.dp
 import com.gutfarms.manager.data.model.Animal
+import com.gutfarms.manager.data.model.AnimalArrivalWithGroup
 import com.gutfarms.manager.data.model.BreedingScheduleWithAnimal
 import com.gutfarms.manager.data.model.FeedingScheduleWithAnimal
 import com.gutfarms.manager.data.model.ProfitSummary
+import com.gutfarms.manager.data.model.RegistrationStatus
 import com.gutfarms.manager.ui.components.MetricTile
 import com.gutfarms.manager.ui.components.ScreenHeader
 import com.gutfarms.manager.ui.components.SectionLabel
@@ -53,8 +55,10 @@ fun HomeScreen(
     animals: StateFlow<List<Animal>>,
     schedules: StateFlow<List<FeedingScheduleWithAnimal>>,
     breedingSchedules: StateFlow<List<BreedingScheduleWithAnimal>>,
+    arrivals: StateFlow<List<AnimalArrivalWithGroup>>,
     profitSummary: StateFlow<ProfitSummary>,
     onOpenAnimals: () -> Unit,
+    onOpenArrivals: () -> Unit,
     onOpenFeeding: () -> Unit,
     onOpenBreeding: () -> Unit,
     onOpenProfits: () -> Unit
@@ -62,6 +66,7 @@ fun HomeScreen(
     val animalList by animals.collectAsState()
     val scheduleList by schedules.collectAsState()
     val breedingList by breedingSchedules.collectAsState()
+    val arrivalList by arrivals.collectAsState()
     val profit by profitSummary.collectAsState()
     var visible by remember { mutableStateOf(false) }
 
@@ -73,6 +78,10 @@ fun HomeScreen(
     val headCount = animalList.sumOf { it.count }
     val activeFeeds = scheduleList.count { it.schedule.active }
     val activeBreeding = breedingList.count { it.schedule.active }
+    val pendingRegistration = arrivalList.count {
+        it.arrival.registrationStatus == RegistrationStatus.PENDING
+    }
+    val recentArrivals = arrivalList.take(3)
     val upcomingBreeding = breedingList
         .filter { it.schedule.active }
         .sortedBy { it.schedule.expectedDueDateMillis }
@@ -89,7 +98,7 @@ fun HomeScreen(
         ScreenHeader(
             brand = "Gut Farms",
             title = "Farm management at a glance",
-            subtitle = "Track livestock, feeding, breeding, and margins."
+            subtitle = "Track livestock, arrivals, feeding, breeding, and margins."
         )
 
         AnimatedVisibility(
@@ -134,13 +143,55 @@ fun HomeScreen(
                             .clickable(onClick = onOpenBreeding)
                     )
                     MetricTile(
-                        label = "Profit margin",
-                        value = formatPercent(profit.marginPercent),
-                        accent = if (profit.marginPercent >= 0) Forest else MaterialTheme.colorScheme.error,
+                        label = "New arrivals",
+                        value = "$pendingRegistration pending",
+                        accent = SoftTeal,
                         modifier = Modifier
                             .weight(1f)
-                            .clickable(onClick = onOpenProfits)
+                            .clickable(onClick = onOpenArrivals)
                     )
+                }
+
+                MetricTile(
+                    label = "Profit margin",
+                    value = formatPercent(profit.marginPercent),
+                    accent = if (profit.marginPercent >= 0) Forest else MaterialTheme.colorScheme.error,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable(onClick = onOpenProfits)
+                )
+
+                SectionLabel("Recent arrivals")
+                if (recentArrivals.isEmpty()) {
+                    Text(
+                        "No animal arrivals recorded yet.",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                } else {
+                    recentArrivals.forEach { item ->
+                        Column(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(16.dp))
+                                .background(MaterialTheme.colorScheme.surface)
+                                .clickable(onClick = onOpenArrivals)
+                                .padding(16.dp)
+                        ) {
+                            Text(
+                                item.arrival.displayName,
+                                style = MaterialTheme.typography.titleMedium
+                            )
+                            Spacer(Modifier.height(4.dp))
+                            Text(
+                                "${item.arrival.eventDateLabel} ${formatDate(item.arrival.eventDateMillis)} · ${
+                                    item.arrival.registrationStatus.name.lowercase().replace('_', ' ')
+                                }",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
                 }
 
                 SectionLabel("Upcoming due dates")
@@ -217,6 +268,7 @@ fun HomeScreen(
                     horizontalArrangement = Arrangement.spacedBy(10.dp),
                     modifier = Modifier.fillMaxWidth()
                 ) {
+                    QuickAction("Arrive", onOpenArrivals, Modifier.weight(1f))
                     QuickAction("Feed", onOpenFeeding, Modifier.weight(1f))
                     QuickAction("Breed", onOpenBreeding, Modifier.weight(1f))
                     QuickAction("Profits", onOpenProfits, Modifier.weight(1f))

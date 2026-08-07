@@ -6,12 +6,15 @@ import androidx.room.Room
 import androidx.room.RoomDatabase
 import androidx.room.TypeConverter
 import androidx.room.TypeConverters
+import com.gutfarms.manager.data.dao.AnimalArrivalDao
 import com.gutfarms.manager.data.dao.AnimalDao
 import com.gutfarms.manager.data.dao.BreedingScheduleDao
 import com.gutfarms.manager.data.dao.FeedingScheduleDao
 import com.gutfarms.manager.data.dao.TransactionDao
 import com.gutfarms.manager.data.model.Animal
+import com.gutfarms.manager.data.model.AnimalArrival
 import com.gutfarms.manager.data.model.AnimalType
+import com.gutfarms.manager.data.model.ArrivalOrigin
 import com.gutfarms.manager.data.model.BreedingMethod
 import com.gutfarms.manager.data.model.BreedingSchedule
 import com.gutfarms.manager.data.model.BreedingStatus
@@ -20,6 +23,7 @@ import com.gutfarms.manager.data.model.FarmTransaction
 import com.gutfarms.manager.data.model.FeedFrequency
 import com.gutfarms.manager.data.model.FeedingSchedule
 import com.gutfarms.manager.data.model.IncomeCategory
+import com.gutfarms.manager.data.model.RegistrationStatus
 import com.gutfarms.manager.data.model.TransactionType
 
 class Converters {
@@ -45,6 +49,13 @@ class Converters {
 
     @TypeConverter fun fromBreedingStatus(value: BreedingStatus): String = value.name
     @TypeConverter fun toBreedingStatus(value: String): BreedingStatus = BreedingStatus.valueOf(value)
+
+    @TypeConverter fun fromArrivalOrigin(value: ArrivalOrigin): String = value.name
+    @TypeConverter fun toArrivalOrigin(value: String): ArrivalOrigin = ArrivalOrigin.valueOf(value)
+
+    @TypeConverter fun fromRegistrationStatus(value: RegistrationStatus): String = value.name
+    @TypeConverter fun toRegistrationStatus(value: String): RegistrationStatus =
+        RegistrationStatus.valueOf(value)
 }
 
 @Database(
@@ -52,9 +63,10 @@ class Converters {
         Animal::class,
         FeedingSchedule::class,
         BreedingSchedule::class,
+        AnimalArrival::class,
         FarmTransaction::class
     ],
-    version = 2,
+    version = 3,
     exportSchema = false
 )
 @TypeConverters(Converters::class)
@@ -62,6 +74,7 @@ abstract class FarmDatabase : RoomDatabase() {
     abstract fun animalDao(): AnimalDao
     abstract fun feedingScheduleDao(): FeedingScheduleDao
     abstract fun breedingScheduleDao(): BreedingScheduleDao
+    abstract fun animalArrivalDao(): AnimalArrivalDao
     abstract fun transactionDao(): TransactionDao
 
     companion object {
@@ -166,6 +179,41 @@ suspend fun seedSampleDataIfEmpty(database: FarmDatabase) {
             expectedDueDateMillis = BreedingSchedule.expectedDueDate(chickenBreeding, AnimalType.CHICKEN),
             expectedOffspring = 12,
             notes = "Incubator tray 2"
+        )
+    )
+
+    database.animalArrivalDao().upsert(
+        AnimalArrival(
+            name = "Maple",
+            type = AnimalType.CATTLE,
+            origin = ArrivalOrigin.PURCHASED,
+            eventDateMillis = now - (12L * BreedingSchedule.DayMillis),
+            registrationStatus = RegistrationStatus.REGISTERED,
+            registrationId = "US-CA-4412",
+            groupAnimalId = cattleId,
+            notes = "Bought at county sale"
+        )
+    )
+    database.animalArrivalDao().upsert(
+        AnimalArrival(
+            name = "",
+            type = AnimalType.CHICKEN,
+            origin = ArrivalOrigin.BORN_ON_FARM,
+            eventDateMillis = now - (2L * BreedingSchedule.DayMillis),
+            registrationStatus = RegistrationStatus.NOT_REQUIRED,
+            groupAnimalId = chickenId,
+            notes = "Clutch from incubator tray 1"
+        )
+    )
+    database.animalArrivalDao().upsert(
+        AnimalArrival(
+            name = "Pepper",
+            type = AnimalType.GOAT,
+            origin = ArrivalOrigin.TRANSFERRED_IN,
+            eventDateMillis = now - (40L * BreedingSchedule.DayMillis),
+            registrationStatus = RegistrationStatus.PENDING,
+            registrationId = "",
+            notes = "Awaiting herd book paperwork"
         )
     )
 

@@ -4,6 +4,8 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import com.gutfarms.manager.data.model.Animal
+import com.gutfarms.manager.data.model.AnimalArrival
+import com.gutfarms.manager.data.model.AnimalArrivalWithGroup
 import com.gutfarms.manager.data.model.BreedingSchedule
 import com.gutfarms.manager.data.model.BreedingScheduleWithAnimal
 import com.gutfarms.manager.data.model.FarmTransaction
@@ -29,6 +31,10 @@ class FarmViewModel(private val repository: FarmRepository) : ViewModel() {
         repository.breedingWithAnimals.stateIn(
             viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList()
         )
+
+    val arrivals: StateFlow<List<AnimalArrivalWithGroup>> = repository.arrivalsWithGroups.stateIn(
+        viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList()
+    )
 
     val transactions: StateFlow<List<FarmTransaction>> = repository.transactions.stateIn(
         viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList()
@@ -60,6 +66,12 @@ class FarmViewModel(private val repository: FarmRepository) : ViewModel() {
 
     fun toggleBreeding(schedule: BreedingSchedule) =
         viewModelScope.launch { repository.toggleBreeding(schedule) }
+
+    fun saveArrival(arrival: AnimalArrival) =
+        viewModelScope.launch { repository.saveArrival(arrival) }
+
+    fun deleteArrival(arrival: AnimalArrival) =
+        viewModelScope.launch { repository.deleteArrival(arrival) }
 
     fun saveTransaction(transaction: FarmTransaction) =
         viewModelScope.launch { repository.saveTransaction(transaction) }

@@ -6,6 +6,7 @@ import androidx.navigation.NavHostController
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import com.gutfarms.manager.ui.screens.AnimalsScreen
+import com.gutfarms.manager.ui.screens.ArrivalsScreen
 import com.gutfarms.manager.ui.screens.BreedingScreen
 import com.gutfarms.manager.ui.screens.FeedingScreen
 import com.gutfarms.manager.ui.screens.HomeScreen
@@ -15,6 +16,7 @@ import com.gutfarms.manager.ui.viewmodel.FarmViewModel
 object Routes {
     const val HOME = "home"
     const val ANIMALS = "animals"
+    const val ARRIVALS = "arrivals"
     const val FEEDING = "feeding"
     const val BREEDING = "breeding"
     const val PROFITS = "profits"
@@ -36,8 +38,10 @@ fun FarmNavHost(
                 animals = viewModel.animals,
                 schedules = viewModel.schedules,
                 breedingSchedules = viewModel.breedingSchedules,
+                arrivals = viewModel.arrivals,
                 profitSummary = viewModel.profitSummary,
                 onOpenAnimals = { navController.navigate(Routes.ANIMALS) },
+                onOpenArrivals = { navController.navigate(Routes.ARRIVALS) },
                 onOpenFeeding = { navController.navigate(Routes.FEEDING) },
                 onOpenBreeding = { navController.navigate(Routes.BREEDING) },
                 onOpenProfits = { navController.navigate(Routes.PROFITS) }
@@ -47,7 +51,17 @@ fun FarmNavHost(
             AnimalsScreen(
                 animals = viewModel.animals,
                 onSave = viewModel::saveAnimal,
-                onDelete = viewModel::deleteAnimal
+                onDelete = viewModel::deleteAnimal,
+                onOpenArrivals = { navController.navigate(Routes.ARRIVALS) }
+            )
+        }
+        composable(Routes.ARRIVALS) {
+            ArrivalsScreen(
+                animals = viewModel.animals,
+                arrivals = viewModel.arrivals,
+                onSave = viewModel::saveArrival,
+                onDelete = viewModel::deleteArrival,
+                onBack = { navController.popBackStack() }
             )
         }
         composable(Routes.FEEDING) {

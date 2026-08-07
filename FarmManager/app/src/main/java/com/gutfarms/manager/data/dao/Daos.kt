@@ -7,9 +7,11 @@ import androidx.room.OnConflictStrategy
 import androidx.room.Query
 import androidx.room.Update
 import com.gutfarms.manager.data.model.Animal
+import com.gutfarms.manager.data.model.AnimalArrival
 import com.gutfarms.manager.data.model.BreedingSchedule
 import com.gutfarms.manager.data.model.FarmTransaction
 import com.gutfarms.manager.data.model.FeedingSchedule
+import com.gutfarms.manager.data.model.RegistrationStatus
 import com.gutfarms.manager.data.model.TransactionType
 import kotlinx.coroutines.flow.Flow
 
@@ -71,6 +73,21 @@ interface BreedingScheduleDao {
 
     @Delete
     suspend fun delete(schedule: BreedingSchedule)
+}
+
+@Dao
+interface AnimalArrivalDao {
+    @Query("SELECT * FROM animal_arrivals ORDER BY eventDateMillis DESC")
+    fun observeAll(): Flow<List<AnimalArrival>>
+
+    @Query("SELECT * FROM animal_arrivals WHERE registrationStatus = :status ORDER BY eventDateMillis DESC")
+    fun observeByRegistration(status: RegistrationStatus): Flow<List<AnimalArrival>>
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun upsert(arrival: AnimalArrival): Long
+
+    @Delete
+    suspend fun delete(arrival: AnimalArrival)
 }
 
 @Dao

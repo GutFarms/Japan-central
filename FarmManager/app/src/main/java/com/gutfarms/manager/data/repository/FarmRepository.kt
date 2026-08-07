@@ -1,10 +1,13 @@
 package com.gutfarms.manager.data.repository
 
+import com.gutfarms.manager.data.dao.AnimalArrivalDao
 import com.gutfarms.manager.data.dao.AnimalDao
 import com.gutfarms.manager.data.dao.BreedingScheduleDao
 import com.gutfarms.manager.data.dao.FeedingScheduleDao
 import com.gutfarms.manager.data.dao.TransactionDao
 import com.gutfarms.manager.data.model.Animal
+import com.gutfarms.manager.data.model.AnimalArrival
+import com.gutfarms.manager.data.model.AnimalArrivalWithGroup
 import com.gutfarms.manager.data.model.BreedingSchedule
 import com.gutfarms.manager.data.model.BreedingScheduleWithAnimal
 import com.gutfarms.manager.data.model.FarmTransaction
@@ -19,11 +22,13 @@ class FarmRepository(
     private val animalDao: AnimalDao,
     private val feedingScheduleDao: FeedingScheduleDao,
     private val breedingScheduleDao: BreedingScheduleDao,
+    private val animalArrivalDao: AnimalArrivalDao,
     private val transactionDao: TransactionDao
 ) {
     val animals: Flow<List<Animal>> = animalDao.observeAll()
     val schedules: Flow<List<FeedingSchedule>> = feedingScheduleDao.observeAll()
     val breedingSchedules: Flow<List<BreedingSchedule>> = breedingScheduleDao.observeAll()
+    val arrivals: Flow<List<AnimalArrival>> = animalArrivalDao.observeAll()
     val transactions: Flow<List<FarmTransaction>> = transactionDao.observeAll()
 
     val schedulesWithAnimals: Flow<List<FeedingScheduleWithAnimal>> =
@@ -48,6 +53,17 @@ class FarmRepository(
                     schedule = schedule,
                     animalName = animal.name,
                     animalType = animal.type
+                )
+            }
+        }
+
+    val arrivalsWithGroups: Flow<List<AnimalArrivalWithGroup>> =
+        combine(arrivals, animals) { arrivalList, animalList ->
+            val byId = animalList.associateBy { it.id }
+            arrivalList.map { arrival ->
+                AnimalArrivalWithGroup(
+                    arrival = arrival,
+                    groupName = arrival.groupAnimalId?.let { byId[it]?.name }
                 )
             }
         }
@@ -83,6 +99,9 @@ class FarmRepository(
     suspend fun deleteBreeding(schedule: BreedingSchedule) = breedingScheduleDao.delete(schedule)
     suspend fun toggleBreeding(schedule: BreedingSchedule) =
         breedingScheduleDao.update(schedule.copy(active = !schedule.active))
+
+    suspend fun saveArrival(arrival: AnimalArrival) = animalArrivalDao.upsert(arrival)
+    suspend fun deleteArrival(arrival: AnimalArrival) = animalArrivalDao.delete(arrival)
 
     suspend fun saveTransaction(transaction: FarmTransaction) = transactionDao.upsert(transaction)
     suspend fun deleteTransaction(transaction: FarmTransaction) = transactionDao.delete(transaction)
