@@ -55,6 +55,9 @@ pub struct StratumStatus {
     pub phase: StratumPhase,
     pub accepted: u32,
     pub rejected: u32,
+    /// Shares dropped because the submit queue was full or auth was not ready.
+    pub dropped: u32,
+    pub reconnects: u32,
     pub job_id: JobIdString,
     pub difficulty: u32,
     pub detail: String<48>,
@@ -66,6 +69,8 @@ impl Default for StratumStatus {
             phase: StratumPhase::Disabled,
             accepted: 0,
             rejected: 0,
+            dropped: 0,
+            reconnects: 0,
             job_id: JobIdString::new(),
             difficulty: 1,
             detail: String::new(),
@@ -256,29 +261,37 @@ pub fn parse_line(line: &str, expect_subscribe_id: Option<u32>) -> Result<Inboun
                 let diff = parse_set_difficulty(line)?;
                 return Ok(Inbound::SetDifficulty(diff));
             }
+            // client.get_version / mining.set_extranonce / etc. — ignore
             _ => return Ok(Inbound::Other),
         }
     }
 
     // Response with id
     let id = json_u32_field(line, "id");
+    let has_error = json_error_present(line);
+
     if let Some(sid) = expect_subscribe_id {
         if id == Some(sid) {
+            if has_error {
+                return Err(StratumError::BadJson);
+            }
             let sub = parse_subscribe_result(line)?;
             return Ok(Inbound::SubscribeOk(sub));
         }
     }
 
-    if line.contains("\"result\":true") || line.contains("\"result\": true") {
+    if let Some(ok) = json_bool_result(line) {
         if let Some(i) = id {
             return Ok(Inbound::SubmitResult {
                 id: i,
-                accepted: true,
+                accepted: ok && !has_error,
             });
         }
-        return Ok(Inbound::AuthorizeOk(true));
+        return Ok(Inbound::AuthorizeOk(ok && !has_error));
     }
-    if line.contains("\"result\":false") || line.contains("\"result\": false") {
+
+    // Non-bool result: subscribe-shaped array, or null+error for reject.
+    if has_error {
         if let Some(i) = id {
             return Ok(Inbound::SubmitResult {
                 id: i,
@@ -288,20 +301,55 @@ pub fn parse_line(line: &str, expect_subscribe_id: Option<u32>) -> Result<Inboun
         return Ok(Inbound::AuthorizeOk(false));
     }
 
-    // authorize / submit may return result:null with error
-    if line.contains("\"error\":null") || line.contains("\"error\": null") {
-        if line.contains("\"result\":") {
-            // subscribe-like without matching id expectation
-            if line.contains("extranonce") || line.contains("[[") {
-                if let Ok(sub) = parse_subscribe_result(line) {
-                    return Ok(Inbound::SubscribeOk(sub));
-                }
+    if json_key_present(line, "result") {
+        // subscribe-like without matching id expectation
+        if line.contains("[[") {
+            if let Ok(sub) = parse_subscribe_result(line) {
+                return Ok(Inbound::SubscribeOk(sub));
             }
-            return Ok(Inbound::AuthorizeOk(true));
         }
+        // Some pools ack authorize with result:null, error:null
+        return Ok(Inbound::AuthorizeOk(true));
     }
 
     Ok(Inbound::Other)
+}
+
+/// True when `"error"` is present and not JSON `null`.
+fn json_error_present(line: &str) -> bool {
+    let Some(rest) = after_json_key(line, "error") else {
+        return false;
+    };
+    let rest = rest.trim_start();
+    !(rest.starts_with("null")
+        || rest.starts_with("Null")
+        || rest.starts_with("NULL"))
+}
+
+fn json_key_present(line: &str, key: &str) -> bool {
+    after_json_key(line, key).is_some()
+}
+
+/// Locate `:"…"` value after `"key"` with optional whitespace around `:`.
+fn after_json_key<'a>(line: &'a str, key: &str) -> Option<&'a str> {
+    let mut needle = String::<24>::new();
+    let _ = fmt::Write::write_fmt(&mut needle, format_args!("\"{key}\""));
+    let rest = line.split(needle.as_str()).nth(1)?;
+    let rest = rest.trim_start();
+    let rest = rest.strip_prefix(':')?.trim_start();
+    Some(rest)
+}
+
+/// Parse a JSON boolean at `"result"` (tolerates whitespace).
+fn json_bool_result(line: &str) -> Option<bool> {
+    let rest = after_json_key(line, "result")?;
+    if rest.starts_with("true") || rest.starts_with("True") {
+        Some(true)
+    } else if rest.starts_with("false") || rest.starts_with("False") {
+        Some(false)
+    } else {
+        None
+    }
 }
 
 fn parse_set_difficulty(line: &str) -> Result<u32, StratumError> {
@@ -849,7 +897,7 @@ mod client {
     use core::fmt::Write as _;
 
     use embassy_executor::Spawner;
-    use embassy_futures::select::{select, Either};
+    use embassy_futures::select::{select, select3, Either, Either3};
     use embassy_net::tcp::TcpSocket;
     use embassy_net::{IpAddress, IpEndpoint, Stack};
     use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
@@ -859,31 +907,38 @@ mod client {
     use embassy_time::{Duration, Timer};
     use heapless::String;
     use log::info;
-    use static_cell::StaticCell;
 
     use super::{
         build_job, encode_authorize, encode_submit, encode_subscribe, nonce_to_hex, parse_line,
-        Endpoint, Inbound, JobMeta, MiningJob, ShareSubmission, StratumPhase, StratumStatus,
-        SubscribeResult,
+        Endpoint, HostString, Inbound, JobMeta, MiningJob, ShareSubmission, StratumPhase,
+        StratumStatus, SubscribeResult,
     };
     use crate::config::PoolConfig;
+
+    #[derive(Clone)]
+    struct SessionConfig {
+        host: HostString,
+        port: u16,
+        worker: String<96>,
+        password: String<64>,
+    }
 
     static STATUS: Mutex<CriticalSectionRawMutex, StratumStatus> =
         Mutex::new(StratumStatus {
             phase: StratumPhase::Disabled,
             accepted: 0,
             rejected: 0,
+            dropped: 0,
+            reconnects: 0,
             job_id: String::new(),
             difficulty: 1,
             detail: String::new(),
         });
 
     static JOB_SIGNAL: Signal<CriticalSectionRawMutex, MiningJob> = Signal::new();
-    static SHARE_CH: Channel<CriticalSectionRawMutex, ShareSubmission, 4> = Channel::new();
-
-    static WORKER: StaticCell<String<96>> = StaticCell::new();
-    static PASSWORD: StaticCell<String<64>> = StaticCell::new();
-    static ENDPOINT_HOST: StaticCell<String<96>> = StaticCell::new();
+    static SHARE_CH: Channel<CriticalSectionRawMutex, ShareSubmission, 8> = Channel::new();
+    static RECONNECT: Signal<CriticalSectionRawMutex, ()> = Signal::new();
+    static SESSION_CFG: Mutex<CriticalSectionRawMutex, Option<SessionConfig>> = Mutex::new(None);
 
     pub async fn snapshot() -> StratumStatus {
         STATUS.lock().await.clone()
@@ -893,8 +948,19 @@ mod client {
         JOB_SIGNAL.try_take()
     }
 
+    /// Queue a share for submit. Waits up to 2s for queue space; counts a drop on timeout.
     pub async fn queue_share(share: ShareSubmission) {
-        let _ = SHARE_CH.try_send(share);
+        match select(SHARE_CH.send(share), Timer::after(Duration::from_secs(2))).await {
+            Either::First(()) => {}
+            Either::Second(()) => {
+                if let Ok(mut s) = STATUS.try_lock() {
+                    s.dropped = s.dropped.saturating_add(1);
+                    s.detail.clear();
+                    let _ = s.detail.push_str("share queue full");
+                }
+                info!("stratum: share dropped (queue full)");
+            }
+        }
     }
 
     pub fn make_share(worker: &str, meta: &JobMeta, nonce: u32) -> ShareSubmission {
@@ -916,52 +982,73 @@ mod client {
         let _ = s.detail.push_str(detail);
     }
 
+    async fn bump_reconnect() {
+        let mut s = STATUS.lock().await;
+        s.reconnects = s.reconnects.saturating_add(1);
+    }
+
+    fn session_from_pool(cfg: &PoolConfig) -> Option<SessionConfig> {
+        let endpoint = Endpoint::parse(cfg.stratum.as_str()).ok()?;
+        let mut worker = String::<96>::new();
+        let _ = worker.push_str(cfg.address.as_str());
+        let mut password = String::<64>::new();
+        let _ = password.push_str(cfg.password.as_str());
+        Some(SessionConfig {
+            host: endpoint.host,
+            port: endpoint.port,
+            worker,
+            password,
+        })
+    }
+
+    /// Apply updated pool identity (stratum/worker/password) and force reconnect.
+    /// WiFi/BLE still need a reboot to restart the radio stack.
+    pub async fn apply_pool_config(cfg: &PoolConfig) {
+        let Some(session) = session_from_pool(cfg) else {
+            set_phase(StratumPhase::Error, "bad endpoint").await;
+            return;
+        };
+        *SESSION_CFG.lock().await = Some(session);
+        RECONNECT.signal(());
+        set_phase(StratumPhase::Connecting, "config reload").await;
+        info!("stratum: pool config applied; reconnecting");
+    }
+
     pub fn start(spawner: &Spawner, stack: Stack<'static>, cfg: &PoolConfig) {
-        let Ok(endpoint) = Endpoint::parse(cfg.stratum.as_str()) else {
+        let Some(session) = session_from_pool(cfg) else {
             info!("stratum: bad endpoint {}", cfg.stratum);
+            if let Ok(mut s) = STATUS.try_lock() {
+                s.phase = StratumPhase::Error;
+                s.detail.clear();
+                let _ = s.detail.push_str("bad endpoint");
+            }
             return;
         };
 
-        let worker = WORKER.init(String::new());
-        let _ = worker.push_str(cfg.address.as_str());
-        let password = PASSWORD.init(String::new());
-        let _ = password.push_str(cfg.password.as_str());
-        let host = ENDPOINT_HOST.init(String::new());
-        let _ = host.push_str(endpoint.host.as_str());
-        let port = endpoint.port;
+        if let Ok(mut slot) = SESSION_CFG.try_lock() {
+            *slot = Some(session);
+        } else {
+            info!("stratum: config lock busy at start");
+        }
 
         if let Ok(mut s) = STATUS.try_lock() {
             s.phase = StratumPhase::WaitingWifi;
             s.difficulty = 1;
             s.detail.clear();
-            let _ = s.detail.push_str("waiting for wifi");
+            let _ = s.detail.push_str("waiting for dhcp");
         }
 
-        if spawner
-            .spawn(stratum_task(
-                stack,
-                host.as_str(),
-                port,
-                worker.as_str(),
-                password.as_str(),
-            ))
-            .is_err()
-        {
-            info!("stratum: failed to spawn task");
+        match stratum_task(stack) {
+            Ok(token) => spawner.spawn(token),
+            Err(_) => info!("stratum: failed to spawn task"),
         }
     }
 
     #[embassy_executor::task]
-    async fn stratum_task(
-        stack: Stack<'static>,
-        host: &'static str,
-        port: u16,
-        worker: &'static str,
-        password: &'static str,
-    ) {
-        let mut rx_buf = [0u8; 2048];
-        let mut tx_buf = [0u8; 1024];
-        let mut line_buf = [0u8; 2048];
+    async fn stratum_task(stack: Stack<'static>) {
+        let mut rx_buf = [0u8; 1536];
+        let mut tx_buf = [0u8; 768];
+        let mut line_buf = [0u8; 1536];
         let mut line_len = 0usize;
         let mut extranonce2_counter = 1u64;
         let mut difficulty = 1u32;
@@ -969,56 +1056,100 @@ mod client {
         let mut next_id = 1u32;
         let mut subscribe_id = 0u32;
         let mut pending_submit_ids: heapless::Vec<u32, 8> = heapless::Vec::new();
+        let mut backoff_secs: u64 = 2;
+        let mut fail_streak: u32 = 0;
 
         loop {
+            let session = loop {
+                if let Some(cfg) = SESSION_CFG.lock().await.clone() {
+                    break cfg;
+                }
+                set_phase(StratumPhase::Error, "no config").await;
+                Timer::after(Duration::from_secs(2)).await;
+            };
+
             set_phase(StratumPhase::WaitingWifi, "dhcp").await;
             stack.wait_config_up().await;
 
-            set_phase(StratumPhase::Resolving, host).await;
-            let ip = match resolve_host(stack, host).await {
-                Some(ip) => ip,
+            let mut detail = String::<48>::new();
+            let _ = write!(detail, "dns {}", session.host.as_str());
+            set_phase(StratumPhase::Resolving, detail.as_str()).await;
+            let ip = match resolve_host(stack, session.host.as_str()).await {
+                Some(ip) => {
+                    fail_streak = 0;
+                    backoff_secs = 2;
+                    ip
+                }
                 None => {
-                    set_phase(StratumPhase::Error, "dns failed").await;
-                    Timer::after(Duration::from_secs(5)).await;
+                    fail_streak = fail_streak.saturating_add(1);
+                    let wait = backoff_with_jitter(backoff_secs, fail_streak);
+                    let mut d = String::<48>::new();
+                    let _ = write!(d, "dns fail; retry {wait}s");
+                    set_phase(StratumPhase::Error, d.as_str()).await;
+                    info!("stratum: dns failed for {}", session.host.as_str());
+                    bump_reconnect().await;
+                    Timer::after(Duration::from_secs(wait)).await;
+                    backoff_secs = (backoff_secs.saturating_mul(2)).min(60);
                     continue;
                 }
             };
 
-            set_phase(StratumPhase::Connecting, host).await;
+            let mut detail = String::<48>::new();
+            let _ = write!(detail, "tcp {}:{}", session.host.as_str(), session.port);
+            set_phase(StratumPhase::Connecting, detail.as_str()).await;
             let mut socket = TcpSocket::new(stack, &mut rx_buf, &mut tx_buf);
             socket.set_timeout(Some(Duration::from_secs(60)));
-            let endpoint = IpEndpoint::new(ip, port);
+            let endpoint = IpEndpoint::new(ip, session.port);
             if let Err(e) = socket.connect(endpoint).await {
-                info!("stratum: connect error {e:?}");
-                set_phase(StratumPhase::Error, "connect failed").await;
-                Timer::after(Duration::from_secs(5)).await;
+                fail_streak = fail_streak.saturating_add(1);
+                let wait = backoff_with_jitter(backoff_secs, fail_streak);
+                info!("stratum: connect error {e:?}; retry in {wait}s");
+                let mut d = String::<48>::new();
+                let _ = write!(d, "connect fail; retry {wait}s");
+                set_phase(StratumPhase::Error, d.as_str()).await;
+                bump_reconnect().await;
+                Timer::after(Duration::from_secs(wait)).await;
+                backoff_secs = (backoff_secs.saturating_mul(2)).min(60);
                 continue;
             }
 
-            info!("stratum: connected to {host}:{port}");
+            info!(
+                "stratum: connected to {}:{}",
+                session.host.as_str(),
+                session.port
+            );
+            fail_streak = 0;
+            backoff_secs = 2;
             line_len = 0;
             pending_submit_ids.clear();
             sub = SubscribeResult::default();
+            let _ = RECONNECT.try_take();
 
-            set_phase(StratumPhase::Subscribing, "subscribe").await;
+            set_phase(StratumPhase::Subscribing, "mining.subscribe").await;
             subscribe_id = next_id;
             next_id = next_id.wrapping_add(1);
             let sub_msg = encode_subscribe(subscribe_id, "esp32-s3-scrypt-miner/0.1");
             if write_all(&mut socket, sub_msg.as_bytes()).await.is_err() {
-                set_phase(StratumPhase::Error, "write failed").await;
-                Timer::after(Duration::from_secs(3)).await;
+                set_phase(StratumPhase::Error, "subscribe write fail").await;
+                bump_reconnect().await;
+                Timer::after(Duration::from_secs(backoff_with_jitter(3, 1))).await;
                 continue;
             }
 
             let mut authorized = false;
             let mut subscribed = false;
             let mut authorize_id: Option<u32> = None;
+            let mut auth_rejected = false;
 
             'session: loop {
-                match select(read_line(&mut socket, &mut line_buf, &mut line_len), SHARE_CH.receive())
-                    .await
+                match select3(
+                    read_line(&mut socket, &mut line_buf, &mut line_len),
+                    SHARE_CH.receive(),
+                    RECONNECT.wait(),
+                )
+                .await
                 {
-                    Either::First(Ok(line)) => {
+                    Either3::First(Ok(line)) => {
                         let expect = if !subscribed {
                             Some(subscribe_id)
                         } else {
@@ -1033,23 +1164,29 @@ mod client {
                                     sub.extranonce1.len(),
                                     sub.extranonce2_size
                                 );
-                                set_phase(StratumPhase::Authorizing, "authorize").await;
+                                set_phase(StratumPhase::Authorizing, "mining.authorize").await;
                                 let auth_id = next_id;
                                 authorize_id = Some(auth_id);
                                 next_id = next_id.wrapping_add(1);
-                                let msg = encode_authorize(auth_id, worker, password);
+                                let msg = encode_authorize(
+                                    auth_id,
+                                    session.worker.as_str(),
+                                    session.password.as_str(),
+                                );
                                 if write_all(&mut socket, msg.as_bytes()).await.is_err() {
                                     break 'session;
                                 }
                             }
                             Ok(Inbound::AuthorizeOk(ok)) => {
                                 authorize_id = None;
-                                authorized = ok;
-                                if ok {
-                                    set_phase(StratumPhase::Idle, "authorized").await;
-                                    info!("stratum: authorized as {worker}");
-                                } else {
-                                    set_phase(StratumPhase::Error, "auth rejected").await;
+                                if !handle_auth_result(
+                                    ok,
+                                    session.worker.as_str(),
+                                    &mut authorized,
+                                    &mut auth_rejected,
+                                )
+                                .await
+                                {
                                     break 'session;
                                 }
                             }
@@ -1061,7 +1198,6 @@ mod client {
                                 info!("stratum: difficulty={difficulty}");
                             }
                             Ok(Inbound::Notify(n)) => {
-                                // Some pools push notify before the authorize reply.
                                 if !subscribed {
                                     continue;
                                 }
@@ -1075,7 +1211,7 @@ mod client {
                                             let _ = st.job_id.push_str(job.meta.job_id.as_str());
                                             st.difficulty = difficulty;
                                             st.detail.clear();
-                                            let _ = st.detail.push_str("job");
+                                            let _ = st.detail.push_str("mining.notify");
                                         }
                                         info!(
                                             "stratum: job={} diff={} clean={}",
@@ -1083,19 +1219,23 @@ mod client {
                                         );
                                         JOB_SIGNAL.signal(job);
                                     }
-                                    Err(e) => info!("stratum: build job error: {e}"),
+                                    Err(e) => {
+                                        info!("stratum: build job error: {e}");
+                                        set_phase(StratumPhase::Error, "bad notify").await;
+                                    }
                                 }
                             }
                             Ok(Inbound::SubmitResult { id, accepted }) => {
-                                // mining.authorize replies are also `result: true/false` with an id.
                                 if authorize_id == Some(id) {
                                     authorize_id = None;
-                                    authorized = accepted;
-                                    if accepted {
-                                        set_phase(StratumPhase::Idle, "authorized").await;
-                                        info!("stratum: authorized as {worker}");
-                                    } else {
-                                        set_phase(StratumPhase::Error, "auth rejected").await;
+                                    if !handle_auth_result(
+                                        accepted,
+                                        session.worker.as_str(),
+                                        &mut authorized,
+                                        &mut auth_rejected,
+                                    )
+                                    .await
+                                    {
                                         break 'session;
                                     }
                                 } else if pending_submit_ids.iter().any(|&x| x == id) {
@@ -1113,13 +1253,18 @@ mod client {
                             Err(e) => info!("stratum: parse error {e} line={}", line.as_str()),
                         }
                     }
-                    Either::First(Err(())) => {
+                    Either3::First(Err(())) => {
                         info!("stratum: connection closed");
                         break 'session;
                     }
-                    Either::Second(share) => {
+                    Either3::Second(share) => {
                         if !authorized {
-                            info!("stratum: drop share (not authorized yet)");
+                            if let Ok(mut s) = STATUS.try_lock() {
+                                s.dropped = s.dropped.saturating_add(1);
+                                s.detail.clear();
+                                let _ = s.detail.push_str("share before auth");
+                            }
+                            info!("stratum: drop share (not authorized)");
                             continue;
                         }
                         let id = next_id;
@@ -1137,12 +1282,60 @@ mod client {
                             break 'session;
                         }
                     }
+                    Either3::Third(()) => {
+                        info!("stratum: reconnect requested (config change)");
+                        break 'session;
+                    }
                 }
             }
 
-            set_phase(StratumPhase::Error, "reconnecting").await;
-            Timer::after(Duration::from_secs(3)).await;
+            if auth_rejected {
+                // Hard stop: do not spin reconnects on bad credentials.
+                set_phase(StratumPhase::Error, "auth rejected — fix creds").await;
+                loop {
+                    match select(RECONNECT.wait(), Timer::after(Duration::from_secs(30))).await {
+                        Either::First(()) => break,
+                        Either::Second(()) => {}
+                    }
+                }
+                continue;
+            }
+
+            bump_reconnect().await;
+            let wait = backoff_with_jitter(backoff_secs, fail_streak.max(1));
+            let mut d = String::<48>::new();
+            let _ = write!(d, "reconnect in {wait}s");
+            set_phase(StratumPhase::Error, d.as_str()).await;
+            Timer::after(Duration::from_secs(wait)).await;
+            backoff_secs = (backoff_secs.saturating_mul(2)).min(60);
         }
+    }
+
+    async fn handle_auth_result(
+        ok: bool,
+        worker: &str,
+        authorized: &mut bool,
+        auth_rejected: &mut bool,
+    ) -> bool {
+        *authorized = ok;
+        if ok {
+            *auth_rejected = false;
+            set_phase(StratumPhase::Idle, "authorized").await;
+            info!("stratum: authorized as {worker}");
+            true
+        } else {
+            *auth_rejected = true;
+            set_phase(StratumPhase::Error, "auth rejected").await;
+            info!("stratum: authorize rejected for {worker}");
+            false
+        }
+    }
+
+    fn backoff_with_jitter(base_secs: u64, streak: u32) -> u64 {
+        let base = base_secs.max(1).min(60);
+        // Cheap deterministic jitter from fail streak (0..base/4).
+        let jitter = u64::from(streak.wrapping_mul(17) % ((base as u32 / 4).max(1) + 1));
+        (base + jitter).min(60)
     }
 
     async fn resolve_host(stack: Stack<'static>, host: &str) -> Option<IpAddress> {
@@ -1162,15 +1355,14 @@ mod client {
     }
 
     async fn write_all(socket: &mut TcpSocket<'_>, mut data: &[u8]) -> Result<(), ()> {
-        use embedded_io_async::Write;
         while !data.is_empty() {
-            match socket.write(data).await {
+            match embedded_io_async::Write::write(socket, data).await {
                 Ok(0) => return Err(()),
                 Ok(n) => data = &data[n..],
                 Err(_) => return Err(()),
             }
         }
-        let _ = socket.flush().await;
+        let _ = embedded_io_async::Write::flush(socket).await;
         Ok(())
     }
 
@@ -1179,7 +1371,6 @@ mod client {
         buf: &mut [u8],
         len: &mut usize,
     ) -> Result<String<2048>, ()> {
-        use embedded_io_async::Read;
         loop {
             if let Some(pos) = buf[..*len].iter().position(|&b| b == b'\n') {
                 let line_end = if pos > 0 && buf[pos - 1] == b'\r' {
@@ -1199,7 +1390,7 @@ mod client {
             if *len == buf.len() {
                 *len = 0; // overflow — resync
             }
-            match socket.read(&mut buf[*len..]).await {
+            match embedded_io_async::Read::read(socket, &mut buf[*len..]).await {
                 Ok(0) => return Err(()),
                 Ok(n) => *len += n,
                 Err(_) => return Err(()),
@@ -1209,7 +1400,7 @@ mod client {
 }
 
 #[cfg(feature = "esp")]
-pub use client::{make_share, queue_share, snapshot, start, try_take_job};
+pub use client::{apply_pool_config, make_share, queue_share, snapshot, start, try_take_job};
 
 #[cfg(test)]
 mod tests {
@@ -1243,6 +1434,13 @@ mod tests {
             other => panic!("unexpected {other:?}"),
         }
 
+        // Whitespace-tolerant difficulty (some pools pretty-print).
+        let line = r#"{ "id" : null, "method" : "mining.set_difficulty", "params" : [ 64.5 ] }"#;
+        match parse_line(line, None).unwrap() {
+            Inbound::SetDifficulty(d) => assert_eq!(d, 64),
+            other => panic!("unexpected {other:?}"),
+        }
+
         let line = r#"{"id":1,"result":[[["mining.set_difficulty","1"],["mining.notify","1"]],"deadbeef",4],"error":null}"#;
         match parse_line(line, Some(1)).unwrap() {
             Inbound::SubscribeOk(s) => {
@@ -1253,13 +1451,50 @@ mod tests {
         }
 
         // Authorize / submit both use result:true with an id — client disambiguates by id.
-        match parse_line(r#"{"id":2,"result":true,"error":null}"#, None).unwrap() {
+        match parse_line(r#"{"id":2,"result": true, "error": null}"#, None).unwrap() {
             Inbound::SubmitResult { id, accepted } => {
                 assert_eq!(id, 2);
                 assert!(accepted);
             }
             other => panic!("unexpected {other:?}"),
         }
+
+        // Explicit JSON-RPC error array → rejected.
+        match parse_line(
+            r#"{"id":3,"result":null,"error":[20,"Invalid share",null]}"#,
+            None,
+        )
+        .unwrap()
+        {
+            Inbound::SubmitResult { id, accepted } => {
+                assert_eq!(id, 3);
+                assert!(!accepted);
+            }
+            other => panic!("unexpected {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parses_realistic_notify_with_merkle_branch() {
+        let line = r#"{"id":null,"method":"mining.notify","params":["job#42","00000000000000000000000000000000000000000000000000000000000000aa","010203","040506",["aabbccddeeff00112233445566778899aabbccddeeff00112233445566778899"],"20000000","1d00ffff","5b1a2c3d",false]}"#;
+        let Inbound::Notify(n) = parse_line(line, None).unwrap() else {
+            panic!("expected notify");
+        };
+        assert_eq!(n.job_id.as_str(), "job#42");
+        assert!(!n.clean);
+        assert_eq!(n.merkle_hex.len(), 1);
+        assert_eq!(
+            n.merkle_hex[0].as_str(),
+            "aabbccddeeff00112233445566778899aabbccddeeff00112233445566778899"
+        );
+
+        let sub = SubscribeResult {
+            extranonce1: heapless::Vec::from_slice(&[0xab]).unwrap(),
+            extranonce2_size: 4,
+        };
+        let job = build_job(&n, &sub, 8, 1).unwrap();
+        assert_eq!(job.difficulty, 8);
+        assert_eq!(job.meta.extranonce2_hex.as_str(), "00000001");
     }
 
     #[test]

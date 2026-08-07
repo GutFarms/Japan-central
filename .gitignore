@@ -6,3 +6,4 @@
 *.bin
 *.elf
 scrypt-miner-config.bin
+export-esp.sh

@@ -80,7 +80,7 @@ impl HostGuiApp {
             stratum: String::new(),
             wifi_ssid: String::new(),
             wifi_password: String::new(),
-            ble_name: "SCRYPT".into(),
+            ble_name: String::new(),
             difficulty: 4,
             current_password: String::new(),
             status: format!("Ready · config file {HOST_CONFIG_PATH}"),
@@ -103,7 +103,7 @@ impl HostGuiApp {
         self.stratum = cfg.stratum.to_string();
         self.wifi_ssid = cfg.wifi_ssid.to_string();
         self.wifi_password = cfg.wifi_password.to_string();
-        self.ble_name = cfg.ble_name_or_default().to_string();
+        self.ble_name = cfg.ble_name.to_string();
     }
 
     fn to_config(&self) -> Result<PoolConfig, String> {

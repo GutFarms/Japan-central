@@ -32,7 +32,7 @@ const BRAND: MonoTextStyle<'_, Rgb565> = MonoTextStyle::new(&FONT_10X20, Rgb565:
 const LABEL: MonoTextStyle<'_, Rgb565> = MonoTextStyle::new(&FONT_6X12, Rgb565::CSS_GRAY);
 const VALUE: MonoTextStyle<'_, Rgb565> = MonoTextStyle::new(&FONT_10X20, Rgb565::WHITE);
 const VALUE_SM: MonoTextStyle<'_, Rgb565> = MonoTextStyle::new(&FONT_8X13_BOLD, Rgb565::WHITE);
-const OK: MonoTextStyle<'_, Rgb565> = MonoTextStyle::new(&FONT_10X20, Rgb565::CSS_LIMEGREEN);
+const OK: MonoTextStyle<'_, Rgb565> = MonoTextStyle::new(&FONT_10X20, Rgb565::CSS_LIME_GREEN);
 const MUTED: MonoTextStyle<'_, Rgb565> = MonoTextStyle::new(&FONT_6X12, Rgb565::CSS_DIM_GRAY);
 const ACCENT: Rgb565 = Rgb565::CSS_DARK_ORANGE;
 const PANEL: Rgb565 = Rgb565::new(3, 6, 3); // dark slate-ish in RGB565
@@ -89,10 +89,13 @@ pub struct DisplayPeripherals {
 }
 
 impl<'a, D: DelayNs> Display<'a, D> {
-    fn draw_ok<T, E>(&mut self, result: Result<T, E>) -> Result<(), Error>
-    where
-        Error: From<E>,
-    {
+    fn draw_text(
+        &mut self,
+        text: &str,
+        position: Point,
+        style: MonoTextStyle<'_, Rgb565>,
+    ) -> Result<(), Error> {
+        let result = Text::new(text, position, style).draw(&mut self.display);
         result.map(|_| ()).map_err(Error::from)
     }
 
@@ -155,35 +158,33 @@ impl<'a, D: DelayNs> Display<'a, D> {
     }
 
     fn fill_rect(&mut self, x: i32, y: i32, w: u32, h: u32, color: Rgb565) -> Result<(), Error> {
-        self.draw_ok(
-            Rectangle::new(Point::new(x, y), Size::new(w, h))
-                .into_styled(PrimitiveStyle::with_fill(color))
-                .draw(&mut self.display),
-        )
+        let result = Rectangle::new(Point::new(x, y), Size::new(w, h))
+            .into_styled(PrimitiveStyle::with_fill(color))
+            .draw(&mut self.display);
+        result.map(|_| ()).map_err(Error::from)
     }
 
     fn round_panel(&mut self, x: i32, y: i32, w: u32, h: u32, color: Rgb565) -> Result<(), Error> {
-        self.draw_ok(
-            RoundedRectangle::with_equal_corners(
-                Rectangle::new(Point::new(x, y), Size::new(w, h)),
-                Size::new(6, 6),
-            )
-            .into_styled(PrimitiveStyle::with_fill(color))
-            .draw(&mut self.display),
+        let result = RoundedRectangle::with_equal_corners(
+            Rectangle::new(Point::new(x, y), Size::new(w, h)),
+            Size::new(6, 6),
         )
+        .into_styled(PrimitiveStyle::with_fill(color))
+        .draw(&mut self.display);
+        result.map(|_| ()).map_err(Error::from)
     }
 
     fn header_bar(&mut self, tab: &str) -> Result<(), Error> {
         self.fill_rect(0, 0, DISPLAY_WIDTH as u32, 28, PANEL)?;
         self.fill_rect(0, 0, DISPLAY_WIDTH as u32, 3, ACCENT)?;
-        self.draw_ok(Text::new("SCRYPT", Point::new(10, 20), BRAND).draw(&mut self.display))?;
-        self.draw_ok(Text::new(tab, Point::new(270, 20), OK).draw(&mut self.display))?;
+        self.draw_text("SCRYPT", Point::new(10, 20), BRAND)?;
+        self.draw_text(tab, Point::new(270, 20), OK)?;
         Ok(())
     }
 
     fn footer_hint(&mut self, text: &str) -> Result<(), Error> {
         self.fill_rect(0, 156, DISPLAY_WIDTH as u32, 14, PANEL)?;
-        self.draw_ok(Text::new(text, Point::new(8, 166), MUTED).draw(&mut self.display))?;
+        self.draw_text(text, Point::new(8, 166), MUTED)?;
         Ok(())
     }
 
@@ -193,13 +194,11 @@ impl<'a, D: DelayNs> Display<'a, D> {
         self.last_screen = None;
         self.fill_rect(0, 0, DISPLAY_WIDTH as u32, DISPLAY_HEIGHT as u32, Rgb565::BLACK)?;
         self.fill_rect(0, 0, DISPLAY_WIDTH as u32, 4, ACCENT)?;
-        self.draw_ok(Text::new("SCRYPT", Point::new(110, 70), BRAND).draw(&mut self.display))?;
+        self.draw_text("SCRYPT", Point::new(110, 70), BRAND)?;
         let mut line: String<48> = String::new();
         let _ = write!(line, "ESP32-S3  N={}  r=1 p=1", SCRYPT_N);
-        self.draw_ok(Text::new(&line, Point::new(70, 100), LABEL).draw(&mut self.display))?;
-        self.draw_ok(
-            Text::new("loading GUI…", Point::new(110, 130), MUTED).draw(&mut self.display),
-        )?;
+        self.draw_text(&line, Point::new(70, 100), LABEL)?;
+        self.draw_text("loading GUI…", Point::new(110, 130), MUTED)?;
         Ok(())
     }
 
@@ -226,12 +225,10 @@ impl<'a, D: DelayNs> Display<'a, D> {
 
         let mut step: String<40> = String::new();
         let _ = write!(step, "{}/6  {}", step_n, field.label());
-        self.draw_ok(Text::new(&step, Point::new(100, 48), LABEL).draw(&mut self.display))?;
+        self.draw_text(&step, Point::new(100, 48), LABEL)?;
 
         self.round_panel(8, 60, 304, 70, PANEL)?;
-        self.draw_ok(
-            Text::new(field.prompt(), Point::new(18, 85), VALUE_SM).draw(&mut self.display),
-        )?;
+        self.draw_text(field.prompt(), Point::new(18, 85), VALUE_SM)?;
 
         let shown = if field.is_secret() && !typed.is_empty() {
             PoolConfig::ellipsize("********", 36)
@@ -240,7 +237,7 @@ impl<'a, D: DelayNs> Display<'a, D> {
         } else {
             PoolConfig::ellipsize(typed, 36)
         };
-        self.draw_ok(Text::new(&shown, Point::new(18, 112), VALUE).draw(&mut self.display))?;
+        self.draw_text(&shown, Point::new(18, 112), VALUE)?;
         self.footer_hint("type value on USB serial, then Enter")?;
         Ok(())
     }
@@ -272,8 +269,8 @@ impl<'a, D: DelayNs> Display<'a, D> {
     }
 
     fn draw_row(&mut self, y: i32, label: &str, value: &str) -> Result<(), Error> {
-        self.draw_ok(Text::new(label, Point::new(18, y), LABEL).draw(&mut self.display))?;
-        self.draw_ok(Text::new(value, Point::new(90, y), VALUE_SM).draw(&mut self.display))?;
+        self.draw_text(label, Point::new(18, y), LABEL)?;
+        self.draw_text(value, Point::new(90, y), VALUE_SM)?;
         Ok(())
     }
 
@@ -338,8 +335,8 @@ impl<'a, D: DelayNs> Display<'a, D> {
             stats.hashrate_x100 / 100,
             stats.hashrate_x100 % 100
         );
-        self.draw_ok(Text::new("hashrate", Point::new(16, 52), LABEL).draw(&mut self.display))?;
-        self.draw_ok(Text::new(&rate, Point::new(16, 74), VALUE).draw(&mut self.display))?;
+        self.draw_text("hashrate", Point::new(16, 52), LABEL)?;
+        self.draw_text(&rate, Point::new(16, 74), VALUE)?;
 
         // Activity bar (0–100% of a soft cap ~20 H/s for visual scale)
         let pct = core::cmp::min(100u32, stats.hashrate_x100 / 20);
@@ -353,10 +350,10 @@ impl<'a, D: DelayNs> Display<'a, D> {
         self.fill_rect(224, 44, 80, 56, PANEL)?;
         let st = if mining { "MINING" } else { "IDLE" };
         let st_style = if mining { OK } else { LABEL };
-        self.draw_ok(Text::new(st, Point::new(228, 58), st_style).draw(&mut self.display))?;
+        self.draw_text(st, Point::new(228, 58), st_style)?;
         let mut shares: String<16> = String::new();
         let _ = write!(shares, "{} sh", stats.shares);
-        self.draw_ok(Text::new(&shares, Point::new(228, 86), VALUE_SM).draw(&mut self.display))?;
+        self.draw_text(&shares, Point::new(228, 86), VALUE_SM)?;
 
         // Bottom identity / stratum strip
         self.fill_rect(16, 122, 288, 24, PANEL)?;
@@ -372,15 +369,16 @@ impl<'a, D: DelayNs> Display<'a, D> {
         let mut line: String<72> = String::new();
         let _ = write!(
             line,
-            "{} {} {} a{}/r{} {}",
+            "{} {} {} a{}/r{}/d{} {}",
             nonce,
             job,
             stratum.phase.label(),
             stratum.accepted,
             stratum.rejected,
+            stratum.dropped,
             best
         );
-        self.draw_ok(Text::new(&line, Point::new(16, 138), LABEL).draw(&mut self.display))?;
+        self.draw_text(&line, Point::new(16, 138), LABEL)?;
 
         let _ = SCRYPT_LOG_N;
         Ok(())
@@ -427,11 +425,11 @@ impl<'a, D: DelayNs> Display<'a, D> {
             radio.wifi.label(),
             ssid.as_str()
         );
-        self.draw_ok(Text::new(&wifi_line, Point::new(18, 58), VALUE_SM).draw(&mut self.display))?;
+        self.draw_text(&wifi_line, Point::new(18, 58), VALUE_SM)?;
 
         let mut ip_line: String<40> = String::new();
         let _ = write!(ip_line, "IP   {}", radio.ip_string().as_str());
-        self.draw_ok(Text::new(&ip_line, Point::new(18, 80), VALUE_SM).draw(&mut self.display))?;
+        self.draw_text(&ip_line, Point::new(18, 80), VALUE_SM)?;
 
         let ble_state = if radio.ble_connected {
             "conn"
@@ -447,33 +445,36 @@ impl<'a, D: DelayNs> Display<'a, D> {
             ble_state,
             PoolConfig::ellipsize(cfg.ble_name_or_default(), 14).as_str()
         );
-        self.draw_ok(Text::new(&ble_line, Point::new(18, 102), VALUE_SM).draw(&mut self.display))?;
+        self.draw_text(&ble_line, Point::new(18, 102), VALUE_SM)?;
 
         let mut st_line: String<56> = String::new();
         let _ = write!(
             st_line,
-            "POOL {} d{} a{}/r{}",
+            "POOL {} d{} a{}/r{}/d{}",
             stratum.phase.label(),
             stratum.difficulty,
             stratum.accepted,
-            stratum.rejected
+            stratum.rejected,
+            stratum.dropped
         );
-        self.draw_ok(Text::new(&st_line, Point::new(18, 124), VALUE_SM).draw(&mut self.display))?;
+        self.draw_text(&st_line, Point::new(18, 124), VALUE_SM)?;
+        if !stratum.detail.is_empty() {
+            let detail = PoolConfig::ellipsize(stratum.detail.as_str(), 28);
+            self.draw_text(detail.as_str(), Point::new(18, 146), VALUE_SM)?;
+        }
         Ok(())
     }
 
     fn draw_menu_body(&mut self, selected: MenuItem) -> Result<(), Error> {
         self.round_panel(8, 36, 304, 110, PANEL)?;
-        self.draw_ok(
-            Text::new("Options", Point::new(18, 55), LABEL).draw(&mut self.display),
-        )?;
+        self.draw_text("Options", Point::new(18, 55), LABEL)?;
 
         for (i, item) in MenuItem::ALL.iter().enumerate() {
             let y = 78 + i as i32 * 30;
             let bg = if *item == selected { SELECT } else { PANEL };
             self.round_panel(18, y - 14, 284, 26, bg)?;
             let style = if *item == selected { OK } else { VALUE_SM };
-            self.draw_ok(Text::new(item.label(), Point::new(28, y), style).draw(&mut self.display))?;
+            self.draw_text(item.label(), Point::new(28, y), style)?;
         }
         self.footer_hint("BOOT=select item  btn=activate")?;
         Ok(())
@@ -485,13 +486,10 @@ impl<'a, D: DelayNs> Display<'a, D> {
         self.last_screen = None;
         self.header_bar("AUTH")?;
         self.round_panel(8, 50, 304, 80, PANEL)?;
-        self.draw_ok(
-            Text::new("Enter current password", Point::new(40, 80), VALUE_SM)
-                .draw(&mut self.display),
-        )?;
+        self.draw_text("Enter current password", Point::new(40, 80), VALUE_SM)?;
         let mut tries: String<32> = String::new();
         let _ = write!(tries, "attempt {attempt}/{max}  (USB serial)");
-        self.draw_ok(Text::new(&tries, Point::new(60, 110), LABEL).draw(&mut self.display))?;
+        self.draw_text(&tries, Point::new(60, 110), LABEL)?;
         self.footer_hint("password required to change credentials")?;
         Ok(())
     }

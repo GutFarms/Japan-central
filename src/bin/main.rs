@@ -34,6 +34,7 @@ use esp_hal::delay::Delay;
 use esp_hal::gpio::{Input, InputConfig, Pin, Pull};
 use esp_hal::ram;
 use esp_hal::timer::timg::TimerGroup;
+use esp_hal::Blocking;
 use esp_hal::usb_serial_jtag::UsbSerialJtag;
 use heapless::String;
 use log::info;
@@ -216,10 +217,18 @@ async fn main(spawner: Spawner) -> ! {
                     password_gated_change(&mut usb, &mut display, &mut store, &pool).await
                 {
                     pool = updated;
-                    serial_writeln(
-                        &mut usb,
-                        "Note: WiFi/BLE/stratum keep prior session until reboot.",
-                    );
+                    if stratum_enabled {
+                        stratum::apply_pool_config(&pool).await;
+                        serial_writeln(
+                            &mut usb,
+                            "Stratum worker/endpoint reloaded. WiFi/BLE still need reboot.",
+                        );
+                    } else {
+                        serial_writeln(
+                            &mut usb,
+                            "Note: WiFi/BLE keep prior session until reboot.",
+                        );
+                    }
                     gui.screen = esp32_s3_scrypt_miner::gui::GuiScreen::Config;
                     let _ = display.draw_config_summary(&pool, true);
                     Timer::after(Duration::from_secs(2)).await;
@@ -242,10 +251,18 @@ async fn main(spawner: Spawner) -> ! {
                     password_gated_change(&mut usb, &mut display, &mut store, &pool).await
                 {
                     pool = updated;
-                    serial_writeln(
-                        &mut usb,
-                        "Note: WiFi/BLE/stratum keep prior session until reboot.",
-                    );
+                    if stratum_enabled {
+                        stratum::apply_pool_config(&pool).await;
+                        serial_writeln(
+                            &mut usb,
+                            "Stratum worker/endpoint reloaded. WiFi/BLE still need reboot.",
+                        );
+                    } else {
+                        serial_writeln(
+                            &mut usb,
+                            "Note: WiFi/BLE keep prior session until reboot.",
+                        );
+                    }
                     let _ = display.draw_config_summary(&pool, true);
                     Timer::after(Duration::from_secs(2)).await;
                 }
@@ -303,7 +320,7 @@ async fn main(spawner: Spawner) -> ! {
         let elapsed = window_start.elapsed();
         if elapsed >= Duration::from_millis(750) {
             let ms = elapsed.as_millis().max(1);
-            let hashrate_x100 = ((window_hashes as u128 * 100_000) / ms) as u32;
+            let hashrate_x100 = ((window_hashes as u128 * 100_000) / u128::from(ms)) as u32;
 
             stats = miner.stats();
             stats.hashrate_x100 = hashrate_x100;
@@ -337,7 +354,7 @@ async fn main(spawner: Spawner) -> ! {
     }
 }
 
-fn print_config_serial(usb: &mut UsbSerialJtag<'_>, pool: &PoolConfig) {
+fn print_config_serial(usb: &mut UsbSerialJtag<'_, Blocking>, pool: &PoolConfig) {
     serial_write(usb, "  address = ");
     serial_writeln(usb, pool.address.as_str());
     serial_write(usb, "  password = ");
@@ -357,7 +374,7 @@ fn print_config_serial(usb: &mut UsbSerialJtag<'_>, pool: &PoolConfig) {
 }
 
 fn print_radio_serial(
-    usb: &mut UsbSerialJtag<'_>,
+    usb: &mut UsbSerialJtag<'_, Blocking>,
     pool: &PoolConfig,
     radio: &RadioStatus,
     stratum: &StratumStatus,
@@ -392,13 +409,26 @@ fn print_radio_serial(
     let mut diff: String<16> = String::new();
     let _ = core::fmt::Write::write_fmt(&mut diff, format_args!("{}", stratum.difficulty));
     serial_writeln(usb, diff.as_str());
-    serial_write(usb, "  accepted/rejected = ");
-    let mut ar: String<24> = String::new();
+    serial_write(usb, "  accepted/rejected/dropped = ");
+    let mut ar: String<32> = String::new();
     let _ = core::fmt::Write::write_fmt(
         &mut ar,
-        format_args!("{}/{}", stratum.accepted, stratum.rejected),
+        format_args!(
+            "{}/{}/{}",
+            stratum.accepted, stratum.rejected, stratum.dropped
+        ),
     );
     serial_writeln(usb, ar.as_str());
+    serial_write(usb, "  reconnects = ");
+    let mut rc: String<12> = String::new();
+    let _ = core::fmt::Write::write_fmt(&mut rc, format_args!("{}", stratum.reconnects));
+    serial_writeln(usb, rc.as_str());
+    serial_write(usb, "  detail = ");
+    if stratum.detail.is_empty() {
+        serial_writeln(usb, "(none)");
+    } else {
+        serial_writeln(usb, stratum.detail.as_str());
+    }
     serial_write(usb, "  job = ");
     if stratum.job_id.is_empty() {
         serial_writeln(usb, "(none)");
@@ -409,7 +439,7 @@ fn print_radio_serial(
 
 /// Load saved credentials, or prompt + save on first run / after authorized change.
 async fn resolve_pool_config<D: embedded_hal::delay::DelayNs>(
-    usb: &mut UsbSerialJtag<'_>,
+    usb: &mut UsbSerialJtag<'_, Blocking>,
     display: &mut Display<'_, D>,
     store: &mut ConfigStore<'_>,
     force_change: bool,
@@ -454,7 +484,7 @@ async fn resolve_pool_config<D: embedded_hal::delay::DelayNs>(
 
 /// Prompt for current password, then collect and persist new credentials.
 async fn password_gated_change<D: embedded_hal::delay::DelayNs>(
-    usb: &mut UsbSerialJtag<'_>,
+    usb: &mut UsbSerialJtag<'_, Blocking>,
     display: &mut Display<'_, D>,
     store: &mut ConfigStore<'_>,
     current: &PoolConfig,
@@ -500,7 +530,7 @@ async fn password_gated_change<D: embedded_hal::delay::DelayNs>(
     None
 }
 
-async fn wait_for_change_command(usb: &mut UsbSerialJtag<'_>, timeout: Duration) -> bool {
+async fn wait_for_change_command(usb: &mut UsbSerialJtag<'_, Blocking>, timeout: Duration) -> bool {
     let deadline = Instant::now() + timeout;
     let mut line: String<32> = String::new();
     let mut byte = [0u8; 1];
@@ -531,7 +561,7 @@ async fn wait_for_change_command(usb: &mut UsbSerialJtag<'_>, timeout: Duration)
 }
 
 /// Returns true when a full line was completed.
-fn poll_command_byte(usb: &mut UsbSerialJtag<'_>, line: &mut String<32>) -> bool {
+fn poll_command_byte(usb: &mut UsbSerialJtag<'_, Blocking>, line: &mut String<32>) -> bool {
     let mut byte = [0u8; 1];
     match usb.read(&mut byte) {
         Ok(0) | Err(_) => false,
@@ -570,7 +600,7 @@ fn eq_ignore_ascii_case(a: &str, b: &str) -> bool {
 }
 
 async fn collect_pool_config<D: embedded_hal::delay::DelayNs>(
-    usb: &mut UsbSerialJtag<'_>,
+    usb: &mut UsbSerialJtag<'_, Blocking>,
     display: &mut Display<'_, D>,
 ) -> PoolConfig {
     let mut cfg = PoolConfig::new();
@@ -650,25 +680,25 @@ fn config_error_msg(e: ConfigError) -> &'static str {
     }
 }
 
-fn serial_write(usb: &mut UsbSerialJtag<'_>, text: &str) {
+fn serial_write(usb: &mut UsbSerialJtag<'_, Blocking>, text: &str) {
     let _ = usb.write_all(text.as_bytes());
 }
 
-fn serial_writeln(usb: &mut UsbSerialJtag<'_>, text: &str) {
+fn serial_writeln(usb: &mut UsbSerialJtag<'_, Blocking>, text: &str) {
     let _ = usb.write_all(text.as_bytes());
     let _ = usb.write_all(b"\r\n");
 }
 
-async fn read_line(usb: &mut UsbSerialJtag<'_>, line: &mut String<128>) {
+async fn read_line(usb: &mut UsbSerialJtag<'_, Blocking>, line: &mut String<128>) {
     read_line_inner(usb, line, false).await;
 }
 
 /// Echo `*` instead of characters (for password entry).
-async fn read_line_secret(usb: &mut UsbSerialJtag<'_>, line: &mut String<128>) {
+async fn read_line_secret(usb: &mut UsbSerialJtag<'_, Blocking>, line: &mut String<128>) {
     read_line_inner(usb, line, true).await;
 }
 
-async fn read_line_inner(usb: &mut UsbSerialJtag<'_>, line: &mut String<128>, secret: bool) {
+async fn read_line_inner(usb: &mut UsbSerialJtag<'_, Blocking>, line: &mut String<128>, secret: bool) {
     line.clear();
     let mut byte = [0u8; 1];
     loop {

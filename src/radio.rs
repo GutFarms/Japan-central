@@ -47,15 +47,13 @@ pub struct RadioStatus {
 
 impl Default for RadioStatus {
     fn default() -> Self {
-        let mut ble_name = BleNameString::new();
-        let _ = ble_name.push_str("SCRYPT");
         Self {
             wifi: WifiPhase::Disabled,
             ssid: String::new(),
             ip: None,
             ble_advertising: false,
             ble_connected: false,
-            ble_name,
+            ble_name: BleNameString::new(),
         }
     }
 }
@@ -112,20 +110,19 @@ mod stack {
     static STACK_RESOURCES: StaticCell<StackResources<4>> = StaticCell::new();
     static BLE_NAME_BUF: StaticCell<[u8; 24]> = StaticCell::new();
 
-    /// Max number of BLE connections.
+    /// Advertise-only BLE (no GATT) — avoids embassy-sync version skew with trouble-host.
     const CONNECTIONS_MAX: usize = 1;
-    /// Signal + ATT.
     const L2CAP_CHANNELS_MAX: usize = 2;
 
-    #[gatt_server]
-    struct Server {
-        battery_service: BatteryService,
-    }
-
-    #[gatt_service(uuid = service::BATTERY)]
-    struct BatteryService {
-        #[characteristic(uuid = characteristic::BATTERY_LEVEL, read, notify, value = 100)]
-        level: u8,
+    fn spawn_task<S>(
+        spawner: &Spawner,
+        token: Result<embassy_executor::SpawnToken<S>, embassy_executor::SpawnError>,
+        what: &str,
+    ) {
+        match token {
+            Ok(t) => spawner.spawn(t),
+            Err(_) => info!("failed to spawn {what}"),
+        }
     }
 
     pub async fn snapshot() -> RadioStatus {
@@ -167,7 +164,9 @@ mod stack {
             s.ble_advertising = false;
             s.ble_connected = false;
             s.ble_name.clear();
-            let _ = s.ble_name.push_str(cfg.ble_name_or_default());
+            if cfg.ble_enabled() {
+                let _ = s.ble_name.push_str(cfg.ble_name.as_str());
+            }
         }
     }
 
@@ -186,9 +185,7 @@ mod stack {
             }
         };
         let ble_controller: ExternalController<_, 1> = ExternalController::new(connector);
-        if spawner.spawn(ble_task(ble_controller, ble_name_bytes)).is_err() {
-            info!("failed to spawn BLE task");
-        }
+        spawn_task(spawner, ble_task(ble_controller, ble_name_bytes), "BLE");
     }
 
     fn start_wifi(
@@ -233,22 +230,17 @@ mod stack {
         );
 
         info!("WiFi starting for SSID={ssid}");
-        if spawner.spawn(connection(controller)).is_err() {
-            info!("failed to spawn WiFi connection task");
-        }
-        if spawner.spawn(net_task(runner)).is_err() {
-            info!("failed to spawn net runner");
-        }
-        if spawner.spawn(dhcp_watch(stack)).is_err() {
-            info!("failed to spawn DHCP watch");
-        }
+        spawn_task(spawner, connection(controller), "WiFi connection");
+        spawn_task(spawner, net_task(runner), "net runner");
+        spawn_task(spawner, dhcp_watch(stack), "DHCP watch");
         Some(stack)
     }
 
-    /// Start BLE advertising and, when configured, WiFi STA + DHCP.
+    /// Start optional BLE advertising and, when configured, WiFi STA + DHCP.
     ///
     /// Returns the embassy-net [`Stack`] when WiFi was started so callers can
-    /// open TCP (stratum) sockets. BLE and WiFi are independent.
+    /// open TCP (stratum) sockets. BLE is opt-in (`ble_name`) so WiFi/stratum
+    /// mining can keep more RAM free.
     pub fn start(
         spawner: &Spawner,
         wifi: WIFI<'static>,
@@ -256,7 +248,12 @@ mod stack {
         cfg: &PoolConfig,
     ) -> Option<Stack<'static>> {
         seed_status(cfg);
-        start_ble(spawner, bt, cfg.ble_name_or_default());
+        if cfg.ble_enabled() {
+            start_ble(spawner, bt, cfg.ble_name.as_str());
+        } else {
+            info!("BLE skipped (no ble_name)");
+            let _ = bt;
+        }
 
         if cfg.wifi_enabled() {
             start_wifi(spawner, wifi, cfg)
@@ -330,7 +327,6 @@ mod stack {
         let address = Address::random([0x42, 0x53, 0x43, 0x52, 0x59, 0x50]);
         let mut resources: HostResources<DefaultPacketPool, CONNECTIONS_MAX, L2CAP_CHANNELS_MAX> =
             HostResources::new();
-        // trouble-host 0.6: build() borrows the Stack for the Host lifetime.
         let stack = trouble_host::new(controller, &mut resources).set_random_address(address);
         let Host {
             mut peripheral,
@@ -353,18 +349,10 @@ mod stack {
             }
         };
 
-        let server = match Server::new_with_config(GapConfig::Peripheral(PeripheralConfig {
-            name: "SCRYPT",
-            appearance: &appearance::power_device::GENERIC_POWER_DEVICE,
-        })) {
-            Ok(s) => s,
-            Err(e) => {
-                info!("BLE GATT server failed: {e:?}");
-                return;
-            }
-        };
-
-        info!("BLE advertising as {:?}", core::str::from_utf8(ble_name));
+        info!(
+            "BLE advertising (non-connectable) as {:?}",
+            core::str::from_utf8(ble_name)
+        );
         let _ = join(runner.run(), async {
             let mut params = AdvertisementParameters::default();
             params.interval_min = Duration::from_millis(200);
@@ -375,26 +363,17 @@ mod stack {
                 match peripheral
                     .advertise(
                         &params,
-                        Advertisement::ConnectableScannableUndirected {
+                        Advertisement::NonconnectableScannableUndirected {
                             adv_data: &adv_data[..adv_len],
                             scan_data: &[],
                         },
                     )
                     .await
                 {
-                    Ok(advertiser) => match advertiser.accept().await {
-                        Ok(conn) => match conn.with_attribute_server(&server) {
-                            Ok(conn) => {
-                                set_ble(true, true).await;
-                                info!("BLE connected");
-                                let _ = gatt_events(&server, &conn).await;
-                                set_ble(true, false).await;
-                                info!("BLE disconnected");
-                            }
-                            Err(e) => info!("BLE GATT attach error: {e:?}"),
-                        },
-                        Err(e) => info!("BLE accept error: {e:?}"),
-                    },
+                    Ok(_advertiser) => {
+                        // Keep advertising until error; non-connectable has no accept loop.
+                        Timer::after(Duration::from_secs(30)).await;
+                    }
                     Err(e) => {
                         info!("BLE advertise error: {e:?}");
                         set_ble(false, false).await;
@@ -404,34 +383,6 @@ mod stack {
             }
         })
         .await;
-    }
-
-    async fn gatt_events<P: PacketPool>(
-        server: &Server<'_>,
-        conn: &GattConnection<'_, '_, P>,
-    ) -> Result<(), trouble_host::Error> {
-        let level = server.battery_service.level;
-        loop {
-            match conn.next().await {
-                GattConnectionEvent::Disconnected { reason } => {
-                    info!("BLE disconnect reason: {reason:?}");
-                    break;
-                }
-                GattConnectionEvent::Gatt { event } => {
-                    if let GattEvent::Read(ev) = &event {
-                        if ev.handle() == level.handle {
-                            let _ = server.get(&level);
-                        }
-                    }
-                    match event.accept() {
-                        Ok(reply) => reply.send().await,
-                        Err(e) => info!("BLE GATT reply error: {e:?}"),
-                    }
-                }
-                _ => {}
-            }
-        }
-        Ok(())
     }
 }
 

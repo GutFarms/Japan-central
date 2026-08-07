@@ -19,8 +19,6 @@ const CONFIG_MAGIC: &[u8; 4] = b"SCFG";
 const CONFIG_VERSION_V1: u8 = 1;
 const CONFIG_VERSION: u8 = 2;
 
-const DEFAULT_BLE_NAME: &str = "SCRYPT";
-
 pub type AddressString = String<ADDRESS_MAX>;
 pub type PasswordString = String<PASSWORD_MAX>;
 pub type StratumString = String<STRATUM_MAX>;
@@ -74,7 +72,7 @@ impl SetupField {
             SetupField::Stratum => "Stratum location (host:port)",
             SetupField::WifiSsid => "WiFi SSID (- to skip)",
             SetupField::WifiPassword => "WiFi password (empty=open)",
-            SetupField::BleName => "BLE name (empty=SCRYPT)",
+            SetupField::BleName => "BLE name (- to skip; saves RAM with WiFi)",
         }
     }
 
@@ -115,15 +113,14 @@ pub struct PoolConfig {
 
 impl Default for PoolConfig {
     fn default() -> Self {
-        let mut ble_name = BleNameString::new();
-        let _ = ble_name.push_str(DEFAULT_BLE_NAME);
         Self {
             address: AddressString::new(),
             password: PasswordString::new(),
             stratum: StratumString::new(),
             wifi_ssid: WifiSsidString::new(),
             wifi_password: WifiPasswordString::new(),
-            ble_name,
+            // Empty = BLE off (saves RAM when WiFi/stratum mining).
+            ble_name: BleNameString::new(),
         }
     }
 }
@@ -164,9 +161,15 @@ impl PoolConfig {
         !self.wifi_ssid.is_empty()
     }
 
+    /// BLE advertising is opt-in: set a non-empty name (not `-` / `skip`).
+    pub fn ble_enabled(&self) -> bool {
+        !self.ble_name.is_empty()
+    }
+
+    /// Advertised name when BLE is enabled; otherwise a display placeholder.
     pub fn ble_name_or_default(&self) -> &str {
         if self.ble_name.is_empty() {
-            DEFAULT_BLE_NAME
+            "(off)"
         } else {
             self.ble_name.as_str()
         }
@@ -256,7 +259,6 @@ impl PoolConfig {
                 let trimmed = raw.trim();
                 self.ble_name.clear();
                 if trimmed.is_empty() || is_skip_token(trimmed) {
-                    let _ = self.ble_name.push_str(DEFAULT_BLE_NAME);
                     return Ok(());
                 }
                 let value = normalize_value(trimmed)?;
@@ -363,8 +365,8 @@ impl PoolConfig {
             self.wifi_password.as_str(),
             WIFI_PASSWORD_MAX,
         )?;
-        let ble = self.ble_name_or_default();
-        let _off = write_field(&mut blob, off, ble, BLE_NAME_MAX)?;
+        let _off =
+            write_field_allow_empty(&mut blob, off, self.ble_name.as_str(), BLE_NAME_MAX)?;
 
         let crc = crc32(&blob[12..]);
         blob[8..12].copy_from_slice(&crc.to_le_bytes());
@@ -436,7 +438,7 @@ impl PoolConfig {
         off = o;
         let (wifi_pass, o) = read_field_allow_empty(blob, off, WIFI_PASSWORD_MAX)?;
         off = o;
-        let (ble, _) = read_field(blob, off, BLE_NAME_MAX)?;
+        let (ble, _) = read_field_allow_empty(blob, off, BLE_NAME_MAX)?;
 
         cfg.set(SetupField::Address, addr)?;
         cfg.set(SetupField::Password, pass)?;
@@ -592,7 +594,8 @@ mod tests {
         assert_eq!(cfg.password.as_str(), "x");
         assert_eq!(cfg.stratum.as_str(), "stratum.example.com:3333");
         assert!(!cfg.wifi_enabled());
-        assert_eq!(cfg.ble_name_or_default(), "SCRYPT");
+        assert!(!cfg.ble_enabled());
+        assert_eq!(cfg.ble_name_or_default(), "(off)");
     }
 
     #[test]
@@ -609,9 +612,12 @@ mod tests {
         assert!(cfg.wifi_enabled());
         assert_eq!(cfg.wifi_ssid.as_str(), "MyAP");
         assert!(cfg.wifi_password.is_empty());
-        assert_eq!(cfg.ble_name_or_default(), "SCRYPT");
+        assert!(!cfg.ble_enabled());
         cfg.set(SetupField::BleName, "Miner1").unwrap();
+        assert!(cfg.ble_enabled());
         assert_eq!(cfg.ble_name_or_default(), "Miner1");
+        cfg.set(SetupField::BleName, "-").unwrap();
+        assert!(!cfg.ble_enabled());
     }
 
     #[test]
@@ -736,6 +742,7 @@ mod tests {
         assert_eq!(cfg.password.as_str(), "x");
         assert_eq!(cfg.stratum.as_str(), "pool:3333");
         assert!(!cfg.wifi_enabled());
-        assert_eq!(cfg.ble_name_or_default(), "SCRYPT");
+        assert!(!cfg.ble_enabled());
+        assert_eq!(cfg.ble_name_or_default(), "(off)");
     }
 }
