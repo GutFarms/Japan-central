@@ -6,7 +6,32 @@ import androidx.room.Index
 import androidx.room.PrimaryKey
 
 enum class AnimalType {
-    CATTLE, CHICKEN, GOAT, PIG, SHEEP, OTHER
+    CATTLE,
+    DAIRY_COW,
+    BEEF_CATTLE,
+    CHICKEN,
+    DUCK,
+    TURKEY,
+    GOOSE,
+    QUAIL,
+    GUINEA_FOWL,
+    GOAT,
+    SHEEP,
+    PIG,
+    HORSE,
+    DONKEY,
+    MULE,
+    RABBIT,
+    LLAMA,
+    ALPACA,
+    BISON,
+    WATER_BUFFALO,
+    DEER,
+    EMU,
+    OSTRICH,
+    FISH,
+    BEE_COLONY,
+    OTHER
 }
 
 @Entity(tableName = "animals")
@@ -129,11 +154,31 @@ data class BreedingSchedule(
         const val DayMillis = 24L * 60L * 60L * 1000L
 
         fun gestationDaysFor(type: AnimalType): Int = when (type) {
-            AnimalType.CATTLE -> 283
+            AnimalType.CATTLE,
+            AnimalType.DAIRY_COW,
+            AnimalType.BEEF_CATTLE -> 283
             AnimalType.SHEEP -> 147
             AnimalType.GOAT -> 150
             AnimalType.PIG -> 114
+            AnimalType.HORSE,
+            AnimalType.DONKEY,
+            AnimalType.MULE -> 340
+            AnimalType.RABBIT -> 31
+            AnimalType.LLAMA,
+            AnimalType.ALPACA -> 345
+            AnimalType.BISON -> 285
+            AnimalType.WATER_BUFFALO -> 310
+            AnimalType.DEER -> 230
             AnimalType.CHICKEN -> 21
+            AnimalType.DUCK -> 28
+            AnimalType.TURKEY -> 28
+            AnimalType.GOOSE -> 30
+            AnimalType.QUAIL -> 17
+            AnimalType.GUINEA_FOWL -> 28
+            AnimalType.EMU -> 50
+            AnimalType.OSTRICH -> 42
+            AnimalType.FISH -> 0
+            AnimalType.BEE_COLONY -> 0
             AnimalType.OTHER -> 120
         }
 

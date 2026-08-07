@@ -4,7 +4,7 @@ Android app for farm management with livestock tracking, feeding schedules, and 
 
 ## Features
 
-- **Livestock** — manage animal groups (cattle, chicken, goat, pig, sheep, other) with head count and purchase cost
+- **Livestock** — manage animal groups (cattle, dairy/beef, poultry, goat, sheep, pig, horse, donkey, rabbit, camelids, bison, buffalo, deer, ratites, fish, bees, and other) with head count and purchase cost
 - **New animal arrivals** — separate screen for purchases, births, and transfers with acquire/birth date, registration status, optional name/tag ID
 - **Feeding schedules** — timed rations per group with frequency, kg amounts, and cost-per-kg; projected daily/monthly feed cost
 - **Breeding schedules** — mating/AI records with status, sire, expected offspring, and due dates (gestation defaults by species)
