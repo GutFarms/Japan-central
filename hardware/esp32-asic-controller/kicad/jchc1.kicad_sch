@@ -1,0 +1,76 @@
+(kicad_sch
+  (version 20231120)
+  (generator "jchc1-generator")
+  (generator_version "8.0")
+  (uuid "a1000001-0000-4000-8000-000000000001")
+  (paper "A3")
+  (title_block
+    (title "JCHC-1 ESP32 ASIC Hash Controller")
+    (date "2026-08-07")
+    (rev "A")
+    (company "Japan-central / GutFarms")
+    (comment 1 "Controller only — ASIC on hashboard daughtercard via J1")
+    (comment 2 "Open in KiCad 8+. Assign footprints from BOM then Update PCB.")
+  )
+
+  (lib_symbols)
+
+  (text "JCHC-1 SYSTEM SCHEMATIC (LOGICAL)\nSee docs/architecture.md for full design.\nPopulate footprints from manufacturing/bom.csv."
+    (exclude_from_sim no) (at 50 20 0)
+    (effects (font (size 2 2)) (justify left bottom))
+    (uuid "a1000001-0000-4000-8000-000000000010")
+  )
+
+  (text "POWER INPUT\nUSB-C J2 5V --F1--> D2 OR\nBarrel J3 9-12V --D1--> VIN\nVIN -> SYS_5V (USB) or buck-to-5V (barrel path)\nSYS_5V -> U2 AMS1117-3.3 -> 3V3\nSYS_5V -> U3 buck -> VCORE (0.6-1.2V / 15A)\nSYS_5V -> U4 LDO -> VIO 1.8V (JP1 select 3.3V)"
+    (exclude_from_sim no) (at 20 45 0)
+    (effects (font (size 1.27 1.27)) (justify left top))
+    (uuid "a1000001-0000-4000-8000-000000000011")
+  )
+
+  (text "U1 ESP32-S3-WROOM-1\n3V3, EN(SW2), GPIO0(SW1)\nUSB_D+/D- <- J2\nUART1 TX=GPIO17 RX=GPIO18 -> U5 TXS0108E -> J1\nNRST=GPIO8 EN=GPIO9 -> J1\nI2C SDA=5 SCL=6 -> J5 OLED + U6 INA219\nFAN_PWM=GPIO7 FAN_TACH=GPIO10 -> J4\nVCORE_PWM=GPIO11 -> RC filter -> U3 FB\nLED GPIO12/13/14"
+    (exclude_from_sim no) (at 110 45 0)
+    (effects (font (size 1.27 1.27)) (justify left top))
+    (uuid "a1000001-0000-4000-8000-000000000012")
+  )
+
+  (text "J1 2x10 HASBOARD\n1,3,5 VCORE | 2,4,6,8,20 GND\n7 VIO | 9 3V3_REF | 10 PG\n11 UART_TX | 12 UART_RX\n13 NRST | 14 EN\n15 SDA | 16 SCL\n17 NTC | 18 FAN_PWM | 19 CLK_OPT"
+    (exclude_from_sim no) (at 200 45 0)
+    (effects (font (size 1.27 1.27)) (justify left top))
+    (uuid "a1000001-0000-4000-8000-000000000013")
+  )
+
+  (text "NET LIST (critical)\nGND, VIN, SYS_5V, 3V3, VCORE, VIO\nUSB_DP, USB_DN\nHASH_TX, HASH_RX, HASH_NRST, HASH_EN\nI2C_SDA, I2C_SCL\nFAN_PWM, FAN_TACH\nVCORE_PWM, PG_VCORE\nLED_PWR, LED_HASH, LED_ERR"
+    (exclude_from_sim no) (at 20 120 0)
+    (effects (font (size 1.27 1.27)) (justify left top))
+    (uuid "a1000001-0000-4000-8000-000000000014")
+  )
+
+  (text "DECOUPLING (minimum)\nU1: 4x100nF + 1x10uF on 3V3 near module\nU2: Cin 10uF Cout 10uF\nU3: per datasheet; Cout >= 2x100uF low ESR on VCORE\nU4: Cin 1uF Cout 22uF\nU5: 100nF on VCCA and VCCB\nJ1 VCORE: place 10uF+100nF on hashboard under ASIC"
+    (exclude_from_sim no) (at 110 120 0)
+    (effects (font (size 1.27 1.27)) (justify left top))
+    (uuid "a1000001-0000-4000-8000-000000000015")
+  )
+
+  (text "WARNING\nNo scrypt ASIC footprint on this PCB.\nHash silicon lives on daughterboard.\nVerify absolute max ratings before enabling VCORE into a real ASIC."
+    (exclude_from_sim no) (at 200 120 0)
+    (effects (font (size 1.27 1.27)) (justify left top))
+    (uuid "a1000001-0000-4000-8000-000000000016")
+  )
+
+  (rectangle (start 15 35) (end 100 100)
+    (stroke (width 0.3) (type solid)) (fill (type none))
+    (uuid "a1000001-0000-4000-8000-000000000021")
+  )
+  (rectangle (start 105 35) (end 190 100)
+    (stroke (width 0.3) (type solid)) (fill (type none))
+    (uuid "a1000001-0000-4000-8000-000000000022")
+  )
+  (rectangle (start 195 35) (end 280 100)
+    (stroke (width 0.3) (type solid)) (fill (type none))
+    (uuid "a1000001-0000-4000-8000-000000000023")
+  )
+
+  (sheet_instances
+    (path "/" (page "1"))
+  )
+)

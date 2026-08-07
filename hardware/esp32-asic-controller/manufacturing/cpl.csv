@@ -1,0 +1,24 @@
+# Pick-and-place — preliminary (refine in KiCad)
+
+Board origin: lower-left of outline. Units: mm. Rotation: degrees CCW.
+Side: top unless noted.
+
+Designator,MidX,MidY,Rotation,Side
+U1,30.00,40.00,0,top
+U2,55.00,55.00,0,top
+U3,70.00,45.00,0,top
+U4,55.00,45.00,0,top
+U5,45.00,25.00,0,top
+U6,60.00,30.00,0,top
+J1,90.00,35.00,90,top
+J2,10.00,60.00,0,top
+J3,10.00,15.00,0,top
+J4,25.00,10.00,0,top
+J5,40.00,10.00,0,top
+SW1,15.00,45.00,0,top
+SW2,15.00,35.00,0,top
+LED1,20.00,55.00,0,top
+LED2,25.00,55.00,0,top
+LED3,30.00,55.00,0,top
+L1,75.00,55.00,0,top
+F1,18.00,60.00,0,top
