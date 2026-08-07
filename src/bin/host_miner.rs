@@ -40,6 +40,21 @@ fn main() {
                     cfg.set(SetupField::Stratum, &v).expect("stratum");
                 }
             }
+            "--wifi-ssid" => {
+                if let Some(v) = args.next() {
+                    cfg.set(SetupField::WifiSsid, &v).expect("wifi_ssid");
+                }
+            }
+            "--wifi-password" => {
+                if let Some(v) = args.next() {
+                    cfg.set(SetupField::WifiPassword, &v).expect("wifi_password");
+                }
+            }
+            "--ble-name" => {
+                if let Some(v) = args.next() {
+                    cfg.set(SetupField::BleName, &v).expect("ble_name");
+                }
+            }
             "--difficulty" | "-d" => {
                 if let Some(v) = args.next() {
                     difficulty = v.parse().unwrap_or(4);
@@ -75,9 +90,7 @@ fn main() {
             }
             println!("Authorized. Enter new values:");
             cfg = PoolConfig::new();
-            prompt_field(&mut cfg, SetupField::Address);
-            prompt_field(&mut cfg, SetupField::Password);
-            prompt_field(&mut cfg, SetupField::Stratum);
+            prompt_all_fields(&mut cfg);
             match persist::save(&cfg) {
                 Ok(()) => println!("Updated credentials saved to {HOST_CONFIG_PATH}"),
                 Err(e) => eprintln!("WARNING: could not save credentials: {e}"),
@@ -107,10 +120,8 @@ fn main() {
     }
 
     if !cfg.is_complete() {
-        println!("Enter pool credentials (required before mining):");
-        prompt_field(&mut cfg, SetupField::Address);
-        prompt_field(&mut cfg, SetupField::Password);
-        prompt_field(&mut cfg, SetupField::Stratum);
+        println!("Enter pool + radio credentials (required before mining):");
+        prompt_all_fields(&mut cfg);
         if !skip_save {
             match persist::save(&cfg) {
                 Ok(()) => println!("Saved credentials to {HOST_CONFIG_PATH}"),
@@ -124,6 +135,16 @@ fn main() {
     println!("  address  = {}", cfg.address);
     println!("  password = {}", cfg.password_masked());
     println!("  stratum  = {}", cfg.stratum);
+    println!(
+        "  wifi_ssid = {}",
+        if cfg.wifi_enabled() {
+            cfg.wifi_ssid.as_str()
+        } else {
+            "(disabled)"
+        }
+    );
+    println!("  wifi_password = {}", cfg.wifi_password_masked());
+    println!("  ble_name = {}", cfg.ble_name_or_default());
     println!();
 
     let mut miner = ScryptMiner::new_demo(difficulty);
@@ -197,8 +218,15 @@ fn prompt_secret(label: &str) -> String {
     line.trim().to_string()
 }
 
+fn prompt_all_fields(cfg: &mut PoolConfig) {
+    for field in SetupField::ALL {
+        prompt_field(cfg, field);
+    }
+}
+
 fn prompt_field(cfg: &mut PoolConfig, field: SetupField) {
-    if !cfg.get(field).is_empty() {
+    // Required fields: skip if already set. Optional radio fields: always ask once.
+    if !field.allows_empty() && !cfg.get(field).is_empty() {
         return;
     }
     let stdin = io::stdin();

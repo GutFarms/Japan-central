@@ -59,6 +59,9 @@ struct HostGuiApp {
     address: String,
     password: String,
     stratum: String,
+    wifi_ssid: String,
+    wifi_password: String,
+    ble_name: String,
     difficulty: u8,
     current_password: String,
     status: String,
@@ -75,6 +78,9 @@ impl HostGuiApp {
             address: String::new(),
             password: String::new(),
             stratum: String::new(),
+            wifi_ssid: String::new(),
+            wifi_password: String::new(),
+            ble_name: "SCRYPT".into(),
             difficulty: 4,
             current_password: String::new(),
             status: format!("Ready · config file {HOST_CONFIG_PATH}"),
@@ -85,12 +91,19 @@ impl HostGuiApp {
             update_rx: None,
         };
         if let Ok(cfg) = persist::load() {
-            app.address = cfg.address.to_string();
-            app.password = cfg.password.to_string();
-            app.stratum = cfg.stratum.to_string();
+            app.apply_config(&cfg);
             app.status = "Loaded saved credentials".into();
         }
         app
+    }
+
+    fn apply_config(&mut self, cfg: &PoolConfig) {
+        self.address = cfg.address.to_string();
+        self.password = cfg.password.to_string();
+        self.stratum = cfg.stratum.to_string();
+        self.wifi_ssid = cfg.wifi_ssid.to_string();
+        self.wifi_password = cfg.wifi_password.to_string();
+        self.ble_name = cfg.ble_name_or_default().to_string();
     }
 
     fn to_config(&self) -> Result<PoolConfig, String> {
@@ -100,6 +113,12 @@ impl HostGuiApp {
         cfg.set(SetupField::Password, &self.password)
             .map_err(|e| e.to_string())?;
         cfg.set(SetupField::Stratum, &self.stratum)
+            .map_err(|e| e.to_string())?;
+        cfg.set(SetupField::WifiSsid, &self.wifi_ssid)
+            .map_err(|e| e.to_string())?;
+        cfg.set(SetupField::WifiPassword, &self.wifi_password)
+            .map_err(|e| e.to_string())?;
+        cfg.set(SetupField::BleName, &self.ble_name)
             .map_err(|e| e.to_string())?;
         Ok(cfg)
     }
@@ -248,6 +267,13 @@ impl App for HostGuiApp {
                 ui.label("Stratum");
                 ui.text_edit_singleline(&mut self.stratum);
                 ui.add_space(8.0);
+                ui.label("WiFi SSID (- to skip)");
+                ui.text_edit_singleline(&mut self.wifi_ssid);
+                ui.label("WiFi password");
+                ui.add(egui::TextEdit::singleline(&mut self.wifi_password).password(true));
+                ui.label("BLE name");
+                ui.text_edit_singleline(&mut self.ble_name);
+                ui.add_space(8.0);
                 ui.horizontal(|ui| {
                     ui.label("Difficulty");
                     ui.add(egui::Slider::new(&mut self.difficulty, 2..=8));
@@ -259,9 +285,7 @@ impl App for HostGuiApp {
                     }
                     if ui.button("Load").clicked() {
                         if let Ok(cfg) = persist::load() {
-                            self.address = cfg.address.to_string();
-                            self.password = cfg.password.to_string();
-                            self.stratum = cfg.stratum.to_string();
+                            self.apply_config(&cfg);
                             self.status = "Loaded saved credentials".into();
                         } else {
                             self.status = "No saved file".into();

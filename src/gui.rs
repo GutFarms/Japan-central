@@ -7,17 +7,25 @@ pub enum GuiScreen {
     Mining,
     /// Saved address / password / stratum.
     Config,
+    /// WiFi + Bluetooth status.
+    Radio,
     /// Soft menu: change credentials, back to mining.
     Menu,
 }
 
 impl GuiScreen {
-    pub const ALL: [GuiScreen; 3] = [GuiScreen::Mining, GuiScreen::Config, GuiScreen::Menu];
+    pub const ALL: [GuiScreen; 4] = [
+        GuiScreen::Mining,
+        GuiScreen::Config,
+        GuiScreen::Radio,
+        GuiScreen::Menu,
+    ];
 
     pub fn title(self) -> &'static str {
         match self {
             GuiScreen::Mining => "MINE",
             GuiScreen::Config => "CONF",
+            GuiScreen::Radio => "RADIO",
             GuiScreen::Menu => "MENU",
         }
     }
@@ -25,7 +33,8 @@ impl GuiScreen {
     pub fn next(self) -> Self {
         match self {
             GuiScreen::Mining => GuiScreen::Config,
-            GuiScreen::Config => GuiScreen::Menu,
+            GuiScreen::Config => GuiScreen::Radio,
+            GuiScreen::Radio => GuiScreen::Menu,
             GuiScreen::Menu => GuiScreen::Mining,
         }
     }
@@ -34,7 +43,8 @@ impl GuiScreen {
         match self {
             GuiScreen::Mining => GuiScreen::Menu,
             GuiScreen::Config => GuiScreen::Mining,
-            GuiScreen::Menu => GuiScreen::Config,
+            GuiScreen::Radio => GuiScreen::Config,
+            GuiScreen::Menu => GuiScreen::Radio,
         }
     }
 }
@@ -120,6 +130,8 @@ mod tests {
         assert_eq!(gui.screen, GuiScreen::Mining);
         gui.on_boot_short_press();
         assert_eq!(gui.screen, GuiScreen::Config);
+        gui.on_boot_short_press();
+        assert_eq!(gui.screen, GuiScreen::Radio);
         gui.on_boot_short_press();
         assert_eq!(gui.screen, GuiScreen::Menu);
         gui.on_action_press();

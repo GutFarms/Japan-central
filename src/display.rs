@@ -22,6 +22,7 @@ use mipidsi::{Builder, Display as MipiDisplay};
 use crate::config::{PoolConfig, SetupField};
 use crate::gui::{GuiScreen, GuiState, MenuItem};
 use crate::miner::{hash_to_hex, MinerStats, SCRYPT_LOG_N, SCRYPT_N};
+use crate::radio::RadioStatus;
 
 pub const DISPLAY_WIDTH: u16 = 320;
 pub const DISPLAY_HEIGHT: u16 = 170;
@@ -211,24 +212,27 @@ impl<'a, D: DelayNs> Display<'a, D> {
             SetupField::Address => 1,
             SetupField::Password => 2,
             SetupField::Stratum => 3,
+            SetupField::WifiSsid => 4,
+            SetupField::WifiPassword => 5,
+            SetupField::BleName => 6,
         };
         // Step dots
-        for i in 1..=3u8 {
-            let x = 12 + (i as i32 - 1) * 18;
+        for i in 1..=6u8 {
+            let x = 12 + (i as i32 - 1) * 14;
             let color = if i <= step_n { ACCENT } else { BAR_BG };
-            self.fill_rect(x, 40, 12, 6, color)?;
+            self.fill_rect(x, 40, 10, 6, color)?;
         }
 
         let mut step: String<40> = String::new();
-        let _ = write!(step, "{}/3  {}", step_n, field.label());
-        self.draw_ok(Text::new(&step, Point::new(80, 48), LABEL).draw(&mut self.display))?;
+        let _ = write!(step, "{}/6  {}", step_n, field.label());
+        self.draw_ok(Text::new(&step, Point::new(100, 48), LABEL).draw(&mut self.display))?;
 
         self.round_panel(8, 60, 304, 70, PANEL)?;
         self.draw_ok(
             Text::new(field.prompt(), Point::new(18, 85), VALUE_SM).draw(&mut self.display),
         )?;
 
-        let shown = if field == SetupField::Password && !typed.is_empty() {
+        let shown = if field.is_secret() && !typed.is_empty() {
             PoolConfig::ellipsize("********", 36)
         } else if typed.is_empty() {
             PoolConfig::ellipsize("(waiting for USB serial…)", 36)
@@ -248,8 +252,14 @@ impl<'a, D: DelayNs> Display<'a, D> {
 
         self.round_panel(8, 36, 304, 110, PANEL)?;
         self.draw_row(48, "address", &PoolConfig::ellipsize(cfg.address.as_str(), 26))?;
-        self.draw_row(78, "password", cfg.password_masked().as_str())?;
-        self.draw_row(108, "stratum", &PoolConfig::ellipsize(cfg.stratum.as_str(), 26))?;
+        self.draw_row(72, "password", cfg.password_masked().as_str())?;
+        self.draw_row(96, "stratum", &PoolConfig::ellipsize(cfg.stratum.as_str(), 26))?;
+        let wifi = if cfg.wifi_enabled() {
+            PoolConfig::ellipsize(cfg.wifi_ssid.as_str(), 22)
+        } else {
+            PoolConfig::ellipsize("(wifi off)", 22)
+        };
+        self.draw_row(120, "wifi", wifi.as_str())?;
 
         let hint = if from_flash {
             "BOOT=tabs  btn=menu  serial: change"
@@ -272,6 +282,7 @@ impl<'a, D: DelayNs> Display<'a, D> {
         gui: &GuiState,
         stats: &MinerStats,
         cfg: &PoolConfig,
+        radio: &RadioStatus,
         mining: bool,
     ) -> Result<(), Error> {
         let screen_changed = self.last_screen != Some(gui.screen);
@@ -288,6 +299,7 @@ impl<'a, D: DelayNs> Display<'a, D> {
                     self.draw_config_body(cfg)?;
                 }
             }
+            GuiScreen::Radio => self.draw_radio_body(cfg, radio, screen_changed)?,
             GuiScreen::Menu => {
                 if screen_changed {
                     self.draw_menu_body(gui.menu)?;
@@ -360,10 +372,65 @@ impl<'a, D: DelayNs> Display<'a, D> {
 
     fn draw_config_body(&mut self, cfg: &PoolConfig) -> Result<(), Error> {
         self.round_panel(8, 36, 304, 110, PANEL)?;
-        self.draw_row(55, "address", &PoolConfig::ellipsize(cfg.address.as_str(), 26))?;
-        self.draw_row(85, "password", cfg.password_masked().as_str())?;
-        self.draw_row(115, "stratum", &PoolConfig::ellipsize(cfg.stratum.as_str(), 26))?;
+        self.draw_row(52, "address", &PoolConfig::ellipsize(cfg.address.as_str(), 26))?;
+        self.draw_row(76, "password", cfg.password_masked().as_str())?;
+        self.draw_row(100, "stratum", &PoolConfig::ellipsize(cfg.stratum.as_str(), 26))?;
+        let wifi = if cfg.wifi_enabled() {
+            PoolConfig::ellipsize(cfg.wifi_ssid.as_str(), 22)
+        } else {
+            PoolConfig::ellipsize("(off)", 22)
+        };
+        self.draw_row(124, "wifi", wifi.as_str())?;
         self.footer_hint("BOOT=next  btn=menu  serial: change")?;
+        Ok(())
+    }
+
+    fn draw_radio_body(
+        &mut self,
+        cfg: &PoolConfig,
+        radio: &RadioStatus,
+        full: bool,
+    ) -> Result<(), Error> {
+        if full {
+            self.round_panel(8, 36, 304, 110, PANEL)?;
+            self.footer_hint("BOOT=next  btn=menu")?;
+        }
+
+        self.fill_rect(16, 44, 288, 96, PANEL)?;
+
+        let ssid = if cfg.wifi_enabled() {
+            PoolConfig::ellipsize(cfg.wifi_ssid.as_str(), 20)
+        } else {
+            PoolConfig::ellipsize("(disabled)", 20)
+        };
+        let mut wifi_line: String<48> = String::new();
+        let _ = write!(
+            wifi_line,
+            "WiFi {}  {}",
+            radio.wifi.label(),
+            ssid.as_str()
+        );
+        self.draw_ok(Text::new(&wifi_line, Point::new(18, 62), VALUE_SM).draw(&mut self.display))?;
+
+        let mut ip_line: String<40> = String::new();
+        let _ = write!(ip_line, "IP   {}", radio.ip_string().as_str());
+        self.draw_ok(Text::new(&ip_line, Point::new(18, 88), VALUE_SM).draw(&mut self.display))?;
+
+        let ble_state = if radio.ble_connected {
+            "conn"
+        } else if radio.ble_advertising {
+            "adv"
+        } else {
+            "off"
+        };
+        let mut ble_line: String<48> = String::new();
+        let _ = write!(
+            ble_line,
+            "BLE  {}  {}",
+            ble_state,
+            PoolConfig::ellipsize(cfg.ble_name_or_default(), 16).as_str()
+        );
+        self.draw_ok(Text::new(&ble_line, Point::new(18, 114), VALUE_SM).draw(&mut self.display))?;
         Ok(())
     }
 

@@ -35,9 +35,12 @@ esp = [
     "dep:esp-alloc",
     "dep:esp-backtrace",
     "dep:esp-println",
+    "dep:esp-radio",
     "dep:embassy-executor",
     "dep:embassy-time",
     "dep:embassy-sync",
+    "dep:embassy-net",
+    "dep:embassy-futures",
     "dep:critical-section",
     "dep:static_cell",
     "dep:mipidsi",
@@ -46,6 +49,8 @@ esp = [
     "dep:embedded-io",
     "dep:esp-storage",
     "dep:embedded-storage",
+    "dep:trouble-host",
+    "dep:bt-hci",
     "dep:log",
 ]
 # Desktop demo / benchmarking of the same miner core
@@ -65,23 +70,28 @@ egui = { version = "=0.27.2", optional = true }
 
 # ESP32-S3 firmware dependencies (enabled with `--features esp`)
 esp-hal = { version = "1.1.1", features = ["esp32s3", "log-04", "unstable"], optional = true }
-esp-rtos = { version = "0.3.0", features = ["embassy", "esp-alloc", "esp32s3", "log-04"], optional = true }
+esp-rtos = { version = "0.3.0", features = ["embassy", "esp-alloc", "esp-radio", "esp32s3", "log-04"], optional = true }
 esp-bootloader-esp-idf = { version = "0.5.0", features = ["esp32s3", "log-04"], optional = true }
 esp-alloc = { version = "0.10.0", optional = true }
 esp-backtrace = { version = "0.19.0", features = ["esp32s3", "panic-handler", "println"], optional = true }
 # uart output so USB Serial/JTAG can be used for post-boot credential entry
 esp-println = { version = "0.17.0", features = ["esp32s3", "log-04", "uart"], optional = true }
+esp-radio = { version = "1.0.0-beta.0", features = ["esp32s3", "wifi", "ble", "coex", "log-04", "unstable"], optional = true }
 embedded-io = { version = "0.6", optional = true }
 esp-storage = { version = "0.9", features = ["esp32s3"], optional = true }
 embedded-storage = { version = "0.3", optional = true }
 embassy-executor = { version = "0.10.0", features = ["log"], optional = true }
 embassy-time = { version = "0.5.1", features = ["log"], optional = true }
 embassy-sync = { version = "0.8.0", optional = true }
+embassy-net = { version = "0.9.0", features = ["dhcpv4", "medium-ethernet", "tcp", "udp", "dns"], optional = true }
+embassy-futures = { version = "0.1", optional = true }
 critical-section = { version = "1.2.0", optional = true }
 static_cell = { version = "2.1.1", optional = true }
 mipidsi = { version = "0.10.0", optional = true }
 embedded-graphics = { version = "0.8.2", optional = true }
 embedded-hal = { version = "1.0.0", optional = true }
+trouble-host = { version = "0.7.0", features = ["default-packet-pool-mtu-255", "derive"], optional = true }
+bt-hci = { version = "0.8.0", optional = true }
 log = { version = "0.4", optional = true }
 
 [profile.dev]

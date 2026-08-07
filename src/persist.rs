@@ -44,6 +44,7 @@ mod esp_flash {
         }
 
         pub fn load(&mut self) -> Result<PoolConfig, PersistError> {
+            // Read a full sector-sized window; from_blob accepts v1 (320) and v2 (512).
             let mut blob = [0u8; CONFIG_BLOB_SIZE];
             self.flash
                 .read(CONFIG_FLASH_OFFSET, &mut blob)
@@ -90,10 +91,14 @@ mod host_file {
 
     pub fn load_path(path: impl AsRef<Path>) -> Result<PoolConfig, PersistError> {
         let data = fs::read(path).map_err(|_| PersistError::Io)?;
-        if data.len() < CONFIG_BLOB_SIZE {
+        // Accept legacy 320-byte v1 files and current 512-byte v2 files.
+        if data.len() < 320 {
             return Err(PersistError::Corrupt);
         }
-        PoolConfig::from_blob(&data[..CONFIG_BLOB_SIZE]).map_err(|_| PersistError::Corrupt)
+        let mut blob = [0u8; CONFIG_BLOB_SIZE];
+        let n = core::cmp::min(data.len(), CONFIG_BLOB_SIZE);
+        blob[..n].copy_from_slice(&data[..n]);
+        PoolConfig::from_blob(&blob).map_err(|_| PersistError::Corrupt)
     }
 
     pub fn save_path(path: impl AsRef<Path>, cfg: &PoolConfig) -> Result<(), PersistError> {
