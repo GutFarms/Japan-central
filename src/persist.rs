@@ -128,4 +128,34 @@ mod host_file {
 }
 
 #[cfg(feature = "host")]
-pub use host_file::{clear, load, save, HOST_CONFIG_PATH};
+pub use host_file::{clear, clear_path, load, load_path, save, save_path, HOST_CONFIG_PATH};
+
+#[cfg(all(test, feature = "host"))]
+mod tests {
+    use super::*;
+    use crate::config::{PoolConfig, SetupField};
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    #[test]
+    fn host_file_roundtrip_includes_radio() {
+        let mut cfg = PoolConfig::new();
+        cfg.set(SetupField::Address, "LPersist").unwrap();
+        cfg.set(SetupField::Password, "pw").unwrap();
+        cfg.set(SetupField::Stratum, "pool:1").unwrap();
+        cfg.set(SetupField::WifiSsid, "Ap").unwrap();
+        cfg.set(SetupField::WifiPassword, "secret").unwrap();
+        cfg.set(SetupField::BleName, "Ble").unwrap();
+
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let path = std::env::temp_dir().join(format!("scrypt-miner-test-{nanos}.bin"));
+        save_path(&path, &cfg).unwrap();
+        let loaded = load_path(&path).unwrap();
+        let _ = std::fs::remove_file(&path);
+        assert_eq!(loaded.wifi_ssid.as_str(), "Ap");
+        assert_eq!(loaded.wifi_password.as_str(), "secret");
+        assert_eq!(loaded.ble_name.as_str(), "Ble");
+    }
+}

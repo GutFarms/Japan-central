@@ -1,6 +1,9 @@
 //! Onboard WiFi (STA + DHCP) and Bluetooth LE advertising status / tasks.
 //!
 //! Status types are available on host builds; the radio stack only runs with `esp`.
+//!
+//! Uses `esp-radio` + `embassy-net` for WiFi and `trouble-host` 0.6 (bt-hci 0.8)
+//! for BLE so versions stay aligned with `esp-radio` 1.0.0-beta.0.
 
 use core::fmt;
 use heapless::String;
@@ -74,6 +77,8 @@ impl RadioStatus {
 
 #[cfg(feature = "esp")]
 mod stack {
+    use alloc::string::String as AllocString;
+
     use embassy_executor::Spawner;
     use embassy_futures::join::join;
     use embassy_net::{Runner, StackResources};
@@ -84,7 +89,8 @@ mod stack {
     use esp_hal::rng::Rng;
     use esp_radio::ble::controller::BleConnector;
     use esp_radio::wifi::{
-        Config, ControllerConfig, Interface, WifiController, sta::StationConfig, AuthenticationMethod,
+        AuthenticationMethod, Config, ControllerConfig, Interface, WifiController,
+        sta::StationConfig,
     };
     use log::info;
     use static_cell::StaticCell;
@@ -93,15 +99,14 @@ mod stack {
     use super::{RadioStatus, WifiPhase};
     use crate::config::PoolConfig;
 
-    static STATUS: Mutex<CriticalSectionRawMutex, RadioStatus> =
-        Mutex::new(RadioStatus {
-            wifi: WifiPhase::Disabled,
-            ssid: heapless::String::new(),
-            ip: None,
-            ble_advertising: false,
-            ble_connected: false,
-            ble_name: heapless::String::new(),
-        });
+    static STATUS: Mutex<CriticalSectionRawMutex, RadioStatus> = Mutex::new(RadioStatus {
+        wifi: WifiPhase::Disabled,
+        ssid: heapless::String::new(),
+        ip: None,
+        ble_advertising: false,
+        ble_connected: false,
+        ble_name: heapless::String::new(),
+    });
 
     static STACK_RESOURCES: StaticCell<StackResources<3>> = StaticCell::new();
     static BLE_NAME_BUF: StaticCell<[u8; 24]> = StaticCell::new();
@@ -148,9 +153,7 @@ mod stack {
         s.ble_connected = connected;
     }
 
-    /// Start BLE advertising and, when configured, WiFi STA + DHCP.
-    pub fn start(spawner: &Spawner, wifi: WIFI<'static>, bt: BT<'static>, cfg: &PoolConfig) {
-        // Seed shared status from config.
+    fn seed_status(cfg: &PoolConfig) {
         if let Ok(mut s) = STATUS.try_lock() {
             s.wifi = if cfg.wifi_enabled() {
                 WifiPhase::Starting
@@ -165,8 +168,9 @@ mod stack {
             s.ble_name.clear();
             let _ = s.ble_name.push_str(cfg.ble_name_or_default());
         }
+    }
 
-        let ble_name = cfg.ble_name_or_default();
+    fn start_ble(spawner: &Spawner, bt: BT<'static>, ble_name: &str) {
         let name_buf = BLE_NAME_BUF.init([0u8; 24]);
         let ble_bytes = ble_name.as_bytes();
         let n = core::cmp::min(ble_bytes.len(), name_buf.len());
@@ -184,12 +188,9 @@ mod stack {
         if spawner.spawn(ble_task(ble_controller, ble_name_bytes)).is_err() {
             info!("failed to spawn BLE task");
         }
+    }
 
-        if !cfg.wifi_enabled() {
-            info!("WiFi skipped (no SSID)");
-            return;
-        }
-
+    fn start_wifi(spawner: &Spawner, wifi: WIFI<'static>, cfg: &PoolConfig) {
         let ssid = cfg.wifi_ssid.as_str();
         let password = cfg.wifi_password.as_str();
 
@@ -197,7 +198,8 @@ mod stack {
         if password.is_empty() {
             station = station.with_auth_method(AuthenticationMethod::None);
         } else {
-            station = station.with_password(password);
+            // StationConfig::password is alloc::String; builder takes it by value.
+            station = station.with_password(AllocString::from(password));
         }
 
         let wifi_interface = Interface::station();
@@ -208,7 +210,6 @@ mod stack {
             Ok(c) => c,
             Err(e) => {
                 info!("WiFi init failed: {e:?}");
-                // best-effort mark failed
                 if let Ok(mut s) = STATUS.try_lock() {
                     s.wifi = WifiPhase::Failed;
                 }
@@ -217,7 +218,7 @@ mod stack {
         };
 
         let net_config = embassy_net::Config::dhcpv4(Default::default());
-        let mut rng = Rng::new();
+        let rng = Rng::new();
         let seed = (rng.random() as u64) << 32 | rng.random() as u64;
         let (stack, runner) = embassy_net::new(
             wifi_interface,
@@ -235,6 +236,22 @@ mod stack {
         }
         if spawner.spawn(dhcp_watch(stack)).is_err() {
             info!("failed to spawn DHCP watch");
+        }
+    }
+
+    /// Start BLE advertising and, when configured, WiFi STA + DHCP.
+    ///
+    /// BLE and WiFi are independent: failure of one does not block the other.
+    pub fn start(spawner: &Spawner, wifi: WIFI<'static>, bt: BT<'static>, cfg: &PoolConfig) {
+        seed_status(cfg);
+        start_ble(spawner, bt, cfg.ble_name_or_default());
+
+        if cfg.wifi_enabled() {
+            start_wifi(spawner, wifi, cfg);
+        } else {
+            info!("WiFi skipped (no SSID)");
+            // WIFI peripheral is unused; drop it.
+            let _ = wifi;
         }
     }
 
@@ -298,14 +315,16 @@ mod stack {
         controller: ExternalController<BleConnector<'static>, 1>,
         ble_name: &'static [u8],
     ) {
-        let address = Address::random([0x42, 0x53, 0x43, 0x52, 0x59, 0x50]); // "BSCRYP" mix
-        let mut resources: HostResources<_, DefaultPacketPool, CONNECTIONS_MAX, L2CAP_CHANNELS_MAX> =
+        let address = Address::random([0x42, 0x53, 0x43, 0x52, 0x59, 0x50]);
+        let mut resources: HostResources<DefaultPacketPool, CONNECTIONS_MAX, L2CAP_CHANNELS_MAX> =
             HostResources::new();
-        let stack = trouble_host::new(controller, &mut resources)
-            .set_random_address(address)
-            .build();
-        let mut peripheral = stack.peripheral();
-        let mut runner = stack.runner();
+        // trouble-host 0.6: build() borrows the Stack for the Host lifetime.
+        let stack = trouble_host::new(controller, &mut resources).set_random_address(address);
+        let Host {
+            mut peripheral,
+            mut runner,
+            ..
+        } = stack.build();
 
         let mut adv_data = [0; 31];
         let adv_len = match AdStructure::encode_slice(

@@ -695,6 +695,25 @@ mod tests {
     }
 
     #[test]
+    fn blob_roundtrip_wifi_open_and_disabled() {
+        let mut cfg = PoolConfig::new();
+        cfg.set(SetupField::Address, "LWallet").unwrap();
+        cfg.set(SetupField::Password, "x").unwrap();
+        cfg.set(SetupField::Stratum, "pool:3333").unwrap();
+        cfg.set(SetupField::WifiSsid, "OpenCafe").unwrap();
+        cfg.set(SetupField::WifiPassword, "").unwrap();
+        cfg.set(SetupField::BleName, "Rig").unwrap();
+        let restored = PoolConfig::from_blob(&cfg.to_blob().unwrap()).unwrap();
+        assert_eq!(restored.wifi_ssid.as_str(), "OpenCafe");
+        assert!(restored.wifi_password.is_empty());
+        assert_eq!(restored.ble_name.as_str(), "Rig");
+
+        cfg.set(SetupField::WifiSsid, "skip").unwrap();
+        let restored = PoolConfig::from_blob(&cfg.to_blob().unwrap()).unwrap();
+        assert!(!restored.wifi_enabled());
+    }
+
+    #[test]
     fn reads_legacy_v1_blob() {
         // Build a v1-shaped blob manually (320 bytes).
         let mut blob = [0u8; 320];

@@ -53,7 +53,7 @@ After changing WiFi/BLE settings, **reboot** so the radio stack picks up the new
 | Board | LilyGO T-Display-S3 (ESP32-S3) |
 | Display | ST7789, 320×170, parallel bus |
 | Buttons | BOOT=GPIO0, custom=GPIO14 |
-| Radio | Onboard WiFi + Bluetooth (esp-radio + embassy-net + trouble-host) |
+| Radio | Onboard WiFi + Bluetooth (`esp-radio` + `embassy-net` + `trouble-host` 0.6) |
 | RAM | ~64 KiB reclaimed + ~200 KiB heap for radio + scrypt ROMix |
 
 Pin map matches LilyGO’s T-Display-S3 parallel wiring (GPIO5–9, 14–15, 38–42, 45–48).
