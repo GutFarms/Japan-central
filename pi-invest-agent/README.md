@@ -56,11 +56,11 @@ pi-invest coinbase address BTC
 
 ## Raspberry Pi 5 quick start
 
-### Option A — bootable OS image (v0.2)
+### Option A — bootable OS image (v0.3)
 
 Flash **Pi Invest OS** — download the prebuilt image from the
-[v0.2.0 release](https://github.com/GutFarms/Japan-central/releases/tag/pi-invest-os-v0.2.0)
-([`.img.xz`](https://github.com/GutFarms/Japan-central/releases/download/pi-invest-os-v0.2.0/pi-invest-os-0.2.0-arm64.img.xz))
+[v0.3.0 release](https://github.com/GutFarms/Japan-central/releases/tag/pi-invest-os-v0.3.0)
+([`.img.xz`](https://github.com/GutFarms/Japan-central/releases/download/pi-invest-os-v0.3.0/pi-invest-os-0.3.0-arm64.img.xz))
 or build from [`../pi-invest-os/`](../pi-invest-os/).
 
 ```bash

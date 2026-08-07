@@ -33,10 +33,16 @@ test -f "$MNT/opt/pi-invest-agent/pyproject.toml"
 test -f "$MNT/opt/pi-invest-agent/src/pi_invest/wallet/__init__.py"
 test -f "$MNT/opt/pi-invest-agent/src/pi_invest/web/app.py"
 test -x "$MNT/usr/local/sbin/pi-invest-firstboot.sh"
+test -x "$MNT/usr/local/sbin/pi-invest-update.sh"
+test -x "$MNT/usr/local/sbin/pi-invest-kiosk.sh"
+test -f "$MNT/etc/systemd/system/pi-invest-kiosk.service"
+test -f "$MNT/etc/systemd/system/pi-invest-update.timer"
 test -L "$MNT/etc/systemd/system/multi-user.target.wants/pi-invest-firstboot.service"
-# Agent units must wait for first-boot marker
+test -L "$MNT/etc/systemd/system/timers.target.wants/pi-invest-update.timer"
 grep -q 'ConditionPathExists=/var/lib/pi-invest/firstboot-done' \
   "$MNT/etc/systemd/system/pi-invest.service"
+grep -q chromium "$MNT/usr/local/sbin/pi-invest-firstboot.sh"
+grep -q pi-invest-update.timer "$MNT/usr/local/sbin/pi-invest-firstboot.sh"
 test ! -e "$MNT/etc/systemd/system/multi-user.target.wants/pi-invest.service"
 test ! -f "$MNT/opt/pi-invest-agent/.env"
 echo "rootfs: OK"
@@ -48,5 +54,7 @@ mdir -i "${LOOP}p1" :: | grep -qi 'pi-invest.env'
 mdir -i "${LOOP}p1" :: | grep -qi 'userconf'
 mdir -i "${LOOP}p1" :: | grep -qiE '(^|[[:space:]])ssh([[:space:]]|$)'
 mdir -i "${LOOP}p1" :: | grep -qi 'bcm2712-rpi-5-b.dtb'
+mtype -i "${LOOP}p1" ::pi-invest.env | grep -q 'PI_INVEST_AUTO_UPDATE'
+mtype -i "${LOOP}p1" ::pi-invest.env | grep -q 'PI_INVEST_KIOSK_URL'
 echo "boot: OK"
 echo "VERIFY_OK $IMG"

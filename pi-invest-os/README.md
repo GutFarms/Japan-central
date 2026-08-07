@@ -1,8 +1,8 @@
 # Pi Invest OS
 
-**Version 0.2** — a bootable Raspberry Pi OS image with the [Pi Invest Agent](../pi-invest-agent/) baked in.
+**Version 0.3** — a bootable Raspberry Pi OS image with the [Pi Invest Agent](../pi-invest-agent/) baked in, plus **Chromium kiosk** and **daily auto-update**.
 
-Flash this onto a microSD (or NVMe), boot a **Raspberry Pi 5**, and the agent provisions itself on first boot: Python venv, paper trading loop, and local dashboard.
+Flash this onto a microSD (or NVMe), boot a **Raspberry Pi 5**, and the agent provisions itself on first boot: Python venv, paper trading loop, local dashboard, fullscreen browser, and update timer.
 
 ## What you get
 
@@ -13,95 +13,85 @@ Flash this onto a microSD (or NVMe), boot a **Raspberry Pi 5**, and the agent pr
 | Agent path | `/opt/pi-invest-agent` |
 | Default user | `pi` / password `change-me` (change immediately) |
 | SSH | Enabled |
-| First boot | Installs deps, creates venv, enables `pi-invest` + dashboard |
+| First boot | Installs deps, Chromium, cage kiosk, unattended-upgrades |
+| Web browser | Chromium fullscreen kiosk on HDMI → `http://127.0.0.1:8787` |
+| Auto-update | Daily timer pulls latest agent from GitHub + restarts services |
+| OS security | `unattended-upgrades` enabled |
 | Trading mode | Paper (live still double-gated) |
-| Dashboard | `http://127.0.0.1:8787` after first boot (SSH tunnel recommended) |
+| Dashboard | `http://127.0.0.1:8787` |
 
 ## Flash the image
 
 ### Option A — download prebuilt (recommended)
 
-**Release:** [Pi Invest OS v0.2.0](https://github.com/GutFarms/Japan-central/releases/tag/pi-invest-os-v0.2.0)
+**Release:** [Pi Invest OS v0.3.0](https://github.com/GutFarms/Japan-central/releases/tag/pi-invest-os-v0.3.0)
+(rebuild publishes this tag; until then build locally or use the latest release)
 
 | File | Link |
 |---|---|
-| Image (~501 MB) | [pi-invest-os-0.2.0-arm64.img.xz](https://github.com/GutFarms/Japan-central/releases/download/pi-invest-os-v0.2.0/pi-invest-os-0.2.0-arm64.img.xz) |
-| Checksums | [pi-invest-os-0.2.0-arm64.sha256](https://github.com/GutFarms/Japan-central/releases/download/pi-invest-os-v0.2.0/pi-invest-os-0.2.0-arm64.sha256) |
+| Image | [pi-invest-os-0.3.0-arm64.img.xz](https://github.com/GutFarms/Japan-central/releases/download/pi-invest-os-v0.3.0/pi-invest-os-0.3.0-arm64.img.xz) |
+| Checksums | [pi-invest-os-0.3.0-arm64.sha256](https://github.com/GutFarms/Japan-central/releases/download/pi-invest-os-v0.3.0/pi-invest-os-0.3.0-arm64.sha256) |
 
 ```bash
-# Verify (optional)
-sha256sum -c pi-invest-os-0.2.0-arm64.sha256
-
-# Linux — replace sdX with your SD/NVMe device (not a partition)
-xzcat pi-invest-os-0.2.0-arm64.img.xz | sudo dd of=/dev/sdX bs=4M status=progress conv=fsync
+sha256sum -c pi-invest-os-0.3.0-arm64.sha256
+xzcat pi-invest-os-0.3.0-arm64.img.xz | sudo dd of=/dev/sdX bs=4M status=progress conv=fsync
 ```
 
 Or open the `.img.xz` in [Raspberry Pi Imager](https://www.raspberrypi.com/software/) → **Use custom**.
 
 ### Option B — build it yourself
 
-On a Linux amd64/arm64 host with sudo:
-
 ```bash
 cd pi-invest-os
 ./scripts/build-image.sh
-# writes dist/pi-invest-os-<version>-arm64.img.xz
 ```
-
-The builder downloads Raspberry Pi OS Lite, expands the rootfs, injects the agent + first-boot service, enables SSH, and seeds boot-partition config.
 
 ## First boot
 
-1. Insert the card, power on the Pi 5, wait 3–10 minutes (apt + pip on first boot).
-2. Optional: before first power-on, mount the boot partition on any PC and edit `pi-invest.env` (API keys, dashboard password, ntfy topic).
-3. SSH in:
+1. Power on with HDMI attached (for the kiosk browser). Wait 5–15 minutes (apt installs Chromium).
+2. Optional: edit `pi-invest.env` on the boot partition before first power-on.
+3. On screen: Chromium opens the dashboard fullscreen.
+4. SSH: `ssh pi@pi-invest.local` (password `change-me`).
 
 ```bash
-ssh pi@pi-invest.local
-# password: change-me
+sudo journalctl -u pi-invest-firstboot -u pi-invest -u pi-invest-kiosk -f
+systemctl status pi-invest-update.timer
+sudo pi-invest-update.sh --force   # manual agent update
 ```
 
-4. Check status:
+## Auto-update
 
-```bash
-sudo journalctl -u pi-invest-firstboot -u pi-invest -f
-pi-invest status
-```
+- **Agent:** `pi-invest-update.timer` runs daily (~04:15 local), clones `PI_INVEST_UPDATE_BRANCH` from GitHub, syncs `/opt/pi-invest-agent` (keeps `.env`, `config.yaml`, `data/`), reinstalls the package, restarts services.
+- **Disable:** set `PI_INVEST_AUTO_UPDATE=false` in `/opt/pi-invest-agent/.env`.
+- **OS packages:** `unattended-upgrades` applies security updates automatically.
 
-5. Dashboard via SSH tunnel (default bind is localhost):
+## Browser / kiosk
 
-```bash
-ssh -L 8787:127.0.0.1:8787 pi@pi-invest.local
-# open http://127.0.0.1:8787  (user pi / password from pi-invest.env)
-```
+- Service: `pi-invest-kiosk.service` (starts only if `/dev/dri/card0` exists).
+- Compositor: Wayland `cage` + Chromium `--kiosk`.
+- URL: `PI_INVEST_KIOSK_URL` (default `http://127.0.0.1:8787`).
+- Desktop launcher also installed at `~/Desktop/pi-invest-dashboard.desktop`.
+- Headless (no display): kiosk is skipped; use SSH tunnel for the dashboard.
 
 ## Layout
 
 ```
 pi-invest-os/
-  VERSION                 # 0.2.x
-  boot/                   # files placed on the FAT boot partition
-    pi-invest.env         # secrets template (copied to agent .env on first boot)
-    userconf.txt          # default pi user
-  config/config.os.yaml   # paper-first OS defaults
-  overlay/                # rootfs overlay (hostname, motd, systemd, firstboot)
-  scripts/build-image.sh  # reproducible image builder
-  dist/                   # build output (gitignored)
+  VERSION
+  boot/pi-invest.env
+  overlay/usr/local/sbin/
+    pi-invest-firstboot.sh
+    pi-invest-update.sh
+    pi-invest-kiosk.sh
+  overlay/etc/systemd/system/
+    pi-invest*.service
+    pi-invest-update.timer
+  scripts/build-image.sh
 ```
-
-## Relationship to `pi-invest-agent`
-
-| | `pi-invest-agent` (v0.1) | `pi-invest-os` (v0.2) |
-|---|---|---|
-| Install | `pip` / git clone on an existing Pi OS | Flash a full OS image |
-| Audience | Developers iterating on the agent | Appliance-style deploy |
-| Code | Source of truth | Build copies agent into `/opt` |
-
-Secrets are **not** baked into the golden image beyond a change-me dashboard password. Put real keys in `pi-invest.env` on the boot partition or edit `/opt/pi-invest-agent/.env` after login.
 
 ## Safety
 
-Same gates as the agent package: paper by default, `ALLOW_LIVE_TRADING` / `ALLOW_LIVE_TRANSFERS` required for live, kill switch, allowlist, send confirmation. This image is for experimentation — not financial advice.
+Paper by default. Live trading/transfers remain double-gated. Change the default password after first login. Not financial advice.
 
 ## License
 

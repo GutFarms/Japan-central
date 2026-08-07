@@ -70,9 +70,9 @@ echo "==> Decompressing"
 rm -f "$RAW"
 xz -T0 -dkc "$ARCHIVE" > "$RAW"
 
-# Grow image by 1.5GiB so agent + first-boot packages fit comfortably
-echo "==> Expanding image +1.5GiB"
-dd if=/dev/zero bs=1M count=1536 status=none >> "$RAW"
+# Grow image by 3.5GiB so first-boot Chromium + updates fit comfortably
+echo "==> Expanding image +3.5GiB"
+dd if=/dev/zero bs=1M count=3584 status=none >> "$RAW"
 LOOP="$(losetup -f --show -P "$RAW")"
 cleanup() {
   set +e
@@ -151,20 +151,33 @@ echo "==> Applying OS overlay"
 install -d -m 755 "$MNT_ROOT/usr/local/sbin"
 install -m 755 "$ROOT/overlay/usr/local/sbin/pi-invest-firstboot.sh" \
   "$MNT_ROOT/usr/local/sbin/pi-invest-firstboot.sh"
+install -m 755 "$ROOT/overlay/usr/local/sbin/pi-invest-update.sh" \
+  "$MNT_ROOT/usr/local/sbin/pi-invest-update.sh"
+install -m 755 "$ROOT/overlay/usr/local/sbin/pi-invest-kiosk.sh" \
+  "$MNT_ROOT/usr/local/sbin/pi-invest-kiosk.sh"
 install -d -m 755 "$MNT_ROOT/etc/systemd/system"
-install -m 644 "$ROOT/overlay/etc/systemd/system/pi-invest-firstboot.service" \
-  "$MNT_ROOT/etc/systemd/system/pi-invest-firstboot.service"
-install -m 644 "$ROOT/overlay/etc/systemd/system/pi-invest.service" \
-  "$MNT_ROOT/etc/systemd/system/pi-invest.service"
-install -m 644 "$ROOT/overlay/etc/systemd/system/pi-invest-dashboard.service" \
-  "$MNT_ROOT/etc/systemd/system/pi-invest-dashboard.service"
+for unit in \
+  pi-invest-firstboot.service \
+  pi-invest.service \
+  pi-invest-dashboard.service \
+  pi-invest-kiosk.service \
+  pi-invest-update.service \
+  pi-invest-update.timer
+do
+  install -m 644 "$ROOT/overlay/etc/systemd/system/$unit" \
+    "$MNT_ROOT/etc/systemd/system/$unit"
+done
 install -m 644 "$ROOT/overlay/etc/hostname" "$MNT_ROOT/etc/hostname"
 install -m 644 "$ROOT/overlay/etc/motd" "$MNT_ROOT/etc/motd"
 
-# Enable first-boot unit (agent units wait on firstboot-done marker)
-mkdir -p "$MNT_ROOT/etc/systemd/system/multi-user.target.wants"
+# Enable first-boot + auto-update timer (agent/kiosk wait on firstboot-done)
+mkdir -p \
+  "$MNT_ROOT/etc/systemd/system/multi-user.target.wants" \
+  "$MNT_ROOT/etc/systemd/system/timers.target.wants"
 ln -sf /etc/systemd/system/pi-invest-firstboot.service \
   "$MNT_ROOT/etc/systemd/system/multi-user.target.wants/pi-invest-firstboot.service"
+ln -sf /etc/systemd/system/pi-invest-update.timer \
+  "$MNT_ROOT/etc/systemd/system/timers.target.wants/pi-invest-update.timer"
 
 # Version stamp on rootfs
 echo "$VERSION" > "$MNT_ROOT/etc/pi-invest-os-version"
@@ -172,8 +185,9 @@ cat > "$MNT_ROOT/etc/pi-invest-os-release" <<EOF
 NAME="Pi Invest OS"
 VERSION="$VERSION"
 ID=pi-invest-os
-VARIANT="Raspberry Pi 5 / arm64 Lite"
+VARIANT="Raspberry Pi 5 / arm64 Lite + Chromium kiosk"
 AGENT_PATH=/opt/pi-invest-agent
+FEATURES="auto-update,chromium-kiosk,unattended-upgrades"
 EOF
 
 echo "==> Writing boot partition (FAT via mtools)"
