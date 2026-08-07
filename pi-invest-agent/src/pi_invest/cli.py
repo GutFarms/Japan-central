@@ -28,19 +28,26 @@ def _boot(config: Optional[str] = None, simulator: bool = False):
 
 @app.command()
 def once(
-    dry_run: bool = typer.Option(False, help="Score and plan without placing orders"),
+    dry_run: bool = typer.Option(False, "--dry-run", help="Score and plan without placing orders"),
+    preview: bool = typer.Option(
+        False,
+        "--preview",
+        help="Alias for --dry-run; print planned rebalance orders",
+    ),
     simulator: bool = typer.Option(False, help="Force offline simulator quotes"),
     config: Optional[str] = typer.Option(None, help="Path to config.yaml"),
 ) -> None:
     """Run a single research + trade cycle."""
-    agent, cfg, _env, _db, _wallet, safety, _journal = _boot(config, simulator)
+    agent, cfg, _env, _db, _wallet, safety, _journal, _alerts = _boot(config, simulator)
     st = safety.state()
     halt_note = f"  [red]HALTED[/red] ({st.reason})" if st.halted else ""
+    plan_only = dry_run or preview
+    mode_note = "  [cyan]PREVIEW[/cyan]" if plan_only else ""
     console.print(
         f"[bold]{cfg.agent.name}[/bold] mode={cfg.agent.mode} "
-        f"backend={cfg.broker.backend}{halt_note}"
+        f"backend={cfg.broker.backend}{halt_note}{mode_note}"
     )
-    decision = agent.run_cycle(dry_run=dry_run)
+    decision = agent.run_cycle(dry_run=plan_only)
     _print_decision(decision)
 
 
@@ -50,7 +57,7 @@ def run(
     config: Optional[str] = typer.Option(None, help="Path to config.yaml"),
 ) -> None:
     """Run continuously on the configured interval."""
-    agent, cfg, _env, _db, _wallet, safety, _journal = _boot(config, simulator)
+agent, cfg, _env, _db, _wallet, safety, _journal, _alerts = _boot(config, simulator)
     interval = max(1, cfg.schedule.interval_minutes) * 60
     console.print(
         f"Starting loop every {cfg.schedule.interval_minutes}m "
@@ -75,7 +82,7 @@ def status(
     config: Optional[str] = typer.Option(None, help="Path to config.yaml"),
 ) -> None:
     """Show portfolio, wallet, halt state, and recent decisions."""
-    agent, cfg, _env, db, wallet, safety, journal = _boot(config, True)
+agent, cfg, _env, db, wallet, safety, journal, _alerts = _boot(config, True)
     marks = {}
     for sym in cfg.universe:
         try:
@@ -146,7 +153,7 @@ def halt(
     config: Optional[str] = typer.Option(None, help="Path to config.yaml"),
 ) -> None:
     """Freeze brokerage orders and outbound wallet sends."""
-    _agent, _cfg, _env, _db, _wallet, safety, _journal = _boot(config, True)
+_agent, _cfg, _env, _db, _wallet, safety, _journal, _alerts = _boot(config, True)
     st = safety.halt(reason)
     console.print(f"[red]HALTED[/red] — {st.reason}")
     console.print("Inbound receives still work. Use `pi-invest resume` to unlock.")
@@ -157,7 +164,7 @@ def resume(
     config: Optional[str] = typer.Option(None, help="Path to config.yaml"),
 ) -> None:
     """Clear the kill switch so trading and sends can resume."""
-    _agent, _cfg, _env, _db, _wallet, safety, _journal = _boot(config, True)
+_agent, _cfg, _env, _db, _wallet, safety, _journal, _alerts = _boot(config, True)
     safety.resume()
     console.print("[green]Resumed[/green] — orders and sends allowed again.")
 
@@ -168,7 +175,7 @@ def journal(
     config: Optional[str] = typer.Option(None, help="Path to config.yaml"),
 ) -> None:
     """Show performance journal (NAV, peak, drawdown)."""
-    _agent, _cfg, _env, _db, _wallet, _safety, journal = _boot(config, True)
+_agent, _cfg, _env, _db, _wallet, _safety, journal, _alerts = _boot(config, True)
     summary = journal.summary()
     if summary.latest_nav is None:
         console.print("No journal points yet — run `pi-invest once` first.")
@@ -208,7 +215,7 @@ def export_journal(
     config: Optional[str] = typer.Option(None, help="Path to config.yaml"),
 ) -> None:
     """Export the performance journal to CSV."""
-    _agent, _cfg, _env, _db, _wallet, _safety, journal = _boot(config, True)
+_agent, _cfg, _env, _db, _wallet, _safety, journal, _alerts = _boot(config, True)
     out = journal.export_csv(path)
     console.print(f"Wrote {out}")
 
@@ -221,7 +228,7 @@ def reset_paper(
     """Wipe the local paper brokerage ledger back to starting cash."""
     if not yes and not typer.confirm("Reset paper brokerage account?"):
         raise typer.Abort()
-    agent, cfg, _env, _db, _wallet, _safety, _journal = _boot(config, True)
+agent, cfg, _env, _db, _wallet, _safety, _journal, _alerts = _boot(config, True)
     agent.broker.reset()
     console.print(f"Paper account reset to ${cfg.broker.starting_cash:,.2f}")
 
@@ -240,7 +247,7 @@ def dashboard(
 
     from pi_invest.web.app import create_app
 
-    agent, cfg, env, db, wallet, safety, journal = _boot(config)
+    agent, cfg, env, db, wallet, safety, journal, _alerts = _boot(config)
     if cfg.dashboard.require_auth and not env.dashboard_password and not allow_open:
         console.print(
             "[red]Dashboard auth required.[/red] Set DASHBOARD_PASSWORD in .env "
@@ -249,15 +256,23 @@ def dashboard(
         raise typer.Exit(1)
 
     api = create_app(agent, cfg, db, wallet, env=env, safety=safety, journal=journal)
-    auth_note = (
-        "auth=off"
-        if allow_open or not env.dashboard_password
-        else f"auth=user:{env.dashboard_username}"
-    )
+    if allow_open or not env.dashboard_password:
+        auth_note = "auth=off"
+    else:
+        parts = [f"admin:{env.dashboard_username}"]
+        if env.dashboard_readonly_password:
+            parts.append(f"viewer:{env.dashboard_readonly_username}")
+        auth_note = "auth=" + " + ".join(parts)
+    host = cfg.dashboard.host
+    if host in {"0.0.0.0", "::"}:
+        console.print(
+            "[yellow]Dashboard binds all interfaces.[/yellow] Prefer "
+            "dashboard.host: 127.0.0.1 and reach it via Tailscale/SSH tunnel."
+        )
     console.print(
-        f"Dashboard on http://{cfg.dashboard.host}:{cfg.dashboard.port} ({auth_note})"
+        f"Dashboard on http://{host}:{cfg.dashboard.port} ({auth_note})"
     )
-    uvicorn.run(api, host=cfg.dashboard.host, port=cfg.dashboard.port, log_level="info")
+    uvicorn.run(api, host=host, port=cfg.dashboard.port, log_level="info")
 
 
 @wallet_app.command("balances")
@@ -265,7 +280,7 @@ def wallet_balances(
     config: Optional[str] = typer.Option(None, help="Path to config.yaml"),
 ) -> None:
     """Show USD + crypto wallet balances and receive addresses."""
-    _a, _c, _e, _d, wallet, _s, _j = _boot(config, True)
+_a, _c, _e, _d, wallet, _s, _j, _alerts = _boot(config, True)
     _print_wallet(wallet.snapshot())
 
 
@@ -275,7 +290,7 @@ def wallet_receive_address(
     config: Optional[str] = typer.Option(None, help="Path to config.yaml"),
 ) -> None:
     """Show the address/account id others can send to."""
-    _a, _c, _e, _d, wallet, _s, _j = _boot(config, True)
+_a, _c, _e, _d, wallet, _s, _j, _alerts = _boot(config, True)
     try:
         info = wallet.receive_info(asset)
     except WalletError as exc:
@@ -307,7 +322,7 @@ def wallet_send(
     """Send USD or cryptocurrency from the wallet (allowlist + confirm)."""
     from pi_invest.wallet.confirm import confirmation_phrase
 
-    _a, cfg, _e, _d, wallet, _s, _j = _boot(config, True)
+_a, cfg, _e, _d, wallet, _s, _j, _alerts = _boot(config, True)
     phrase = confirmation_phrase(asset, amount)
     if cfg.wallet.require_send_confirmation and not confirm:
         console.print(f"Confirmation required. Re-run with: --confirm \"{phrase}\"")
@@ -328,7 +343,7 @@ def wallet_allowlist(
     config: Optional[str] = typer.Option(None, help="Path to config.yaml"),
 ) -> None:
     """Show withdrawal allowlist destinations."""
-    _a, cfg, _e, _d, wallet, _s, _j = _boot(config, True)
+_a, cfg, _e, _d, wallet, _s, _j, _alerts = _boot(config, True)
     rows = wallet.allowlist()
     console.print(
         f"allowlist_required={cfg.wallet.allowlist_required}  "
@@ -350,7 +365,7 @@ def wallet_allowlist_add(
     config: Optional[str] = typer.Option(None, help="Path to config.yaml"),
 ) -> None:
     """Allow a destination for future sends."""
-    _a, _c, _e, _d, wallet, _s, _j = _boot(config, True)
+_a, _c, _e, _d, wallet, _s, _j, _alerts = _boot(config, True)
     wallet.allowlist_add(destination, label=label)
     console.print(f"[green]allowlisted[/green] {destination}")
 
@@ -361,7 +376,7 @@ def wallet_allowlist_remove(
     config: Optional[str] = typer.Option(None, help="Path to config.yaml"),
 ) -> None:
     """Remove a destination from the withdrawal allowlist."""
-    _a, _c, _e, _d, wallet, _s, _j = _boot(config, True)
+_a, _c, _e, _d, wallet, _s, _j, _alerts = _boot(config, True)
     try:
         wallet.allowlist_remove(destination)
     except WalletError as exc:
@@ -379,7 +394,7 @@ def wallet_credit(
     config: Optional[str] = typer.Option(None, help="Path to config.yaml"),
 ) -> None:
     """Credit an inbound payment (paper receive / webhook stand-in)."""
-    _a, _c, _e, _d, wallet, _s, _j = _boot(config, True)
+_a, _c, _e, _d, wallet, _s, _j, _alerts = _boot(config, True)
     try:
         record = wallet.receive(asset, amount, from_address=frm, memo=memo)
     except WalletError as exc:
@@ -397,7 +412,7 @@ def wallet_history(
     config: Optional[str] = typer.Option(None, help="Path to config.yaml"),
 ) -> None:
     """Show recent wallet transfers."""
-    _a, _c, _e, _d, wallet, _s, _j = _boot(config, True)
+_a, _c, _e, _d, wallet, _s, _j, _alerts = _boot(config, True)
     rows = wallet.history(limit=limit)
     table = Table(title="Transfers")
     table.add_column("When")
@@ -428,7 +443,7 @@ def wallet_bridge_to_broker(
     from pi_invest.broker import PaperBroker
     from pi_invest.wallet.confirm import bridge_phrase
 
-    _a, cfg, _e, db, wallet, _s, _j = _boot(config, True)
+_a, cfg, _e, db, wallet, _s, _j, _alerts = _boot(config, True)
     if cfg.broker.backend == "paper":
         PaperBroker(db, cfg.broker.starting_cash)
     phrase = bridge_phrase(amount)
@@ -453,7 +468,7 @@ def wallet_bridge_from_broker(
     from pi_invest.broker import PaperBroker
     from pi_invest.wallet.confirm import bridge_phrase
 
-    _a, cfg, _e, db, wallet, _s, _j = _boot(config, True)
+_a, cfg, _e, db, wallet, _s, _j, _alerts = _boot(config, True)
     if cfg.broker.backend == "paper":
         PaperBroker(db, cfg.broker.starting_cash)
     phrase = bridge_phrase(amount)
@@ -475,7 +490,7 @@ def coinbase_status(
     """Test Coinbase CDP credentials and show live balances."""
     from pi_invest.wallet.coinbase_client import CoinbaseAPIError, CoinbaseClient
 
-    _a, cfg, env, _d, wallet, _s, _j = _boot(config, True)
+_a, cfg, env, _d, wallet, _s, _j, _alerts = _boot(config, True)
     if not env.coinbase_api_key or not env.coinbase_api_secret:
         console.print(
             "[red]Missing credentials.[/red] Set COINBASE_API_KEY and "
@@ -528,7 +543,7 @@ def coinbase_address(
     """Fetch or create a Coinbase receive address for an asset."""
     from pi_invest.wallet.coinbase_client import CoinbaseAPIError, CoinbaseClient
 
-    _a, _c, env, _d, _w, _s, _j = _boot(config, True)
+_a, _c, env, _d, _w, _s, _j, _alerts = _boot(config, True)
     try:
         client = CoinbaseClient(env)
         addr = client.get_or_create_receive_address(asset.upper())
@@ -565,11 +580,13 @@ def _print_wallet(snap) -> None:
 def _print_decision(decision) -> None:
     console.print(f"\n[bold]Cycle[/bold] {decision.cycle_id[:8]}…")
     halted = decision.meta.get("halted")
+    preview = decision.meta.get("preview")
     console.print(
         f"market_open={decision.market_open}  "
         f"data={decision.meta.get('data_source')}  "
         f"mode={decision.meta.get('mode')}  "
-        f"halted={halted}"
+        f"halted={halted}  "
+        f"preview={preview}"
     )
     score_table = Table(title="Income scores")
     score_table.add_column("Symbol")
@@ -584,6 +601,29 @@ def _print_decision(decision) -> None:
             ", ".join(s.notes) or "—",
         )
     console.print(score_table)
+
+    planned = decision.meta.get("planned_orders") or []
+    if planned:
+        plan_table = Table(title="Planned orders (not sent)" if preview or halted else "Planned orders")
+        plan_table.add_column("Side")
+        plan_table.add_column("Symbol")
+        plan_table.add_column("Notional/Qty", justify="right")
+        plan_table.add_column("Confidence", justify="right")
+        plan_table.add_column("Reason")
+        for p in planned:
+            size = (
+                f"${p['notional']:,.2f}"
+                if p.get("notional") is not None
+                else f"qty {p.get('qty', 0):.4f}"
+            )
+            plan_table.add_row(
+                str(p.get("side", "")),
+                str(p.get("symbol", "")),
+                size,
+                f"{float(p.get('confidence') or 0):.2f}",
+                (p.get("reason") or "—")[:48],
+            )
+        console.print(plan_table)
 
     if decision.orders:
         for o in decision.orders:

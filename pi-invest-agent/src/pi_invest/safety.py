@@ -1,7 +1,12 @@
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 from pi_invest.models import HaltState, utcnow
 from pi_invest.storage.db import Database
+
+if TYPE_CHECKING:
+    from pi_invest.alerts import AlertBus
 
 
 class HaltedError(RuntimeError):
@@ -11,8 +16,9 @@ class HaltedError(RuntimeError):
 class SafetyGate:
     """Persistent kill switch — blocks brokerage orders and wallet sends."""
 
-    def __init__(self, db: Database) -> None:
+    def __init__(self, db: Database, alerts: AlertBus | None = None) -> None:
         self.db = db
+        self.alerts = alerts
 
     def state(self) -> HaltState:
         halted, reason, updated = self.db.get_halt_state()
@@ -30,11 +36,16 @@ class SafetyGate:
         return self.state().halted
 
     def halt(self, reason: str = "manual halt") -> HaltState:
-        self.db.set_halt_state(True, reason=reason or "manual halt")
+        reason = reason or "manual halt"
+        self.db.set_halt_state(True, reason=reason)
+        if self.alerts is not None:
+            self.alerts.halt(reason)
         return self.state()
 
     def resume(self) -> HaltState:
         self.db.set_halt_state(False, reason="")
+        if self.alerts is not None:
+            self.alerts.resume()
         return self.state()
 
     def assert_trading_allowed(self) -> None:

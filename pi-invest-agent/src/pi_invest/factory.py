@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from pi_invest.agent import InvestAgent
+from pi_invest.alerts import AlertBus, build_alerts
 from pi_invest.broker import build_broker
 from pi_invest.config import AppConfig, EnvSettings, load_config, load_env
 from pi_invest.data import build_market_data
@@ -20,7 +21,14 @@ def build_agent(
     config_path: str | None = None,
     force_simulator: bool = False,
 ) -> tuple[
-    InvestAgent, AppConfig, EnvSettings, Database, WalletService, SafetyGate, PerformanceJournal
+    InvestAgent,
+    AppConfig,
+    EnvSettings,
+    Database,
+    WalletService,
+    SafetyGate,
+    PerformanceJournal,
+    AlertBus,
 ]:
     root = project_root()
     env = load_env()
@@ -39,8 +47,9 @@ def build_agent(
         db_path = root / db_path
     db = Database(db_path)
 
-    safety = SafetyGate(db)
-    journal = PerformanceJournal(db, safety)
+    alerts = build_alerts(cfg.alerts, env, db)
+    safety = SafetyGate(db, alerts=alerts)
+    journal = PerformanceJournal(db, safety, alerts=alerts)
 
     provider = "simulator" if force_simulator else cfg.market.provider
     market = build_market_data(
@@ -58,5 +67,6 @@ def build_agent(
         safety=safety,
         journal=journal,
         wallet=wallet,
+        alerts=alerts,
     )
-    return agent, cfg, env, db, wallet, safety, journal
+    return agent, cfg, env, db, wallet, safety, journal, alerts

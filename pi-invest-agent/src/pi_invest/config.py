@@ -40,9 +40,16 @@ class ScheduleConfig(BaseModel):
 
 
 class DashboardConfig(BaseModel):
-    host: str = "0.0.0.0"
+    # Default localhost — use Tailscale/SSH tunnel or set 0.0.0.0 deliberately
+    host: str = "127.0.0.1"
     port: int = 8787
     require_auth: bool = True
+
+
+class AlertsConfig(BaseModel):
+    enabled: bool = True
+    # Topic comes from NTFY_TOPIC in .env; server defaults to ntfy.sh
+    drawdown_alert_pct: float = 0.05  # notify when drawdown reaches 5%
 
 
 class WalletConfig(BaseModel):
@@ -122,6 +129,7 @@ class AppConfig(BaseModel):
     dashboard: DashboardConfig = Field(default_factory=DashboardConfig)
     wallet: WalletConfig = Field(default_factory=WalletConfig)
     safety: SafetyConfig = Field(default_factory=SafetyConfig)
+    alerts: AlertsConfig = Field(default_factory=AlertsConfig)
 
 
 class EnvSettings(BaseSettings):
@@ -144,6 +152,12 @@ class EnvSettings(BaseSettings):
     coinbase_api_secret: str = ""
     dashboard_username: str = "pi"
     dashboard_password: str = ""
+    # Optional read-only dashboard user (cannot send/halt/cycle/edit allowlist)
+    dashboard_readonly_username: str = "viewer"
+    dashboard_readonly_password: str = ""
+    ntfy_topic: str = ""
+    ntfy_server: str = "https://ntfy.sh"
+    ntfy_token: str = ""
     pi_invest_config: str = "config/config.yaml"
     pi_invest_db: str = "data/pi_invest.db"
 

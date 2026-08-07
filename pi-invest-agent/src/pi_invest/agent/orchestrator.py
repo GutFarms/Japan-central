@@ -4,6 +4,8 @@ import uuid
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
+from typing import TYPE_CHECKING, Any
+
 from pi_invest.agent.llm import LlmAdvisor
 from pi_invest.agent.risk import RiskGate
 from pi_invest.agent.scoring import heuristic_intents, score_symbol
@@ -15,6 +17,9 @@ from pi_invest.models import Decision, Side, TradeIntent, utcnow
 from pi_invest.safety import HaltedError, SafetyGate
 from pi_invest.storage.db import Database
 from pi_invest.wallet import WalletService
+
+if TYPE_CHECKING:
+    from pi_invest.alerts import AlertBus
 
 
 def _market_open(tz_name: str) -> bool:
@@ -39,6 +44,7 @@ class InvestAgent:
         safety: SafetyGate | None = None,
         journal: PerformanceJournal | None = None,
         wallet: WalletService | None = None,
+        alerts: AlertBus | None = None,
     ) -> None:
         self.cfg = cfg
         self.env = env
@@ -50,6 +56,7 @@ class InvestAgent:
         self.safety = safety or SafetyGate(db)
         self.journal = journal or PerformanceJournal(db, self.safety)
         self.wallet = wallet
+        self.alerts = alerts
 
     def run_cycle(self, dry_run: bool = False) -> Decision:
         cycle_id = str(uuid.uuid4())
@@ -134,15 +141,19 @@ class InvestAgent:
         skipped.extend(risk_notes)
 
         orders = []
+        planned_orders: list[dict[str, Any]] = []
         if dry_run:
-            skipped.append("dry-run: orders not sent")
+            skipped.append("preview/dry-run: orders not sent")
+            planned_orders = self._plan_orders(safe_intents, marks, skipped)
         elif halted:
             skipped.append("orders blocked by halt")
+            planned_orders = self._plan_orders(safe_intents, marks, skipped)
         else:
             try:
                 self.safety.assert_trading_allowed()
             except HaltedError as exc:
                 skipped.append(str(exc))
+                planned_orders = self._plan_orders(safe_intents, marks, skipped)
             else:
                 for intent in safe_intents:
                     account = self.broker.get_account(marks)
@@ -173,12 +184,35 @@ class InvestAgent:
                 "backend": self.cfg.broker.backend,
                 "agent": self.cfg.agent.name,
                 "halted": halted,
+                "preview": dry_run,
+                "planned_orders": planned_orders,
             },
         )
         self.db.save_decision(decision)
         if self.cfg.safety.journal_enabled:
             self._journal(account_after, cycle_id)
         return decision
+
+    def _plan_orders(
+        self,
+        intents: list[TradeIntent],
+        marks: dict[str, float],
+        skipped: list[str],
+    ) -> list[dict[str, Any]]:
+        """Compute orders that would be placed without submitting them."""
+        planned: list[dict[str, Any]] = []
+        account = self.broker.get_account(marks)
+        for intent in intents:
+            px = marks.get(intent.symbol)
+            if px is None:
+                skipped.append(f"{intent.symbol}: missing mark (preview)")
+                continue
+            order_req, reason = self.risk.to_order(intent, account, px)
+            if order_req is None:
+                skipped.append(f"{intent.symbol}: {reason}")
+                continue
+            planned.append(order_req.model_dump(mode="json"))
+        return planned
 
     def _journal(self, account, cycle_id: str) -> None:
         if not self.cfg.safety.journal_enabled:
@@ -189,6 +223,17 @@ class InvestAgent:
                 wallet_snap = self.wallet.snapshot()
             except Exception:  # noqa: BLE001
                 wallet_snap = None
+        if (
+            wallet_snap is not None
+            and wallet_snap.backend == "coinbase-error"
+            and self.alerts is not None
+        ):
+            try:
+                self.alerts.coinbase_error(
+                    str(wallet_snap.meta.get("error") or "Coinbase snapshot failed")
+                )
+            except Exception:  # noqa: BLE001
+                pass
         try:
             self.journal.record(account, wallet_snap, cycle_id=cycle_id)
         except Exception:  # noqa: BLE001

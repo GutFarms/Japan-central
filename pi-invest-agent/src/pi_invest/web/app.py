@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import secrets
-from typing import Annotated
+from typing import Literal
 
 from fastapi import Depends, FastAPI, HTTPException, status
 from fastapi.responses import HTMLResponse
@@ -95,7 +95,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
 <body>
   <main>
     <h1>Pi Invest</h1>
-    <p class="sub">Income agent + secured wallet · <span id="mode" class="pill">…</span> <span id="haltpill" class="pill">…</span></p>
+    <p class="sub">Income agent + secured wallet · <span id="mode" class="pill">…</span> <span id="haltpill" class="pill">…</span> <span id="rolepill" class="pill">…</span></p>
 
     <div class="grid">
       <div class="stat"><div class="label">Equity</div><div class="value" id="equity">—</div></div>
@@ -107,15 +107,19 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     <h2>NAV chart</h2>
     <div class="chart-wrap"><canvas id="nav-chart" width="900" height="180"></canvas></div>
 
+    <div id="admin-controls">
     <h2>Safety</h2>
     <button id="halt-btn" class="danger">Halt trading + sends</button>
     <button id="resume-btn" class="secondary">Resume</button>
     <button id="cycle" class="secondary">Run invest cycle</button>
+    </div>
     <p class="muted" id="halt-reason"></p>
+    <p class="muted" id="viewer-note" style="display:none">Read-only session — halt, send, and allowlist edits require the admin user.</p>
 
     <h2>Receive (QR)</h2>
     <div class="qr-grid" id="qr-grid"></div>
 
+    <div id="admin-send">
     <h2>Send wizard</h2>
     <div class="forms">
       <div class="form">
@@ -142,6 +146,15 @@ DASHBOARD_HTML = """<!DOCTYPE html>
           <tbody id="allow-rows"></tbody>
         </table>
       </div>
+    </div>
+    </div>
+
+    <div id="viewer-allowlist" style="display:none">
+    <h2>Allowlist (read-only)</h2>
+    <table>
+      <thead><tr><th>Destination</th><th>Label</th></tr></thead>
+      <tbody id="allow-rows-ro"></tbody>
+    </table>
     </div>
 
     <h2>Wallet balances</h2>
@@ -243,6 +256,13 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     async function refresh() {
       const r = await fetch('/api/status');
       const d = await r.json();
+      const role = d.role || 'admin';
+      const isAdmin = role === 'admin';
+      document.getElementById('admin-controls').style.display = isAdmin ? '' : 'none';
+      document.getElementById('admin-send').style.display = isAdmin ? '' : 'none';
+      document.getElementById('viewer-note').style.display = isAdmin ? 'none' : '';
+      document.getElementById('viewer-allowlist').style.display = isAdmin ? 'none' : '';
+      document.getElementById('rolepill').textContent = role.toUpperCase();
       document.getElementById('mode').textContent =
         `${d.mode} / ${d.backend} · wallet ${d.wallet.backend}`;
       const hp = document.getElementById('haltpill');
@@ -255,8 +275,10 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       document.getElementById('dd').textContent =
         `${((d.journal.max_drawdown_pct || 0) * 100).toFixed(2)}%`;
       document.getElementById('walletusd').textContent = fmt(d.wallet.total_usd_estimate);
-      fillAssets(d.wallet.balances.map(b => b.asset));
-      fillDestinations(d.allowlist || []);
+      if (isAdmin) {
+        fillAssets(d.wallet.balances.map(b => b.asset));
+        fillDestinations(d.allowlist || []);
+      }
       drawNav(d.journal_rows || []);
 
       document.getElementById('wallet').innerHTML = d.wallet.balances.map(b => {
@@ -270,16 +292,22 @@ DASHBOARD_HTML = """<!DOCTYPE html>
          <td>${fmt(p.market_value)}</td><td>${fmt(p.unrealized_pnl)}</td></tr>`
       ).join('') || '<tr><td colspan=4 class="muted">No positions</td></tr>';
 
-      document.getElementById('allow-rows').innerHTML = (d.allowlist || []).map(r =>
-        `<tr><td><code>${r.destination}</code>${r.label ? ' · ' + r.label : ''}</td>
-         <td class="row-actions"><button data-rm="${r.destination}" class="secondary allow-rm">Remove</button></td></tr>`
-      ).join('') || '<tr><td colspan=2 class="muted">Empty — sends blocked until you add destinations</td></tr>';
-      document.querySelectorAll('.allow-rm').forEach(btn => {
-        btn.onclick = async () => {
-          await post('/api/wallet/allowlist/remove', {destination: btn.dataset.rm});
-          await refresh();
-        };
-      });
+      if (isAdmin) {
+        document.getElementById('allow-rows').innerHTML = (d.allowlist || []).map(r =>
+          `<tr><td><code>${r.destination}</code>${r.label ? ' · ' + r.label : ''}</td>
+           <td class="row-actions"><button data-rm="${r.destination}" class="secondary allow-rm">Remove</button></td></tr>`
+        ).join('') || '<tr><td colspan=2 class="muted">Empty — sends blocked until you add destinations</td></tr>';
+        document.querySelectorAll('.allow-rm').forEach(btn => {
+          btn.onclick = async () => {
+            await post('/api/wallet/allowlist/remove', {destination: btn.dataset.rm});
+            await refresh();
+          };
+        });
+      } else {
+        document.getElementById('allow-rows-ro').innerHTML = (d.allowlist || []).map(r =>
+          `<tr><td><code>${r.destination}</code></td><td>${r.label || '—'}</td></tr>`
+        ).join('') || '<tr><td colspan=2 class="muted">Empty</td></tr>';
+      }
 
       // QR cards for crypto receive addresses
       const qg = document.getElementById('qr-grid');
@@ -297,7 +325,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
         `<tr><td class="muted">${a.created_at}</td><td>${a.kind}</td><td>${a.detail}</td></tr>`
       ).join('') || '<tr><td colspan=3 class="muted">No audit events</td></tr>';
 
-      updateConfirmHint();
+      if (isAdmin) updateConfirmHint();
     }
 
     async function post(url, body) {
@@ -390,6 +418,11 @@ class AllowRemoveBody(BaseModel):
     destination: str
 
 
+class DashboardUser(BaseModel):
+    username: str
+    role: Literal["admin", "viewer"] = "admin"
+
+
 def create_app(
     agent: InvestAgent,
     cfg: AppConfig,
@@ -404,37 +437,68 @@ def create_app(
     journal = journal or PerformanceJournal(db, safety)
     app = FastAPI(title="Pi Invest Agent", version="0.1.0")
 
+    def _match(username: str, password: str, expect_user: str, expect_pass: str) -> bool:
+        if not expect_pass:
+            return False
+        user_ok = secrets.compare_digest(
+            username.encode(), expect_user.encode()
+        )
+        pass_ok = secrets.compare_digest(
+            password.encode(), expect_pass.encode()
+        )
+        return user_ok and pass_ok
+
     def require_user(
-        credentials: Annotated[HTTPBasicCredentials | None, Depends(security)],
-    ) -> str:
+        credentials: HTTPBasicCredentials | None = Depends(security),
+    ) -> DashboardUser:
+        """Return admin or viewer identity."""
         if not cfg.dashboard.require_auth or not env.dashboard_password:
-            return env.dashboard_username or "anonymous"
+            return DashboardUser(
+                username=env.dashboard_username or "anonymous",
+                role="admin",
+            )
         if credentials is None:
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail="Authentication required",
                 headers={"WWW-Authenticate": "Basic"},
             )
-        user_ok = secrets.compare_digest(
-            credentials.username.encode(), env.dashboard_username.encode()
+        if _match(
+            credentials.username,
+            credentials.password,
+            env.dashboard_username,
+            env.dashboard_password,
+        ):
+            return DashboardUser(username=credentials.username, role="admin")
+        if _match(
+            credentials.username,
+            credentials.password,
+            env.dashboard_readonly_username,
+            env.dashboard_readonly_password,
+        ):
+            return DashboardUser(username=credentials.username, role="viewer")
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid credentials",
+            headers={"WWW-Authenticate": "Basic"},
         )
-        pass_ok = secrets.compare_digest(
-            credentials.password.encode(), env.dashboard_password.encode()
-        )
-        if not (user_ok and pass_ok):
+
+    def require_admin(
+        user: DashboardUser = Depends(require_user),
+    ) -> DashboardUser:
+        if user.role != "admin":
             raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Invalid credentials",
-                headers={"WWW-Authenticate": "Basic"},
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Admin credentials required for this action",
             )
-        return credentials.username
+        return user
 
     @app.get("/", response_class=HTMLResponse)
-    def home(_user: Annotated[str, Depends(require_user)]) -> str:
+    def home(_user: DashboardUser = Depends(require_user)) -> str:
         return DASHBOARD_HTML
 
     @app.get("/api/status")
-    def status_api(_user: Annotated[str, Depends(require_user)]) -> dict:
+    def status_api(user: DashboardUser = Depends(require_user)) -> dict:
         marks = {}
         for sym in cfg.universe:
             try:
@@ -461,6 +525,8 @@ def create_app(
             "mode": cfg.agent.mode,
             "backend": cfg.broker.backend,
             "agent": cfg.agent.name,
+            "role": user.role,
+            "username": user.username,
             "halted": halt.halted,
             "halt_reason": halt.reason,
             "account": account.model_dump(),
@@ -477,27 +543,27 @@ def create_app(
         }
 
     @app.post("/api/cycle")
-    def cycle(_user: Annotated[str, Depends(require_user)]) -> dict:
+    def cycle(_user: DashboardUser = Depends(require_admin)) -> dict:
         decision = agent.run_cycle(dry_run=False)
         db.audit("invest.cycle", decision.cycle_id)
         return decision.model_dump(mode="json")
 
     @app.post("/api/halt")
     def halt_api(
-        body: HaltBody, _user: Annotated[str, Depends(require_user)]
+        body: HaltBody, _user: DashboardUser = Depends(require_admin)
     ) -> dict:
         st = safety.halt(body.reason)
         db.audit("safety.halt", body.reason)
         return st.model_dump(mode="json")
 
     @app.post("/api/resume")
-    def resume_api(_user: Annotated[str, Depends(require_user)]) -> dict:
+    def resume_api(_user: DashboardUser = Depends(require_admin)) -> dict:
         st = safety.resume()
         db.audit("safety.resume", "ok")
         return st.model_dump(mode="json")
 
     @app.get("/api/journal")
-    def journal_api(_user: Annotated[str, Depends(require_user)]) -> dict:
+    def journal_api(_user: DashboardUser = Depends(require_user)) -> dict:
         return {
             "summary": journal.summary().model_dump(mode="json"),
             "rows": [r.model_dump(mode="json") for r in journal.history(100)],
@@ -505,7 +571,7 @@ def create_app(
 
     @app.post("/api/wallet/send")
     def wallet_send(
-        body: SendBody, _user: Annotated[str, Depends(require_user)]
+        body: SendBody, _user: DashboardUser = Depends(require_admin)
     ) -> dict:
         try:
             return wallet.send(
@@ -520,7 +586,7 @@ def create_app(
 
     @app.post("/api/wallet/receive")
     def wallet_receive(
-        body: ReceiveBody, _user: Annotated[str, Depends(require_user)]
+        body: ReceiveBody, _user: DashboardUser = Depends(require_admin)
     ) -> dict:
         try:
             return wallet.receive(
@@ -534,7 +600,9 @@ def create_app(
 
     @app.get("/api/wallet/confirm-phrase")
     def confirm_phrase_api(
-        asset: str, amount: float, _user: Annotated[str, Depends(require_user)]
+        asset: str,
+        amount: float,
+        _user: DashboardUser = Depends(require_user),
     ) -> dict:
         return {
             "phrase": confirmation_phrase(asset, amount),
@@ -543,7 +611,7 @@ def create_app(
 
     @app.post("/api/wallet/allowlist/add")
     def allow_add(
-        body: AllowAddBody, _user: Annotated[str, Depends(require_user)]
+        body: AllowAddBody, _user: DashboardUser = Depends(require_admin)
     ) -> dict:
         try:
             wallet.allowlist_add(body.destination, label=body.label)
@@ -553,7 +621,7 @@ def create_app(
 
     @app.post("/api/wallet/allowlist/remove")
     def allow_remove(
-        body: AllowRemoveBody, _user: Annotated[str, Depends(require_user)]
+        body: AllowRemoveBody, _user: DashboardUser = Depends(require_admin)
     ) -> dict:
         try:
             wallet.allowlist_remove(body.destination)

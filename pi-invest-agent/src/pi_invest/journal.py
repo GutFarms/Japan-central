@@ -3,6 +3,7 @@ from __future__ import annotations
 import csv
 import uuid
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from pi_invest.models import (
     AccountSnapshot,
@@ -13,13 +14,22 @@ from pi_invest.models import (
 from pi_invest.safety import SafetyGate
 from pi_invest.storage.db import Database
 
+if TYPE_CHECKING:
+    from pi_invest.alerts import AlertBus
+
 
 class PerformanceJournal:
     """Tracks brokerage + wallet NAV, peak, and drawdown over time."""
 
-    def __init__(self, db: Database, safety: SafetyGate) -> None:
+    def __init__(
+        self,
+        db: Database,
+        safety: SafetyGate,
+        alerts: AlertBus | None = None,
+    ) -> None:
         self.db = db
         self.safety = safety
+        self.alerts = alerts
 
     def record(
         self,
@@ -47,6 +57,11 @@ class PerformanceJournal:
             cycle_id=cycle_id,
         )
         self.db.save_equity_snapshot(snap)
+        if self.alerts is not None:
+            try:
+                self.alerts.drawdown(snap.drawdown_pct, snap.total_nav, snap.peak_nav)
+            except Exception:  # noqa: BLE001
+                pass
         return snap
 
     def history(self, limit: int = 50) -> list[EquitySnapshot]:

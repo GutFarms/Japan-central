@@ -114,6 +114,10 @@ class Database:
                     halted INTEGER NOT NULL,
                     cycle_id TEXT
                 );
+                CREATE TABLE IF NOT EXISTS kv_store (
+                    key TEXT PRIMARY KEY,
+                    value TEXT NOT NULL
+                );
                 """
             )
             row = conn.execute("SELECT id FROM agent_state WHERE id = 1").fetchone()
@@ -678,4 +682,35 @@ class Database:
                 (limit,),
             ).fetchall()
             return [dict(r) for r in rows]
+
+    def kv_get(self, key: str, default: str | None = None) -> str | None:
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT value FROM kv_store WHERE key = ?", (key,)
+            ).fetchone()
+            if row is None:
+                return default
+            return str(row["value"])
+
+    def kv_set(self, key: str, value: str) -> None:
+        with self._connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO kv_store (key, value) VALUES (?, ?)
+                ON CONFLICT(key) DO UPDATE SET value=excluded.value
+                """,
+                (key, value),
+            )
+
+    def get_alert_drawdown_peak(self) -> float:
+        raw = self.kv_get("alert.drawdown_peak")
+        if raw is None:
+            return 0.0
+        try:
+            return float(raw)
+        except ValueError:
+            return 0.0
+
+    def set_alert_drawdown_peak(self, peak: float) -> None:
+        self.kv_set("alert.drawdown_peak", str(peak))
 

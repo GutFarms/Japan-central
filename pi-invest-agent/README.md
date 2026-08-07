@@ -23,7 +23,9 @@ It scores tickers for expected income (dividends + capital appreciation signals)
 | Live transfers unlock | Off (`ALLOW_LIVE_TRANSFERS=false`) |
 | Kill switch | `pi-invest halt` freezes orders + outbound sends |
 | Daily send cap | `$250` USD-equivalent (configurable) |
-| Dashboard auth | HTTP basic auth when `DASHBOARD_PASSWORD` is set |
+| Dashboard bind | `127.0.0.1` (use Tailscale/SSH; avoid open LAN) |
+| Dashboard auth | Admin + optional read-only viewer (HTTP basic) |
+| Alerts | Optional ntfy on halt / resume / drawdown |
 | Max position | 15% of equity |
 | Max daily loss | 3% of equity |
 | Cash reserve | 10% kept uninvested |
@@ -69,13 +71,13 @@ pip install -e ".[dev]"
 cp config/config.example.yaml config/config.yaml
 cp .env.example .env
 
-# Dry-run one decision cycle (simulator, no network required)
-pi-invest once --dry-run
+# Dry-run / preview one decision cycle (simulator, no network required)
+pi-invest once --preview
 
 # Continuous paper loop
 pi-invest run
 
-# Status dashboard (http://<pi-ip>:8787)
+# Status dashboard (http://127.0.0.1:8787 — Tailscale recommended)
 pi-invest dashboard
 ```
 
@@ -99,9 +101,10 @@ journalctl -u pi-invest -f
 
 ```bash
 pi-invest once          # single research + trade cycle
+pi-invest once --preview  # score + planned orders, no fills
 pi-invest run           # scheduled loop
 pi-invest status        # portfolio + wallet + recent decisions
-pi-invest dashboard     # web UI on :8787
+pi-invest dashboard     # web UI on 127.0.0.1:8787
 pi-invest reset-paper   # wipe paper brokerage ledger (keeps config)
 
 # USD + crypto wallet
@@ -124,6 +127,7 @@ pi-invest wallet allowlist-add usd:friend:abc --label "Friend"
 pi-invest wallet send USD --amount 25 --to usd:friend:abc --confirm "SEND 25.00 USD"
 ```
 
+Set `DASHBOARD_READONLY_PASSWORD` for a viewer login that can see status/NAV but cannot send, halt, run cycles, or edit the allowlist. Set `NTFY_TOPIC` to get push alerts on halt/resume and drawdown.
 ## Config
 
 Edit `config/config.yaml` (copied from the example):
@@ -154,6 +158,7 @@ pi-invest-agent/
     data/        # market snapshots
     storage/     # SQLite trade/decision/transfer log
     web/         # FastAPI dashboard
+    alerts.py    # optional ntfy push notifications
   config/
   systemd/
   scripts/

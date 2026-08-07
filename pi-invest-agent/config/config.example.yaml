@@ -47,9 +47,14 @@ schedule:
   prefer_market_hours: true
 
 dashboard:
-  host: 0.0.0.0
+  # Prefer localhost + Tailscale/SSH; set 0.0.0.0 only if you need LAN bind
+  host: 127.0.0.1
   port: 8787
   require_auth: true           # set DASHBOARD_PASSWORD in .env
+
+alerts:
+  enabled: true
+  drawdown_alert_pct: 0.05     # ntfy when NAV drawdown reaches 5% (needs NTFY_TOPIC)
 
 wallet:
   backend: paper                 # paper | coinbase
