@@ -18,6 +18,15 @@ Native SwiftUI companion to the Android `FarmManager` app.
 - iOS 17.0+ device or simulator
 - Apple ID for signing (Automatic)
 
+## Download / distribute
+
+iOS apps cannot be shared as a simple downloadable file like Android APKs.
+
+- **Testers:** Archive in Xcode → upload to **TestFlight**
+- **Public:** Archive → submit to the **App Store**
+
+For the Android installable APK, see [`../DOWNLOAD.md`](../DOWNLOAD.md).
+
 ## Open & run
 
 1. Pull branch `cursor/farm-management-android-115a`

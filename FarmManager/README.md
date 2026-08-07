@@ -3,6 +3,8 @@
 Android app for farm management with livestock tracking, feeding schedules, and profit margin analysis.
 
 > **iOS version:** see [`../FarmManager-iOS/`](../FarmManager-iOS/) (SwiftUI + SwiftData).
+>
+> **Download Android APK:** [`dist/GutFarms-FarmManager.apk`](./dist/GutFarms-FarmManager.apk) — see also [`../DOWNLOAD.md`](../DOWNLOAD.md).
 
 ## Features
 
