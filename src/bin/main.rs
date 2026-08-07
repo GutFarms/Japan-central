@@ -36,6 +36,7 @@ use log::info;
 
 use esp32_s3_scrypt_miner::config::{ConfigError, PoolConfig, SetupField};
 use esp32_s3_scrypt_miner::display::{Display, DisplayPeripherals};
+use esp32_s3_scrypt_miner::gui::GuiState;
 use esp32_s3_scrypt_miner::miner::ScryptMiner;
 use esp32_s3_scrypt_miner::persist::ConfigStore;
 
@@ -65,9 +66,13 @@ async fn main(_spawner: Spawner) -> ! {
     let mut usb = UsbSerialJtag::new(peripherals.USB_DEVICE);
     let mut store = ConfigStore::new(peripherals.FLASH);
 
-    // BOOT button (GPIO0): hold at power-on to open password-gated change flow.
+    // BOOT (GPIO0) + custom button (GPIO14) drive the on-screen GUI.
     let boot_btn = Input::new(
         peripherals.GPIO0,
+        InputConfig::default().with_pull(Pull::Up),
+    );
+    let action_btn = Input::new(
+        peripherals.GPIO14,
         InputConfig::default().with_pull(Pull::Up),
     );
     let force_change = boot_btn.is_low();
@@ -101,6 +106,9 @@ async fn main(_spawner: Spawner) -> ! {
         }
     };
 
+    let _ = display.draw_splash();
+    Timer::after(Duration::from_millis(600)).await;
+
     let (mut pool, from_flash) =
         resolve_pool_config(&mut usb, &mut display, &mut store, force_change).await;
 
@@ -110,7 +118,7 @@ async fn main(_spawner: Spawner) -> ! {
         serial_writeln(&mut usb, "Loaded saved credentials from flash.");
         serial_writeln(
             &mut usb,
-            "While mining, type 'change' to edit (requires current password).",
+            "GUI: BOOT=tabs, btn=menu. Serial 'change' also works (password required).",
         );
     } else {
         serial_writeln(&mut usb, "Credentials saved to flash for next boot.");
@@ -135,11 +143,40 @@ async fn main(_spawner: Spawner) -> ! {
     let mut window_start = Instant::now();
     let mut window_hashes: u64 = 0;
     let mut cmd_line: String<32> = String::new();
+    let mut gui = GuiState::default();
+    let mut boot_was_down = boot_btn.is_low();
+    let mut action_was_down = action_btn.is_low();
 
     let mut stats = miner.stats();
-    let _ = display.draw_stats(&stats, &pool, true);
+    let _ = display.draw_gui(&gui, &stats, &pool, true);
 
     loop {
+        // Button edge detection for on-screen GUI navigation.
+        let boot_down = boot_btn.is_low();
+        if boot_down && !boot_was_down {
+            gui.on_boot_short_press();
+            let _ = display.draw_gui(&gui, &stats, &pool, true);
+        }
+        boot_was_down = boot_down;
+
+        let action_down = action_btn.is_low();
+        if action_down && !action_was_down {
+            gui.on_action_press();
+            if gui.take_change_request() {
+                if let Some(updated) =
+                    password_gated_change(&mut usb, &mut display, &mut store, &pool).await
+                {
+                    pool = updated;
+                    gui.screen = esp32_s3_scrypt_miner::gui::GuiScreen::Config;
+                    let _ = display.draw_config_summary(&pool, true);
+                    Timer::after(Duration::from_secs(2)).await;
+                }
+                gui.screen = esp32_s3_scrypt_miner::gui::GuiScreen::Mining;
+            }
+            let _ = display.draw_gui(&gui, &stats, &pool, true);
+        }
+        action_was_down = action_down;
+
         // Non-blocking serial command poll (password-gated change while mining).
         if poll_command_byte(&mut usb, &mut cmd_line) {
             if is_change_command(cmd_line.as_str().trim()) {
@@ -149,8 +186,9 @@ async fn main(_spawner: Spawner) -> ! {
                     pool = updated;
                     let _ = display.draw_config_summary(&pool, true);
                     Timer::after(Duration::from_secs(2)).await;
-                    let _ = display.draw_stats(&stats, &pool, true);
                 }
+                gui.screen = esp32_s3_scrypt_miner::gui::GuiScreen::Mining;
+                let _ = display.draw_gui(&gui, &stats, &pool, true);
             } else if !cmd_line.is_empty() {
                 serial_writeln(&mut usb, "Unknown command. Type 'change' to edit credentials.");
             }
@@ -185,7 +223,7 @@ async fn main(_spawner: Spawner) -> ! {
 
             stats = miner.stats();
             stats.hashrate_x100 = hashrate_x100;
-            if let Err(e) = display.draw_stats(&stats, &pool, true) {
+            if let Err(e) = display.draw_gui(&gui, &stats, &pool, true) {
                 info!("display error: {e}");
             }
 
@@ -267,6 +305,7 @@ async fn password_gated_change<D: embedded_hal::delay::DelayNs>(
     serial_writeln(usb, "=== Change credentials (password required) ===");
 
     for attempt in 1..=MAX_PASSWORD_ATTEMPTS {
+        let _ = display.draw_auth_prompt(attempt, MAX_PASSWORD_ATTEMPTS);
         serial_write(usb, "current password");
         if attempt > 1 {
             serial_write(usb, " (retry)");

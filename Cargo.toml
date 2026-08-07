@@ -20,6 +20,11 @@ name = "host-miner"
 path = "src/bin/host_miner.rs"
 required-features = ["host"]
 
+[[bin]]
+name = "host-gui"
+path = "src/bin/host_gui.rs"
+required-features = ["host-gui"]
+
 [features]
 default = ["esp"]
 # Cross-compile firmware for ESP32-S3 (LilyGO T-Display-S3)
@@ -45,6 +50,8 @@ esp = [
 ]
 # Desktop demo / benchmarking of the same miner core
 host = []
+# Desktop GUI (eframe/egui) on top of the host miner core
+host-gui = ["host", "dep:eframe", "dep:egui"]
 # Lighter scrypt params (N=64) for tighter RAM / faster demo hashrate
 lite = []
 
@@ -53,6 +60,8 @@ heapless = "0.8"
 sha2 = { version = "0.10", default-features = false }
 hmac = { version = "0.12", default-features = false }
 pbkdf2 = { version = "0.12", default-features = false, features = ["hmac"] }
+eframe = { version = "=0.27.2", optional = true, default-features = true }
+egui = { version = "=0.27.2", optional = true }
 
 # ESP32-S3 firmware dependencies (enabled with `--features esp`)
 esp-hal = { version = "1.1.1", features = ["esp32s3", "log-04", "unstable"], optional = true }

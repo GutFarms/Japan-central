@@ -8,6 +8,7 @@
 extern crate alloc;
 
 pub mod config;
+pub mod gui;
 pub mod miner;
 pub mod persist;
 

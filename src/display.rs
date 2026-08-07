@@ -1,15 +1,15 @@
-//! LilyGO T-Display-S3 (ST7789, 320×170, 8-bit parallel) mining UI.
+//! LilyGO T-Display-S3 GUI (ST7789, 320×170, 8-bit parallel).
 
 use core::fmt::Write as _;
 
 use embedded_graphics::Drawable;
 use embedded_graphics::draw_target::DrawTarget;
 use embedded_graphics::geometry::{Point, Size};
-use embedded_graphics::mono_font::ascii::{FONT_10X20, FONT_6X12};
+use embedded_graphics::mono_font::ascii::{FONT_10X20, FONT_6X12, FONT_8X13_BOLD};
 use embedded_graphics::mono_font::MonoTextStyle;
 use embedded_graphics::pixelcolor::{Rgb565, RgbColor};
 use embedded_graphics::prelude::{Primitive, WebColors};
-use embedded_graphics::primitives::{PrimitiveStyle, Rectangle};
+use embedded_graphics::primitives::{PrimitiveStyle, Rectangle, RoundedRectangle};
 use embedded_graphics::text::Text;
 use embedded_hal::delay::DelayNs;
 use esp_hal::gpio::{AnyPin, Level, Output, OutputConfig};
@@ -20,18 +20,23 @@ use mipidsi::options::{ColorInversion, Orientation, Rotation};
 use mipidsi::{Builder, Display as MipiDisplay};
 
 use crate::config::{PoolConfig, SetupField};
+use crate::gui::{GuiScreen, GuiState, MenuItem};
 use crate::miner::{hash_to_hex, MinerStats, SCRYPT_LOG_N, SCRYPT_N};
 
 pub const DISPLAY_WIDTH: u16 = 320;
 pub const DISPLAY_HEIGHT: u16 = 170;
 
-const BRAND_STYLE: MonoTextStyle<'_, Rgb565> =
-    MonoTextStyle::new(&FONT_10X20, Rgb565::CSS_ORANGE);
-const LABEL_STYLE: MonoTextStyle<'_, Rgb565> = MonoTextStyle::new(&FONT_6X12, Rgb565::CSS_GRAY);
-const VALUE_STYLE: MonoTextStyle<'_, Rgb565> = MonoTextStyle::new(&FONT_10X20, Rgb565::WHITE);
-const SHARE_STYLE: MonoTextStyle<'_, Rgb565> =
-    MonoTextStyle::new(&FONT_10X20, Rgb565::CSS_LIMEGREEN);
+const BRAND: MonoTextStyle<'_, Rgb565> = MonoTextStyle::new(&FONT_10X20, Rgb565::CSS_ORANGE);
+const LABEL: MonoTextStyle<'_, Rgb565> = MonoTextStyle::new(&FONT_6X12, Rgb565::CSS_GRAY);
+const VALUE: MonoTextStyle<'_, Rgb565> = MonoTextStyle::new(&FONT_10X20, Rgb565::WHITE);
+const VALUE_SM: MonoTextStyle<'_, Rgb565> = MonoTextStyle::new(&FONT_8X13_BOLD, Rgb565::WHITE);
+const OK: MonoTextStyle<'_, Rgb565> = MonoTextStyle::new(&FONT_10X20, Rgb565::CSS_LIMEGREEN);
+const MUTED: MonoTextStyle<'_, Rgb565> = MonoTextStyle::new(&FONT_6X12, Rgb565::CSS_DIM_GRAY);
 const ACCENT: Rgb565 = Rgb565::CSS_DARK_ORANGE;
+const PANEL: Rgb565 = Rgb565::new(3, 6, 3); // dark slate-ish in RGB565
+const BAR_BG: Rgb565 = Rgb565::new(4, 8, 4);
+const BAR_FG: Rgb565 = Rgb565::CSS_ORANGE;
+const SELECT: Rgb565 = Rgb565::new(8, 12, 4);
 
 type MipiDisplayWrapper<'a> = MipiDisplay<
     ParallelInterface<
@@ -55,12 +60,12 @@ type MipiDisplayWrapper<'a> = MipiDisplay<
 pub struct Display<'a, D: DelayNs> {
     display: MipiDisplayWrapper<'a>,
     backlight: Output<'a>,
-    /// Kept alive so LCD power / bus control lines stay driven.
     _power_en: Output<'a>,
     _cs: Output<'a>,
     _rd: Output<'a>,
     delay: D,
-    ready: bool,
+    /// Last painted operational screen (forces full redraw on switch).
+    last_screen: Option<GuiScreen>,
 }
 
 pub struct DisplayPeripherals {
@@ -101,7 +106,6 @@ impl<'a, D: DelayNs> Display<'a, D> {
         let wr = Output::new(p.wr, Level::Low, OutputConfig::default());
         let mut rd = Output::new(p.rd, Level::Low, OutputConfig::default());
 
-        // Chip-select active, RD held high (write-only path).
         cs.set_low();
         rd.set_high();
 
@@ -133,14 +137,11 @@ impl<'a, D: DelayNs> Display<'a, D> {
             _cs: cs,
             _rd: rd,
             delay,
-            ready: false,
+            last_screen: None,
         })
     }
 
-    fn ensure_ready(&mut self) -> Result<(), Error> {
-        if self.ready {
-            return Ok(());
-        }
+    fn wake_clear(&mut self) -> Result<(), Error> {
         self.backlight.set_high();
         self.display
             .wake(&mut self.delay)
@@ -148,194 +149,255 @@ impl<'a, D: DelayNs> Display<'a, D> {
         self.display
             .clear(Rgb565::BLACK)
             .map_err(|_| Error::DisplayInterface("clear"))?;
-
-        // Accent bar
-        self.draw_ok(
-            Rectangle::new(Point::new(0, 0), Size::new(DISPLAY_WIDTH as u32, 4))
-                .into_styled(PrimitiveStyle::with_fill(ACCENT))
-                .draw(&mut self.display),
-        )?;
-
-        self.draw_ok(Text::new("SCRYPT", Point::new(12, 22), BRAND_STYLE).draw(&mut self.display))?;
-
-        let mut params: String<48> = String::new();
-        let _ = write!(
-            params,
-            "ESP32-S3  N={} (2^{})  r=1 p=1",
-            SCRYPT_N, SCRYPT_LOG_N
-        );
-        self.draw_ok(Text::new(&params, Point::new(100, 26), LABEL_STYLE).draw(&mut self.display))?;
-
-        self.draw_ok(Text::new("rate", Point::new(12, 52), LABEL_STYLE).draw(&mut self.display))?;
-        self.draw_ok(Text::new("nonce", Point::new(12, 82), LABEL_STYLE).draw(&mut self.display))?;
-        self.draw_ok(Text::new("shares", Point::new(12, 112), LABEL_STYLE).draw(&mut self.display))?;
-        self.draw_ok(Text::new("best", Point::new(12, 142), LABEL_STYLE).draw(&mut self.display))?;
-
-        self.ready = true;
         Ok(())
     }
 
-    fn clear_value(&mut self, y: i32, x: i32, w: u32) -> Result<(), Error> {
+    fn fill_rect(&mut self, x: i32, y: i32, w: u32, h: u32, color: Rgb565) -> Result<(), Error> {
         self.draw_ok(
-            Rectangle::new(Point::new(x, y), Size::new(w, 22))
-                .into_styled(PrimitiveStyle::with_fill(Rgb565::BLACK))
+            Rectangle::new(Point::new(x, y), Size::new(w, h))
+                .into_styled(PrimitiveStyle::with_fill(color))
                 .draw(&mut self.display),
         )
     }
 
+    fn round_panel(&mut self, x: i32, y: i32, w: u32, h: u32, color: Rgb565) -> Result<(), Error> {
+        self.draw_ok(
+            RoundedRectangle::with_equal_corners(
+                Rectangle::new(Point::new(x, y), Size::new(w, h)),
+                Size::new(6, 6),
+            )
+            .into_styled(PrimitiveStyle::with_fill(color))
+            .draw(&mut self.display),
+        )
+    }
+
+    fn header_bar(&mut self, tab: &str) -> Result<(), Error> {
+        self.fill_rect(0, 0, DISPLAY_WIDTH as u32, 28, PANEL)?;
+        self.fill_rect(0, 0, DISPLAY_WIDTH as u32, 3, ACCENT)?;
+        self.draw_ok(Text::new("SCRYPT", Point::new(10, 20), BRAND).draw(&mut self.display))?;
+        self.draw_ok(Text::new(tab, Point::new(270, 20), OK).draw(&mut self.display))?;
+        Ok(())
+    }
+
+    fn footer_hint(&mut self, text: &str) -> Result<(), Error> {
+        self.fill_rect(0, 156, DISPLAY_WIDTH as u32, 14, PANEL)?;
+        self.draw_ok(Text::new(text, Point::new(8, 166), MUTED).draw(&mut self.display))?;
+        Ok(())
+    }
+
+    /// Boot splash.
+    pub fn draw_splash(&mut self) -> Result<(), Error> {
+        self.wake_clear()?;
+        self.last_screen = None;
+        self.fill_rect(0, 0, DISPLAY_WIDTH as u32, DISPLAY_HEIGHT as u32, Rgb565::BLACK)?;
+        self.fill_rect(0, 0, DISPLAY_WIDTH as u32, 4, ACCENT)?;
+        self.draw_ok(Text::new("SCRYPT", Point::new(110, 70), BRAND).draw(&mut self.display))?;
+        let mut line: String<48> = String::new();
+        let _ = write!(line, "ESP32-S3  N={}  r=1 p=1", SCRYPT_N);
+        self.draw_ok(Text::new(&line, Point::new(70, 100), LABEL).draw(&mut self.display))?;
+        self.draw_ok(
+            Text::new("loading GUI…", Point::new(110, 130), MUTED).draw(&mut self.display),
+        )?;
+        Ok(())
+    }
+
     /// Full-screen post-boot setup prompt for one credential field.
     pub fn draw_setup(&mut self, field: SetupField, typed: &str) -> Result<(), Error> {
-        self.backlight.set_high();
-        self.display
-            .wake(&mut self.delay)
-            .map_err(|_| Error::InitError)?;
-        self.display
-            .clear(Rgb565::BLACK)
-            .map_err(|_| Error::DisplayInterface("clear"))?;
-        self.ready = false;
+        self.wake_clear()?;
+        self.last_screen = None;
+        self.header_bar("SETUP")?;
 
-        self.draw_ok(
-            Rectangle::new(Point::new(0, 0), Size::new(DISPLAY_WIDTH as u32, 4))
-                .into_styled(PrimitiveStyle::with_fill(ACCENT))
-                .draw(&mut self.display),
-        )?;
-
-        self.draw_ok(Text::new("SCRYPT", Point::new(12, 22), BRAND_STYLE).draw(&mut self.display))?;
-        self.draw_ok(
-            Text::new("SETUP", Point::new(240, 22), SHARE_STYLE).draw(&mut self.display),
-        )?;
-
-        let mut step: String<32> = String::new();
         let step_n = match field {
             SetupField::Address => 1,
             SetupField::Password => 2,
             SetupField::Stratum => 3,
         };
-        let _ = write!(step, "step {step_n}/3  {}", field.label());
-        self.draw_ok(Text::new(&step, Point::new(12, 52), LABEL_STYLE).draw(&mut self.display))?;
+        // Step dots
+        for i in 1..=3u8 {
+            let x = 12 + (i as i32 - 1) * 18;
+            let color = if i <= step_n { ACCENT } else { BAR_BG };
+            self.fill_rect(x, 40, 12, 6, color)?;
+        }
 
-        self.draw_ok(
-            Text::new(field.prompt(), Point::new(12, 78), VALUE_STYLE).draw(&mut self.display),
-        )?;
+        let mut step: String<40> = String::new();
+        let _ = write!(step, "{}/3  {}", step_n, field.label());
+        self.draw_ok(Text::new(&step, Point::new(80, 48), LABEL).draw(&mut self.display))?;
 
+        self.round_panel(8, 60, 304, 70, PANEL)?;
         self.draw_ok(
-            Text::new("Enter via USB serial, then Enter", Point::new(12, 110), LABEL_STYLE)
-                .draw(&mut self.display),
+            Text::new(field.prompt(), Point::new(18, 85), VALUE_SM).draw(&mut self.display),
         )?;
 
         let shown = if field == SetupField::Password && !typed.is_empty() {
-            PoolConfig::ellipsize("********", 40)
+            PoolConfig::ellipsize("********", 36)
+        } else if typed.is_empty() {
+            PoolConfig::ellipsize("(waiting for USB serial…)", 36)
         } else {
-            PoolConfig::ellipsize(typed, 40)
+            PoolConfig::ellipsize(typed, 36)
         };
-        self.draw_ok(Text::new(&shown, Point::new(12, 140), VALUE_STYLE).draw(&mut self.display))?;
-
+        self.draw_ok(Text::new(&shown, Point::new(18, 112), VALUE).draw(&mut self.display))?;
+        self.footer_hint("type value on USB serial, then Enter")?;
         Ok(())
     }
 
     /// Summary of credentials before mining starts.
-    /// `from_flash` shows whether values were restored from saved storage.
     pub fn draw_config_summary(&mut self, cfg: &PoolConfig, from_flash: bool) -> Result<(), Error> {
-        self.backlight.set_high();
-        self.display
-            .wake(&mut self.delay)
-            .map_err(|_| Error::InitError)?;
-        self.display
-            .clear(Rgb565::BLACK)
-            .map_err(|_| Error::DisplayInterface("clear"))?;
-        self.ready = false;
+        self.wake_clear()?;
+        self.last_screen = None;
+        self.header_bar(if from_flash { "SAVED" } else { "READY" })?;
 
-        self.draw_ok(
-            Rectangle::new(Point::new(0, 0), Size::new(DISPLAY_WIDTH as u32, 4))
-                .into_styled(PrimitiveStyle::with_fill(ACCENT))
-                .draw(&mut self.display),
-        )?;
-        self.draw_ok(Text::new("SCRYPT", Point::new(12, 22), BRAND_STYLE).draw(&mut self.display))?;
-        let badge = if from_flash { "SAVED" } else { "READY" };
-        self.draw_ok(Text::new(badge, Point::new(240, 22), SHARE_STYLE).draw(&mut self.display))?;
-
-        let addr = PoolConfig::ellipsize(cfg.address.as_str(), 28);
-        let pass = cfg.password_masked();
-        let stratum = PoolConfig::ellipsize(cfg.stratum.as_str(), 28);
-
-        self.draw_ok(Text::new("address", Point::new(12, 50), LABEL_STYLE).draw(&mut self.display))?;
-        self.draw_ok(Text::new(&addr, Point::new(80, 50), VALUE_STYLE).draw(&mut self.display))?;
-        self.draw_ok(Text::new("password", Point::new(12, 80), LABEL_STYLE).draw(&mut self.display))?;
-        self.draw_ok(Text::new(&pass, Point::new(80, 80), VALUE_STYLE).draw(&mut self.display))?;
-        self.draw_ok(Text::new("stratum", Point::new(12, 110), LABEL_STYLE).draw(&mut self.display))?;
-        self.draw_ok(Text::new(&stratum, Point::new(80, 110), VALUE_STYLE).draw(&mut self.display))?;
+        self.round_panel(8, 36, 304, 110, PANEL)?;
+        self.draw_row(48, "address", &PoolConfig::ellipsize(cfg.address.as_str(), 26))?;
+        self.draw_row(78, "password", cfg.password_masked().as_str())?;
+        self.draw_row(108, "stratum", &PoolConfig::ellipsize(cfg.stratum.as_str(), 26))?;
 
         let hint = if from_flash {
-            "serial: change = edit (needs password)"
+            "BOOT=tabs  btn=menu  serial: change"
         } else {
             "saved to flash for next boot"
         };
-        self.draw_ok(Text::new(hint, Point::new(12, 145), LABEL_STYLE).draw(&mut self.display))?;
-
+        self.footer_hint(hint)?;
         Ok(())
     }
 
-    /// Redraw dynamic mining stats (includes truncated address / stratum).
-    pub fn draw_stats(
+    fn draw_row(&mut self, y: i32, label: &str, value: &str) -> Result<(), Error> {
+        self.draw_ok(Text::new(label, Point::new(18, y), LABEL).draw(&mut self.display))?;
+        self.draw_ok(Text::new(value, Point::new(90, y), VALUE_SM).draw(&mut self.display))?;
+        Ok(())
+    }
+
+    /// Paint the active GUI screen (full redraw when the tab changes).
+    pub fn draw_gui(
         &mut self,
+        gui: &GuiState,
         stats: &MinerStats,
         cfg: &PoolConfig,
         mining: bool,
     ) -> Result<(), Error> {
-        self.ensure_ready()?;
-
-        let mut rate: String<32> = String::new();
-        let whole = stats.hashrate_x100 / 100;
-        let frac = stats.hashrate_x100 % 100;
-        let _ = write!(rate, "{}.{:02} H/s", whole, frac);
-
-        let mut nonce: String<32> = String::new();
-        let _ = write!(nonce, "{:08x}", stats.nonce);
-
-        let mut shares: String<32> = String::new();
-        let _ = write!(shares, "{}", stats.shares);
-
-        let mut best: String<128> = String::new();
-        hash_to_hex(&stats.best_hash, 8, &mut best);
-
-        let mut status: String<16> = String::new();
-        if mining {
-            let _ = write!(status, "MINING");
-        } else {
-            let _ = write!(status, "IDLE");
+        let screen_changed = self.last_screen != Some(gui.screen);
+        if screen_changed {
+            self.wake_clear()?;
+            self.header_bar(gui.screen.title())?;
+            self.last_screen = Some(gui.screen);
         }
 
-        self.clear_value(48, 70, 160)?;
-        self.draw_ok(Text::new(&rate, Point::new(70, 58), VALUE_STYLE).draw(&mut self.display))?;
+        match gui.screen {
+            GuiScreen::Mining => self.draw_mining_body(stats, cfg, mining, screen_changed)?,
+            GuiScreen::Config => {
+                if screen_changed {
+                    self.draw_config_body(cfg)?;
+                }
+            }
+            GuiScreen::Menu => {
+                if screen_changed {
+                    self.draw_menu_body(gui.menu)?;
+                } else {
+                    // Refresh selection highlight cheaply by redrawing menu body.
+                    self.draw_menu_body(gui.menu)?;
+                }
+            }
+        }
+        Ok(())
+    }
 
-        self.clear_value(48, 240, 70)?;
-        let st_style = if mining { SHARE_STYLE } else { LABEL_STYLE };
-        self.draw_ok(Text::new(&status, Point::new(240, 58), st_style).draw(&mut self.display))?;
+    fn draw_mining_body(
+        &mut self,
+        stats: &MinerStats,
+        cfg: &PoolConfig,
+        mining: bool,
+        full: bool,
+    ) -> Result<(), Error> {
+        if full {
+            self.round_panel(8, 36, 200, 72, PANEL)?;
+            self.round_panel(216, 36, 96, 72, PANEL)?;
+            self.round_panel(8, 116, 304, 36, PANEL)?;
+            self.footer_hint("BOOT=next  btn=menu")?;
+        }
 
-        self.clear_value(78, 70, 200)?;
-        self.draw_ok(Text::new(&nonce, Point::new(70, 88), VALUE_STYLE).draw(&mut self.display))?;
+        // Hashrate
+        self.fill_rect(16, 44, 184, 36, PANEL)?;
+        let mut rate: String<24> = String::new();
+        let _ = write!(
+            rate,
+            "{}.{:02} H/s",
+            stats.hashrate_x100 / 100,
+            stats.hashrate_x100 % 100
+        );
+        self.draw_ok(Text::new("hashrate", Point::new(16, 52), LABEL).draw(&mut self.display))?;
+        self.draw_ok(Text::new(&rate, Point::new(16, 74), VALUE).draw(&mut self.display))?;
 
-        self.clear_value(108, 70, 120)?;
-        let share_style = if stats.shares > 0 {
-            SHARE_STYLE
-        } else {
-            VALUE_STYLE
-        };
-        self.draw_ok(Text::new(&shares, Point::new(70, 118), share_style).draw(&mut self.display))?;
+        // Activity bar (0–100% of a soft cap ~20 H/s for visual scale)
+        let pct = core::cmp::min(100u32, stats.hashrate_x100 / 20);
+        self.fill_rect(16, 88, 184, 10, BAR_BG)?;
+        let w = (184 * pct / 100).max(if mining { 4 } else { 0 });
+        if w > 0 {
+            self.fill_rect(16, 88, w, 10, BAR_FG)?;
+        }
 
-        let addr = PoolConfig::ellipsize(cfg.address.as_str(), 14);
-        self.clear_value(108, 160, 150)?;
-        self.draw_ok(Text::new(&addr, Point::new(160, 122), LABEL_STYLE).draw(&mut self.display))?;
+        // Status + shares
+        self.fill_rect(224, 44, 80, 56, PANEL)?;
+        let st = if mining { "MINING" } else { "IDLE" };
+        let st_style = if mining { OK } else { LABEL };
+        self.draw_ok(Text::new(st, Point::new(228, 58), st_style).draw(&mut self.display))?;
+        let mut shares: String<16> = String::new();
+        let _ = write!(shares, "{} sh", stats.shares);
+        self.draw_ok(Text::new(&shares, Point::new(228, 86), VALUE_SM).draw(&mut self.display))?;
 
-        self.clear_value(138, 70, 100)?;
-        self.draw_ok(Text::new(&best, Point::new(70, 148), VALUE_STYLE).draw(&mut self.display))?;
+        // Bottom identity strip
+        self.fill_rect(16, 122, 288, 24, PANEL)?;
+        let mut nonce: String<20> = String::new();
+        let _ = write!(nonce, "{:08x}", stats.nonce);
+        let addr = PoolConfig::ellipsize(cfg.address.as_str(), 12);
+        let mut best: String<128> = String::new();
+        hash_to_hex(&stats.best_hash, 4, &mut best);
+        let mut line: String<64> = String::new();
+        let _ = write!(line, "{}  {}  {}", nonce, addr, best);
+        self.draw_ok(Text::new(&line, Point::new(16, 138), LABEL).draw(&mut self.display))?;
 
-        let stratum = PoolConfig::ellipsize(cfg.stratum.as_str(), 18);
-        self.clear_value(138, 180, 130)?;
+        let _ = SCRYPT_LOG_N; // keep params referenced for future UI chips
+        Ok(())
+    }
+
+    fn draw_config_body(&mut self, cfg: &PoolConfig) -> Result<(), Error> {
+        self.round_panel(8, 36, 304, 110, PANEL)?;
+        self.draw_row(55, "address", &PoolConfig::ellipsize(cfg.address.as_str(), 26))?;
+        self.draw_row(85, "password", cfg.password_masked().as_str())?;
+        self.draw_row(115, "stratum", &PoolConfig::ellipsize(cfg.stratum.as_str(), 26))?;
+        self.footer_hint("BOOT=next  btn=menu  serial: change")?;
+        Ok(())
+    }
+
+    fn draw_menu_body(&mut self, selected: MenuItem) -> Result<(), Error> {
+        self.round_panel(8, 36, 304, 110, PANEL)?;
         self.draw_ok(
-            Text::new(&stratum, Point::new(180, 152), LABEL_STYLE).draw(&mut self.display),
+            Text::new("Options", Point::new(18, 55), LABEL).draw(&mut self.display),
         )?;
 
+        for (i, item) in MenuItem::ALL.iter().enumerate() {
+            let y = 78 + i as i32 * 30;
+            let bg = if *item == selected { SELECT } else { PANEL };
+            self.round_panel(18, y - 14, 284, 26, bg)?;
+            let style = if *item == selected { OK } else { VALUE_SM };
+            self.draw_ok(Text::new(item.label(), Point::new(28, y), style).draw(&mut self.display))?;
+        }
+        self.footer_hint("BOOT=select item  btn=activate")?;
+        Ok(())
+    }
+
+    /// Password prompt screen while waiting on serial.
+    pub fn draw_auth_prompt(&mut self, attempt: u8, max: u8) -> Result<(), Error> {
+        self.wake_clear()?;
+        self.last_screen = None;
+        self.header_bar("AUTH")?;
+        self.round_panel(8, 50, 304, 80, PANEL)?;
+        self.draw_ok(
+            Text::new("Enter current password", Point::new(40, 80), VALUE_SM)
+                .draw(&mut self.display),
+        )?;
+        let mut tries: String<32> = String::new();
+        let _ = write!(tries, "attempt {attempt}/{max}  (USB serial)");
+        self.draw_ok(Text::new(&tries, Point::new(60, 110), LABEL).draw(&mut self.display))?;
+        self.footer_hint("password required to change credentials")?;
         Ok(())
     }
 }
