@@ -7,6 +7,7 @@ import androidx.room.OnConflictStrategy
 import androidx.room.Query
 import androidx.room.Update
 import com.gutfarms.manager.data.model.Animal
+import com.gutfarms.manager.data.model.BreedingSchedule
 import com.gutfarms.manager.data.model.FarmTransaction
 import com.gutfarms.manager.data.model.FeedingSchedule
 import com.gutfarms.manager.data.model.TransactionType
@@ -49,6 +50,27 @@ interface FeedingScheduleDao {
 
     @Delete
     suspend fun delete(schedule: FeedingSchedule)
+}
+
+@Dao
+interface BreedingScheduleDao {
+    @Query("SELECT * FROM breeding_schedules ORDER BY expectedDueDateMillis ASC")
+    fun observeAll(): Flow<List<BreedingSchedule>>
+
+    @Query("SELECT * FROM breeding_schedules WHERE animalId = :animalId ORDER BY expectedDueDateMillis ASC")
+    fun observeForAnimal(animalId: Long): Flow<List<BreedingSchedule>>
+
+    @Query("SELECT * FROM breeding_schedules WHERE active = 1 ORDER BY expectedDueDateMillis ASC")
+    fun observeActive(): Flow<List<BreedingSchedule>>
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun upsert(schedule: BreedingSchedule): Long
+
+    @Update
+    suspend fun update(schedule: BreedingSchedule)
+
+    @Delete
+    suspend fun delete(schedule: BreedingSchedule)
 }
 
 @Dao

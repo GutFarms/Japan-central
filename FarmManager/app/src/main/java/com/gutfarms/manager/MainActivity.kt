@@ -8,6 +8,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.TrendingUp
+import androidx.compose.material.icons.outlined.Favorite
 import androidx.compose.material.icons.outlined.Home
 import androidx.compose.material.icons.outlined.Pets
 import androidx.compose.material.icons.outlined.Restaurant
@@ -44,9 +45,10 @@ class MainActivity : ComponentActivity() {
 
                 val destinations = listOf(
                     NavItem(Routes.HOME, "Home", Icons.Outlined.Home),
-                    NavItem(Routes.ANIMALS, "Livestock", Icons.Outlined.Pets),
-                    NavItem(Routes.FEEDING, "Feeding", Icons.Outlined.Restaurant),
-                    NavItem(Routes.PROFITS, "Profits", Icons.AutoMirrored.Outlined.TrendingUp)
+                    NavItem(Routes.ANIMALS, "Herd", Icons.Outlined.Pets),
+                    NavItem(Routes.FEEDING, "Feed", Icons.Outlined.Restaurant),
+                    NavItem(Routes.BREEDING, "Breed", Icons.Outlined.Favorite),
+                    NavItem(Routes.PROFITS, "Profit", Icons.AutoMirrored.Outlined.TrendingUp)
                 )
 
                 Scaffold(

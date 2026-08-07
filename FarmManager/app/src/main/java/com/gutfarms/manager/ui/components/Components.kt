@@ -40,7 +40,9 @@ import com.gutfarms.manager.ui.theme.ForestDeep
 import com.gutfarms.manager.ui.theme.Mist
 import com.gutfarms.manager.ui.theme.Wheat
 import java.text.NumberFormat
+import java.text.SimpleDateFormat
 import java.util.Currency
+import java.util.Date
 import java.util.Locale
 
 fun formatMoney(amount: Double): String {
@@ -50,6 +52,20 @@ fun formatMoney(amount: Double): String {
 }
 
 fun formatPercent(value: Double): String = String.format(Locale.US, "%.1f%%", value)
+
+fun formatDate(millis: Long): String =
+    SimpleDateFormat("MMM d, yyyy", Locale.US).format(Date(millis))
+
+fun parseDateInput(value: String): Long? {
+    return try {
+        SimpleDateFormat("yyyy-MM-dd", Locale.US).parse(value.trim())?.time
+    } catch (_: Exception) {
+        null
+    }
+}
+
+fun formatDateInput(millis: Long): String =
+    SimpleDateFormat("yyyy-MM-dd", Locale.US).format(Date(millis))
 
 @Composable
 fun ScreenHeader(

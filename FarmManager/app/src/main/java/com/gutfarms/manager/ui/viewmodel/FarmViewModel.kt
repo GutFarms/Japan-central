@@ -4,6 +4,8 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import com.gutfarms.manager.data.model.Animal
+import com.gutfarms.manager.data.model.BreedingSchedule
+import com.gutfarms.manager.data.model.BreedingScheduleWithAnimal
 import com.gutfarms.manager.data.model.FarmTransaction
 import com.gutfarms.manager.data.model.FeedingSchedule
 import com.gutfarms.manager.data.model.FeedingScheduleWithAnimal
@@ -22,6 +24,11 @@ class FarmViewModel(private val repository: FarmRepository) : ViewModel() {
     val schedules: StateFlow<List<FeedingScheduleWithAnimal>> = repository.schedulesWithAnimals.stateIn(
         viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList()
     )
+
+    val breedingSchedules: StateFlow<List<BreedingScheduleWithAnimal>> =
+        repository.breedingWithAnimals.stateIn(
+            viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList()
+        )
 
     val transactions: StateFlow<List<FarmTransaction>> = repository.transactions.stateIn(
         viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList()
@@ -44,6 +51,15 @@ class FarmViewModel(private val repository: FarmRepository) : ViewModel() {
 
     fun toggleSchedule(schedule: FeedingSchedule) =
         viewModelScope.launch { repository.toggleSchedule(schedule) }
+
+    fun saveBreeding(schedule: BreedingSchedule) =
+        viewModelScope.launch { repository.saveBreeding(schedule) }
+
+    fun deleteBreeding(schedule: BreedingSchedule) =
+        viewModelScope.launch { repository.deleteBreeding(schedule) }
+
+    fun toggleBreeding(schedule: BreedingSchedule) =
+        viewModelScope.launch { repository.toggleBreeding(schedule) }
 
     fun saveTransaction(transaction: FarmTransaction) =
         viewModelScope.launch { repository.saveTransaction(transaction) }

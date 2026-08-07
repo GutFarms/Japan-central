@@ -31,11 +31,13 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.unit.dp
 import com.gutfarms.manager.data.model.Animal
+import com.gutfarms.manager.data.model.BreedingScheduleWithAnimal
 import com.gutfarms.manager.data.model.FeedingScheduleWithAnimal
 import com.gutfarms.manager.data.model.ProfitSummary
 import com.gutfarms.manager.ui.components.MetricTile
 import com.gutfarms.manager.ui.components.ScreenHeader
 import com.gutfarms.manager.ui.components.SectionLabel
+import com.gutfarms.manager.ui.components.formatDate
 import com.gutfarms.manager.ui.components.formatMoney
 import com.gutfarms.manager.ui.components.formatPercent
 import com.gutfarms.manager.ui.theme.CreamLeaf
@@ -50,13 +52,16 @@ import kotlinx.coroutines.flow.StateFlow
 fun HomeScreen(
     animals: StateFlow<List<Animal>>,
     schedules: StateFlow<List<FeedingScheduleWithAnimal>>,
+    breedingSchedules: StateFlow<List<BreedingScheduleWithAnimal>>,
     profitSummary: StateFlow<ProfitSummary>,
     onOpenAnimals: () -> Unit,
     onOpenFeeding: () -> Unit,
+    onOpenBreeding: () -> Unit,
     onOpenProfits: () -> Unit
 ) {
     val animalList by animals.collectAsState()
     val scheduleList by schedules.collectAsState()
+    val breedingList by breedingSchedules.collectAsState()
     val profit by profitSummary.collectAsState()
     var visible by remember { mutableStateOf(false) }
 
@@ -67,6 +72,11 @@ fun HomeScreen(
 
     val headCount = animalList.sumOf { it.count }
     val activeFeeds = scheduleList.count { it.schedule.active }
+    val activeBreeding = breedingList.count { it.schedule.active }
+    val upcomingBreeding = breedingList
+        .filter { it.schedule.active }
+        .sortedBy { it.schedule.expectedDueDateMillis }
+        .take(3)
 
     Column(
         modifier = Modifier
@@ -79,7 +89,7 @@ fun HomeScreen(
         ScreenHeader(
             brand = "Gut Farms",
             title = "Farm management at a glance",
-            subtitle = "Track livestock, feeding, and margins in one place."
+            subtitle = "Track livestock, feeding, breeding, and margins."
         )
 
         AnimatedVisibility(
@@ -111,14 +121,64 @@ fun HomeScreen(
                     )
                 }
 
-                MetricTile(
-                    label = "Profit margin",
-                    value = formatPercent(profit.marginPercent),
-                    accent = if (profit.marginPercent >= 0) Forest else MaterialTheme.colorScheme.error,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clickable(onClick = onOpenProfits)
-                )
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    MetricTile(
+                        label = "Breeding",
+                        value = "$activeBreeding",
+                        accent = SoftTeal,
+                        modifier = Modifier
+                            .weight(1f)
+                            .clickable(onClick = onOpenBreeding)
+                    )
+                    MetricTile(
+                        label = "Profit margin",
+                        value = formatPercent(profit.marginPercent),
+                        accent = if (profit.marginPercent >= 0) Forest else MaterialTheme.colorScheme.error,
+                        modifier = Modifier
+                            .weight(1f)
+                            .clickable(onClick = onOpenProfits)
+                    )
+                }
+
+                SectionLabel("Upcoming due dates")
+                if (upcomingBreeding.isEmpty()) {
+                    Text(
+                        "No active breeding schedules yet.",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                } else {
+                    upcomingBreeding.forEach { item ->
+                        val days = item.schedule.daysUntilDue
+                        val dueText = when {
+                            days < 0 -> "Overdue by ${-days}d"
+                            days == 0L -> "Due today"
+                            else -> "In ${days}d"
+                        }
+                        Column(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(16.dp))
+                                .background(MaterialTheme.colorScheme.surface)
+                                .clickable(onClick = onOpenBreeding)
+                                .padding(16.dp)
+                        ) {
+                            Text(
+                                "${item.schedule.femaleLabel} · $dueText",
+                                style = MaterialTheme.typography.titleMedium
+                            )
+                            Spacer(Modifier.height(4.dp))
+                            Text(
+                                "${item.animalName} · due ${formatDate(item.schedule.expectedDueDateMillis)}",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
+                }
 
                 SectionLabel("Today's feeding")
                 val upcoming = scheduleList.filter { it.schedule.active }.take(3)
@@ -157,8 +217,8 @@ fun HomeScreen(
                     horizontalArrangement = Arrangement.spacedBy(10.dp),
                     modifier = Modifier.fillMaxWidth()
                 ) {
-                    QuickAction("Livestock", onOpenAnimals, Modifier.weight(1f))
-                    QuickAction("Feeding", onOpenFeeding, Modifier.weight(1f))
+                    QuickAction("Feed", onOpenFeeding, Modifier.weight(1f))
+                    QuickAction("Breed", onOpenBreeding, Modifier.weight(1f))
                     QuickAction("Profits", onOpenProfits, Modifier.weight(1f))
                 }
                 Spacer(Modifier.height(12.dp))

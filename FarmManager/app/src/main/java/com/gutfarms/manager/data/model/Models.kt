@@ -89,6 +89,65 @@ data class FeedingScheduleWithAnimal(
     val animalType: AnimalType
 )
 
+enum class BreedingMethod {
+    NATURAL, ARTIFICIAL_INSEMINATION, EMBRYO_TRANSFER
+}
+
+enum class BreedingStatus {
+    PLANNED, BRED, PREGNANT, DUE_SOON, COMPLETED, FAILED
+}
+
+@Entity(
+    tableName = "breeding_schedules",
+    foreignKeys = [
+        ForeignKey(
+            entity = Animal::class,
+            parentColumns = ["id"],
+            childColumns = ["animalId"],
+            onDelete = ForeignKey.CASCADE
+        )
+    ],
+    indices = [Index("animalId"), Index("expectedDueDateMillis")]
+)
+data class BreedingSchedule(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    val animalId: Long,
+    val femaleLabel: String,
+    val sireName: String = "",
+    val method: BreedingMethod = BreedingMethod.NATURAL,
+    val status: BreedingStatus = BreedingStatus.PLANNED,
+    val breedingDateMillis: Long,
+    val expectedDueDateMillis: Long,
+    val expectedOffspring: Int = 1,
+    val notes: String = "",
+    val active: Boolean = true
+) {
+    val daysUntilDue: Long
+        get() = ((expectedDueDateMillis - System.currentTimeMillis()) / DayMillis)
+
+    companion object {
+        const val DayMillis = 24L * 60L * 60L * 1000L
+
+        fun gestationDaysFor(type: AnimalType): Int = when (type) {
+            AnimalType.CATTLE -> 283
+            AnimalType.SHEEP -> 147
+            AnimalType.GOAT -> 150
+            AnimalType.PIG -> 114
+            AnimalType.CHICKEN -> 21
+            AnimalType.OTHER -> 120
+        }
+
+        fun expectedDueDate(breedingDateMillis: Long, type: AnimalType): Long =
+            breedingDateMillis + gestationDaysFor(type) * DayMillis
+    }
+}
+
+data class BreedingScheduleWithAnimal(
+    val schedule: BreedingSchedule,
+    val animalName: String,
+    val animalType: AnimalType
+)
+
 data class ProfitSummary(
     val totalIncome: Double,
     val totalExpenses: Double,

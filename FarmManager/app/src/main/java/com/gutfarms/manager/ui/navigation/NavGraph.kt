@@ -6,6 +6,7 @@ import androidx.navigation.NavHostController
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import com.gutfarms.manager.ui.screens.AnimalsScreen
+import com.gutfarms.manager.ui.screens.BreedingScreen
 import com.gutfarms.manager.ui.screens.FeedingScreen
 import com.gutfarms.manager.ui.screens.HomeScreen
 import com.gutfarms.manager.ui.screens.ProfitsScreen
@@ -15,6 +16,7 @@ object Routes {
     const val HOME = "home"
     const val ANIMALS = "animals"
     const val FEEDING = "feeding"
+    const val BREEDING = "breeding"
     const val PROFITS = "profits"
 }
 
@@ -33,9 +35,11 @@ fun FarmNavHost(
             HomeScreen(
                 animals = viewModel.animals,
                 schedules = viewModel.schedules,
+                breedingSchedules = viewModel.breedingSchedules,
                 profitSummary = viewModel.profitSummary,
                 onOpenAnimals = { navController.navigate(Routes.ANIMALS) },
                 onOpenFeeding = { navController.navigate(Routes.FEEDING) },
+                onOpenBreeding = { navController.navigate(Routes.BREEDING) },
                 onOpenProfits = { navController.navigate(Routes.PROFITS) }
             )
         }
@@ -53,6 +57,15 @@ fun FarmNavHost(
                 onSave = viewModel::saveSchedule,
                 onDelete = viewModel::deleteSchedule,
                 onToggle = viewModel::toggleSchedule
+            )
+        }
+        composable(Routes.BREEDING) {
+            BreedingScreen(
+                animals = viewModel.animals,
+                breedingSchedules = viewModel.breedingSchedules,
+                onSave = viewModel::saveBreeding,
+                onDelete = viewModel::deleteBreeding,
+                onToggle = viewModel::toggleBreeding
             )
         }
         composable(Routes.PROFITS) {

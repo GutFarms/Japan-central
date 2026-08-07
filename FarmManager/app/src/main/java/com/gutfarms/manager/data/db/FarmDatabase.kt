@@ -7,10 +7,14 @@ import androidx.room.RoomDatabase
 import androidx.room.TypeConverter
 import androidx.room.TypeConverters
 import com.gutfarms.manager.data.dao.AnimalDao
+import com.gutfarms.manager.data.dao.BreedingScheduleDao
 import com.gutfarms.manager.data.dao.FeedingScheduleDao
 import com.gutfarms.manager.data.dao.TransactionDao
 import com.gutfarms.manager.data.model.Animal
 import com.gutfarms.manager.data.model.AnimalType
+import com.gutfarms.manager.data.model.BreedingMethod
+import com.gutfarms.manager.data.model.BreedingSchedule
+import com.gutfarms.manager.data.model.BreedingStatus
 import com.gutfarms.manager.data.model.ExpenseCategory
 import com.gutfarms.manager.data.model.FarmTransaction
 import com.gutfarms.manager.data.model.FeedFrequency
@@ -35,17 +39,29 @@ class Converters {
     @TypeConverter fun fromIncomeCategory(value: IncomeCategory?): String? = value?.name
     @TypeConverter fun toIncomeCategory(value: String?): IncomeCategory? =
         value?.let { IncomeCategory.valueOf(it) }
+
+    @TypeConverter fun fromBreedingMethod(value: BreedingMethod): String = value.name
+    @TypeConverter fun toBreedingMethod(value: String): BreedingMethod = BreedingMethod.valueOf(value)
+
+    @TypeConverter fun fromBreedingStatus(value: BreedingStatus): String = value.name
+    @TypeConverter fun toBreedingStatus(value: String): BreedingStatus = BreedingStatus.valueOf(value)
 }
 
 @Database(
-    entities = [Animal::class, FeedingSchedule::class, FarmTransaction::class],
-    version = 1,
+    entities = [
+        Animal::class,
+        FeedingSchedule::class,
+        BreedingSchedule::class,
+        FarmTransaction::class
+    ],
+    version = 2,
     exportSchema = false
 )
 @TypeConverters(Converters::class)
 abstract class FarmDatabase : RoomDatabase() {
     abstract fun animalDao(): AnimalDao
     abstract fun feedingScheduleDao(): FeedingScheduleDao
+    abstract fun breedingScheduleDao(): BreedingScheduleDao
     abstract fun transactionDao(): TransactionDao
 
     companion object {
@@ -57,7 +73,10 @@ abstract class FarmDatabase : RoomDatabase() {
                     context.applicationContext,
                     FarmDatabase::class.java,
                     "farm_manager.db"
-                ).build().also { INSTANCE = it }
+                )
+                    .fallbackToDestructiveMigration()
+                    .build()
+                    .also { INSTANCE = it }
             }
         }
     }
@@ -119,6 +138,37 @@ suspend fun seedSampleDataIfEmpty(database: FarmDatabase) {
             timeOfDay = "08:00"
         )
     )
+
+    val now = System.currentTimeMillis()
+    val cattleBreeding = now - (30L * BreedingSchedule.DayMillis)
+    database.breedingScheduleDao().upsert(
+        BreedingSchedule(
+            animalId = cattleId,
+            femaleLabel = "Cow #14",
+            sireName = "Bull Ranger",
+            method = BreedingMethod.NATURAL,
+            status = BreedingStatus.PREGNANT,
+            breedingDateMillis = cattleBreeding,
+            expectedDueDateMillis = BreedingSchedule.expectedDueDate(cattleBreeding, AnimalType.CATTLE),
+            expectedOffspring = 1,
+            notes = "First calf for #14"
+        )
+    )
+    val chickenBreeding = now - (5L * BreedingSchedule.DayMillis)
+    database.breedingScheduleDao().upsert(
+        BreedingSchedule(
+            animalId = chickenId,
+            femaleLabel = "Broody hen group",
+            sireName = "Rooster pen B",
+            method = BreedingMethod.NATURAL,
+            status = BreedingStatus.DUE_SOON,
+            breedingDateMillis = chickenBreeding,
+            expectedDueDateMillis = BreedingSchedule.expectedDueDate(chickenBreeding, AnimalType.CHICKEN),
+            expectedOffspring = 12,
+            notes = "Incubator tray 2"
+        )
+    )
+
     database.transactionDao().upsert(
         FarmTransaction(
             type = TransactionType.INCOME,
