@@ -1,0 +1,51 @@
+agent:
+  name: pi-income-agent
+  # paper | live  (live also requires ALLOW_LIVE_TRADING=true in .env)
+  mode: paper
+  # Use built-in simulator quotes when network/Yahoo is unavailable
+  allow_simulator_fallback: true
+
+universe:
+  # Only these symbols may be traded
+  - SCHD
+  - VYM
+  - JEPI
+  - QQQ
+  - SPY
+  - BND
+  - GLD
+  - AAPL
+  - MSFT
+  - NVDA
+
+risk:
+  max_position_pct: 0.15       # 15% of equity per symbol
+  max_daily_loss_pct: 0.03     # halt trading after -3% day
+  cash_reserve_pct: 0.10       # keep 10% cash
+  max_open_positions: 8
+  min_confidence: 0.55         # ignore weak signals
+  min_trade_notional: 25.0     # USD
+
+broker:
+  backend: paper               # paper | alpaca
+  starting_cash: 10000.0
+
+market:
+  lookback_days: 60
+  provider: yahoo              # yahoo | simulator
+
+llm:
+  provider: none               # none | ollama | openai
+  # When provider=none, heuristic scoring alone decides
+  temperature: 0.2
+  timeout_seconds: 45
+
+schedule:
+  interval_minutes: 60
+  # US equity hours hint (agent still runs, but marks market_open)
+  market_tz: America/New_York
+  prefer_market_hours: true
+
+dashboard:
+  host: 0.0.0.0
+  port: 8787

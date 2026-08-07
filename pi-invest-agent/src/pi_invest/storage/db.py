@@ -1,0 +1,220 @@
+from __future__ import annotations
+
+import json
+import sqlite3
+from pathlib import Path
+from typing import Any
+
+from pi_invest.models import Decision, Side, utcnow
+
+
+class Database:
+    def __init__(self, path: str | Path) -> None:
+        self.path = Path(path)
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        self._init()
+
+    def _connect(self) -> sqlite3.Connection:
+        conn = sqlite3.connect(self.path)
+        conn.row_factory = sqlite3.Row
+        return conn
+
+    def _init(self) -> None:
+        with self._connect() as conn:
+            conn.executescript(
+                """
+                CREATE TABLE IF NOT EXISTS paper_account (
+                    id INTEGER PRIMARY KEY CHECK (id = 1),
+                    cash REAL NOT NULL,
+                    day_start_equity REAL NOT NULL,
+                    updated_at TEXT NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS paper_positions (
+                    symbol TEXT PRIMARY KEY,
+                    qty REAL NOT NULL,
+                    avg_cost REAL NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS orders (
+                    order_id TEXT PRIMARY KEY,
+                    symbol TEXT NOT NULL,
+                    side TEXT NOT NULL,
+                    qty REAL NOT NULL,
+                    fill_price REAL NOT NULL,
+                    paper INTEGER NOT NULL,
+                    reason TEXT,
+                    confidence REAL,
+                    created_at TEXT NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS decisions (
+                    cycle_id TEXT PRIMARY KEY,
+                    created_at TEXT NOT NULL,
+                    payload TEXT NOT NULL
+                );
+                """
+            )
+
+    def ensure_paper_account(self, starting_cash: float) -> None:
+        with self._connect() as conn:
+            row = conn.execute("SELECT id FROM paper_account WHERE id = 1").fetchone()
+            if row is None:
+                now = utcnow().isoformat()
+                conn.execute(
+                    "INSERT INTO paper_account (id, cash, day_start_equity, updated_at) "
+                    "VALUES (1, ?, ?, ?)",
+                    (starting_cash, starting_cash, now),
+                )
+
+    def reset_paper(self, starting_cash: float) -> None:
+        with self._connect() as conn:
+            conn.execute("DELETE FROM paper_positions")
+            conn.execute("DELETE FROM paper_account")
+            now = utcnow().isoformat()
+            conn.execute(
+                "INSERT INTO paper_account (id, cash, day_start_equity, updated_at) "
+                "VALUES (1, ?, ?, ?)",
+                (starting_cash, starting_cash, now),
+            )
+
+    def load_paper_state(self) -> tuple[float, list[tuple[str, float, float]], float]:
+        with self._connect() as conn:
+            acct = conn.execute(
+                "SELECT cash, day_start_equity FROM paper_account WHERE id = 1"
+            ).fetchone()
+            if acct is None:
+                return 0.0, [], 0.0
+            positions = [
+                (r["symbol"], r["qty"], r["avg_cost"])
+                for r in conn.execute(
+                    "SELECT symbol, qty, avg_cost FROM paper_positions WHERE qty > 0"
+                )
+            ]
+            return float(acct["cash"]), positions, float(acct["day_start_equity"])
+
+    def apply_paper_fill(
+        self, symbol: str, side: Side, qty: float, price: float
+    ) -> None:
+        symbol = symbol.upper()
+        with self._connect() as conn:
+            cash = float(
+                conn.execute("SELECT cash FROM paper_account WHERE id = 1").fetchone()[
+                    "cash"
+                ]
+            )
+            row = conn.execute(
+                "SELECT qty, avg_cost FROM paper_positions WHERE symbol = ?",
+                (symbol,),
+            ).fetchone()
+            held_qty = float(row["qty"]) if row else 0.0
+            avg_cost = float(row["avg_cost"]) if row else 0.0
+
+            if side == Side.BUY:
+                new_qty = held_qty + qty
+                new_avg = (
+                    ((held_qty * avg_cost) + (qty * price)) / new_qty if new_qty else 0.0
+                )
+                cash -= qty * price
+                conn.execute(
+                    """
+                    INSERT INTO paper_positions (symbol, qty, avg_cost)
+                    VALUES (?, ?, ?)
+                    ON CONFLICT(symbol) DO UPDATE SET
+                      qty=excluded.qty, avg_cost=excluded.avg_cost
+                    """,
+                    (symbol, new_qty, new_avg),
+                )
+            else:
+                new_qty = held_qty - qty
+                cash += qty * price
+                if new_qty <= 1e-9:
+                    conn.execute(
+                        "DELETE FROM paper_positions WHERE symbol = ?", (symbol,)
+                    )
+                else:
+                    conn.execute(
+                        "UPDATE paper_positions SET qty = ? WHERE symbol = ?",
+                        (new_qty, symbol),
+                    )
+
+            conn.execute(
+                "UPDATE paper_account SET cash = ?, updated_at = ? WHERE id = 1",
+                (cash, utcnow().isoformat()),
+            )
+
+    def log_order(
+        self,
+        order_id: str,
+        symbol: str,
+        side: str,
+        qty: float,
+        fill_price: float,
+        paper: bool,
+        reason: str,
+        confidence: float,
+    ) -> None:
+        with self._connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO orders (
+                  order_id, symbol, side, qty, fill_price, paper, reason, confidence, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    order_id,
+                    symbol,
+                    side,
+                    qty,
+                    fill_price,
+                    1 if paper else 0,
+                    reason,
+                    confidence,
+                    utcnow().isoformat(),
+                ),
+            )
+
+    def save_decision(self, decision: Decision) -> None:
+        with self._connect() as conn:
+            conn.execute(
+                "INSERT OR REPLACE INTO decisions (cycle_id, created_at, payload) "
+                "VALUES (?, ?, ?)",
+                (
+                    decision.cycle_id,
+                    decision.timestamp.isoformat(),
+                    decision.model_dump_json(),
+                ),
+            )
+
+    def recent_decisions(self, limit: int = 10) -> list[dict[str, Any]]:
+        with self._connect() as conn:
+            rows = conn.execute(
+                "SELECT payload FROM decisions ORDER BY created_at DESC LIMIT ?",
+                (limit,),
+            ).fetchall()
+            return [json.loads(r["payload"]) for r in rows]
+
+    def recent_orders(self, limit: int = 20) -> list[dict[str, Any]]:
+        with self._connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT order_id, symbol, side, qty, fill_price, paper, reason,
+                       confidence, created_at
+                FROM orders ORDER BY created_at DESC LIMIT ?
+                """,
+                (limit,),
+            ).fetchall()
+            return [dict(r) for r in rows]
+
+    def rollover_day_start_if_needed(self, equity: float, force: bool = False) -> None:
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT day_start_equity, updated_at FROM paper_account WHERE id = 1"
+            ).fetchone()
+            if row is None:
+                return
+            updated = row["updated_at"]
+            today = utcnow().date().isoformat()
+            if force or not str(updated).startswith(today):
+                conn.execute(
+                    "UPDATE paper_account SET day_start_equity = ?, updated_at = ? "
+                    "WHERE id = 1",
+                    (equity, utcnow().isoformat()),
+                )

@@ -1,1 +1,8 @@
 target/
+pi-invest-agent/.venv/
+pi-invest-agent/data/
+pi-invest-agent/.env
+pi-invest-agent/config/config.yaml
+pi-invest-agent/**/__pycache__/
+pi-invest-agent/**/*.egg-info/
+pi-invest-agent/.pytest_cache/
