@@ -43,11 +43,11 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import com.gutfarms.manager.data.model.Animal
 import com.gutfarms.manager.data.model.AnimalType
+import com.gutfarms.manager.ui.components.BubbleScrollPicker
 import com.gutfarms.manager.ui.components.EmptyHint
 import com.gutfarms.manager.ui.components.FormSheet
 import com.gutfarms.manager.ui.components.MoneyField
 import com.gutfarms.manager.ui.components.ScreenHeader
-import com.gutfarms.manager.ui.components.SimpleDropdown
 import com.gutfarms.manager.ui.components.formatMoney
 import com.gutfarms.manager.ui.theme.CreamLeaf
 import com.gutfarms.manager.ui.theme.Mist
@@ -209,12 +209,14 @@ private fun AnimalForm(
             singleLine = true,
             modifier = Modifier.fillMaxWidth()
         )
-        SimpleDropdown(
+        BubbleScrollPicker(
             label = "Type",
             options = AnimalType.entries,
             selected = type,
             onSelected = { type = it },
-            optionLabel = { it.name.lowercase().replaceFirstChar { c -> c.titlecase() } }
+            optionLabel = {
+                it.name.lowercase().replace('_', ' ').replaceFirstChar { c -> c.titlecase() }
+            }
         )
         OutlinedTextField(
             value = count,
