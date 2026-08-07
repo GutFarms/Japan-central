@@ -1,1 +1,9 @@
-target/
+/target/
+**/*.rs.bk
+.embuild/
+.vscode/
+.idea/
+*.bin
+*.elf
+scrypt-miner-config.bin
+export-esp.sh

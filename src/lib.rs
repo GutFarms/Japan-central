@@ -1,0 +1,26 @@
+//! Scrypt proof-of-work miner core for ESP32-S3 (and host demos).
+//!
+//! The mining engine is `no_std` + `alloc` so it can run on bare-metal ESP32-S3
+//! firmware and also be unit-tested on a desktop host.
+
+#![cfg_attr(not(any(test, feature = "host")), no_std)]
+
+extern crate alloc;
+
+pub mod config;
+pub mod gui;
+pub mod miner;
+pub mod persist;
+pub mod radio;
+pub mod stratum;
+
+#[cfg(feature = "esp")]
+pub mod display;
+
+pub use config::{ConfigError, PoolConfig, SetupField};
+pub use miner::{
+    hash_meets_target, hash_to_hex, target_from_leading_zero_nibbles, HashResult, MinerStats,
+    ScryptMiner, HASH_LEN, HEADER_LEN, SCRYPT_LOG_N, SCRYPT_N, SCRYPT_P, SCRYPT_R, V_BYTES,
+};
+pub use radio::{RadioStatus, WifiPhase};
+pub use stratum::{Endpoint, StratumPhase, StratumStatus};

@@ -1,0 +1,17 @@
+[target.xtensa-esp32s3-none-elf]
+runner = "espflash flash --monitor"
+rustflags = [
+    "-C", "link-arg=-Tlinkall.x",
+    "-C", "link-arg=-nostartfiles",
+]
+
+[env]
+ESP_LOG = "info"
+
+# Firmware (recommended: lite scrypt for RAM):
+#   . $HOME/export-esp.sh   # or ./export-esp.sh from espup
+#   cargo +esp run -Zbuild-std=core,alloc --release \
+#     --target xtensa-esp32s3-none-elf --features esp,lite
+# Host tests / demo (no ESP toolchain):
+#   cargo test --no-default-features
+#   cargo run --no-default-features --features host --bin host-miner --release
