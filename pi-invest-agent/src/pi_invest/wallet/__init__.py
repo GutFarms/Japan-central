@@ -396,7 +396,15 @@ class WalletService:
         mark = DEFAULT_MARKS_USD.get(asset.upper(), 0.0)
         return amount * mark
 
-    def _assert_can_send(self, asset: str, amount: float) -> None:
+    def _assert_can_send(
+        self,
+        asset: str,
+        amount: float,
+        to_address: str | None = None,
+        *,
+        confirm: str | None = None,
+        internal: bool = False,
+    ) -> None:
         if self.safety is not None:
             try:
                 self.safety.assert_send_allowed()
@@ -409,6 +417,26 @@ class WalletService:
             raise WalletError(
                 f"daily send limit exceeded: ${spent:.2f} + ${usd:.2f} > ${cap:.2f}"
             )
+        if not internal:
+            if self.cfg.require_send_confirmation:
+                from pi_invest.wallet.confirm import (
+                    confirmation_phrase,
+                    confirmations_match,
+                )
+
+                expected = confirmation_phrase(asset, amount)
+                if not confirmations_match(expected, confirm):
+                    raise WalletError(
+                        f"confirmation required — type exactly: {expected}"
+                    )
+            if self.cfg.allowlist_required:
+                if not to_address:
+                    raise WalletError("destination required")
+                if not self.db.is_allowlisted(to_address):
+                    raise WalletError(
+                        f"destination not on withdrawal allowlist: {to_address}. "
+                        "Add it with `pi-invest wallet allowlist-add` first."
+                    )
 
     def send(
         self,
@@ -417,9 +445,21 @@ class WalletService:
         to_address: str,
         memo: str = "",
         network: str | None = None,
+        confirm: str | None = None,
     ) -> TransferRecord:
-        self._assert_can_send(asset, amount)
-        return self.backend.send(asset, amount, to_address, memo=memo, network=network)
+        self._assert_can_send(asset, amount, to_address, confirm=confirm, internal=False)
+        record = self.backend.send(
+            asset, amount, to_address, memo=memo, network=network
+        )
+        try:
+            self.db.audit(
+                "wallet.send",
+                f"{record.direction.value} {record.amount} {record.asset} "
+                f"-> {record.counterparty} ref={record.tx_ref}",
+            )
+        except Exception:  # noqa: BLE001
+            pass
+        return record
 
     def receive(
         self,
@@ -434,10 +474,26 @@ class WalletService:
     def history(self, limit: int = 25) -> list[TransferRecord]:
         return self.backend.history(limit=limit)
 
-    def bridge_to_broker(self, amount_usd: float) -> TransferRecord:
+    def bridge_to_broker(self, amount_usd: float, confirm: str | None = None) -> TransferRecord:
         if amount_usd <= 0:
             raise WalletError("amount must be positive")
-        self._assert_can_send("USD", amount_usd)
+        if self.cfg.require_send_confirmation:
+            from pi_invest.wallet.confirm import (
+                bridge_phrase,
+                confirmation_phrase,
+                confirmations_match,
+            )
+
+            expected_send = confirmation_phrase("USD", amount_usd)
+            expected_bridge = bridge_phrase(amount_usd)
+            if not (
+                confirmations_match(expected_send, confirm)
+                or confirmations_match(expected_bridge, confirm)
+            ):
+                raise WalletError(
+                    f"confirmation required — type exactly: {expected_bridge}"
+                )
+        self._assert_can_send("USD", amount_usd, internal=True)
         bal = self.db.wallet_balances().get("USD", 0.0)
         if amount_usd > bal + 1e-9:
             raise WalletError(f"insufficient wallet USD ({bal})")
@@ -458,9 +514,12 @@ class WalletService:
             tx_ref=f"bridge-out-{secrets.token_hex(6)}",
         )
         self.db.save_transfer(record)
+        self.db.audit("wallet.bridge_to_broker", f"{amount_usd} USD")
         return record
 
-    def bridge_from_broker(self, amount_usd: float) -> TransferRecord:
+    def bridge_from_broker(
+        self, amount_usd: float, confirm: str | None = None
+    ) -> TransferRecord:
         if amount_usd <= 0:
             raise WalletError("amount must be positive")
         if self.safety is not None:
@@ -468,6 +527,22 @@ class WalletService:
                 self.safety.assert_send_allowed()
             except Exception as exc:
                 raise WalletError(str(exc)) from exc
+        if self.cfg.require_send_confirmation:
+            from pi_invest.wallet.confirm import (
+                bridge_phrase,
+                confirmation_phrase,
+                confirmations_match,
+            )
+
+            expected_send = confirmation_phrase("USD", amount_usd)
+            expected_bridge = bridge_phrase(amount_usd)
+            if not (
+                confirmations_match(expected_send, confirm)
+                or confirmations_match(expected_bridge, confirm)
+            ):
+                raise WalletError(
+                    f"confirmation required — type exactly: {expected_bridge}"
+                )
         self.db.ensure_paper_account(0.0)
         cash, _, _ = self.db.load_paper_state()
         if amount_usd > cash + 1e-9:
@@ -487,7 +562,20 @@ class WalletService:
             tx_ref=f"bridge-in-{secrets.token_hex(6)}",
         )
         self.db.save_transfer(record)
+        self.db.audit("wallet.bridge_from_broker", f"{amount_usd} USD")
         return record
+
+    def allowlist(self) -> list[dict[str, str]]:
+        return self.db.list_allowlist()
+
+    def allowlist_add(self, destination: str, label: str = "") -> None:
+        self.db.add_allowlist(destination, label=label)
+        self.db.audit("allowlist.add", destination)
+
+    def allowlist_remove(self, destination: str) -> None:
+        if not self.db.remove_allowlist(destination):
+            raise WalletError(f"not on allowlist: {destination}")
+        self.db.audit("allowlist.remove", destination)
 
 
 def build_wallet(
@@ -500,6 +588,7 @@ def build_wallet(
 
     wcfg = cfg.wallet
     gate = safety or SafetyGate(db)
+    db.ensure_allowlist(wcfg.allowlist_bootstrap)
     if wcfg.backend == "coinbase":
         backend: WalletBackend = CoinbaseWallet(env, wcfg, db)
     else:

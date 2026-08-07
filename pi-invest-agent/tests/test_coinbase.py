@@ -119,6 +119,7 @@ def test_coinbase_wallet_snapshot_and_send_gate(tmp_path):
         coinbase_api_secret=env.coinbase_api_secret,
         allow_live_transfers=True,
     )
+    # Bypass service-level gates by calling backend directly for this unit
     wallet2 = CoinbaseWallet(env2, cfg, db)
     with patch.object(
         wallet2.client,

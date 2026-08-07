@@ -77,6 +77,10 @@ wallet:
     BTC: 0.00001
     ETH: 0.0002
   max_daily_send_usd: 250.0      # hard outbound send cap per UTC day
+  allowlist_required: true       # block sends until destinations are allowlisted
+  allowlist_bootstrap: []        # optional seed destinations
+  require_send_confirmation: true  # must type "SEND <amount> <ASSET>"
 
 safety:
   journal_enabled: true
+  audit_enabled: true

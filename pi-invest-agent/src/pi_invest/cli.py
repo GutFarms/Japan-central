@@ -296,12 +296,24 @@ def wallet_send(
     amount: float = typer.Option(..., "--amount", "-a", help="Amount to send"),
     to: str = typer.Option(..., "--to", "-t", help="Destination address or USD account id"),
     memo: str = typer.Option("", "--memo", "-m", help="Optional memo"),
+    confirm: Optional[str] = typer.Option(
+        None,
+        "--confirm",
+        "-c",
+        help='Confirmation phrase, e.g. "SEND 25.00 USD"',
+    ),
     config: Optional[str] = typer.Option(None, help="Path to config.yaml"),
 ) -> None:
-    """Send USD or cryptocurrency from the wallet."""
-    _a, _c, _e, _d, wallet, _s, _j = _boot(config, True)
+    """Send USD or cryptocurrency from the wallet (allowlist + confirm)."""
+    from pi_invest.wallet.confirm import confirmation_phrase
+
+    _a, cfg, _e, _d, wallet, _s, _j = _boot(config, True)
+    phrase = confirmation_phrase(asset, amount)
+    if cfg.wallet.require_send_confirmation and not confirm:
+        console.print(f"Confirmation required. Re-run with: --confirm \"{phrase}\"")
+        raise typer.Exit(2)
     try:
-        record = wallet.send(asset, amount, to, memo=memo)
+        record = wallet.send(asset, amount, to, memo=memo, confirm=confirm or phrase)
     except WalletError as exc:
         console.print(f"[red]{exc}[/red]")
         raise typer.Exit(1) from exc
@@ -309,6 +321,53 @@ def wallet_send(
         f"[green]sent[/green] {record.amount} {record.asset} → {record.counterparty} "
         f"(fee {record.fee}) ref={record.tx_ref}"
     )
+
+
+@wallet_app.command("allowlist")
+def wallet_allowlist(
+    config: Optional[str] = typer.Option(None, help="Path to config.yaml"),
+) -> None:
+    """Show withdrawal allowlist destinations."""
+    _a, cfg, _e, _d, wallet, _s, _j = _boot(config, True)
+    rows = wallet.allowlist()
+    console.print(
+        f"allowlist_required={cfg.wallet.allowlist_required}  "
+        f"entries={len(rows)}"
+    )
+    table = Table(title="Withdrawal allowlist")
+    table.add_column("Destination")
+    table.add_column("Label")
+    table.add_column("Added")
+    for r in rows:
+        table.add_row(r["destination"], r.get("label") or "—", r.get("created_at") or "")
+    console.print(table)
+
+
+@wallet_app.command("allowlist-add")
+def wallet_allowlist_add(
+    destination: str = typer.Argument(..., help="Address, email, or account id"),
+    label: str = typer.Option("", "--label", "-l"),
+    config: Optional[str] = typer.Option(None, help="Path to config.yaml"),
+) -> None:
+    """Allow a destination for future sends."""
+    _a, _c, _e, _d, wallet, _s, _j = _boot(config, True)
+    wallet.allowlist_add(destination, label=label)
+    console.print(f"[green]allowlisted[/green] {destination}")
+
+
+@wallet_app.command("allowlist-remove")
+def wallet_allowlist_remove(
+    destination: str = typer.Argument(...),
+    config: Optional[str] = typer.Option(None, help="Path to config.yaml"),
+) -> None:
+    """Remove a destination from the withdrawal allowlist."""
+    _a, _c, _e, _d, wallet, _s, _j = _boot(config, True)
+    try:
+        wallet.allowlist_remove(destination)
+    except WalletError as exc:
+        console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(1) from exc
+    console.print(f"removed {destination}")
 
 
 @wallet_app.command("credit")
@@ -362,16 +421,22 @@ def wallet_history(
 @wallet_app.command("bridge-to-broker")
 def wallet_bridge_to_broker(
     amount: float = typer.Option(..., "--amount", "-a", help="USD amount"),
+    confirm: Optional[str] = typer.Option(None, "--confirm", "-c"),
     config: Optional[str] = typer.Option(None, help="Path to config.yaml"),
 ) -> None:
     """Move USD from wallet treasury into paper brokerage cash."""
-    _a, cfg, _e, db, wallet, _s, _j = _boot(config, True)
     from pi_invest.broker import PaperBroker
+    from pi_invest.wallet.confirm import bridge_phrase
 
+    _a, cfg, _e, db, wallet, _s, _j = _boot(config, True)
     if cfg.broker.backend == "paper":
         PaperBroker(db, cfg.broker.starting_cash)
+    phrase = bridge_phrase(amount)
+    if cfg.wallet.require_send_confirmation and not confirm:
+        console.print(f"Confirmation required. Re-run with: --confirm \"{phrase}\"")
+        raise typer.Exit(2)
     try:
-        record = wallet.bridge_to_broker(amount)
+        record = wallet.bridge_to_broker(amount, confirm=confirm or phrase)
     except WalletError as exc:
         console.print(f"[red]{exc}[/red]")
         raise typer.Exit(1) from exc
@@ -381,16 +446,22 @@ def wallet_bridge_to_broker(
 @wallet_app.command("bridge-from-broker")
 def wallet_bridge_from_broker(
     amount: float = typer.Option(..., "--amount", "-a", help="USD amount"),
+    confirm: Optional[str] = typer.Option(None, "--confirm", "-c"),
     config: Optional[str] = typer.Option(None, help="Path to config.yaml"),
 ) -> None:
     """Move USD from paper brokerage cash into wallet treasury."""
-    _a, cfg, _e, db, wallet, _s, _j = _boot(config, True)
     from pi_invest.broker import PaperBroker
+    from pi_invest.wallet.confirm import bridge_phrase
 
+    _a, cfg, _e, db, wallet, _s, _j = _boot(config, True)
     if cfg.broker.backend == "paper":
         PaperBroker(db, cfg.broker.starting_cash)
+    phrase = bridge_phrase(amount)
+    if cfg.wallet.require_send_confirmation and not confirm:
+        console.print(f"Confirmation required. Re-run with: --confirm \"{phrase}\"")
+        raise typer.Exit(2)
     try:
-        record = wallet.bridge_from_broker(amount)
+        record = wallet.bridge_from_broker(amount, confirm=confirm or phrase)
     except WalletError as exc:
         console.print(f"[red]{exc}[/red]")
         raise typer.Exit(1) from exc

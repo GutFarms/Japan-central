@@ -118,6 +118,10 @@ pi-invest halt --reason "stepping away"
 pi-invest resume
 pi-invest journal
 pi-invest export-journal --path data/journal.csv
+
+# Secured sends
+pi-invest wallet allowlist-add usd:friend:abc --label "Friend"
+pi-invest wallet send USD --amount 25 --to usd:friend:abc --confirm "SEND 25.00 USD"
 ```
 
 ## Config

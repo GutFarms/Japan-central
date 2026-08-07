@@ -83,6 +83,17 @@ class Database:
                     tx_ref TEXT,
                     created_at TEXT NOT NULL
                 );
+                CREATE TABLE IF NOT EXISTS withdrawal_allowlist (
+                    destination TEXT PRIMARY KEY,
+                    label TEXT NOT NULL DEFAULT '',
+                    created_at TEXT NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS audit_events (
+                    event_id TEXT PRIMARY KEY,
+                    kind TEXT NOT NULL,
+                    detail TEXT NOT NULL,
+                    created_at TEXT NOT NULL
+                );
                 CREATE TABLE IF NOT EXISTS agent_state (
                     id INTEGER PRIMARY KEY CHECK (id = 1),
                     halted INTEGER NOT NULL DEFAULT 0,
@@ -581,9 +592,90 @@ class Database:
             ).fetchall()
         total = 0.0
         for r in rows:
-            # Internal bridges count toward daily send too (money left wallet)
             asset = r["asset"]
             px = marks.get(asset, 1.0 if asset in {"USD", "USDC", "USDT"} else 0.0)
             total += float(r["amount"]) * px
         return total
+
+    def ensure_allowlist(self, bootstrap: list[str]) -> None:
+        with self._connect() as conn:
+            count = conn.execute(
+                "SELECT COUNT(*) AS c FROM withdrawal_allowlist"
+            ).fetchone()["c"]
+            if count == 0 and bootstrap:
+                now = utcnow().isoformat()
+                for dest in bootstrap:
+                    d = dest.strip()
+                    if not d:
+                        continue
+                    conn.execute(
+                        "INSERT OR IGNORE INTO withdrawal_allowlist "
+                        "(destination, label, created_at) VALUES (?, ?, ?)",
+                        (d, "", now),
+                    )
+
+    def list_allowlist(self) -> list[dict[str, str]]:
+        with self._connect() as conn:
+            rows = conn.execute(
+                "SELECT destination, label, created_at FROM withdrawal_allowlist "
+                "ORDER BY created_at ASC"
+            ).fetchall()
+            return [dict(r) for r in rows]
+
+    def add_allowlist(self, destination: str, label: str = "") -> None:
+        dest = destination.strip()
+        if not dest:
+            raise ValueError("destination required")
+        with self._connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO withdrawal_allowlist (destination, label, created_at)
+                VALUES (?, ?, ?)
+                ON CONFLICT(destination) DO UPDATE SET label=excluded.label
+                """,
+                (dest, label.strip(), utcnow().isoformat()),
+            )
+
+    def remove_allowlist(self, destination: str) -> bool:
+        with self._connect() as conn:
+            cur = conn.execute(
+                "DELETE FROM withdrawal_allowlist WHERE destination = ?",
+                (destination.strip(),),
+            )
+            return cur.rowcount > 0
+
+    def is_allowlisted(self, destination: str) -> bool:
+        dest = destination.strip()
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT 1 FROM withdrawal_allowlist WHERE destination = ?",
+                (dest,),
+            ).fetchone()
+            if row:
+                return True
+            # Case-insensitive match for emails / tags
+            row = conn.execute(
+                "SELECT 1 FROM withdrawal_allowlist WHERE lower(destination) = lower(?)",
+                (dest,),
+            ).fetchone()
+            return row is not None
+
+    def audit(self, kind: str, detail: str) -> None:
+        import uuid as _uuid
+
+        with self._connect() as conn:
+            conn.execute(
+                "INSERT INTO audit_events (event_id, kind, detail, created_at) "
+                "VALUES (?, ?, ?, ?)",
+                (str(_uuid.uuid4()), kind, detail, utcnow().isoformat()),
+            )
+
+    def recent_audit(self, limit: int = 30) -> list[dict]:
+        with self._connect() as conn:
+            rows = conn.execute(
+                "SELECT event_id, kind, detail, created_at FROM audit_events "
+                "ORDER BY created_at DESC LIMIT ?",
+                (limit,),
+            ).fetchall()
+            return [dict(r) for r in rows]
 

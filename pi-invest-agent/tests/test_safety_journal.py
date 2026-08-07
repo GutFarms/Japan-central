@@ -14,7 +14,11 @@ from pi_invest.wallet import PaperWallet, WalletError, WalletService, build_wall
 def test_halt_blocks_send(tmp_path):
     db = Database(tmp_path / "s.db")
     safety = SafetyGate(db)
-    cfg = WalletConfig(starting_balances={"USD": 500.0, "BTC": 0, "ETH": 0, "USDC": 0})
+    cfg = WalletConfig(
+        starting_balances={"USD": 500.0, "BTC": 0, "ETH": 0, "USDC": 0},
+        allowlist_required=False,
+        require_send_confirmation=False,
+    )
     svc = WalletService(PaperWallet(db, cfg), db, cfg, EnvSettings(), safety=safety)
     safety.halt("test")
     with pytest.raises(WalletError, match="halted"):
@@ -31,6 +35,8 @@ def test_daily_send_limit(tmp_path):
     cfg = WalletConfig(
         starting_balances={"USD": 1000.0, "BTC": 0, "ETH": 0, "USDC": 0},
         max_daily_send_usd=50.0,
+        allowlist_required=False,
+        require_send_confirmation=False,
     )
     svc = WalletService(PaperWallet(db, cfg), db, cfg, EnvSettings(), safety=safety)
     svc.send("USD", 40, "usd:a")

@@ -86,13 +86,20 @@ class WalletConfig(BaseModel):
     )
     # Hard cap on outbound wallet sends (USD-equivalent) per UTC day
     max_daily_send_usd: float = 250.0
+    # When true, external sends only go to DB allowlist destinations
+    allowlist_required: bool = True
+    # Seeded into the DB allowlist on first run (emails, addresses, account ids)
+    allowlist_bootstrap: list[str] = Field(default_factory=list)
+    # Require typing "SEND <amount> <ASSET>" (or --yes with matching --confirm)
+    require_send_confirmation: bool = True
 
 
 class SafetyConfig(BaseModel):
     """Kill-switch defaults — halt blocks trading and outbound sends."""
 
-    # Record NAV after every invest cycle
     journal_enabled: bool = True
+    # Append security-sensitive actions to audit log
+    audit_enabled: bool = True
 
 
 
