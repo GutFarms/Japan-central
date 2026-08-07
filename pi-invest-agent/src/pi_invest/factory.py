@@ -7,21 +7,20 @@ from pi_invest.broker import build_broker
 from pi_invest.config import AppConfig, EnvSettings, load_config, load_env
 from pi_invest.data import build_market_data
 from pi_invest.storage.db import Database
+from pi_invest.wallet import WalletService, build_wallet
 
 
 def project_root() -> Path:
-    # src/pi_invest/factory.py -> pi-invest-agent/
     return Path(__file__).resolve().parents[2]
 
 
 def build_agent(
     config_path: str | None = None,
     force_simulator: bool = False,
-) -> tuple[InvestAgent, AppConfig, EnvSettings, Database]:
+) -> tuple[InvestAgent, AppConfig, EnvSettings, Database, WalletService]:
     root = project_root()
     env = load_env()
 
-    # Prefer paths relative to project root when running as a service
     cfg_path = Path(config_path or env.pi_invest_config)
     if not cfg_path.is_absolute():
         cfg_path = root / cfg_path
@@ -43,4 +42,5 @@ def build_agent(
     )
     broker = build_broker(cfg, env, db)
     agent = InvestAgent(cfg, env, market, broker, db)
-    return agent, cfg, env, db
+    wallet = build_wallet(cfg, env, db)
+    return agent, cfg, env, db, wallet

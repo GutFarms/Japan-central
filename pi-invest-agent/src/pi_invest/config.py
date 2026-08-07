@@ -44,6 +44,48 @@ class DashboardConfig(BaseModel):
     port: int = 8787
 
 
+class WalletConfig(BaseModel):
+    """Fiat + crypto treasury for send/receive (separate from brokerage book)."""
+
+    backend: Literal["paper", "coinbase"] = "paper"
+    assets: list[str] = Field(
+        default_factory=lambda: ["USD", "USDC", "BTC", "ETH"]
+    )
+    starting_balances: dict[str, float] = Field(
+        default_factory=lambda: {
+            "USD": 1000.0,
+            "USDC": 0.0,
+            "BTC": 0.0,
+            "ETH": 0.0,
+        }
+    )
+    networks: dict[str, str] = Field(
+        default_factory=lambda: {
+            "USD": "ach-sim",
+            "USDC": "ethereum",
+            "BTC": "bitcoin",
+            "ETH": "ethereum",
+        }
+    )
+    # Optional per-asset minimum send size
+    min_send: dict[str, float] = Field(
+        default_factory=lambda: {
+            "USD": 1.0,
+            "USDC": 1.0,
+            "BTC": 0.0001,
+            "ETH": 0.001,
+        }
+    )
+    send_fee: dict[str, float] = Field(
+        default_factory=lambda: {
+            "USD": 0.0,
+            "USDC": 0.0,
+            "BTC": 0.00001,
+            "ETH": 0.0002,
+        }
+    )
+
+
 class AgentConfig(BaseModel):
     name: str = "pi-income-agent"
     mode: Literal["paper", "live"] = "paper"
@@ -61,6 +103,7 @@ class AppConfig(BaseModel):
     llm: LlmConfig = Field(default_factory=LlmConfig)
     schedule: ScheduleConfig = Field(default_factory=ScheduleConfig)
     dashboard: DashboardConfig = Field(default_factory=DashboardConfig)
+    wallet: WalletConfig = Field(default_factory=WalletConfig)
 
 
 class EnvSettings(BaseSettings):
@@ -78,6 +121,9 @@ class EnvSettings(BaseSettings):
     ollama_base_url: str = "http://127.0.0.1:11434"
     ollama_model: str = "llama3.2:3b"
     allow_live_trading: bool = False
+    allow_live_transfers: bool = False
+    coinbase_api_key: str = ""
+    coinbase_api_secret: str = ""
     pi_invest_config: str = "config/config.yaml"
     pi_invest_db: str = "data/pi_invest.db"
 

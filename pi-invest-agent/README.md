@@ -19,12 +19,22 @@ It scores tickers for expected income (dividends + capital appreciation signals)
 |---|---|
 | Trading mode | `paper` |
 | Live unlock | Off (`ALLOW_LIVE_TRADING=false`) |
+| Wallet transfers | Paper simulation (`wallet.backend: paper`) |
+| Live transfers unlock | Off (`ALLOW_LIVE_TRANSFERS=false`) |
 | Max position | 15% of equity |
 | Max daily loss | 3% of equity |
 | Cash reserve | 10% kept uninvested |
 | Universe | Configurable allowlist only |
 
-> This is software for experimentation. It is **not** financial advice. Automated trading can lose money. Start in paper mode and only unlock live capital if you understand the risks.
+### Wallet (USD + crypto)
+
+A separate treasury from the brokerage book supports **send** and **receive** for USD and cryptocurrencies (BTC, ETH, USDC by default).
+
+- Paper mode generates stable local receive addresses (`usd:piinvest:…`, `paper-btc-…`, `0xpaper…`) and simulates inbound/outbound transfers.
+- Bridge commands move USD between the wallet and paper brokerage cash.
+- Coinbase backend is an optional shell; live withdrawals are not auto-fired — set `ALLOW_LIVE_TRANSFERS=true` only if you extend the adapter for your exchange API.
+
+> This is software for experimentation. It is **not** financial advice. Automated trading and transfers can lose money. Start in paper mode and only unlock live capital if you understand the risks.
 
 ## Raspberry Pi 5 quick start
 
@@ -74,9 +84,18 @@ journalctl -u pi-invest -f
 ```bash
 pi-invest once          # single research + trade cycle
 pi-invest run           # scheduled loop
-pi-invest status        # portfolio + recent decisions
+pi-invest status        # portfolio + wallet + recent decisions
 pi-invest dashboard     # web UI on :8787
-pi-invest reset-paper   # wipe paper ledger (keeps config)
+pi-invest reset-paper   # wipe paper brokerage ledger (keeps config)
+
+# USD + crypto wallet
+pi-invest wallet balances
+pi-invest wallet receive BTC
+pi-invest wallet credit BTC --amount 0.01 --from alice
+pi-invest wallet send USD --amount 25 --to usd:friend:abc123
+pi-invest wallet history
+pi-invest wallet bridge-to-broker --amount 100    # wallet USD → brokerage cash
+pi-invest wallet bridge-from-broker --amount 50   # brokerage cash → wallet USD
 ```
 
 ## Config
@@ -105,8 +124,9 @@ pi-invest-agent/
   src/pi_invest/
     agent/       # scoring brain + risk gate + orchestrator
     broker/      # paper + Alpaca adapters
+    wallet/      # USD + crypto send/receive treasury
     data/        # market snapshots
-    storage/     # SQLite trade/decision log
+    storage/     # SQLite trade/decision/transfer log
     web/         # FastAPI dashboard
   config/
   systemd/

@@ -2,10 +2,19 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from pi_invest.models import Decision, Side, utcnow
+from pi_invest.models import (
+    Decision,
+    ReceiveAddress,
+    Side,
+    TransferDirection,
+    TransferRecord,
+    TransferStatus,
+    utcnow,
+)
 
 
 class Database:
@@ -49,6 +58,30 @@ class Database:
                     cycle_id TEXT PRIMARY KEY,
                     created_at TEXT NOT NULL,
                     payload TEXT NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS wallet_balances (
+                    asset TEXT PRIMARY KEY,
+                    amount REAL NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS wallet_addresses (
+                    asset TEXT PRIMARY KEY,
+                    address TEXT NOT NULL,
+                    network TEXT NOT NULL,
+                    memo_tag TEXT
+                );
+                CREATE TABLE IF NOT EXISTS wallet_transfers (
+                    transfer_id TEXT PRIMARY KEY,
+                    direction TEXT NOT NULL,
+                    asset TEXT NOT NULL,
+                    amount REAL NOT NULL,
+                    fee REAL NOT NULL,
+                    counterparty TEXT NOT NULL,
+                    network TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    memo TEXT,
+                    paper INTEGER NOT NULL,
+                    tx_ref TEXT,
+                    created_at TEXT NOT NULL
                 );
                 """
             )
@@ -217,4 +250,179 @@ class Database:
                     "UPDATE paper_account SET day_start_equity = ?, updated_at = ? "
                     "WHERE id = 1",
                     (equity, utcnow().isoformat()),
+                )
+
+    def set_paper_cash(self, cash: float) -> None:
+        with self._connect() as conn:
+            conn.execute(
+                "UPDATE paper_account SET cash = ?, updated_at = ? WHERE id = 1",
+                (cash, utcnow().isoformat()),
+            )
+
+    def ensure_wallet(
+        self,
+        starting: dict[str, float],
+        assets: list[str],
+        address_fn,
+        networks: dict[str, str],
+    ) -> None:
+        with self._connect() as conn:
+            for asset in assets:
+                a = asset.upper()
+                row = conn.execute(
+                    "SELECT asset FROM wallet_balances WHERE asset = ?", (a,)
+                ).fetchone()
+                if row is None:
+                    conn.execute(
+                        "INSERT INTO wallet_balances (asset, amount) VALUES (?, ?)",
+                        (a, float(starting.get(a, starting.get(asset, 0.0)))),
+                    )
+                addr_row = conn.execute(
+                    "SELECT asset FROM wallet_addresses WHERE asset = ?", (a,)
+                ).fetchone()
+                if addr_row is None:
+                    conn.execute(
+                        "INSERT INTO wallet_addresses (asset, address, network, memo_tag) "
+                        "VALUES (?, ?, ?, NULL)",
+                        (a, address_fn(a), networks.get(a, "paper")),
+                    )
+
+    def wallet_balances(self) -> dict[str, float]:
+        with self._connect() as conn:
+            rows = conn.execute("SELECT asset, amount FROM wallet_balances").fetchall()
+            return {r["asset"]: float(r["amount"]) for r in rows}
+
+    def adjust_wallet_balance(self, asset: str, delta: float) -> float:
+        asset = asset.upper()
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT amount FROM wallet_balances WHERE asset = ?", (asset,)
+            ).fetchone()
+            current = float(row["amount"]) if row else 0.0
+            new_amt = current + delta
+            if new_amt < -1e-9:
+                raise ValueError(f"wallet {asset} would go negative ({new_amt})")
+            if row is None:
+                conn.execute(
+                    "INSERT INTO wallet_balances (asset, amount) VALUES (?, ?)",
+                    (asset, max(0.0, new_amt)),
+                )
+            else:
+                conn.execute(
+                    "UPDATE wallet_balances SET amount = ? WHERE asset = ?",
+                    (max(0.0, new_amt), asset),
+                )
+            return max(0.0, new_amt)
+
+    def wallet_addresses(self) -> list[ReceiveAddress]:
+        with self._connect() as conn:
+            rows = conn.execute(
+                "SELECT asset, address, network, memo_tag FROM wallet_addresses"
+            ).fetchall()
+            return [
+                ReceiveAddress(
+                    asset=r["asset"],
+                    address=r["address"],
+                    network=r["network"],
+                    memo_tag=r["memo_tag"],
+                )
+                for r in rows
+            ]
+
+    def get_or_create_address(
+        self, asset: str, address: str, network: str
+    ) -> ReceiveAddress:
+        asset = asset.upper()
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT asset, address, network, memo_tag FROM wallet_addresses "
+                "WHERE asset = ?",
+                (asset,),
+            ).fetchone()
+            if row is None:
+                conn.execute(
+                    "INSERT INTO wallet_addresses (asset, address, network, memo_tag) "
+                    "VALUES (?, ?, ?, NULL)",
+                    (asset, address, network),
+                )
+                return ReceiveAddress(asset=asset, address=address, network=network)
+            return ReceiveAddress(
+                asset=row["asset"],
+                address=row["address"],
+                network=row["network"],
+                memo_tag=row["memo_tag"],
+            )
+
+    def save_transfer(self, record: TransferRecord) -> None:
+        with self._connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO wallet_transfers (
+                  transfer_id, direction, asset, amount, fee, counterparty,
+                  network, status, memo, paper, tx_ref, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    record.transfer_id,
+                    record.direction.value,
+                    record.asset,
+                    record.amount,
+                    record.fee,
+                    record.counterparty,
+                    record.network,
+                    record.status.value,
+                    record.memo,
+                    1 if record.paper else 0,
+                    record.tx_ref,
+                    record.timestamp.isoformat(),
+                ),
+            )
+
+    def list_transfers(self, limit: int = 25) -> list[TransferRecord]:
+        with self._connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT transfer_id, direction, asset, amount, fee, counterparty,
+                       network, status, memo, paper, tx_ref, created_at
+                FROM wallet_transfers
+                ORDER BY created_at DESC
+                LIMIT ?
+                """,
+                (limit,),
+            ).fetchall()
+            out: list[TransferRecord] = []
+            for r in rows:
+                ts_raw = r["created_at"]
+                try:
+                    ts = datetime.fromisoformat(ts_raw) if ts_raw else utcnow()
+                except ValueError:
+                    ts = utcnow()
+                out.append(
+                    TransferRecord(
+                        transfer_id=r["transfer_id"],
+                        direction=TransferDirection(r["direction"]),
+                        asset=r["asset"],
+                        amount=float(r["amount"]),
+                        fee=float(r["fee"]),
+                        counterparty=r["counterparty"],
+                        network=r["network"],
+                        status=TransferStatus(r["status"]),
+                        memo=r["memo"] or "",
+                        paper=bool(r["paper"]),
+                        tx_ref=r["tx_ref"] or "",
+                        timestamp=ts,
+                    )
+                )
+            return out
+
+    def reset_wallet(self, starting: dict[str, float]) -> None:
+        with self._connect() as conn:
+            conn.execute("DELETE FROM wallet_transfers")
+            for asset, amount in starting.items():
+                conn.execute(
+                    """
+                    INSERT INTO wallet_balances (asset, amount) VALUES (?, ?)
+                    ON CONFLICT(asset) DO UPDATE SET amount=excluded.amount
+                    """,
+                    (asset.upper(), float(amount)),
                 )

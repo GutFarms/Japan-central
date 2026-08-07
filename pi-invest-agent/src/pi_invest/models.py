@@ -118,3 +118,55 @@ class Decision(BaseModel):
     llm_raw: str | None = None
     account_after: AccountSnapshot | None = None
     meta: dict[str, Any] = Field(default_factory=dict)
+
+
+class TransferDirection(str, Enum):
+    SEND = "send"
+    RECEIVE = "receive"
+
+
+class TransferStatus(str, Enum):
+    PENDING = "pending"
+    COMPLETED = "completed"
+    FAILED = "failed"
+
+
+class AssetBalance(BaseModel):
+    asset: str
+    amount: float
+    available: float
+    usd_mark: float | None = None
+
+    @property
+    def usd_value(self) -> float:
+        return self.amount * (self.usd_mark or 0.0)
+
+
+class ReceiveAddress(BaseModel):
+    asset: str
+    address: str
+    network: str = "paper"
+    memo_tag: str | None = None
+
+
+class TransferRecord(BaseModel):
+    transfer_id: str
+    direction: TransferDirection
+    asset: str
+    amount: float
+    fee: float = 0.0
+    counterparty: str
+    network: str = "paper"
+    status: TransferStatus = TransferStatus.COMPLETED
+    memo: str = ""
+    paper: bool = True
+    tx_ref: str = ""
+    timestamp: datetime = Field(default_factory=utcnow)
+
+
+class WalletSnapshot(BaseModel):
+    backend: str
+    balances: list[AssetBalance] = Field(default_factory=list)
+    addresses: dict[str, ReceiveAddress] = Field(default_factory=dict)
+    total_usd_estimate: float = 0.0
+    meta: dict[str, Any] = Field(default_factory=dict)
