@@ -58,12 +58,15 @@ pi-invest coinbase address BTC
 
 ### Option A — bootable OS image (v0.2)
 
-Flash **Pi Invest OS** from [`../pi-invest-os/`](../pi-invest-os/) — a customized Raspberry Pi OS Lite image with the agent, first-boot provisioning, and systemd units baked in.
+Flash **Pi Invest OS** — download the prebuilt image from the
+[v0.2.0 release](https://github.com/GutFarms/Japan-central/releases/tag/pi-invest-os-v0.2.0)
+([`.img.xz`](https://github.com/GutFarms/Japan-central/releases/download/pi-invest-os-v0.2.0/pi-invest-os-0.2.0-arm64.img.xz))
+or build from [`../pi-invest-os/`](../pi-invest-os/).
 
 ```bash
-cd ../pi-invest-os
-./scripts/build-image.sh   # or use a prebuilt dist/*.img.xz
-# flash with Raspberry Pi Imager → Use custom
+# download + flash, or:
+cd ../pi-invest-os && ./scripts/build-image.sh
+# Raspberry Pi Imager → Use custom
 ```
 
 ### Option B — install onto an existing Pi OS

@@ -19,16 +19,24 @@ Flash this onto a microSD (or NVMe), boot a **Raspberry Pi 5**, and the agent pr
 
 ## Flash the image
 
-### Option A — prebuilt artifact
+### Option A — download prebuilt (recommended)
 
-If you have `dist/pi-invest-os-0.2.0-arm64.img.xz`:
+**Release:** [Pi Invest OS v0.2.0](https://github.com/GutFarms/Japan-central/releases/tag/pi-invest-os-v0.2.0)
+
+| File | Link |
+|---|---|
+| Image (~501 MB) | [pi-invest-os-0.2.0-arm64.img.xz](https://github.com/GutFarms/Japan-central/releases/download/pi-invest-os-v0.2.0/pi-invest-os-0.2.0-arm64.img.xz) |
+| Checksums | [pi-invest-os-0.2.0-arm64.sha256](https://github.com/GutFarms/Japan-central/releases/download/pi-invest-os-v0.2.0/pi-invest-os-0.2.0-arm64.sha256) |
 
 ```bash
+# Verify (optional)
+sha256sum -c pi-invest-os-0.2.0-arm64.sha256
+
 # Linux — replace sdX with your SD/NVMe device (not a partition)
-xzcat dist/pi-invest-os-0.2.0-arm64.img.xz | sudo dd of=/dev/sdX bs=4M status=progress conv=fsync
+xzcat pi-invest-os-0.2.0-arm64.img.xz | sudo dd of=/dev/sdX bs=4M status=progress conv=fsync
 ```
 
-Or open the `.img.xz` / `.img` in [Raspberry Pi Imager](https://www.raspberrypi.com/software/) → **Use custom**.
+Or open the `.img.xz` in [Raspberry Pi Imager](https://www.raspberrypi.com/software/) → **Use custom**.
 
 ### Option B — build it yourself
 
