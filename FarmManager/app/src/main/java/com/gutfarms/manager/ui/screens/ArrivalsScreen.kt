@@ -47,7 +47,6 @@ import com.gutfarms.manager.data.model.AnimalArrivalWithGroup
 import com.gutfarms.manager.data.model.AnimalType
 import com.gutfarms.manager.data.model.ArrivalOrigin
 import com.gutfarms.manager.data.model.RegistrationStatus
-import com.gutfarms.manager.ui.components.BubbleScrollPicker
 import com.gutfarms.manager.ui.components.EmptyHint
 import com.gutfarms.manager.ui.components.FormSheet
 import com.gutfarms.manager.ui.components.ScreenHeader
@@ -297,7 +296,7 @@ private fun ArrivalForm(
             singleLine = true,
             modifier = Modifier.fillMaxWidth()
         )
-        BubbleScrollPicker(
+        SimpleDropdown(
             label = "Animal type",
             options = AnimalType.entries,
             selected = type,

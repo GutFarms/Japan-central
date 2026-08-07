@@ -200,6 +200,18 @@ fun <T> SimpleDropdown(
     optionLabel: (T) -> String,
     modifier: Modifier = Modifier
 ) {
+    if (options.size > 5) {
+        BubbleScrollPicker(
+            label = label,
+            options = options,
+            selected = selected,
+            onSelected = onSelected,
+            optionLabel = optionLabel,
+            modifier = modifier
+        )
+        return
+    }
+
     var expanded by remember { mutableStateOf(false) }
     ExposedDropdownMenuBox(
         expanded = expanded,
