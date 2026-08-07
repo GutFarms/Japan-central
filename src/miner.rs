@@ -117,6 +117,15 @@ impl ScryptMiner {
         &self.target
     }
 
+    /// Replace the active header/target while keeping ROMix buffers allocated.
+    pub fn set_job(&mut self, header: [u8; HEADER_LEN], target: [u8; HASH_LEN], start_nonce: u32) {
+        self.header = header;
+        self.target = target;
+        self.nonce = start_nonce;
+        self.best_hash = [0xffu8; HASH_LEN];
+        self.last_share_nonce = None;
+    }
+
     /// Hash the current nonce, advance, and return the result.
     pub fn mine_one(&mut self) -> HashResult {
         self.header[76..80].copy_from_slice(&self.nonce.to_le_bytes());

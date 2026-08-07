@@ -81,7 +81,7 @@ mod stack {
 
     use embassy_executor::Spawner;
     use embassy_futures::join::join;
-    use embassy_net::{Runner, StackResources};
+    use embassy_net::{Runner, Stack, StackResources};
     use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
     use embassy_sync::mutex::Mutex;
     use embassy_time::{Duration, Timer};
@@ -108,7 +108,8 @@ mod stack {
         ble_name: heapless::String::new(),
     });
 
-    static STACK_RESOURCES: StaticCell<StackResources<3>> = StaticCell::new();
+    // DNS + TCP (+ spare) sockets for stratum over WiFi.
+    static STACK_RESOURCES: StaticCell<StackResources<4>> = StaticCell::new();
     static BLE_NAME_BUF: StaticCell<[u8; 24]> = StaticCell::new();
 
     /// Max number of BLE connections.
@@ -190,7 +191,11 @@ mod stack {
         }
     }
 
-    fn start_wifi(spawner: &Spawner, wifi: WIFI<'static>, cfg: &PoolConfig) {
+    fn start_wifi(
+        spawner: &Spawner,
+        wifi: WIFI<'static>,
+        cfg: &PoolConfig,
+    ) -> Option<Stack<'static>> {
         let ssid = cfg.wifi_ssid.as_str();
         let password = cfg.wifi_password.as_str();
 
@@ -213,7 +218,7 @@ mod stack {
                 if let Ok(mut s) = STATUS.try_lock() {
                     s.wifi = WifiPhase::Failed;
                 }
-                return;
+                return None;
             }
         };
 
@@ -223,7 +228,7 @@ mod stack {
         let (stack, runner) = embassy_net::new(
             wifi_interface,
             net_config,
-            STACK_RESOURCES.init(StackResources::<3>::new()),
+            STACK_RESOURCES.init(StackResources::<4>::new()),
             seed,
         );
 
@@ -237,21 +242,28 @@ mod stack {
         if spawner.spawn(dhcp_watch(stack)).is_err() {
             info!("failed to spawn DHCP watch");
         }
+        Some(stack)
     }
 
     /// Start BLE advertising and, when configured, WiFi STA + DHCP.
     ///
-    /// BLE and WiFi are independent: failure of one does not block the other.
-    pub fn start(spawner: &Spawner, wifi: WIFI<'static>, bt: BT<'static>, cfg: &PoolConfig) {
+    /// Returns the embassy-net [`Stack`] when WiFi was started so callers can
+    /// open TCP (stratum) sockets. BLE and WiFi are independent.
+    pub fn start(
+        spawner: &Spawner,
+        wifi: WIFI<'static>,
+        bt: BT<'static>,
+        cfg: &PoolConfig,
+    ) -> Option<Stack<'static>> {
         seed_status(cfg);
         start_ble(spawner, bt, cfg.ble_name_or_default());
 
         if cfg.wifi_enabled() {
-            start_wifi(spawner, wifi, cfg);
+            start_wifi(spawner, wifi, cfg)
         } else {
             info!("WiFi skipped (no SSID)");
-            // WIFI peripheral is unused; drop it.
             let _ = wifi;
+            None
         }
     }
 

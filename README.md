@@ -8,7 +8,8 @@ Bare-metal Rust firmware that mines **scrypt** proof-of-work on an **ESP32-S3** 
 - Reuses ROMix buffers across hashes (≈128 KiB working set)
 - **After boot**, prompts over USB serial for **address**, **password**, **stratum**, optional **WiFi**, and **BLE name**
 - Starts **WiFi STA + DHCP** when an SSID is set; always advertises **BLE** (connectable GATT)
-- **On-device GUI**: splash, setup, mining dashboard, config tab, radio tab, menu
+- **Stratum TCP client** over WiFi: subscribe, authorize, receive jobs, submit shares
+- **On-device GUI**: splash, setup, mining dashboard, config tab, radio/pool tab, menu
 - Saves credentials to flash and auto-loads them on later boots
 - Host CLI (`host-miner`), **desktop GUI** (`host-gui`), and unit tests
 
@@ -21,9 +22,11 @@ This is an educational / demo miner. An ESP32-S3 will only manage a few hashes p
 | **BOOT** (GPIO0) | Next tab, or move menu highlight |
 | **Custom btn** (GPIO14) | Open menu / activate selected item |
 | Serial `change` | Password-gated credential edit |
-| Serial `radio` / `wifi` / `ble` | Print live radio status |
+| Serial `radio` / `wifi` / `ble` / `stratum` | Print live radio + pool status |
 
-Tabs: **MINE** · **CONF** · **RADIO** (WiFi phase/IP + BLE) · **MENU**.
+Tabs: **MINE** · **CONF** · **RADIO** (WiFi/IP/BLE + stratum) · **MENU**.
+
+When WiFi is configured, the firmware connects to `stratum` (`host:port` or `stratum+tcp://…`), runs `mining.subscribe` / `mining.authorize`, mines `mining.notify` jobs with the pool difficulty, and submits shares with `mining.submit`. Without WiFi it falls back to local demo mining.
 
 ## Post-boot credentials (saved to flash)
 

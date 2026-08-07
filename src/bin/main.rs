@@ -2,12 +2,13 @@
 //!
 //! After first boot, enter wallet **address**, pool **password**, **stratum**,
 //! optional **WiFi**, and **BLE name** over USB serial. Values are saved to flash
-//! and auto-loaded on later boots. Onboard WiFi (STA+DHCP) and BLE advertising
-//! start from those settings.
+//! and auto-loaded on later boots. Onboard WiFi (STA+DHCP) + BLE advertising
+//! start from those settings. When WiFi is configured, a **stratum TCP client**
+//! connects to the pool and mines real jobs.
 //!
 //! To change saved info later, type `change` and enter the **current password**
 //! first (also works while mining). Hold BOOT at power-on to jump into that
-//! password-gated change flow. Type `radio` for a live radio status line.
+//! password-gated change flow. Type `radio` / `stratum` for live status.
 //!
 //! Flash (ESP Rust toolchain + espflash required):
 //! ```text
@@ -43,6 +44,7 @@ use esp32_s3_scrypt_miner::gui::GuiState;
 use esp32_s3_scrypt_miner::miner::ScryptMiner;
 use esp32_s3_scrypt_miner::persist::ConfigStore;
 use esp32_s3_scrypt_miner::radio::{self, RadioStatus};
+use esp32_s3_scrypt_miner::stratum::{self, JobMeta, StratumStatus};
 
 esp_bootloader_esp_idf::esp_app_desc!();
 
@@ -118,8 +120,20 @@ async fn main(spawner: Spawner) -> ! {
     let (mut pool, from_flash) =
         resolve_pool_config(&mut usb, &mut display, &mut store, force_change).await;
 
-    // Start onboard WiFi / BLE from saved (or just-entered) radio settings.
-    radio::start(&spawner, peripherals.WIFI, peripherals.BT, &pool);
+    // Start onboard WiFi / BLE; when WiFi is up, also start the stratum TCP client.
+    let stratum_enabled = if let Some(stack) =
+        radio::start(&spawner, peripherals.WIFI, peripherals.BT, &pool)
+    {
+        stratum::start(&spawner, stack, &pool);
+        serial_writeln(&mut usb, "Stratum client starting (needs WiFi + DHCP).");
+        true
+    } else {
+        serial_writeln(
+            &mut usb,
+            "No WiFi SSID — local demo mining only (no stratum).",
+        );
+        false
+    };
 
     let _ = display.draw_config_summary(&pool, from_flash);
     serial_writeln(&mut usb, "");
@@ -127,7 +141,7 @@ async fn main(spawner: Spawner) -> ! {
         serial_writeln(&mut usb, "Loaded saved credentials from flash.");
         serial_writeln(
             &mut usb,
-            "GUI: BOOT=tabs, btn=menu. Serial 'change' / 'radio' also work.",
+            "GUI: BOOT=tabs, btn=menu. Serial: change | radio | stratum",
         );
     } else {
         serial_writeln(&mut usb, "Credentials saved to flash for next boot.");
@@ -146,6 +160,8 @@ async fn main(spawner: Spawner) -> ! {
     );
 
     let mut miner = ScryptMiner::new_demo(DEMO_ZERO_NIBBLES);
+    let mut active_job: Option<JobMeta> = None;
+    let mut pool_mode = false;
     let mut window_start = Instant::now();
     let mut window_hashes: u64 = 0;
     let mut cmd_line: String<32> = String::new();
@@ -155,15 +171,40 @@ async fn main(spawner: Spawner) -> ! {
 
     let mut stats = miner.stats();
     let mut radio_status = radio::snapshot().await;
-    let _ = display.draw_gui(&gui, &stats, &pool, &radio_status, true);
+    let mut stratum_status = if stratum_enabled {
+        stratum::snapshot().await
+    } else {
+        StratumStatus::default()
+    };
+    let _ = display.draw_gui(&gui, &stats, &pool, &radio_status, &stratum_status, true);
 
     loop {
+        // Apply any new stratum job.
+        if let Some(job) = stratum::try_take_job() {
+            let diff = job.difficulty;
+            let clean = job.clean;
+            let job_id = job.meta.job_id.clone();
+            info!("new stratum job={job_id} diff={diff} clean={clean}");
+            miner.set_job(job.header, job.target, 0);
+            active_job = Some(job.meta);
+            pool_mode = true;
+            let mut m: String<96> = String::new();
+            let _ = core::fmt::Write::write_fmt(
+                &mut m,
+                format_args!("JOB {job_id} diff={diff}"),
+            );
+            serial_writeln(&mut usb, m.as_str());
+        }
+
         // Button edge detection for on-screen GUI navigation.
         let boot_down = boot_btn.is_low();
         if boot_down && !boot_was_down {
             gui.on_boot_short_press();
             radio_status = radio::snapshot().await;
-            let _ = display.draw_gui(&gui, &stats, &pool, &radio_status, true);
+            if stratum_enabled {
+                stratum_status = stratum::snapshot().await;
+            }
+            let _ = display.draw_gui(&gui, &stats, &pool, &radio_status, &stratum_status, true);
         }
         boot_was_down = boot_down;
 
@@ -175,10 +216,9 @@ async fn main(spawner: Spawner) -> ! {
                     password_gated_change(&mut usb, &mut display, &mut store, &pool).await
                 {
                     pool = updated;
-                    // Radio credentials changed — reboot recommended; status reflects config.
                     serial_writeln(
                         &mut usb,
-                        "Note: WiFi/BLE stack keeps prior session until reboot.",
+                        "Note: WiFi/BLE/stratum keep prior session until reboot.",
                     );
                     gui.screen = esp32_s3_scrypt_miner::gui::GuiScreen::Config;
                     let _ = display.draw_config_summary(&pool, true);
@@ -187,11 +227,14 @@ async fn main(spawner: Spawner) -> ! {
                 gui.screen = esp32_s3_scrypt_miner::gui::GuiScreen::Mining;
             }
             radio_status = radio::snapshot().await;
-            let _ = display.draw_gui(&gui, &stats, &pool, &radio_status, true);
+            if stratum_enabled {
+                stratum_status = stratum::snapshot().await;
+            }
+            let _ = display.draw_gui(&gui, &stats, &pool, &radio_status, &stratum_status, true);
         }
         action_was_down = action_down;
 
-        // Non-blocking serial command poll (password-gated change while mining).
+        // Non-blocking serial command poll.
         if poll_command_byte(&mut usb, &mut cmd_line) {
             let cmd = cmd_line.as_str().trim();
             if is_change_command(cmd) {
@@ -201,23 +244,29 @@ async fn main(spawner: Spawner) -> ! {
                     pool = updated;
                     serial_writeln(
                         &mut usb,
-                        "Note: WiFi/BLE stack keeps prior session until reboot.",
+                        "Note: WiFi/BLE/stratum keep prior session until reboot.",
                     );
                     let _ = display.draw_config_summary(&pool, true);
                     Timer::after(Duration::from_secs(2)).await;
                 }
                 gui.screen = esp32_s3_scrypt_miner::gui::GuiScreen::Mining;
                 radio_status = radio::snapshot().await;
-                let _ = display.draw_gui(&gui, &stats, &pool, &radio_status, true);
+                if stratum_enabled {
+                    stratum_status = stratum::snapshot().await;
+                }
+                let _ = display.draw_gui(&gui, &stats, &pool, &radio_status, &stratum_status, true);
             } else if is_radio_command(cmd) {
                 radio_status = radio::snapshot().await;
-                print_radio_serial(&mut usb, &pool, &radio_status);
+                if stratum_enabled {
+                    stratum_status = stratum::snapshot().await;
+                }
+                print_radio_serial(&mut usb, &pool, &radio_status, &stratum_status);
                 gui.screen = esp32_s3_scrypt_miner::gui::GuiScreen::Radio;
-                let _ = display.draw_gui(&gui, &stats, &pool, &radio_status, true);
+                let _ = display.draw_gui(&gui, &stats, &pool, &radio_status, &stratum_status, true);
             } else if !cmd.is_empty() {
                 serial_writeln(
                     &mut usb,
-                    "Unknown command. Type 'change' or 'radio'.",
+                    "Unknown command. Type 'change', 'radio', or 'stratum'.",
                 );
             }
             cmd_line.clear();
@@ -228,13 +277,13 @@ async fn main(spawner: Spawner) -> ! {
 
         if found_share {
             info!(
-                "share! nonce={:08x} hash={:02x}{:02x}{:02x}{:02x}... addr={}",
+                "share! nonce={:08x} hash={:02x}{:02x}{:02x}{:02x}... pool_mode={}",
                 last.nonce,
                 last.hash[0],
                 last.hash[1],
                 last.hash[2],
                 last.hash[3],
-                pool.address
+                pool_mode
             );
             let mut msg: String<96> = String::new();
             let _ = core::fmt::Write::write_fmt(
@@ -242,6 +291,13 @@ async fn main(spawner: Spawner) -> ! {
                 format_args!("SHARE nonce={:08x} address={}", last.nonce, pool.address),
             );
             serial_writeln(&mut usb, msg.as_str());
+
+            if pool_mode {
+                if let Some(meta) = active_job.as_ref() {
+                    let share = stratum::make_share(pool.address.as_str(), meta, last.nonce);
+                    stratum::queue_share(share).await;
+                }
+            }
         }
 
         let elapsed = window_start.elapsed();
@@ -252,18 +308,25 @@ async fn main(spawner: Spawner) -> ! {
             stats = miner.stats();
             stats.hashrate_x100 = hashrate_x100;
             radio_status = radio::snapshot().await;
-            if let Err(e) = display.draw_gui(&gui, &stats, &pool, &radio_status, true) {
+            if stratum_enabled {
+                stratum_status = stratum::snapshot().await;
+            }
+            if let Err(e) =
+                display.draw_gui(&gui, &stats, &pool, &radio_status, &stratum_status, true)
+            {
                 info!("display error: {e}");
             }
 
             info!(
-                "H/s={}.{:02} nonce={:08x} shares={} wifi={} ip={}",
+                "H/s={}.{:02} nonce={:08x} shares={} wifi={} stratum={} acc={}/{}",
                 hashrate_x100 / 100,
                 hashrate_x100 % 100,
                 stats.nonce,
                 stats.shares,
                 radio_status.wifi.label(),
-                radio_status.ip_string()
+                stratum_status.phase.label(),
+                stratum_status.accepted,
+                stratum_status.rejected
             );
 
             window_start = Instant::now();
@@ -293,9 +356,14 @@ fn print_config_serial(usb: &mut UsbSerialJtag<'_>, pool: &PoolConfig) {
     serial_writeln(usb, pool.ble_name_or_default());
 }
 
-fn print_radio_serial(usb: &mut UsbSerialJtag<'_>, pool: &PoolConfig, radio: &RadioStatus) {
+fn print_radio_serial(
+    usb: &mut UsbSerialJtag<'_>,
+    pool: &PoolConfig,
+    radio: &RadioStatus,
+    stratum: &StratumStatus,
+) {
     serial_writeln(usb, "");
-    serial_writeln(usb, "=== Radio status ===");
+    serial_writeln(usb, "=== Radio / stratum status ===");
     serial_write(usb, "  wifi = ");
     serial_write(usb, radio.wifi.label());
     serial_write(usb, "  ssid = ");
@@ -316,6 +384,27 @@ fn print_radio_serial(usb: &mut UsbSerialJtag<'_>, pool: &PoolConfig, radio: &Ra
     }
     serial_write(usb, "  name = ");
     serial_writeln(usb, pool.ble_name_or_default());
+    serial_write(usb, "  stratum = ");
+    serial_write(usb, stratum.phase.label());
+    serial_write(usb, "  endpoint = ");
+    serial_writeln(usb, pool.stratum.as_str());
+    serial_write(usb, "  difficulty = ");
+    let mut diff: String<16> = String::new();
+    let _ = core::fmt::Write::write_fmt(&mut diff, format_args!("{}", stratum.difficulty));
+    serial_writeln(usb, diff.as_str());
+    serial_write(usb, "  accepted/rejected = ");
+    let mut ar: String<24> = String::new();
+    let _ = core::fmt::Write::write_fmt(
+        &mut ar,
+        format_args!("{}/{}", stratum.accepted, stratum.rejected),
+    );
+    serial_writeln(usb, ar.as_str());
+    serial_write(usb, "  job = ");
+    if stratum.job_id.is_empty() {
+        serial_writeln(usb, "(none)");
+    } else {
+        serial_writeln(usb, stratum.job_id.as_str());
+    }
 }
 
 /// Load saved credentials, or prompt + save on first run / after authorized change.
@@ -469,6 +558,8 @@ fn is_radio_command(cmd: &str) -> bool {
         || eq_ignore_ascii_case(cmd, "wifi")
         || eq_ignore_ascii_case(cmd, "ble")
         || eq_ignore_ascii_case(cmd, "bt")
+        || eq_ignore_ascii_case(cmd, "stratum")
+        || eq_ignore_ascii_case(cmd, "pool")
 }
 
 fn eq_ignore_ascii_case(a: &str, b: &str) -> bool {

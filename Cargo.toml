@@ -47,6 +47,7 @@ esp = [
     "dep:embedded-graphics",
     "dep:embedded-hal",
     "dep:embedded-io",
+    "dep:embedded-io-async",
     "dep:esp-storage",
     "dep:embedded-storage",
     "dep:trouble-host",
@@ -77,6 +78,7 @@ esp-backtrace = { version = "0.19.0", features = ["esp32s3", "panic-handler", "p
 esp-println = { version = "0.17.0", features = ["esp32s3", "log-04", "uart"], optional = true }
 esp-radio = { version = "1.0.0-beta.0", features = ["esp32s3", "wifi", "ble", "coex", "log-04", "unstable"], optional = true }
 embedded-io = { version = "0.6", optional = true }
+embedded-io-async = { version = "0.7", optional = true }
 esp-storage = { version = "0.9", features = ["esp32s3"], optional = true }
 embedded-storage = { version = "0.3", optional = true }
 embassy-executor = { version = "0.10.0", features = ["log"], optional = true }

@@ -23,6 +23,7 @@ use crate::config::{PoolConfig, SetupField};
 use crate::gui::{GuiScreen, GuiState, MenuItem};
 use crate::miner::{hash_to_hex, MinerStats, SCRYPT_LOG_N, SCRYPT_N};
 use crate::radio::RadioStatus;
+use crate::stratum::StratumStatus;
 
 pub const DISPLAY_WIDTH: u16 = 320;
 pub const DISPLAY_HEIGHT: u16 = 170;
@@ -283,6 +284,7 @@ impl<'a, D: DelayNs> Display<'a, D> {
         stats: &MinerStats,
         cfg: &PoolConfig,
         radio: &RadioStatus,
+        stratum: &StratumStatus,
         mining: bool,
     ) -> Result<(), Error> {
         let screen_changed = self.last_screen != Some(gui.screen);
@@ -293,13 +295,13 @@ impl<'a, D: DelayNs> Display<'a, D> {
         }
 
         match gui.screen {
-            GuiScreen::Mining => self.draw_mining_body(stats, cfg, mining, screen_changed)?,
+            GuiScreen::Mining => self.draw_mining_body(stats, cfg, stratum, mining, screen_changed)?,
             GuiScreen::Config => {
                 if screen_changed {
                     self.draw_config_body(cfg)?;
                 }
             }
-            GuiScreen::Radio => self.draw_radio_body(cfg, radio, screen_changed)?,
+            GuiScreen::Radio => self.draw_radio_body(cfg, radio, stratum, screen_changed)?,
             GuiScreen::Menu => {
                 if screen_changed {
                     self.draw_menu_body(gui.menu)?;
@@ -316,6 +318,7 @@ impl<'a, D: DelayNs> Display<'a, D> {
         &mut self,
         stats: &MinerStats,
         cfg: &PoolConfig,
+        stratum: &StratumStatus,
         mining: bool,
         full: bool,
     ) -> Result<(), Error> {
@@ -355,18 +358,31 @@ impl<'a, D: DelayNs> Display<'a, D> {
         let _ = write!(shares, "{} sh", stats.shares);
         self.draw_ok(Text::new(&shares, Point::new(228, 86), VALUE_SM).draw(&mut self.display))?;
 
-        // Bottom identity strip
+        // Bottom identity / stratum strip
         self.fill_rect(16, 122, 288, 24, PANEL)?;
         let mut nonce: String<20> = String::new();
         let _ = write!(nonce, "{:08x}", stats.nonce);
-        let addr = PoolConfig::ellipsize(cfg.address.as_str(), 12);
+        let job = if stratum.job_id.is_empty() {
+            PoolConfig::ellipsize(cfg.address.as_str(), 10)
+        } else {
+            PoolConfig::ellipsize(stratum.job_id.as_str(), 10)
+        };
         let mut best: String<128> = String::new();
-        hash_to_hex(&stats.best_hash, 4, &mut best);
-        let mut line: String<64> = String::new();
-        let _ = write!(line, "{}  {}  {}", nonce, addr, best);
+        hash_to_hex(&stats.best_hash, 2, &mut best);
+        let mut line: String<72> = String::new();
+        let _ = write!(
+            line,
+            "{} {} {} a{}/r{} {}",
+            nonce,
+            job,
+            stratum.phase.label(),
+            stratum.accepted,
+            stratum.rejected,
+            best
+        );
         self.draw_ok(Text::new(&line, Point::new(16, 138), LABEL).draw(&mut self.display))?;
 
-        let _ = SCRYPT_LOG_N; // keep params referenced for future UI chips
+        let _ = SCRYPT_LOG_N;
         Ok(())
     }
 
@@ -389,6 +405,7 @@ impl<'a, D: DelayNs> Display<'a, D> {
         &mut self,
         cfg: &PoolConfig,
         radio: &RadioStatus,
+        stratum: &StratumStatus,
         full: bool,
     ) -> Result<(), Error> {
         if full {
@@ -399,22 +416,22 @@ impl<'a, D: DelayNs> Display<'a, D> {
         self.fill_rect(16, 44, 288, 96, PANEL)?;
 
         let ssid = if cfg.wifi_enabled() {
-            PoolConfig::ellipsize(cfg.wifi_ssid.as_str(), 20)
+            PoolConfig::ellipsize(cfg.wifi_ssid.as_str(), 18)
         } else {
-            PoolConfig::ellipsize("(disabled)", 20)
+            PoolConfig::ellipsize("(disabled)", 18)
         };
         let mut wifi_line: String<48> = String::new();
         let _ = write!(
             wifi_line,
-            "WiFi {}  {}",
+            "WiFi {} {}",
             radio.wifi.label(),
             ssid.as_str()
         );
-        self.draw_ok(Text::new(&wifi_line, Point::new(18, 62), VALUE_SM).draw(&mut self.display))?;
+        self.draw_ok(Text::new(&wifi_line, Point::new(18, 58), VALUE_SM).draw(&mut self.display))?;
 
         let mut ip_line: String<40> = String::new();
         let _ = write!(ip_line, "IP   {}", radio.ip_string().as_str());
-        self.draw_ok(Text::new(&ip_line, Point::new(18, 88), VALUE_SM).draw(&mut self.display))?;
+        self.draw_ok(Text::new(&ip_line, Point::new(18, 80), VALUE_SM).draw(&mut self.display))?;
 
         let ble_state = if radio.ble_connected {
             "conn"
@@ -426,11 +443,22 @@ impl<'a, D: DelayNs> Display<'a, D> {
         let mut ble_line: String<48> = String::new();
         let _ = write!(
             ble_line,
-            "BLE  {}  {}",
+            "BLE  {} {}",
             ble_state,
-            PoolConfig::ellipsize(cfg.ble_name_or_default(), 16).as_str()
+            PoolConfig::ellipsize(cfg.ble_name_or_default(), 14).as_str()
         );
-        self.draw_ok(Text::new(&ble_line, Point::new(18, 114), VALUE_SM).draw(&mut self.display))?;
+        self.draw_ok(Text::new(&ble_line, Point::new(18, 102), VALUE_SM).draw(&mut self.display))?;
+
+        let mut st_line: String<56> = String::new();
+        let _ = write!(
+            st_line,
+            "POOL {} d{} a{}/r{}",
+            stratum.phase.label(),
+            stratum.difficulty,
+            stratum.accepted,
+            stratum.rejected
+        );
+        self.draw_ok(Text::new(&st_line, Point::new(18, 124), VALUE_SM).draw(&mut self.display))?;
         Ok(())
     }
 
