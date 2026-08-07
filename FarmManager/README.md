@@ -1,0 +1,30 @@
+# Gut Farms — Farm Manager (Android)
+
+Android app for farm management with livestock tracking, feeding schedules, and profit margin analysis.
+
+## Features
+
+- **Livestock** — manage animal groups (cattle, chicken, goat, pig, sheep, other) with head count and purchase cost
+- **Feeding schedules** — timed rations per group with frequency, kg amounts, and cost-per-kg; projected daily/monthly feed cost
+- **Profit margins** — income/expense ledger; net profit and margin % including projected monthly feed from active schedules
+- **Home dashboard** — livestock head count, active feeds, margin snapshot, and today's feeding list
+
+## Stack
+
+- Kotlin + Jetpack Compose (Material 3)
+- Room database (offline-first, sample data on first launch)
+- Navigation Compose + ViewModel
+
+## Build
+
+Requirements: JDK 17+, Android SDK 34
+
+```bash
+cd FarmManager
+export ANDROID_HOME=$HOME/android-sdk   # or your SDK path
+./gradlew assembleDebug
+```
+
+APK output: `app/build/outputs/apk/debug/app-debug.apk`
+
+Open the `FarmManager` folder in Android Studio to run on an emulator or device.
