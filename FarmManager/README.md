@@ -2,6 +2,8 @@
 
 Android app for farm management with livestock tracking, feeding schedules, and profit margin analysis.
 
+> **iOS version:** see [`../FarmManager-iOS/`](../FarmManager-iOS/) (SwiftUI + SwiftData).
+
 ## Features
 
 - **Custom farm name** — tap the farm name on Home to rename; the name appears on every screen header and is saved on-device
