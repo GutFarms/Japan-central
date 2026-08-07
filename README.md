@@ -61,20 +61,23 @@ Stratum worker/endpoint/password changes **reconnect without reboot**. After cha
 
 ## Build & flash (device)
 
-Install the espup toolchain, then:
+**See [FLASH.md](FLASH.md) for the full flash guide.**
 
 ```bash
-. $HOME/export-esp.sh
+. ./export-esp.sh   # paths for espup / xtensa linker
 
-cargo +esp run -Zbuild-std=core,alloc --release \
-  --target xtensa-esp32-none-elf --features esp,lite
+# Build .bin images into flash/
+./scripts/build-flash-images.sh
+
+# Flash + serial monitor (Windows example: COM6)
+./scripts/flash-cyd.sh COM6
 ```
 
-Or flash an already-built binary:
+Or flash a merged image directly:
 
 ```bash
-espflash flash --monitor \
-  target/xtensa-esp32-none-elf/release/esp32-s3-scrypt-miner
+espflash write-bin -p COM6 0x0 flash/esp32-2432s028-scrypt-miner-merged.bin
+espflash monitor -p COM6
 ```
 
 If upload fails, try a lower baud / hold **BOOT** while resetting. Install CH340 drivers if the serial port does not appear.
