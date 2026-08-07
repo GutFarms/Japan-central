@@ -6,3 +6,6 @@ pi-invest-agent/config/config.yaml
 pi-invest-agent/**/__pycache__/
 pi-invest-agent/**/*.egg-info/
 pi-invest-agent/.pytest_cache/
+pi-invest-os/.build/
+pi-invest-os/.cache/
+pi-invest-os/dist/

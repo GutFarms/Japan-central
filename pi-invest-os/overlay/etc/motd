@@ -1,0 +1,13 @@
+
+Pi Invest OS — Raspberry Pi 5 income agent
+==========================================
+First boot installs Python deps and starts:
+  • pi-invest.service          (paper trading loop)
+  • pi-invest-dashboard.service (http://127.0.0.1:8787)
+
+Secrets: edit /boot/firmware/pi-invest.env before first boot
+         or /opt/pi-invest-agent/.env after login.
+
+Login: user `pi` (set password via Raspberry Pi Imager / first boot)
+Docs:  /opt/pi-invest-agent/README.md
+

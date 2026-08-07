@@ -56,6 +56,18 @@ pi-invest coinbase address BTC
 
 ## Raspberry Pi 5 quick start
 
+### Option A — bootable OS image (v0.2)
+
+Flash **Pi Invest OS** from [`../pi-invest-os/`](../pi-invest-os/) — a customized Raspberry Pi OS Lite image with the agent, first-boot provisioning, and systemd units baked in.
+
+```bash
+cd ../pi-invest-os
+./scripts/build-image.sh   # or use a prebuilt dist/*.img.xz
+# flash with Raspberry Pi Imager → Use custom
+```
+
+### Option B — install onto an existing Pi OS
+
 ```bash
 # On the Pi (Bookworm / 64-bit recommended)
 sudo apt update
