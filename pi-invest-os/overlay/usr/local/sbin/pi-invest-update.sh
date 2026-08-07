@@ -27,6 +27,9 @@ if [[ "${1:-}" != "--force" && "${AUTO,,}" != "true" && "${AUTO}" != "1" ]]; the
 fi
 
 REPO_URL="${PI_INVEST_UPDATE_URL:-https://github.com/GutFarms/Japan-central.git}"
+if [[ -z "${PI_INVEST_UPDATE_BRANCH:-}" && -f /etc/pi-invest-os-update-branch ]]; then
+  PI_INVEST_UPDATE_BRANCH="$(tr -d '[:space:]' </etc/pi-invest-os-update-branch)"
+fi
 BRANCH="${PI_INVEST_UPDATE_BRANCH:-master}"
 TARGET_USER="$(stat -c '%U' "$AGENT_ROOT" 2>/dev/null || echo pi)"
 

@@ -107,7 +107,11 @@ ensure_env() {
 }
 ensure_env PI_INVEST_AUTO_UPDATE true
 ensure_env PI_INVEST_UPDATE_URL https://github.com/GutFarms/Japan-central.git
-ensure_env PI_INVEST_UPDATE_BRANCH master
+DEFAULT_BRANCH=master
+if [[ -f /etc/pi-invest-os-update-branch ]]; then
+  DEFAULT_BRANCH="$(tr -d '[:space:]' </etc/pi-invest-os-update-branch)"
+fi
+ensure_env PI_INVEST_UPDATE_BRANCH "$DEFAULT_BRANCH"
 ensure_env PI_INVEST_KIOSK_URL http://127.0.0.1:8787
 chown "$TARGET_USER:$TARGET_USER" "$AGENT_ROOT/.env"
 chmod 600 "$AGENT_ROOT/.env"

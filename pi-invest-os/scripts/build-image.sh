@@ -181,6 +181,13 @@ ln -sf /etc/systemd/system/pi-invest-update.timer \
 
 # Version stamp on rootfs
 echo "$VERSION" > "$MNT_ROOT/etc/pi-invest-os-version"
+# Prefer updating from the branch this image was built from (avoids rolling
+# back to an older master before the OS PR is merged).
+UPDATE_BRANCH="$(git -C "$REPO_ROOT" rev-parse --abbrev-ref HEAD 2>/dev/null || echo master)"
+if [[ "$UPDATE_BRANCH" == "HEAD" ]]; then
+  UPDATE_BRANCH=master
+fi
+echo "$UPDATE_BRANCH" > "$MNT_ROOT/etc/pi-invest-os-update-branch"
 cat > "$MNT_ROOT/etc/pi-invest-os-release" <<EOF
 NAME="Pi Invest OS"
 VERSION="$VERSION"
@@ -188,6 +195,7 @@ ID=pi-invest-os
 VARIANT="Raspberry Pi 5 / arm64 Lite + Chromium kiosk"
 AGENT_PATH=/opt/pi-invest-agent
 FEATURES="auto-update,chromium-kiosk,unattended-upgrades"
+UPDATE_BRANCH=$UPDATE_BRANCH
 EOF
 
 echo "==> Writing boot partition (FAT via mtools)"
