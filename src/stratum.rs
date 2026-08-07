@@ -1046,9 +1046,9 @@ mod client {
 
     #[embassy_executor::task]
     async fn stratum_task(stack: Stack<'static>) {
-        let mut rx_buf = [0u8; 1536];
-        let mut tx_buf = [0u8; 768];
-        let mut line_buf = [0u8; 1536];
+        let mut rx_buf = [0u8; 1024];
+        let mut tx_buf = [0u8; 512];
+        let mut line_buf = [0u8; 1024];
         let mut line_len = 0usize;
         let mut extranonce2_counter = 1u64;
         let mut difficulty = 1u32;

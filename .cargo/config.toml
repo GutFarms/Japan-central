@@ -1,4 +1,4 @@
-[target.xtensa-esp32s3-none-elf]
+[target.xtensa-esp32-none-elf]
 runner = "espflash flash --monitor"
 rustflags = [
     "-C", "link-arg=-Tlinkall.x",
@@ -8,10 +8,10 @@ rustflags = [
 [env]
 ESP_LOG = "info"
 
-# Firmware (recommended: lite scrypt for RAM):
-#   . $HOME/export-esp.sh   # or ./export-esp.sh from espup
+# Firmware for ESP32-2432S028 (CYD) — use lite scrypt (N=64) for RAM:
+#   . $HOME/export-esp.sh
 #   cargo +esp run -Zbuild-std=core,alloc --release \
-#     --target xtensa-esp32s3-none-elf --features esp,lite
-# Host tests / demo (no ESP toolchain):
+#     --target xtensa-esp32-none-elf --features esp,lite
+# Host tests / demo:
 #   cargo test --no-default-features
 #   cargo run --no-default-features --features host --bin host-miner --release

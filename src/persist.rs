@@ -27,8 +27,7 @@ mod esp_flash {
     use crate::config::{PoolConfig, CONFIG_BLOB_SIZE};
 
     /// Dedicated 4 KiB sector for miner credentials.
-    /// Placed at the end of a 4 MiB region so it stays outside the typical
-    /// factory app image on T-Display-S3 (4–16 MiB flash).
+    /// Placed at the end of a 4 MiB region (CYD / ESP32-2432S028 typical flash).
     pub const CONFIG_FLASH_OFFSET: u32 = 0x003F_F000;
     pub const CONFIG_FLASH_SECTOR: u32 = 4096;
 

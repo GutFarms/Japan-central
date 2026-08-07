@@ -1,4 +1,4 @@
-//! On-device GUI screens and navigation for the T-Display-S3.
+//! On-device GUI screens and navigation (ESP32-2432S028 / CYD).
 
 /// Screens shown on the LCD during normal operation.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -102,7 +102,7 @@ impl GuiState {
         }
     }
 
-    /// Custom button (GPIO14): activate menu item, or jump to menu.
+    /// Action (BOOT long-press on CYD): activate menu item, or jump to menu.
     pub fn on_action_press(&mut self) {
         match self.screen {
             GuiScreen::Menu => match self.menu {

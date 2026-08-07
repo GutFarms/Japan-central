@@ -1,19 +1,18 @@
-//! ESP32-S3 scrypt miner firmware for LilyGO T-Display-S3.
+//! ESP32 scrypt miner firmware for **ESP32-2432S028** (Cheap Yellow Display).
 //!
 //! After first boot, enter wallet **address**, pool **password**, **stratum**,
-//! optional **WiFi**, and **BLE name** over USB serial. Values are saved to flash
-//! and auto-loaded on later boots. Onboard WiFi (STA+DHCP) + BLE advertising
-//! start from those settings. When WiFi is configured, a **stratum TCP client**
-//! connects to the pool and mines real jobs.
+//! optional **WiFi**, and **BLE name** over USB serial (CH340 UART0). Values are
+//! saved to flash and auto-loaded on later boots. Onboard WiFi (STA+DHCP) +
+//! optional BLE start from those settings. When WiFi is configured, a
+//! **stratum TCP client** connects to the pool and mines real jobs.
 //!
-//! To change saved info later, type `change` and enter the **current password**
-//! first (also works while mining). Hold BOOT at power-on to jump into that
-//! password-gated change flow. Type `radio` / `stratum` for live status.
+//! Controls: **BOOT** short-press = next tab / menu highlight; long-press = menu
+//! activate. Type `change` / `radio` / `stratum` on serial.
 //!
 //! Flash (ESP Rust toolchain + espflash required):
 //! ```text
 //! cargo +esp run -Zbuild-std=core,alloc --release \
-//!   --target xtensa-esp32s3-none-elf --features esp
+//!   --target xtensa-esp32-none-elf --features esp,lite
 //! ```
 
 #![no_std]
@@ -27,15 +26,14 @@ extern crate alloc;
 
 use embassy_executor::Spawner;
 use embassy_time::{Duration, Instant, Timer};
-use embedded_io::{Read, Write};
+use embedded_io::Write;
 use esp_backtrace as _;
 use esp_hal::clock::CpuClock;
 use esp_hal::delay::Delay;
 use esp_hal::gpio::{Input, InputConfig, Pin, Pull};
-use esp_hal::ram;
 use esp_hal::timer::timg::TimerGroup;
+use esp_hal::uart::{Config as UartConfig, Uart};
 use esp_hal::Blocking;
-use esp_hal::usb_serial_jtag::UsbSerialJtag;
 use heapless::String;
 use log::info;
 
@@ -49,59 +47,55 @@ use esp32_s3_scrypt_miner::stratum::{self, JobMeta, StratumStatus};
 
 esp_bootloader_esp_idf::esp_app_desc!();
 
-const BATCH_SIZE: usize = 4;
+const BATCH_SIZE: usize = 2;
 const DEMO_ZERO_NIBBLES: u8 = 4;
-/// How long to show the saved-config screen and accept a `change` command.
 const SAVED_CONFIRM_SECS: u64 = 8;
 const MAX_PASSWORD_ATTEMPTS: u8 = 3;
+const BOOT_LONG_PRESS_MS: u64 = 700;
+
+type Serial<'d> = Uart<'d, Blocking>;
 
 #[esp_rtos::main]
 async fn main(spawner: Spawner) -> ! {
     esp_println::logger::init_logger_from_env();
-    info!("esp32-s3-scrypt-miner starting");
+    info!("esp32-2432s028 scrypt miner starting");
 
     let config = esp_hal::Config::default().with_cpu_clock(CpuClock::max());
     let peripherals = esp_hal::init(config);
 
-    // Radio + scrypt need a larger heap (reclaimed DRAM + internal).
-    esp_alloc::heap_allocator!(#[ram(reclaimed)] size: 64 * 1024);
-    esp_alloc::heap_allocator!(size: 200 * 1024);
+    // Classic ESP32 DRAM is tight (static heap lives in .bss). Keep modest;
+    // WiFi + lite scrypt (N=64 ≈ 8 KiB ROMix) share this pool.
+    esp_alloc::heap_allocator!(size: 48 * 1024);
 
     let timg0 = TimerGroup::new(peripherals.TIMG0);
     let sw_interrupt =
         esp_hal::interrupt::software::SoftwareInterruptControl::new(peripherals.SW_INTERRUPT);
     esp_rtos::start(timg0.timer0, sw_interrupt.software_interrupt0);
 
-    let mut usb = UsbSerialJtag::new(peripherals.USB_DEVICE);
+    // CYD USB-UART bridge on UART0 (GPIO1 TX / GPIO3 RX).
+    let mut usb = Uart::new(peripherals.UART0, UartConfig::default())
+        .expect("UART0")
+        .with_tx(peripherals.GPIO1)
+        .with_rx(peripherals.GPIO3);
+
     let mut store = ConfigStore::new(peripherals.FLASH);
 
-    // BOOT (GPIO0) + custom button (GPIO14) drive the on-screen GUI.
+    // Only physical user button is BOOT (GPIO0). Short = next, long = action.
     let boot_btn = Input::new(
         peripherals.GPIO0,
         InputConfig::default().with_pull(Pull::Up),
     );
-    let action_btn = Input::new(
-        peripherals.GPIO14,
-        InputConfig::default().with_pull(Pull::Up),
-    );
     let force_change = boot_btn.is_low();
 
+    // CYD ILI9341 HSPI pins.
     let dp = DisplayPeripherals {
-        rst: peripherals.GPIO5.degrade(),
-        cs: peripherals.GPIO6.degrade(),
-        dc: peripherals.GPIO7.degrade(),
-        wr: peripherals.GPIO8.degrade(),
-        rd: peripherals.GPIO9.degrade(),
-        power_en: peripherals.GPIO15.degrade(),
-        backlight: peripherals.GPIO38.degrade(),
-        d0: peripherals.GPIO39.degrade(),
-        d1: peripherals.GPIO40.degrade(),
-        d2: peripherals.GPIO41.degrade(),
-        d3: peripherals.GPIO42.degrade(),
-        d4: peripherals.GPIO45.degrade(),
-        d5: peripherals.GPIO46.degrade(),
-        d6: peripherals.GPIO47.degrade(),
-        d7: peripherals.GPIO48.degrade(),
+        spi: peripherals.SPI2,
+        sclk: peripherals.GPIO14.degrade(),
+        mosi: peripherals.GPIO13.degrade(),
+        miso: peripherals.GPIO12.degrade(),
+        cs: peripherals.GPIO15.degrade(),
+        dc: peripherals.GPIO2.degrade(),
+        backlight: peripherals.GPIO21.degrade(),
     };
 
     let mut display = match Display::new(dp, Delay::new()) {
@@ -121,7 +115,6 @@ async fn main(spawner: Spawner) -> ! {
     let (mut pool, from_flash) =
         resolve_pool_config(&mut usb, &mut display, &mut store, force_change).await;
 
-    // Start onboard WiFi / BLE; when WiFi is up, also start the stratum TCP client.
     let stratum_enabled = if let Some(stack) =
         radio::start(&spawner, peripherals.WIFI, peripherals.BT, &pool)
     {
@@ -142,7 +135,7 @@ async fn main(spawner: Spawner) -> ! {
         serial_writeln(&mut usb, "Loaded saved credentials from flash.");
         serial_writeln(
             &mut usb,
-            "GUI: BOOT=tabs, btn=menu. Serial: change | radio | stratum",
+            "GUI: BOOT short=tabs, long=menu. Serial: change | radio | stratum",
         );
     } else {
         serial_writeln(&mut usb, "Credentials saved to flash for next boot.");
@@ -168,7 +161,7 @@ async fn main(spawner: Spawner) -> ! {
     let mut cmd_line: String<32> = String::new();
     let mut gui = GuiState::default();
     let mut boot_was_down = boot_btn.is_low();
-    let mut action_was_down = action_btn.is_low();
+    let mut boot_down_since: Option<Instant> = None;
 
     let mut stats = miner.stats();
     let mut radio_status = radio::snapshot().await;
@@ -180,7 +173,6 @@ async fn main(spawner: Spawner) -> ! {
     let _ = display.draw_gui(&gui, &stats, &pool, &radio_status, &stratum_status, true);
 
     loop {
-        // Apply any new stratum job.
         if let Some(job) = stratum::try_take_job() {
             let diff = job.difficulty;
             let clean = job.clean;
@@ -197,53 +189,50 @@ async fn main(spawner: Spawner) -> ! {
             serial_writeln(&mut usb, m.as_str());
         }
 
-        // Button edge detection for on-screen GUI navigation.
         let boot_down = boot_btn.is_low();
         if boot_down && !boot_was_down {
-            gui.on_boot_short_press();
-            radio_status = radio::snapshot().await;
-            if stratum_enabled {
-                stratum_status = stratum::snapshot().await;
+            boot_down_since = Some(Instant::now());
+        }
+        if !boot_down && boot_was_down {
+            if let Some(start) = boot_down_since.take() {
+                let long = start.elapsed() >= Duration::from_millis(BOOT_LONG_PRESS_MS);
+                if long {
+                    gui.on_action_press();
+                    if gui.take_change_request() {
+                        if let Some(updated) =
+                            password_gated_change(&mut usb, &mut display, &mut store, &pool).await
+                        {
+                            pool = updated;
+                            if stratum_enabled {
+                                stratum::apply_pool_config(&pool).await;
+                                serial_writeln(
+                                    &mut usb,
+                                    "Stratum worker/endpoint reloaded. WiFi/BLE still need reboot.",
+                                );
+                            } else {
+                                serial_writeln(
+                                    &mut usb,
+                                    "Note: WiFi/BLE keep prior session until reboot.",
+                                );
+                            }
+                            gui.screen = esp32_s3_scrypt_miner::gui::GuiScreen::Config;
+                            let _ = display.draw_config_summary(&pool, true);
+                            Timer::after(Duration::from_secs(2)).await;
+                        }
+                        gui.screen = esp32_s3_scrypt_miner::gui::GuiScreen::Mining;
+                    }
+                } else {
+                    gui.on_boot_short_press();
+                }
+                radio_status = radio::snapshot().await;
+                if stratum_enabled {
+                    stratum_status = stratum::snapshot().await;
+                }
+                let _ = display.draw_gui(&gui, &stats, &pool, &radio_status, &stratum_status, true);
             }
-            let _ = display.draw_gui(&gui, &stats, &pool, &radio_status, &stratum_status, true);
         }
         boot_was_down = boot_down;
 
-        let action_down = action_btn.is_low();
-        if action_down && !action_was_down {
-            gui.on_action_press();
-            if gui.take_change_request() {
-                if let Some(updated) =
-                    password_gated_change(&mut usb, &mut display, &mut store, &pool).await
-                {
-                    pool = updated;
-                    if stratum_enabled {
-                        stratum::apply_pool_config(&pool).await;
-                        serial_writeln(
-                            &mut usb,
-                            "Stratum worker/endpoint reloaded. WiFi/BLE still need reboot.",
-                        );
-                    } else {
-                        serial_writeln(
-                            &mut usb,
-                            "Note: WiFi/BLE keep prior session until reboot.",
-                        );
-                    }
-                    gui.screen = esp32_s3_scrypt_miner::gui::GuiScreen::Config;
-                    let _ = display.draw_config_summary(&pool, true);
-                    Timer::after(Duration::from_secs(2)).await;
-                }
-                gui.screen = esp32_s3_scrypt_miner::gui::GuiScreen::Mining;
-            }
-            radio_status = radio::snapshot().await;
-            if stratum_enabled {
-                stratum_status = stratum::snapshot().await;
-            }
-            let _ = display.draw_gui(&gui, &stats, &pool, &radio_status, &stratum_status, true);
-        }
-        action_was_down = action_down;
-
-        // Non-blocking serial command poll.
         if poll_command_byte(&mut usb, &mut cmd_line) {
             let cmd = cmd_line.as_str().trim();
             if is_change_command(cmd) {
@@ -354,7 +343,7 @@ async fn main(spawner: Spawner) -> ! {
     }
 }
 
-fn print_config_serial(usb: &mut UsbSerialJtag<'_, Blocking>, pool: &PoolConfig) {
+fn print_config_serial(usb: &mut Serial<'_>, pool: &PoolConfig) {
     serial_write(usb, "  address = ");
     serial_writeln(usb, pool.address.as_str());
     serial_write(usb, "  password = ");
@@ -374,7 +363,7 @@ fn print_config_serial(usb: &mut UsbSerialJtag<'_, Blocking>, pool: &PoolConfig)
 }
 
 fn print_radio_serial(
-    usb: &mut UsbSerialJtag<'_, Blocking>,
+    usb: &mut Serial<'_>,
     pool: &PoolConfig,
     radio: &RadioStatus,
     stratum: &StratumStatus,
@@ -437,9 +426,8 @@ fn print_radio_serial(
     }
 }
 
-/// Load saved credentials, or prompt + save on first run / after authorized change.
 async fn resolve_pool_config<D: embedded_hal::delay::DelayNs>(
-    usb: &mut UsbSerialJtag<'_, Blocking>,
+    usb: &mut Serial<'_>,
     display: &mut Display<'_, D>,
     store: &mut ConfigStore<'_>,
     force_change: bool,
@@ -467,24 +455,25 @@ async fn resolve_pool_config<D: embedded_hal::delay::DelayNs>(
                     return (updated, true);
                 }
                 serial_writeln(usb, "Keeping previously saved credentials.");
+                return (saved, true);
             }
             (saved, true)
         }
         Err(_) => {
-            serial_writeln(usb, "No saved credentials — starting setup.");
+            serial_writeln(usb, "");
+            serial_writeln(usb, "No saved credentials — first-time setup.");
             let cfg = collect_pool_config(usb, display).await;
             match store.save(&cfg) {
-                Ok(()) => serial_writeln(usb, "Saved credentials to flash."),
-                Err(_) => serial_writeln(usb, "WARNING: failed to save credentials to flash."),
+                Ok(()) => serial_writeln(usb, "Credentials saved to flash."),
+                Err(_) => serial_writeln(usb, "WARNING: flash save failed."),
             }
             (cfg, false)
         }
     }
 }
 
-/// Prompt for current password, then collect and persist new credentials.
 async fn password_gated_change<D: embedded_hal::delay::DelayNs>(
-    usb: &mut UsbSerialJtag<'_, Blocking>,
+    usb: &mut Serial<'_>,
     display: &mut Display<'_, D>,
     store: &mut ConfigStore<'_>,
     current: &PoolConfig,
@@ -530,7 +519,7 @@ async fn password_gated_change<D: embedded_hal::delay::DelayNs>(
     None
 }
 
-async fn wait_for_change_command(usb: &mut UsbSerialJtag<'_, Blocking>, timeout: Duration) -> bool {
+async fn wait_for_change_command(usb: &mut Serial<'_>, timeout: Duration) -> bool {
     let deadline = Instant::now() + timeout;
     let mut line: String<32> = String::new();
     let mut byte = [0u8; 1];
@@ -560,8 +549,7 @@ async fn wait_for_change_command(usb: &mut UsbSerialJtag<'_, Blocking>, timeout:
     false
 }
 
-/// Returns true when a full line was completed.
-fn poll_command_byte(usb: &mut UsbSerialJtag<'_, Blocking>, line: &mut String<32>) -> bool {
+fn poll_command_byte(usb: &mut Serial<'_>, line: &mut String<32>) -> bool {
     let mut byte = [0u8; 1];
     match usb.read(&mut byte) {
         Ok(0) | Err(_) => false,
@@ -600,13 +588,13 @@ fn eq_ignore_ascii_case(a: &str, b: &str) -> bool {
 }
 
 async fn collect_pool_config<D: embedded_hal::delay::DelayNs>(
-    usb: &mut UsbSerialJtag<'_, Blocking>,
+    usb: &mut Serial<'_>,
     display: &mut Display<'_, D>,
 ) -> PoolConfig {
     let mut cfg = PoolConfig::new();
 
     serial_writeln(usb, "");
-    serial_writeln(usb, "=== ESP32-S3 Scrypt Miner setup ===");
+    serial_writeln(usb, "=== ESP32-2432S028 Scrypt Miner setup ===");
     serial_writeln(
         usb,
         "Enter address, password, stratum, then WiFi/BLE (one field at a time).",
@@ -616,11 +604,10 @@ async fn collect_pool_config<D: embedded_hal::delay::DelayNs>(
         "Prefixes: address | password | stratum | wifi_ssid | wifi_password | ble_name",
     );
     serial_writeln(usb, "WiFi SSID '-' skips WiFi. Empty WiFi password = open AP.");
-    serial_writeln(usb, "Empty BLE name defaults to SCRYPT.");
+    serial_writeln(usb, "BLE name '-' / empty skips BLE (saves RAM).");
     serial_writeln(usb, "");
 
     for field in SetupField::ALL {
-        // Skip already-filled required pool fields; always prompt optional radio once.
         if !field.allows_empty() && !cfg.get(field).is_empty() {
             continue;
         }
@@ -680,25 +667,24 @@ fn config_error_msg(e: ConfigError) -> &'static str {
     }
 }
 
-fn serial_write(usb: &mut UsbSerialJtag<'_, Blocking>, text: &str) {
+fn serial_write(usb: &mut Serial<'_>, text: &str) {
     let _ = usb.write_all(text.as_bytes());
 }
 
-fn serial_writeln(usb: &mut UsbSerialJtag<'_, Blocking>, text: &str) {
+fn serial_writeln(usb: &mut Serial<'_>, text: &str) {
     let _ = usb.write_all(text.as_bytes());
     let _ = usb.write_all(b"\r\n");
 }
 
-async fn read_line(usb: &mut UsbSerialJtag<'_, Blocking>, line: &mut String<128>) {
+async fn read_line(usb: &mut Serial<'_>, line: &mut String<128>) {
     read_line_inner(usb, line, false).await;
 }
 
-/// Echo `*` instead of characters (for password entry).
-async fn read_line_secret(usb: &mut UsbSerialJtag<'_, Blocking>, line: &mut String<128>) {
+async fn read_line_secret(usb: &mut Serial<'_>, line: &mut String<128>) {
     read_line_inner(usb, line, true).await;
 }
 
-async fn read_line_inner(usb: &mut UsbSerialJtag<'_, Blocking>, line: &mut String<128>, secret: bool) {
+async fn read_line_inner(usb: &mut Serial<'_>, line: &mut String<128>, secret: bool) {
     line.clear();
     let mut byte = [0u8; 1];
     loop {
@@ -710,7 +696,6 @@ async fn read_line_inner(usb: &mut UsbSerialJtag<'_, Blocking>, line: &mut Strin
                 let c = byte[0];
                 match c {
                     b'\n' | b'\r' => {
-                        // Allow empty line for optional fields (caller decides).
                         let _ = usb.write_all(b"\r\n");
                         break;
                     }

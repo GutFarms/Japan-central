@@ -1,4 +1,4 @@
-//! LilyGO T-Display-S3 GUI (ST7789, 320×170, 8-bit parallel).
+//! ESP32-2432S028 (Cheap Yellow Display) GUI — ILI9341 SPI, 320×240 landscape.
 
 use core::fmt::Write as _;
 
@@ -12,12 +12,19 @@ use embedded_graphics::prelude::{Primitive, WebColors};
 use embedded_graphics::primitives::{PrimitiveStyle, Rectangle, RoundedRectangle};
 use embedded_graphics::text::Text;
 use embedded_hal::delay::DelayNs;
+use embedded_hal_bus::spi::ExclusiveDevice;
+use esp_hal::delay::Delay;
 use esp_hal::gpio::{AnyPin, Level, Output, OutputConfig};
+use esp_hal::spi::master::{Config as SpiConfig, Spi};
+use esp_hal::spi::Mode as SpiMode;
+use esp_hal::time::Rate;
+use esp_hal::Blocking;
 use heapless::String;
-use mipidsi::interface::{Generic8BitBus, ParallelError, ParallelInterface};
-use mipidsi::models::ST7789;
-use mipidsi::options::{ColorInversion, Orientation, Rotation};
-use mipidsi::{Builder, Display as MipiDisplay};
+use mipidsi::interface::SpiInterface;
+use mipidsi::models::ILI9341Rgb565;
+use mipidsi::options::{ColorOrder, Orientation, Rotation};
+use mipidsi::{Builder, Display as MipiDisplay, NoResetPin};
+use static_cell::StaticCell;
 
 use crate::config::{PoolConfig, SetupField};
 use crate::gui::{GuiScreen, GuiState, MenuItem};
@@ -25,8 +32,9 @@ use crate::miner::{hash_to_hex, MinerStats, SCRYPT_LOG_N, SCRYPT_N};
 use crate::radio::RadioStatus;
 use crate::stratum::StratumStatus;
 
+/// Landscape resolution after Deg90 rotation of the native 240×320 panel.
 pub const DISPLAY_WIDTH: u16 = 320;
-pub const DISPLAY_HEIGHT: u16 = 170;
+pub const DISPLAY_HEIGHT: u16 = 240;
 
 const BRAND: MonoTextStyle<'_, Rgb565> = MonoTextStyle::new(&FONT_10X20, Rgb565::CSS_ORANGE);
 const LABEL: MonoTextStyle<'_, Rgb565> = MonoTextStyle::new(&FONT_6X12, Rgb565::CSS_GRAY);
@@ -35,57 +43,32 @@ const VALUE_SM: MonoTextStyle<'_, Rgb565> = MonoTextStyle::new(&FONT_8X13_BOLD, 
 const OK: MonoTextStyle<'_, Rgb565> = MonoTextStyle::new(&FONT_10X20, Rgb565::CSS_LIME_GREEN);
 const MUTED: MonoTextStyle<'_, Rgb565> = MonoTextStyle::new(&FONT_6X12, Rgb565::CSS_DIM_GRAY);
 const ACCENT: Rgb565 = Rgb565::CSS_DARK_ORANGE;
-const PANEL: Rgb565 = Rgb565::new(3, 6, 3); // dark slate-ish in RGB565
+const PANEL: Rgb565 = Rgb565::new(3, 6, 3);
 const BAR_BG: Rgb565 = Rgb565::new(4, 8, 4);
 const BAR_FG: Rgb565 = Rgb565::CSS_ORANGE;
 const SELECT: Rgb565 = Rgb565::new(8, 12, 4);
 
-type MipiDisplayWrapper<'a> = MipiDisplay<
-    ParallelInterface<
-        Generic8BitBus<
-            Output<'a>,
-            Output<'a>,
-            Output<'a>,
-            Output<'a>,
-            Output<'a>,
-            Output<'a>,
-            Output<'a>,
-            Output<'a>,
-        >,
-        Output<'a>,
-        Output<'a>,
-    >,
-    ST7789,
-    Output<'a>,
->;
+type SpiBus<'a> = Spi<'a, Blocking>;
+type SpiDev<'a> = ExclusiveDevice<SpiBus<'a>, Output<'a>, Delay>;
+type SpiDi<'a> = SpiInterface<'a, SpiDev<'a>, Output<'a>>;
+type MipiDisplayWrapper<'a> = MipiDisplay<SpiDi<'a>, ILI9341Rgb565, NoResetPin>;
 
 pub struct Display<'a, D: DelayNs> {
     display: MipiDisplayWrapper<'a>,
     backlight: Output<'a>,
-    _power_en: Output<'a>,
-    _cs: Output<'a>,
-    _rd: Output<'a>,
     delay: D,
-    /// Last painted operational screen (forces full redraw on switch).
     last_screen: Option<GuiScreen>,
 }
 
+/// CYD TFT pins + SPI2 (HSPI).
 pub struct DisplayPeripherals {
-    pub rst: AnyPin<'static>,
+    pub spi: esp_hal::peripherals::SPI2<'static>,
+    pub sclk: AnyPin<'static>,
+    pub mosi: AnyPin<'static>,
+    pub miso: AnyPin<'static>,
     pub cs: AnyPin<'static>,
     pub dc: AnyPin<'static>,
-    pub wr: AnyPin<'static>,
-    pub rd: AnyPin<'static>,
-    pub power_en: AnyPin<'static>,
     pub backlight: AnyPin<'static>,
-    pub d0: AnyPin<'static>,
-    pub d1: AnyPin<'static>,
-    pub d2: AnyPin<'static>,
-    pub d3: AnyPin<'static>,
-    pub d4: AnyPin<'static>,
-    pub d5: AnyPin<'static>,
-    pub d6: AnyPin<'static>,
-    pub d7: AnyPin<'static>,
 }
 
 impl<'a, D: DelayNs> Display<'a, D> {
@@ -95,52 +78,46 @@ impl<'a, D: DelayNs> Display<'a, D> {
         position: Point,
         style: MonoTextStyle<'_, Rgb565>,
     ) -> Result<(), Error> {
-        let result = Text::new(text, position, style).draw(&mut self.display);
-        result.map(|_| ()).map_err(Error::from)
+        Text::new(text, position, style)
+            .draw(&mut self.display)
+            .map(|_| ())
+            .map_err(|_| Error::DisplayInterface("text"))
     }
 
     pub fn new(p: DisplayPeripherals, mut delay: D) -> Result<Self, Error> {
-        let mut power_en = Output::new(p.power_en, Level::High, OutputConfig::default());
-        power_en.set_high();
-
-        let backlight = Output::new(p.backlight, Level::Low, OutputConfig::default());
-
+        let backlight = Output::new(p.backlight, Level::High, OutputConfig::default());
         let dc = Output::new(p.dc, Level::Low, OutputConfig::default());
-        let mut cs = Output::new(p.cs, Level::Low, OutputConfig::default());
-        let rst = Output::new(p.rst, Level::Low, OutputConfig::default());
-        let wr = Output::new(p.wr, Level::Low, OutputConfig::default());
-        let mut rd = Output::new(p.rd, Level::Low, OutputConfig::default());
+        let cs = Output::new(p.cs, Level::High, OutputConfig::default());
 
-        cs.set_low();
-        rd.set_high();
+        let spi = Spi::new(
+            p.spi,
+            SpiConfig::default()
+                .with_frequency(Rate::from_mhz(40))
+                .with_mode(SpiMode::_0),
+        )
+        .map_err(|_| Error::InitError)?
+        .with_sck(p.sclk)
+        .with_mosi(p.mosi)
+        .with_miso(p.miso);
 
-        let d0 = Output::new(p.d0, Level::Low, OutputConfig::default());
-        let d1 = Output::new(p.d1, Level::Low, OutputConfig::default());
-        let d2 = Output::new(p.d2, Level::Low, OutputConfig::default());
-        let d3 = Output::new(p.d3, Level::Low, OutputConfig::default());
-        let d4 = Output::new(p.d4, Level::Low, OutputConfig::default());
-        let d5 = Output::new(p.d5, Level::Low, OutputConfig::default());
-        let d6 = Output::new(p.d6, Level::Low, OutputConfig::default());
-        let d7 = Output::new(p.d7, Level::Low, OutputConfig::default());
+        // Short CS settle delay between transactions.
+        let spi_dev = ExclusiveDevice::new(spi, cs, Delay::new());
 
-        let bus = Generic8BitBus::new((d0, d1, d2, d3, d4, d5, d6, d7));
-        let di = ParallelInterface::new(bus, dc, wr);
+        static SPI_BUF: StaticCell<[u8; 512]> = StaticCell::new();
+        let buf = SPI_BUF.init([0u8; 512]);
+        let di = SpiInterface::new(spi_dev, dc, buf);
 
-        let display = Builder::new(ST7789, di)
-            .display_size(DISPLAY_HEIGHT, DISPLAY_WIDTH)
-            .display_offset((240 - DISPLAY_HEIGHT) / 2, 0)
-            .orientation(Orientation::new().rotate(Rotation::Deg270))
-            .invert_colors(ColorInversion::Inverted)
-            .reset_pin(rst)
+        // Native panel is 240×320; Deg90 → 320×240 landscape. CYD ILI9341 is BGR.
+        let display = Builder::new(ILI9341Rgb565, di)
+            .display_size(240, 320)
+            .orientation(Orientation::new().rotate(Rotation::Deg90))
+            .color_order(ColorOrder::Bgr)
             .init(&mut delay)
             .map_err(|_| Error::InitError)?;
 
         Ok(Self {
             display,
             backlight,
-            _power_en: power_en,
-            _cs: cs,
-            _rd: rd,
             delay,
             last_screen: None,
         })
@@ -158,20 +135,22 @@ impl<'a, D: DelayNs> Display<'a, D> {
     }
 
     fn fill_rect(&mut self, x: i32, y: i32, w: u32, h: u32, color: Rgb565) -> Result<(), Error> {
-        let result = Rectangle::new(Point::new(x, y), Size::new(w, h))
+        Rectangle::new(Point::new(x, y), Size::new(w, h))
             .into_styled(PrimitiveStyle::with_fill(color))
-            .draw(&mut self.display);
-        result.map(|_| ()).map_err(Error::from)
+            .draw(&mut self.display)
+            .map(|_| ())
+            .map_err(|_| Error::DisplayInterface("rect"))
     }
 
     fn round_panel(&mut self, x: i32, y: i32, w: u32, h: u32, color: Rgb565) -> Result<(), Error> {
-        let result = RoundedRectangle::with_equal_corners(
+        RoundedRectangle::with_equal_corners(
             Rectangle::new(Point::new(x, y), Size::new(w, h)),
             Size::new(6, 6),
         )
         .into_styled(PrimitiveStyle::with_fill(color))
-        .draw(&mut self.display);
-        result.map(|_| ()).map_err(Error::from)
+        .draw(&mut self.display)
+        .map(|_| ())
+        .map_err(|_| Error::DisplayInterface("panel"))
     }
 
     fn header_bar(&mut self, tab: &str) -> Result<(), Error> {
@@ -183,26 +162,24 @@ impl<'a, D: DelayNs> Display<'a, D> {
     }
 
     fn footer_hint(&mut self, text: &str) -> Result<(), Error> {
-        self.fill_rect(0, 156, DISPLAY_WIDTH as u32, 14, PANEL)?;
-        self.draw_text(text, Point::new(8, 166), MUTED)?;
+        self.fill_rect(0, 226, DISPLAY_WIDTH as u32, 14, PANEL)?;
+        self.draw_text(text, Point::new(8, 236), MUTED)?;
         Ok(())
     }
 
-    /// Boot splash.
     pub fn draw_splash(&mut self) -> Result<(), Error> {
         self.wake_clear()?;
         self.last_screen = None;
         self.fill_rect(0, 0, DISPLAY_WIDTH as u32, DISPLAY_HEIGHT as u32, Rgb565::BLACK)?;
         self.fill_rect(0, 0, DISPLAY_WIDTH as u32, 4, ACCENT)?;
-        self.draw_text("SCRYPT", Point::new(110, 70), BRAND)?;
+        self.draw_text("SCRYPT", Point::new(110, 90), BRAND)?;
         let mut line: String<48> = String::new();
-        let _ = write!(line, "ESP32-S3  N={}  r=1 p=1", SCRYPT_N);
-        self.draw_text(&line, Point::new(70, 100), LABEL)?;
-        self.draw_text("loading GUI…", Point::new(110, 130), MUTED)?;
+        let _ = write!(line, "ESP32-2432S028  N={}  r=1 p=1", SCRYPT_N);
+        self.draw_text(&line, Point::new(40, 130), LABEL)?;
+        self.draw_text("loading GUI…", Point::new(110, 160), MUTED)?;
         Ok(())
     }
 
-    /// Full-screen post-boot setup prompt for one credential field.
     pub fn draw_setup(&mut self, field: SetupField, typed: &str) -> Result<(), Error> {
         self.wake_clear()?;
         self.last_screen = None;
@@ -216,7 +193,6 @@ impl<'a, D: DelayNs> Display<'a, D> {
             SetupField::WifiPassword => 5,
             SetupField::BleName => 6,
         };
-        // Step dots
         for i in 1..=6u8 {
             let x = 12 + (i as i32 - 1) * 14;
             let color = if i <= step_n { ACCENT } else { BAR_BG };
@@ -227,8 +203,8 @@ impl<'a, D: DelayNs> Display<'a, D> {
         let _ = write!(step, "{}/6  {}", step_n, field.label());
         self.draw_text(&step, Point::new(100, 48), LABEL)?;
 
-        self.round_panel(8, 60, 304, 70, PANEL)?;
-        self.draw_text(field.prompt(), Point::new(18, 85), VALUE_SM)?;
+        self.round_panel(8, 70, 304, 100, PANEL)?;
+        self.draw_text(field.prompt(), Point::new(18, 100), VALUE_SM)?;
 
         let shown = if field.is_secret() && !typed.is_empty() {
             PoolConfig::ellipsize("********", 36)
@@ -237,30 +213,30 @@ impl<'a, D: DelayNs> Display<'a, D> {
         } else {
             PoolConfig::ellipsize(typed, 36)
         };
-        self.draw_text(&shown, Point::new(18, 112), VALUE)?;
+        self.draw_text(&shown, Point::new(18, 140), VALUE)?;
         self.footer_hint("type value on USB serial, then Enter")?;
         Ok(())
     }
 
-    /// Summary of credentials before mining starts.
     pub fn draw_config_summary(&mut self, cfg: &PoolConfig, from_flash: bool) -> Result<(), Error> {
         self.wake_clear()?;
         self.last_screen = None;
         self.header_bar(if from_flash { "SAVED" } else { "READY" })?;
 
-        self.round_panel(8, 36, 304, 110, PANEL)?;
-        self.draw_row(48, "address", &PoolConfig::ellipsize(cfg.address.as_str(), 26))?;
-        self.draw_row(72, "password", cfg.password_masked().as_str())?;
-        self.draw_row(96, "stratum", &PoolConfig::ellipsize(cfg.stratum.as_str(), 26))?;
+        self.round_panel(8, 40, 304, 160, PANEL)?;
+        self.draw_row(60, "address", &PoolConfig::ellipsize(cfg.address.as_str(), 26))?;
+        self.draw_row(90, "password", cfg.password_masked().as_str())?;
+        self.draw_row(120, "stratum", &PoolConfig::ellipsize(cfg.stratum.as_str(), 26))?;
         let wifi = if cfg.wifi_enabled() {
             PoolConfig::ellipsize(cfg.wifi_ssid.as_str(), 22)
         } else {
             PoolConfig::ellipsize("(wifi off)", 22)
         };
-        self.draw_row(120, "wifi", wifi.as_str())?;
+        self.draw_row(150, "wifi", wifi.as_str())?;
+        self.draw_row(180, "ble", cfg.ble_name_or_default())?;
 
         let hint = if from_flash {
-            "BOOT=tabs  btn=menu  serial: change"
+            "BOOT short=tabs  long=menu  serial: change"
         } else {
             "saved to flash for next boot"
         };
@@ -274,7 +250,6 @@ impl<'a, D: DelayNs> Display<'a, D> {
         Ok(())
     }
 
-    /// Paint the active GUI screen (full redraw when the tab changes).
     pub fn draw_gui(
         &mut self,
         gui: &GuiState,
@@ -299,14 +274,7 @@ impl<'a, D: DelayNs> Display<'a, D> {
                 }
             }
             GuiScreen::Radio => self.draw_radio_body(cfg, radio, stratum, screen_changed)?,
-            GuiScreen::Menu => {
-                if screen_changed {
-                    self.draw_menu_body(gui.menu)?;
-                } else {
-                    // Refresh selection highlight cheaply by redrawing menu body.
-                    self.draw_menu_body(gui.menu)?;
-                }
-            }
+            GuiScreen::Menu => self.draw_menu_body(gui.menu)?,
         }
         Ok(())
     }
@@ -320,14 +288,13 @@ impl<'a, D: DelayNs> Display<'a, D> {
         full: bool,
     ) -> Result<(), Error> {
         if full {
-            self.round_panel(8, 36, 200, 72, PANEL)?;
-            self.round_panel(216, 36, 96, 72, PANEL)?;
-            self.round_panel(8, 116, 304, 36, PANEL)?;
-            self.footer_hint("BOOT=next  btn=menu")?;
+            self.round_panel(8, 40, 200, 100, PANEL)?;
+            self.round_panel(216, 40, 96, 100, PANEL)?;
+            self.round_panel(8, 152, 304, 56, PANEL)?;
+            self.footer_hint("BOOT short=next  long=menu")?;
         }
 
-        // Hashrate
-        self.fill_rect(16, 44, 184, 36, PANEL)?;
+        self.fill_rect(16, 48, 184, 36, PANEL)?;
         let mut rate: String<24> = String::new();
         let _ = write!(
             rate,
@@ -335,28 +302,25 @@ impl<'a, D: DelayNs> Display<'a, D> {
             stats.hashrate_x100 / 100,
             stats.hashrate_x100 % 100
         );
-        self.draw_text("hashrate", Point::new(16, 52), LABEL)?;
-        self.draw_text(&rate, Point::new(16, 74), VALUE)?;
+        self.draw_text("hashrate", Point::new(16, 56), LABEL)?;
+        self.draw_text(&rate, Point::new(16, 80), VALUE)?;
 
-        // Activity bar (0–100% of a soft cap ~20 H/s for visual scale)
         let pct = core::cmp::min(100u32, stats.hashrate_x100 / 20);
-        self.fill_rect(16, 88, 184, 10, BAR_BG)?;
+        self.fill_rect(16, 110, 184, 10, BAR_BG)?;
         let w = (184 * pct / 100).max(if mining { 4 } else { 0 });
         if w > 0 {
-            self.fill_rect(16, 88, w, 10, BAR_FG)?;
+            self.fill_rect(16, 110, w, 10, BAR_FG)?;
         }
 
-        // Status + shares
-        self.fill_rect(224, 44, 80, 56, PANEL)?;
+        self.fill_rect(224, 48, 80, 80, PANEL)?;
         let st = if mining { "MINING" } else { "IDLE" };
         let st_style = if mining { OK } else { LABEL };
-        self.draw_text(st, Point::new(228, 58), st_style)?;
+        self.draw_text(st, Point::new(228, 70), st_style)?;
         let mut shares: String<16> = String::new();
         let _ = write!(shares, "{} sh", stats.shares);
-        self.draw_text(&shares, Point::new(228, 86), VALUE_SM)?;
+        self.draw_text(&shares, Point::new(228, 110), VALUE_SM)?;
 
-        // Bottom identity / stratum strip
-        self.fill_rect(16, 122, 288, 24, PANEL)?;
+        self.fill_rect(16, 160, 288, 40, PANEL)?;
         let mut nonce: String<20> = String::new();
         let _ = write!(nonce, "{:08x}", stats.nonce);
         let job = if stratum.job_id.is_empty() {
@@ -378,24 +342,25 @@ impl<'a, D: DelayNs> Display<'a, D> {
             stratum.dropped,
             best
         );
-        self.draw_text(&line, Point::new(16, 138), LABEL)?;
+        self.draw_text(&line, Point::new(16, 180), LABEL)?;
 
         let _ = SCRYPT_LOG_N;
         Ok(())
     }
 
     fn draw_config_body(&mut self, cfg: &PoolConfig) -> Result<(), Error> {
-        self.round_panel(8, 36, 304, 110, PANEL)?;
-        self.draw_row(52, "address", &PoolConfig::ellipsize(cfg.address.as_str(), 26))?;
-        self.draw_row(76, "password", cfg.password_masked().as_str())?;
-        self.draw_row(100, "stratum", &PoolConfig::ellipsize(cfg.stratum.as_str(), 26))?;
+        self.round_panel(8, 40, 304, 160, PANEL)?;
+        self.draw_row(60, "address", &PoolConfig::ellipsize(cfg.address.as_str(), 26))?;
+        self.draw_row(90, "password", cfg.password_masked().as_str())?;
+        self.draw_row(120, "stratum", &PoolConfig::ellipsize(cfg.stratum.as_str(), 26))?;
         let wifi = if cfg.wifi_enabled() {
             PoolConfig::ellipsize(cfg.wifi_ssid.as_str(), 22)
         } else {
             PoolConfig::ellipsize("(off)", 22)
         };
-        self.draw_row(124, "wifi", wifi.as_str())?;
-        self.footer_hint("BOOT=next  btn=menu  serial: change")?;
+        self.draw_row(150, "wifi", wifi.as_str())?;
+        self.draw_row(180, "ble", cfg.ble_name_or_default())?;
+        self.footer_hint("BOOT short=next  long=menu  serial: change")?;
         Ok(())
     }
 
@@ -407,11 +372,11 @@ impl<'a, D: DelayNs> Display<'a, D> {
         full: bool,
     ) -> Result<(), Error> {
         if full {
-            self.round_panel(8, 36, 304, 110, PANEL)?;
-            self.footer_hint("BOOT=next  btn=menu")?;
+            self.round_panel(8, 40, 304, 160, PANEL)?;
+            self.footer_hint("BOOT short=next  long=menu")?;
         }
 
-        self.fill_rect(16, 44, 288, 96, PANEL)?;
+        self.fill_rect(16, 48, 288, 140, PANEL)?;
 
         let ssid = if cfg.wifi_enabled() {
             PoolConfig::ellipsize(cfg.wifi_ssid.as_str(), 18)
@@ -425,11 +390,11 @@ impl<'a, D: DelayNs> Display<'a, D> {
             radio.wifi.label(),
             ssid.as_str()
         );
-        self.draw_text(&wifi_line, Point::new(18, 58), VALUE_SM)?;
+        self.draw_text(&wifi_line, Point::new(18, 70), VALUE_SM)?;
 
         let mut ip_line: String<40> = String::new();
         let _ = write!(ip_line, "IP   {}", radio.ip_string().as_str());
-        self.draw_text(&ip_line, Point::new(18, 80), VALUE_SM)?;
+        self.draw_text(&ip_line, Point::new(18, 100), VALUE_SM)?;
 
         let ble_state = if radio.ble_connected {
             "conn"
@@ -445,7 +410,7 @@ impl<'a, D: DelayNs> Display<'a, D> {
             ble_state,
             PoolConfig::ellipsize(cfg.ble_name_or_default(), 14).as_str()
         );
-        self.draw_text(&ble_line, Point::new(18, 102), VALUE_SM)?;
+        self.draw_text(&ble_line, Point::new(18, 130), VALUE_SM)?;
 
         let mut st_line: String<56> = String::new();
         let _ = write!(
@@ -457,39 +422,38 @@ impl<'a, D: DelayNs> Display<'a, D> {
             stratum.rejected,
             stratum.dropped
         );
-        self.draw_text(&st_line, Point::new(18, 124), VALUE_SM)?;
+        self.draw_text(&st_line, Point::new(18, 160), VALUE_SM)?;
         if !stratum.detail.is_empty() {
             let detail = PoolConfig::ellipsize(stratum.detail.as_str(), 28);
-            self.draw_text(detail.as_str(), Point::new(18, 146), VALUE_SM)?;
+            self.draw_text(detail.as_str(), Point::new(18, 185), VALUE_SM)?;
         }
         Ok(())
     }
 
     fn draw_menu_body(&mut self, selected: MenuItem) -> Result<(), Error> {
-        self.round_panel(8, 36, 304, 110, PANEL)?;
-        self.draw_text("Options", Point::new(18, 55), LABEL)?;
+        self.round_panel(8, 40, 304, 160, PANEL)?;
+        self.draw_text("Options", Point::new(18, 65), LABEL)?;
 
         for (i, item) in MenuItem::ALL.iter().enumerate() {
-            let y = 78 + i as i32 * 30;
+            let y = 100 + i as i32 * 36;
             let bg = if *item == selected { SELECT } else { PANEL };
-            self.round_panel(18, y - 14, 284, 26, bg)?;
+            self.round_panel(18, y - 14, 284, 30, bg)?;
             let style = if *item == selected { OK } else { VALUE_SM };
             self.draw_text(item.label(), Point::new(28, y), style)?;
         }
-        self.footer_hint("BOOT=select item  btn=activate")?;
+        self.footer_hint("BOOT short=select  long=activate")?;
         Ok(())
     }
 
-    /// Password prompt screen while waiting on serial.
     pub fn draw_auth_prompt(&mut self, attempt: u8, max: u8) -> Result<(), Error> {
         self.wake_clear()?;
         self.last_screen = None;
         self.header_bar("AUTH")?;
-        self.round_panel(8, 50, 304, 80, PANEL)?;
-        self.draw_text("Enter current password", Point::new(40, 80), VALUE_SM)?;
+        self.round_panel(8, 70, 304, 100, PANEL)?;
+        self.draw_text("Enter current password", Point::new(40, 110), VALUE_SM)?;
         let mut tries: String<32> = String::new();
         let _ = write!(tries, "attempt {attempt}/{max}  (USB serial)");
-        self.draw_text(&tries, Point::new(60, 110), LABEL)?;
+        self.draw_text(&tries, Point::new(60, 145), LABEL)?;
         self.footer_hint("password required to change credentials")?;
         Ok(())
     }
@@ -510,12 +474,3 @@ impl core::fmt::Display for Error {
     }
 }
 
-impl<BUS, DC, WR> From<ParallelError<BUS, DC, WR>> for Error {
-    fn from(e: ParallelError<BUS, DC, WR>) -> Self {
-        match e {
-            ParallelError::Bus(_) => Self::DisplayInterface("bus"),
-            ParallelError::Dc(_) => Self::DisplayInterface("dc"),
-            ParallelError::Wr(_) => Self::DisplayInterface("wr"),
-        }
-    }
-}
