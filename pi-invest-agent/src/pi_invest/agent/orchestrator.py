@@ -10,8 +10,11 @@ from pi_invest.agent.scoring import heuristic_intents, score_symbol
 from pi_invest.broker import Broker
 from pi_invest.config import AppConfig, EnvSettings
 from pi_invest.data import ResilientMarketData
+from pi_invest.journal import PerformanceJournal
 from pi_invest.models import Decision, Side, TradeIntent, utcnow
+from pi_invest.safety import HaltedError, SafetyGate
 from pi_invest.storage.db import Database
+from pi_invest.wallet import WalletService
 
 
 def _market_open(tz_name: str) -> bool:
@@ -33,6 +36,9 @@ class InvestAgent:
         market: ResilientMarketData,
         broker: Broker,
         db: Database,
+        safety: SafetyGate | None = None,
+        journal: PerformanceJournal | None = None,
+        wallet: WalletService | None = None,
     ) -> None:
         self.cfg = cfg
         self.env = env
@@ -41,6 +47,9 @@ class InvestAgent:
         self.db = db
         self.risk = RiskGate(cfg.risk, cfg.universe)
         self.llm = LlmAdvisor(cfg.llm, env)
+        self.safety = safety or SafetyGate(db)
+        self.journal = journal or PerformanceJournal(db, self.safety)
+        self.wallet = wallet
 
     def run_cycle(self, dry_run: bool = False) -> Decision:
         cycle_id = str(uuid.uuid4())
@@ -67,6 +76,12 @@ class InvestAgent:
             account = self.broker.get_account(marks)
         except Exception:  # noqa: BLE001
             pass
+
+        # Kill switch: still score/plan, never place orders
+        halted = self.safety.is_halted()
+        if halted:
+            st = self.safety.state()
+            skipped.append(f"HALTED: {st.reason or 'kill switch active'}")
 
         intents: list[TradeIntent] = self.risk.trim_overweight(account)
 
@@ -103,9 +118,13 @@ class InvestAgent:
                 skipped_reasons=skipped + ["live trading blocked outside hours"],
                 llm_raw=llm_raw,
                 account_after=account,
-                meta={"data_source": self.market.last_source},
+                meta={
+                    "data_source": self.market.last_source,
+                    "halted": halted,
+                },
             )
             self.db.save_decision(decision)
+            self._journal(account, cycle_id)
             return decision
 
         if self.cfg.schedule.prefer_market_hours and not market_open:
@@ -115,21 +134,28 @@ class InvestAgent:
         skipped.extend(risk_notes)
 
         orders = []
-        if not dry_run:
-            for intent in safe_intents:
-                account = self.broker.get_account(marks)
-                px = marks.get(intent.symbol)
-                if px is None:
-                    skipped.append(f"{intent.symbol}: missing mark")
-                    continue
-                order_req, reason = self.risk.to_order(intent, account, px)
-                if order_req is None:
-                    skipped.append(f"{intent.symbol}: {reason}")
-                    continue
-                result = self.broker.place_order(order_req, px)
-                orders.append(result)
-        else:
+        if dry_run:
             skipped.append("dry-run: orders not sent")
+        elif halted:
+            skipped.append("orders blocked by halt")
+        else:
+            try:
+                self.safety.assert_trading_allowed()
+            except HaltedError as exc:
+                skipped.append(str(exc))
+            else:
+                for intent in safe_intents:
+                    account = self.broker.get_account(marks)
+                    px = marks.get(intent.symbol)
+                    if px is None:
+                        skipped.append(f"{intent.symbol}: missing mark")
+                        continue
+                    order_req, reason = self.risk.to_order(intent, account, px)
+                    if order_req is None:
+                        skipped.append(f"{intent.symbol}: {reason}")
+                        continue
+                    result = self.broker.place_order(order_req, px)
+                    orders.append(result)
 
         account_after = self.broker.get_account(marks)
         decision = Decision(
@@ -146,7 +172,24 @@ class InvestAgent:
                 "mode": self.cfg.agent.mode,
                 "backend": self.cfg.broker.backend,
                 "agent": self.cfg.agent.name,
+                "halted": halted,
             },
         )
         self.db.save_decision(decision)
+        if self.cfg.safety.journal_enabled:
+            self._journal(account_after, cycle_id)
         return decision
+
+    def _journal(self, account, cycle_id: str) -> None:
+        if not self.cfg.safety.journal_enabled:
+            return
+        wallet_snap = None
+        if self.wallet is not None:
+            try:
+                wallet_snap = self.wallet.snapshot()
+            except Exception:  # noqa: BLE001
+                wallet_snap = None
+        try:
+            self.journal.record(account, wallet_snap, cycle_id=cycle_id)
+        except Exception:  # noqa: BLE001
+            pass

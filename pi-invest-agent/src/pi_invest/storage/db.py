@@ -83,8 +83,35 @@ class Database:
                     tx_ref TEXT,
                     created_at TEXT NOT NULL
                 );
+                CREATE TABLE IF NOT EXISTS agent_state (
+                    id INTEGER PRIMARY KEY CHECK (id = 1),
+                    halted INTEGER NOT NULL DEFAULT 0,
+                    reason TEXT NOT NULL DEFAULT '',
+                    updated_at TEXT NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS equity_snapshots (
+                    snapshot_id TEXT PRIMARY KEY,
+                    created_at TEXT NOT NULL,
+                    equity REAL NOT NULL,
+                    cash REAL NOT NULL,
+                    wallet_usd REAL NOT NULL,
+                    total_nav REAL NOT NULL,
+                    day_pnl REAL NOT NULL,
+                    day_pnl_pct REAL NOT NULL,
+                    peak_nav REAL NOT NULL,
+                    drawdown_pct REAL NOT NULL,
+                    halted INTEGER NOT NULL,
+                    cycle_id TEXT
+                );
                 """
             )
+            row = conn.execute("SELECT id FROM agent_state WHERE id = 1").fetchone()
+            if row is None:
+                conn.execute(
+                    "INSERT INTO agent_state (id, halted, reason, updated_at) "
+                    "VALUES (1, 0, '', ?)",
+                    (utcnow().isoformat(),),
+                )
 
     def ensure_paper_account(self, starting_cash: float) -> None:
         with self._connect() as conn:
@@ -426,3 +453,120 @@ class Database:
                     """,
                     (asset.upper(), float(amount)),
                 )
+
+    def get_halt_state(self) -> tuple[bool, str, str | None]:
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT halted, reason, updated_at FROM agent_state WHERE id = 1"
+            ).fetchone()
+            if row is None:
+                return False, "", None
+            return bool(row["halted"]), str(row["reason"] or ""), row["updated_at"]
+
+    def set_halt_state(self, halted: bool, reason: str = "") -> None:
+        with self._connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO agent_state (id, halted, reason, updated_at)
+                VALUES (1, ?, ?, ?)
+                ON CONFLICT(id) DO UPDATE SET
+                  halted=excluded.halted,
+                  reason=excluded.reason,
+                  updated_at=excluded.updated_at
+                """,
+                (1 if halted else 0, reason, utcnow().isoformat()),
+            )
+
+    def save_equity_snapshot(self, snap) -> None:
+        with self._connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO equity_snapshots (
+                  snapshot_id, created_at, equity, cash, wallet_usd, total_nav,
+                  day_pnl, day_pnl_pct, peak_nav, drawdown_pct, halted, cycle_id
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    snap.snapshot_id,
+                    snap.timestamp.isoformat(),
+                    snap.equity,
+                    snap.cash,
+                    snap.wallet_usd,
+                    snap.total_nav,
+                    snap.day_pnl,
+                    snap.day_pnl_pct,
+                    snap.peak_nav,
+                    snap.drawdown_pct,
+                    1 if snap.halted else 0,
+                    snap.cycle_id,
+                ),
+            )
+
+    def list_equity_snapshots(self, limit: int = 100) -> list:
+        from pi_invest.models import EquitySnapshot
+
+        with self._connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT snapshot_id, created_at, equity, cash, wallet_usd, total_nav,
+                       day_pnl, day_pnl_pct, peak_nav, drawdown_pct, halted, cycle_id
+                FROM equity_snapshots
+                ORDER BY created_at DESC
+                LIMIT ?
+                """,
+                (limit,),
+            ).fetchall()
+        out = []
+        for r in rows:
+            try:
+                ts = datetime.fromisoformat(r["created_at"])
+            except ValueError:
+                ts = utcnow()
+            out.append(
+                EquitySnapshot(
+                    snapshot_id=r["snapshot_id"],
+                    timestamp=ts,
+                    equity=float(r["equity"]),
+                    cash=float(r["cash"]),
+                    wallet_usd=float(r["wallet_usd"]),
+                    total_nav=float(r["total_nav"]),
+                    day_pnl=float(r["day_pnl"]),
+                    day_pnl_pct=float(r["day_pnl_pct"]),
+                    peak_nav=float(r["peak_nav"]),
+                    drawdown_pct=float(r["drawdown_pct"]),
+                    halted=bool(r["halted"]),
+                    cycle_id=r["cycle_id"],
+                )
+            )
+        return out
+
+    def peak_nav(self) -> float:
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT MAX(total_nav) AS peak FROM equity_snapshots"
+            ).fetchone()
+            if row is None or row["peak"] is None:
+                return 0.0
+            return float(row["peak"])
+
+    def outbound_send_usd_today(self, marks: dict[str, float]) -> float:
+        """Sum completed outbound sends today, valued in USD using marks."""
+        today = utcnow().date().isoformat()
+        with self._connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT asset, amount, network, created_at
+                FROM wallet_transfers
+                WHERE direction = 'send' AND status = 'completed'
+                  AND created_at LIKE ?
+                """,
+                (f"{today}%",),
+            ).fetchall()
+        total = 0.0
+        for r in rows:
+            # Internal bridges count toward daily send too (money left wallet)
+            asset = r["asset"]
+            px = marks.get(asset, 1.0 if asset in {"USD", "USDC", "USDT"} else 0.0)
+            total += float(r["amount"]) * px
+        return total
+

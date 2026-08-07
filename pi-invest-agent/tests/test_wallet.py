@@ -23,7 +23,8 @@ def test_receive_address_stable(tmp_path):
 
 def test_credit_and_send_btc(tmp_path):
     db = Database(tmp_path / "w.db")
-    svc = WalletService(PaperWallet(db, WalletConfig()), db, WalletConfig(), EnvSettings())
+    cfg = WalletConfig(max_daily_send_usd=10_000.0)
+    svc = WalletService(PaperWallet(db, cfg), db, cfg, EnvSettings())
     svc.receive("BTC", 0.05, from_address="friend")
     snap = svc.snapshot()
     btc = next(b for b in snap.balances if b.asset == "BTC")
@@ -75,7 +76,7 @@ def test_build_wallet_from_appconfig(tmp_path, monkeypatch):
 
 def test_history_records(tmp_path):
     db = Database(tmp_path / "w.db")
-    cfg = WalletConfig()
+    cfg = WalletConfig(max_daily_send_usd=10_000.0)
     svc = WalletService(PaperWallet(db, cfg), db, cfg, EnvSettings())
     svc.receive("ETH", 1.0)
     svc.send("ETH", 0.1, "0xabc")

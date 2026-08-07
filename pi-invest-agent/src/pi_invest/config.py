@@ -42,6 +42,7 @@ class ScheduleConfig(BaseModel):
 class DashboardConfig(BaseModel):
     host: str = "0.0.0.0"
     port: int = 8787
+    require_auth: bool = True
 
 
 class WalletConfig(BaseModel):
@@ -67,7 +68,6 @@ class WalletConfig(BaseModel):
             "ETH": "ethereum",
         }
     )
-    # Optional per-asset minimum send size
     min_send: dict[str, float] = Field(
         default_factory=lambda: {
             "USD": 1.0,
@@ -84,6 +84,16 @@ class WalletConfig(BaseModel):
             "ETH": 0.0002,
         }
     )
+    # Hard cap on outbound wallet sends (USD-equivalent) per UTC day
+    max_daily_send_usd: float = 250.0
+
+
+class SafetyConfig(BaseModel):
+    """Kill-switch defaults — halt blocks trading and outbound sends."""
+
+    # Record NAV after every invest cycle
+    journal_enabled: bool = True
+
 
 
 class AgentConfig(BaseModel):
@@ -104,6 +114,7 @@ class AppConfig(BaseModel):
     schedule: ScheduleConfig = Field(default_factory=ScheduleConfig)
     dashboard: DashboardConfig = Field(default_factory=DashboardConfig)
     wallet: WalletConfig = Field(default_factory=WalletConfig)
+    safety: SafetyConfig = Field(default_factory=SafetyConfig)
 
 
 class EnvSettings(BaseSettings):
@@ -124,6 +135,8 @@ class EnvSettings(BaseSettings):
     allow_live_transfers: bool = False
     coinbase_api_key: str = ""
     coinbase_api_secret: str = ""
+    dashboard_username: str = "pi"
+    dashboard_password: str = ""
     pi_invest_config: str = "config/config.yaml"
     pi_invest_db: str = "data/pi_invest.db"
 

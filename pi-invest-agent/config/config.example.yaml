@@ -49,6 +49,7 @@ schedule:
 dashboard:
   host: 0.0.0.0
   port: 8787
+  require_auth: true           # set DASHBOARD_PASSWORD in .env
 
 wallet:
   backend: paper                 # paper | coinbase
@@ -73,3 +74,7 @@ wallet:
     USDC: 0.0
     BTC: 0.00001
     ETH: 0.0002
+  max_daily_send_usd: 250.0      # hard outbound send cap per UTC day
+
+safety:
+  journal_enabled: true

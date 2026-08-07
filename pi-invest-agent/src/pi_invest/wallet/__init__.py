@@ -292,17 +292,37 @@ class WalletService:
         db: Database,
         cfg: WalletConfig,
         env: EnvSettings,
+        safety: "SafetyGate | None" = None,
     ) -> None:
         self.backend = backend
         self.db = db
         self.cfg = cfg
         self.env = env
+        self.safety = safety
 
     def snapshot(self) -> WalletSnapshot:
         return self.backend.snapshot()
 
     def receive_info(self, asset: str) -> ReceiveAddress:
         return self.backend.receive_address(asset)
+
+    def _usd_value(self, asset: str, amount: float) -> float:
+        mark = DEFAULT_MARKS_USD.get(asset.upper(), 0.0)
+        return amount * mark
+
+    def _assert_can_send(self, asset: str, amount: float) -> None:
+        if self.safety is not None:
+            try:
+                self.safety.assert_send_allowed()
+            except Exception as exc:  # HaltedError
+                raise WalletError(str(exc)) from exc
+        usd = self._usd_value(asset, amount)
+        spent = self.db.outbound_send_usd_today(DEFAULT_MARKS_USD)
+        cap = self.cfg.max_daily_send_usd
+        if spent + usd > cap + 1e-9:
+            raise WalletError(
+                f"daily send limit exceeded: ${spent:.2f} + ${usd:.2f} > ${cap:.2f}"
+            )
 
     def send(
         self,
@@ -312,6 +332,7 @@ class WalletService:
         memo: str = "",
         network: str | None = None,
     ) -> TransferRecord:
+        self._assert_can_send(asset, amount)
         return self.backend.send(asset, amount, to_address, memo=memo, network=network)
 
     def receive(
@@ -321,6 +342,7 @@ class WalletService:
         from_address: str = "external",
         memo: str = "",
     ) -> TransferRecord:
+        # Inbound receives remain allowed during halt
         return self.backend.credit_inbound(asset, amount, from_address, memo)
 
     def history(self, limit: int = 25) -> list[TransferRecord]:
@@ -329,6 +351,7 @@ class WalletService:
     def bridge_to_broker(self, amount_usd: float) -> TransferRecord:
         if amount_usd <= 0:
             raise WalletError("amount must be positive")
+        self._assert_can_send("USD", amount_usd)
         bal = self.db.wallet_balances().get("USD", 0.0)
         if amount_usd > bal + 1e-9:
             raise WalletError(f"insufficient wallet USD ({bal})")
@@ -354,6 +377,11 @@ class WalletService:
     def bridge_from_broker(self, amount_usd: float) -> TransferRecord:
         if amount_usd <= 0:
             raise WalletError("amount must be positive")
+        if self.safety is not None:
+            try:
+                self.safety.assert_send_allowed()
+            except Exception as exc:
+                raise WalletError(str(exc)) from exc
         self.db.ensure_paper_account(0.0)
         cash, _, _ = self.db.load_paper_state()
         if amount_usd > cash + 1e-9:
@@ -376,10 +404,19 @@ class WalletService:
         return record
 
 
-def build_wallet(cfg: AppConfig, env: EnvSettings, db: Database) -> WalletService:
+def build_wallet(
+    cfg: AppConfig,
+    env: EnvSettings,
+    db: Database,
+    safety: "SafetyGate | None" = None,
+) -> WalletService:
+    from pi_invest.safety import SafetyGate
+
     wcfg = cfg.wallet
+    gate = safety or SafetyGate(db)
     if wcfg.backend == "coinbase":
         backend: WalletBackend = CoinbaseWallet(env, wcfg, db)
     else:
         backend = PaperWallet(db, wcfg)
-    return WalletService(backend, db, wcfg, env)
+    return WalletService(backend, db, wcfg, env, safety=gate)
+

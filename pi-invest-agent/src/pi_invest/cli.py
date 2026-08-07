@@ -20,6 +20,10 @@ app.add_typer(wallet_app, name="wallet")
 console = Console()
 
 
+def _boot(config: Optional[str] = None, simulator: bool = False):
+    return build_agent(config_path=config, force_simulator=simulator)
+
+
 @app.command()
 def once(
     dry_run: bool = typer.Option(False, help="Score and plan without placing orders"),
@@ -27,11 +31,12 @@ def once(
     config: Optional[str] = typer.Option(None, help="Path to config.yaml"),
 ) -> None:
     """Run a single research + trade cycle."""
-    agent, cfg, _env, _db, _wallet = build_agent(
-        config_path=config, force_simulator=simulator
-    )
+    agent, cfg, _env, _db, _wallet, safety, _journal = _boot(config, simulator)
+    st = safety.state()
+    halt_note = f"  [red]HALTED[/red] ({st.reason})" if st.halted else ""
     console.print(
-        f"[bold]{cfg.agent.name}[/bold] mode={cfg.agent.mode} backend={cfg.broker.backend}"
+        f"[bold]{cfg.agent.name}[/bold] mode={cfg.agent.mode} "
+        f"backend={cfg.broker.backend}{halt_note}"
     )
     decision = agent.run_cycle(dry_run=dry_run)
     _print_decision(decision)
@@ -43,14 +48,17 @@ def run(
     config: Optional[str] = typer.Option(None, help="Path to config.yaml"),
 ) -> None:
     """Run continuously on the configured interval."""
-    agent, cfg, _env, _db, _wallet = build_agent(
-        config_path=config, force_simulator=simulator
-    )
+    agent, cfg, _env, _db, _wallet, safety, _journal = _boot(config, simulator)
     interval = max(1, cfg.schedule.interval_minutes) * 60
     console.print(
         f"Starting loop every {cfg.schedule.interval_minutes}m "
         f"(mode={cfg.agent.mode}, ctrl+c to stop)"
     )
+    if safety.is_halted():
+        console.print(
+            "[yellow]Agent is HALTED — cycles will plan but not trade/send. "
+            "Use `pi-invest resume` to unlock.[/yellow]"
+        )
     while True:
         try:
             decision = agent.run_cycle(dry_run=False)
@@ -64,10 +72,8 @@ def run(
 def status(
     config: Optional[str] = typer.Option(None, help="Path to config.yaml"),
 ) -> None:
-    """Show portfolio, wallet, and recent decisions."""
-    agent, cfg, _env, db, wallet = build_agent(
-        config_path=config, force_simulator=True
-    )
+    """Show portfolio, wallet, halt state, and recent decisions."""
+    agent, cfg, _env, db, wallet, safety, journal = _boot(config, True)
     marks = {}
     for sym in cfg.universe:
         try:
@@ -75,12 +81,33 @@ def status(
         except Exception:  # noqa: BLE001
             pass
     acct = agent.broker.get_account(marks)
+    st = safety.state()
+
+    if st.halted:
+        console.print(f"[bold red]HALTED[/bold red] — {st.reason or 'kill switch'}")
+    else:
+        console.print("[green]Running[/green] (orders + sends allowed)")
 
     console.print(
         f"[bold]Equity[/bold] ${acct.equity:,.2f}  "
         f"[bold]Cash[/bold] ${acct.cash:,.2f}  "
         f"[bold]Day PnL[/bold] ${acct.day_pnl:,.2f} ({acct.day_pnl_pct:.2%})"
     )
+    summary = journal.summary()
+    if summary.latest_nav is not None:
+        ret = (
+            f"{summary.total_return_pct:.2%}"
+            if summary.total_return_pct is not None
+            else "—"
+        )
+        console.print(
+            f"[bold]NAV[/bold] ${summary.latest_nav:,.2f}  "
+            f"peak ${summary.peak_nav:,.2f}  "
+            f"max DD {summary.max_drawdown_pct:.2%}  "
+            f"return {ret}  "
+            f"({summary.points} journal pts)"
+        )
+
     table = Table(title="Positions")
     table.add_column("Symbol")
     table.add_column("Qty", justify="right")
@@ -111,6 +138,79 @@ def status(
         )
 
 
+@app.command()
+def halt(
+    reason: str = typer.Option("manual halt", "--reason", "-r"),
+    config: Optional[str] = typer.Option(None, help="Path to config.yaml"),
+) -> None:
+    """Freeze brokerage orders and outbound wallet sends."""
+    _agent, _cfg, _env, _db, _wallet, safety, _journal = _boot(config, True)
+    st = safety.halt(reason)
+    console.print(f"[red]HALTED[/red] — {st.reason}")
+    console.print("Inbound receives still work. Use `pi-invest resume` to unlock.")
+
+
+@app.command()
+def resume(
+    config: Optional[str] = typer.Option(None, help="Path to config.yaml"),
+) -> None:
+    """Clear the kill switch so trading and sends can resume."""
+    _agent, _cfg, _env, _db, _wallet, safety, _journal = _boot(config, True)
+    safety.resume()
+    console.print("[green]Resumed[/green] — orders and sends allowed again.")
+
+
+@app.command()
+def journal(
+    limit: int = typer.Option(20, help="Rows to show"),
+    config: Optional[str] = typer.Option(None, help="Path to config.yaml"),
+) -> None:
+    """Show performance journal (NAV, peak, drawdown)."""
+    _agent, _cfg, _env, _db, _wallet, _safety, journal = _boot(config, True)
+    summary = journal.summary()
+    if summary.latest_nav is None:
+        console.print("No journal points yet — run `pi-invest once` first.")
+        return
+    ret = (
+        f"{summary.total_return_pct:.2%}"
+        if summary.total_return_pct is not None
+        else "—"
+    )
+    console.print(
+        f"NAV ${summary.latest_nav:,.2f} · start ${summary.start_nav:,.2f} · "
+        f"peak ${summary.peak_nav:,.2f} · max DD {summary.max_drawdown_pct:.2%} · "
+        f"return {ret}"
+    )
+    table = Table(title="Equity journal")
+    table.add_column("When")
+    table.add_column("NAV", justify="right")
+    table.add_column("Equity", justify="right")
+    table.add_column("Wallet", justify="right")
+    table.add_column("DD", justify="right")
+    table.add_column("Halt")
+    for row in journal.history(limit=limit):
+        table.add_row(
+            row.timestamp.isoformat(),
+            f"{row.total_nav:,.2f}",
+            f"{row.equity:,.2f}",
+            f"{row.wallet_usd:,.2f}",
+            f"{row.drawdown_pct:.2%}",
+            "yes" if row.halted else "",
+        )
+    console.print(table)
+
+
+@app.command("export-journal")
+def export_journal(
+    path: str = typer.Option("data/journal.csv", "--path", "-p"),
+    config: Optional[str] = typer.Option(None, help="Path to config.yaml"),
+) -> None:
+    """Export the performance journal to CSV."""
+    _agent, _cfg, _env, _db, _wallet, _safety, journal = _boot(config, True)
+    out = journal.export_csv(path)
+    console.print(f"Wrote {out}")
+
+
 @app.command("reset-paper")
 def reset_paper(
     config: Optional[str] = typer.Option(None, help="Path to config.yaml"),
@@ -119,9 +219,7 @@ def reset_paper(
     """Wipe the local paper brokerage ledger back to starting cash."""
     if not yes and not typer.confirm("Reset paper brokerage account?"):
         raise typer.Abort()
-    agent, cfg, _env, _db, _wallet = build_agent(
-        config_path=config, force_simulator=True
-    )
+    agent, cfg, _env, _db, _wallet, _safety, _journal = _boot(config, True)
     agent.broker.reset()
     console.print(f"Paper account reset to ${cfg.broker.starting_cash:,.2f}")
 
@@ -129,15 +227,34 @@ def reset_paper(
 @app.command()
 def dashboard(
     config: Optional[str] = typer.Option(None, help="Path to config.yaml"),
+    allow_open: bool = typer.Option(
+        False,
+        "--allow-open",
+        help="Allow unauthenticated dashboard (not recommended on LAN)",
+    ),
 ) -> None:
-    """Start the local status dashboard."""
+    """Start the local status dashboard (HTTP basic auth by default)."""
     import uvicorn
 
     from pi_invest.web.app import create_app
 
-    agent, cfg, _env, db, wallet = build_agent(config_path=config)
-    api = create_app(agent, cfg, db, wallet)
-    console.print(f"Dashboard on http://{cfg.dashboard.host}:{cfg.dashboard.port}")
+    agent, cfg, env, db, wallet, safety, journal = _boot(config)
+    if cfg.dashboard.require_auth and not env.dashboard_password and not allow_open:
+        console.print(
+            "[red]Dashboard auth required.[/red] Set DASHBOARD_PASSWORD in .env "
+            "or pass --allow-open for local testing only."
+        )
+        raise typer.Exit(1)
+
+    api = create_app(agent, cfg, db, wallet, env=env, safety=safety, journal=journal)
+    auth_note = (
+        "auth=off"
+        if allow_open or not env.dashboard_password
+        else f"auth=user:{env.dashboard_username}"
+    )
+    console.print(
+        f"Dashboard on http://{cfg.dashboard.host}:{cfg.dashboard.port} ({auth_note})"
+    )
     uvicorn.run(api, host=cfg.dashboard.host, port=cfg.dashboard.port, log_level="info")
 
 
@@ -146,9 +263,7 @@ def wallet_balances(
     config: Optional[str] = typer.Option(None, help="Path to config.yaml"),
 ) -> None:
     """Show USD + crypto wallet balances and receive addresses."""
-    _agent, _cfg, _env, _db, wallet = build_agent(
-        config_path=config, force_simulator=True
-    )
+    _a, _c, _e, _d, wallet, _s, _j = _boot(config, True)
     _print_wallet(wallet.snapshot())
 
 
@@ -158,9 +273,7 @@ def wallet_receive_address(
     config: Optional[str] = typer.Option(None, help="Path to config.yaml"),
 ) -> None:
     """Show the address/account id others can send to."""
-    _agent, _cfg, _env, _db, wallet = build_agent(
-        config_path=config, force_simulator=True
-    )
+    _a, _c, _e, _d, wallet, _s, _j = _boot(config, True)
     try:
         info = wallet.receive_info(asset)
     except WalletError as exc:
@@ -184,9 +297,7 @@ def wallet_send(
     config: Optional[str] = typer.Option(None, help="Path to config.yaml"),
 ) -> None:
     """Send USD or cryptocurrency from the wallet."""
-    _agent, _cfg, _env, _db, wallet = build_agent(
-        config_path=config, force_simulator=True
-    )
+    _a, _c, _e, _d, wallet, _s, _j = _boot(config, True)
     try:
         record = wallet.send(asset, amount, to, memo=memo)
     except WalletError as exc:
@@ -207,9 +318,7 @@ def wallet_credit(
     config: Optional[str] = typer.Option(None, help="Path to config.yaml"),
 ) -> None:
     """Credit an inbound payment (paper receive / webhook stand-in)."""
-    _agent, _cfg, _env, _db, wallet = build_agent(
-        config_path=config, force_simulator=True
-    )
+    _a, _c, _e, _d, wallet, _s, _j = _boot(config, True)
     try:
         record = wallet.receive(asset, amount, from_address=frm, memo=memo)
     except WalletError as exc:
@@ -227,9 +336,7 @@ def wallet_history(
     config: Optional[str] = typer.Option(None, help="Path to config.yaml"),
 ) -> None:
     """Show recent wallet transfers."""
-    _agent, _cfg, _env, _db, wallet = build_agent(
-        config_path=config, force_simulator=True
-    )
+    _a, _c, _e, _d, wallet, _s, _j = _boot(config, True)
     rows = wallet.history(limit=limit)
     table = Table(title="Transfers")
     table.add_column("When")
@@ -256,14 +363,11 @@ def wallet_bridge_to_broker(
     config: Optional[str] = typer.Option(None, help="Path to config.yaml"),
 ) -> None:
     """Move USD from wallet treasury into paper brokerage cash."""
-    _agent, cfg, _env, _db, wallet = build_agent(
-        config_path=config, force_simulator=True
-    )
-    # Ensure brokerage account exists
+    _a, cfg, _e, db, wallet, _s, _j = _boot(config, True)
     from pi_invest.broker import PaperBroker
 
     if cfg.broker.backend == "paper":
-        PaperBroker(_db, cfg.broker.starting_cash)
+        PaperBroker(db, cfg.broker.starting_cash)
     try:
         record = wallet.bridge_to_broker(amount)
     except WalletError as exc:
@@ -278,13 +382,11 @@ def wallet_bridge_from_broker(
     config: Optional[str] = typer.Option(None, help="Path to config.yaml"),
 ) -> None:
     """Move USD from paper brokerage cash into wallet treasury."""
-    _agent, cfg, _env, _db, wallet = build_agent(
-        config_path=config, force_simulator=True
-    )
+    _a, cfg, _e, db, wallet, _s, _j = _boot(config, True)
     from pi_invest.broker import PaperBroker
 
     if cfg.broker.backend == "paper":
-        PaperBroker(_db, cfg.broker.starting_cash)
+        PaperBroker(db, cfg.broker.starting_cash)
     try:
         record = wallet.bridge_from_broker(amount)
     except WalletError as exc:
@@ -307,7 +409,9 @@ def _print_wallet(snap) -> None:
         addr = snap.addresses.get(b.asset)
         table.add_row(
             b.asset,
-            f"{b.amount:.8f}".rstrip("0").rstrip(".") if b.asset != "USD" else f"{b.amount:.2f}",
+            f"{b.amount:.8f}".rstrip("0").rstrip(".")
+            if b.asset != "USD"
+            else f"{b.amount:.2f}",
             f"${b.usd_value:,.2f}",
             addr.address if addr else "—",
         )
@@ -316,10 +420,12 @@ def _print_wallet(snap) -> None:
 
 def _print_decision(decision) -> None:
     console.print(f"\n[bold]Cycle[/bold] {decision.cycle_id[:8]}…")
+    halted = decision.meta.get("halted")
     console.print(
         f"market_open={decision.market_open}  "
         f"data={decision.meta.get('data_source')}  "
-        f"mode={decision.meta.get('mode')}"
+        f"mode={decision.meta.get('mode')}  "
+        f"halted={halted}"
     )
     score_table = Table(title="Income scores")
     score_table.add_column("Symbol")

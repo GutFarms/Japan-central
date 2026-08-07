@@ -170,3 +170,37 @@ class WalletSnapshot(BaseModel):
     addresses: dict[str, ReceiveAddress] = Field(default_factory=dict)
     total_usd_estimate: float = 0.0
     meta: dict[str, Any] = Field(default_factory=dict)
+
+
+class HaltState(BaseModel):
+    halted: bool = False
+    reason: str = ""
+    updated_at: datetime | None = None
+
+
+class EquitySnapshot(BaseModel):
+    snapshot_id: str
+    timestamp: datetime = Field(default_factory=utcnow)
+    equity: float
+    cash: float
+    wallet_usd: float
+    total_nav: float
+    day_pnl: float = 0.0
+    day_pnl_pct: float = 0.0
+    peak_nav: float = 0.0
+    drawdown_pct: float = 0.0
+    halted: bool = False
+    cycle_id: str | None = None
+
+
+class JournalSummary(BaseModel):
+    points: int = 0
+    start_nav: float | None = None
+    latest_nav: float | None = None
+    peak_nav: float | None = None
+    max_drawdown_pct: float = 0.0
+    total_return_pct: float | None = None
+    latest: EquitySnapshot | None = None
+    halted: bool = False
+    halt_reason: str = ""
+

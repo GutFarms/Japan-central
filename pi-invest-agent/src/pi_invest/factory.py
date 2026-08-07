@@ -6,6 +6,8 @@ from pi_invest.agent import InvestAgent
 from pi_invest.broker import build_broker
 from pi_invest.config import AppConfig, EnvSettings, load_config, load_env
 from pi_invest.data import build_market_data
+from pi_invest.journal import PerformanceJournal
+from pi_invest.safety import SafetyGate
 from pi_invest.storage.db import Database
 from pi_invest.wallet import WalletService, build_wallet
 
@@ -17,7 +19,9 @@ def project_root() -> Path:
 def build_agent(
     config_path: str | None = None,
     force_simulator: bool = False,
-) -> tuple[InvestAgent, AppConfig, EnvSettings, Database, WalletService]:
+) -> tuple[
+    InvestAgent, AppConfig, EnvSettings, Database, WalletService, SafetyGate, PerformanceJournal
+]:
     root = project_root()
     env = load_env()
 
@@ -35,12 +39,24 @@ def build_agent(
         db_path = root / db_path
     db = Database(db_path)
 
+    safety = SafetyGate(db)
+    journal = PerformanceJournal(db, safety)
+
     provider = "simulator" if force_simulator else cfg.market.provider
     market = build_market_data(
         provider=provider,
         allow_simulator_fallback=cfg.agent.allow_simulator_fallback,
     )
     broker = build_broker(cfg, env, db)
-    agent = InvestAgent(cfg, env, market, broker, db)
-    wallet = build_wallet(cfg, env, db)
-    return agent, cfg, env, db, wallet
+    wallet = build_wallet(cfg, env, db, safety=safety)
+    agent = InvestAgent(
+        cfg,
+        env,
+        market,
+        broker,
+        db,
+        safety=safety,
+        journal=journal,
+        wallet=wallet,
+    )
+    return agent, cfg, env, db, wallet, safety, journal

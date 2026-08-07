@@ -21,6 +21,9 @@ It scores tickers for expected income (dividends + capital appreciation signals)
 | Live unlock | Off (`ALLOW_LIVE_TRADING=false`) |
 | Wallet transfers | Paper simulation (`wallet.backend: paper`) |
 | Live transfers unlock | Off (`ALLOW_LIVE_TRANSFERS=false`) |
+| Kill switch | `pi-invest halt` freezes orders + outbound sends |
+| Daily send cap | `$250` USD-equivalent (configurable) |
+| Dashboard auth | HTTP basic auth when `DASHBOARD_PASSWORD` is set |
 | Max position | 15% of equity |
 | Max daily loss | 3% of equity |
 | Cash reserve | 10% kept uninvested |
@@ -96,6 +99,12 @@ pi-invest wallet send USD --amount 25 --to usd:friend:abc123
 pi-invest wallet history
 pi-invest wallet bridge-to-broker --amount 100    # wallet USD → brokerage cash
 pi-invest wallet bridge-from-broker --amount 50   # brokerage cash → wallet USD
+
+# Safety + performance
+pi-invest halt --reason "stepping away"
+pi-invest resume
+pi-invest journal
+pi-invest export-journal --path data/journal.csv
 ```
 
 ## Config
