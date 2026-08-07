@@ -21,10 +21,13 @@ dependencies = [
   "fastapi>=0.111",
   "uvicorn[standard]>=0.30",
   "python-dotenv>=1.0",
+  "PyJWT>=2.8",
+  "cryptography>=42.0",
 ]
 
 [project.optional-dependencies]
 dev = ["pytest>=8.2", "pytest-asyncio>=0.23"]
+coinbase = ["PyJWT>=2.8", "cryptography>=42.0"]
 
 [project.scripts]
 pi-invest = "pi_invest.cli:app"

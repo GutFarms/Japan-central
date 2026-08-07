@@ -53,6 +53,8 @@ dashboard:
 
 wallet:
   backend: paper                 # paper | coinbase
+  # For coinbase: set COINBASE_API_KEY + COINBASE_API_SECRET (ECDSA PEM).
+  # Live sends also need ALLOW_LIVE_TRANSFERS=true.
   assets: [USD, USDC, BTC, ETH]
   starting_balances:
     USD: 1000.0

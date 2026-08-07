@@ -33,9 +33,22 @@ It scores tickers for expected income (dividends + capital appreciation signals)
 
 A separate treasury from the brokerage book supports **send** and **receive** for USD and cryptocurrencies (BTC, ETH, USDC by default).
 
-- Paper mode generates stable local receive addresses (`usd:piinvest:…`, `paper-btc-…`, `0xpaper…`) and simulates inbound/outbound transfers.
+- Paper mode generates stable local receive addresses and simulates inbound/outbound transfers.
 - Bridge commands move USD between the wallet and paper brokerage cash.
-- Coinbase backend is an optional shell; live withdrawals are not auto-fired — set `ALLOW_LIVE_TRANSFERS=true` only if you extend the adapter for your exchange API.
+- **Coinbase App** connection (CDP ECDSA API keys) for live balances, receive addresses, and gated sends.
+
+```bash
+# 1) Create a Coinbase App API key at https://portal.cdp.coinbase.com/
+#    Signature algorithm: ECDSA (required). Scopes: view (+ transfer to send).
+# 2) Put key name + PEM secret in .env (see .env.example)
+# 3) Test:
+pi-invest coinbase status
+pi-invest coinbase address BTC
+
+# 4) Switch the agent wallet to Coinbase in config/config.yaml:
+#    wallet.backend: coinbase
+# 5) Live sends still require ALLOW_LIVE_TRANSFERS=true
+```
 
 > This is software for experimentation. It is **not** financial advice. Automated trading and transfers can lose money. Start in paper mode and only unlock live capital if you understand the risks.
 

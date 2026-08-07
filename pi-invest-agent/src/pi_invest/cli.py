@@ -17,6 +17,8 @@ app = typer.Typer(
 )
 wallet_app = typer.Typer(help="Send/receive USD and cryptocurrency")
 app.add_typer(wallet_app, name="wallet")
+coinbase_app = typer.Typer(help="Coinbase App connection (CDP API keys)")
+app.add_typer(coinbase_app, name="coinbase")
 console = Console()
 
 
@@ -393,6 +395,77 @@ def wallet_bridge_from_broker(
         console.print(f"[red]{exc}[/red]")
         raise typer.Exit(1) from exc
     console.print(f"[green]bridged[/green] ${record.amount:.2f} brokerage → wallet")
+
+
+@coinbase_app.command("status")
+def coinbase_status(
+    config: Optional[str] = typer.Option(None, help="Path to config.yaml"),
+) -> None:
+    """Test Coinbase CDP credentials and show live balances."""
+    from pi_invest.wallet.coinbase_client import CoinbaseAPIError, CoinbaseClient
+
+    _a, cfg, env, _d, wallet, _s, _j = _boot(config, True)
+    if not env.coinbase_api_key or not env.coinbase_api_secret:
+        console.print(
+            "[red]Missing credentials.[/red] Set COINBASE_API_KEY and "
+            "COINBASE_API_SECRET in .env (CDP key name + ECDSA PEM)."
+        )
+        raise typer.Exit(1)
+    try:
+        client = CoinbaseClient(env)
+        ping = client.ping()
+        accounts = client.list_app_accounts()
+    except CoinbaseAPIError as exc:
+        console.print(f"[red]Coinbase connection failed:[/red] {exc}")
+        raise typer.Exit(1) from exc
+
+    console.print(
+        f"[green]Connected[/green] to Coinbase "
+        f"(advanced_trade_sample_accounts={ping.get('advanced_trade_accounts')})"
+    )
+    console.print(
+        f"wallet.backend={cfg.wallet.backend}  "
+        f"ALLOW_LIVE_TRANSFERS={env.allow_live_transfers}"
+    )
+    table = Table(title="Coinbase App accounts")
+    table.add_column("Currency")
+    table.add_column("Name")
+    table.add_column("Balance", justify="right")
+    table.add_column("Account id")
+    for a in accounts:
+        if a.balance == 0 and a.currency not in {x.upper() for x in cfg.wallet.assets}:
+            continue
+        table.add_row(a.currency, a.name, f"{a.balance}", a.id[:8] + "…")
+    console.print(table)
+    if cfg.wallet.backend != "coinbase":
+        console.print(
+            "[dim]Tip: set wallet.backend: coinbase in config.yaml to use these "
+            "balances in the agent wallet.[/dim]"
+        )
+    elif isinstance(wallet.backend, object):
+        from pi_invest.wallet import CoinbaseWallet
+
+        if isinstance(wallet.backend, CoinbaseWallet):
+            console.print("[dim]Agent wallet is live-backed by Coinbase.[/dim]")
+
+
+@coinbase_app.command("address")
+def coinbase_address(
+    asset: str = typer.Argument(..., help="Asset, e.g. BTC ETH USDC"),
+    config: Optional[str] = typer.Option(None, help="Path to config.yaml"),
+) -> None:
+    """Fetch or create a Coinbase receive address for an asset."""
+    from pi_invest.wallet.coinbase_client import CoinbaseAPIError, CoinbaseClient
+
+    _a, _c, env, _d, _w, _s, _j = _boot(config, True)
+    try:
+        client = CoinbaseClient(env)
+        addr = client.get_or_create_receive_address(asset.upper())
+    except CoinbaseAPIError as exc:
+        console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(1) from exc
+    console.print(f"[bold]{asset.upper()}[/bold] network={addr.network}")
+    console.print(f"Receive: [green]{addr.address}[/green]")
 
 
 def _print_wallet(snap) -> None:

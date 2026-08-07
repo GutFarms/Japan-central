@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import hashlib
-import hmac
 import secrets
 import uuid
 from abc import ABC, abstractmethod
@@ -16,6 +15,7 @@ from pi_invest.models import (
     WalletSnapshot,
 )
 from pi_invest.storage.db import Database
+from pi_invest.wallet.coinbase_client import CoinbaseAPIError, CoinbaseClient
 
 
 # Approximate USD marks for paper display
@@ -213,48 +213,94 @@ class PaperWallet(WalletBackend):
 
 class CoinbaseWallet(WalletBackend):
     """
-    Optional live-capable wallet shell.
+    Live Coinbase App connection via CDP JWT.
 
-    Requires COINBASE_API_KEY / COINBASE_API_SECRET and ALLOW_LIVE_TRANSFERS=true.
-    Automatic live withdrawals are disabled by design — extend send() for your
-    exchange withdrawal API. Balances/history use the local mirror so the Pi
-    stays usable.
+    - Read (balances, receive addresses): needs COINBASE_API_KEY + SECRET
+    - Send: also needs ALLOW_LIVE_TRANSFERS=true (and safety gate / daily caps)
     """
 
     def __init__(self, env: EnvSettings, cfg: WalletConfig, db: Database) -> None:
-        if not env.allow_live_transfers:
-            raise WalletError(
-                "Live wallet backend requires ALLOW_LIVE_TRANSFERS=true"
-            )
         if not env.coinbase_api_key or not env.coinbase_api_secret:
-            raise WalletError("Coinbase API key/secret required for live wallet")
+            raise WalletError(
+                "Coinbase backend requires COINBASE_API_KEY and COINBASE_API_SECRET"
+            )
         self.env = env
         self.cfg = cfg
         self.db = db
+        self.client = CoinbaseClient(env)
+        # Keep a local mirror for history / offline fallback notes
         self._paper = PaperWallet(db, cfg)
+        self._account_cache: dict[str, str] = {}
 
-    def _sign(self, timestamp: str, method: str, path: str, body: str = "") -> str:
-        message = f"{timestamp}{method}{path}{body}".encode()
-        try:
-            import base64
-
-            key = base64.b64decode(self.env.coinbase_api_secret)
-        except Exception:  # noqa: BLE001
-            key = self.env.coinbase_api_secret.encode()
-        return hmac.new(key, message, hashlib.sha256).hexdigest()
+    def ping(self) -> dict:
+        return self.client.ping()
 
     def snapshot(self) -> WalletSnapshot:
-        snap = self._paper.snapshot()
-        snap.backend = "coinbase"
-        snap.meta = {
-            "note": "live keys present; balances mirrored locally until withdrawal API wired"
-        }
-        return snap
+        try:
+            accounts = self.client.list_app_accounts()
+        except CoinbaseAPIError as exc:
+            snap = self._paper.snapshot()
+            snap.backend = "coinbase-error"
+            snap.meta = {"error": str(exc)}
+            return snap
+
+        wanted = {a.upper() for a in self.cfg.assets}
+        balances: list[AssetBalance] = []
+        addresses: dict[str, ReceiveAddress] = {}
+        by_ccy: dict[str, float] = {}
+        for acct in accounts:
+            if wanted and acct.currency not in wanted:
+                # Always include USD if present even if not listed? stick to config
+                continue
+            by_ccy[acct.currency] = by_ccy.get(acct.currency, 0.0) + acct.balance
+            self._account_cache[acct.currency] = acct.id
+
+        for asset in self.cfg.assets:
+            ccy = asset.upper()
+            amount = by_ccy.get(ccy, 0.0)
+            balances.append(
+                AssetBalance(
+                    asset=ccy,
+                    amount=amount,
+                    available=amount,
+                    usd_mark=DEFAULT_MARKS_USD.get(ccy, 0.0),
+                )
+            )
+            # Prefer cached receive address from DB, else fetch lazily on demand
+            try:
+                local = self.db.get_or_create_address(
+                    ccy,
+                    _paper_address(ccy, _device_suffix(str(self.db.path)), "coinbase"),
+                    self.cfg.networks.get(ccy, "coinbase"),
+                )
+                # If we previously stored a real address, use it
+                if local.address and not local.address.startswith(
+                    ("paper-", "0xpaper", "usd:piinvest:")
+                ):
+                    addresses[ccy] = local
+            except Exception:  # noqa: BLE001
+                pass
+
+        total = sum(b.amount * (b.usd_mark or 0.0) for b in balances)
+        return WalletSnapshot(
+            backend="coinbase",
+            balances=balances,
+            addresses=addresses,
+            total_usd_estimate=round(total, 2),
+            meta={
+                "accounts_seen": len(accounts),
+                "live_transfers": self.env.allow_live_transfers,
+            },
+        )
 
     def receive_address(self, asset: str, network: str | None = None) -> ReceiveAddress:
-        addr = self._paper.receive_address(asset, network)
-        addr.network = f"coinbase:{addr.network}"
-        return addr
+        asset = asset.upper()
+        try:
+            cb_addr = self.client.get_or_create_receive_address(asset)
+        except CoinbaseAPIError as exc:
+            raise WalletError(str(exc)) from exc
+        net = network or cb_addr.network or self.cfg.networks.get(asset, "coinbase")
+        return self.db.upsert_wallet_address(asset, cb_addr.address, net)
 
     def send(
         self,
@@ -264,11 +310,49 @@ class CoinbaseWallet(WalletBackend):
         memo: str = "",
         network: str | None = None,
     ) -> TransferRecord:
-        raise WalletError(
-            "Live Coinbase withdrawals are intentionally not auto-fired from this "
-            "agent. Use backend=paper for simulated sends, or extend "
-            "CoinbaseWallet.send with your account's withdrawal API."
+        if not self.env.allow_live_transfers:
+            raise WalletError(
+                "Live Coinbase sends require ALLOW_LIVE_TRANSFERS=true in .env"
+            )
+        asset = asset.upper()
+        if amount <= 0:
+            raise WalletError("amount must be positive")
+        if not to_address.strip():
+            raise WalletError("destination required")
+        try:
+            raw = self.client.send_money(
+                asset,
+                amount,
+                to_address.strip(),
+                description=memo,
+                network=network,
+                destination_tag=memo if memo and asset in {"XRP", "XLM", "HBAR"} else None,
+            )
+        except CoinbaseAPIError as exc:
+            raise WalletError(str(exc)) from exc
+
+        tx_id = str(raw.get("id") or raw.get("resource_path") or secrets.token_hex(8))
+        status_raw = str(raw.get("status") or "pending").lower()
+        status = (
+            TransferStatus.COMPLETED
+            if status_raw in {"completed", "complete"}
+            else TransferStatus.PENDING
         )
+        record = TransferRecord(
+            transfer_id=str(uuid.uuid4()),
+            direction=TransferDirection.SEND,
+            asset=asset,
+            amount=amount,
+            fee=0.0,
+            counterparty=to_address.strip(),
+            network=network or self.cfg.networks.get(asset, "coinbase"),
+            status=status,
+            memo=memo,
+            paper=False,
+            tx_ref=tx_id,
+        )
+        self.db.save_transfer(record)
+        return record
 
     def credit_inbound(
         self,
@@ -277,10 +361,12 @@ class CoinbaseWallet(WalletBackend):
         from_address: str = "external",
         memo: str = "",
     ) -> TransferRecord:
+        # Live inbound is detected on Coinbase; local credit is bookkeeping only
         return self._paper.credit_inbound(asset, amount, from_address, memo)
 
     def history(self, limit: int = 25) -> list[TransferRecord]:
-        return self._paper.history(limit=limit)
+        # Prefer local log (includes paper + live sends we initiated)
+        return self.db.list_transfers(limit=limit)
 
 
 class WalletService:

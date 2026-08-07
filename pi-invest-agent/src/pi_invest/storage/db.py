@@ -380,6 +380,23 @@ class Database:
                 memo_tag=row["memo_tag"],
             )
 
+    def upsert_wallet_address(
+        self, asset: str, address: str, network: str
+    ) -> ReceiveAddress:
+        asset = asset.upper()
+        with self._connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO wallet_addresses (asset, address, network, memo_tag)
+                VALUES (?, ?, ?, NULL)
+                ON CONFLICT(asset) DO UPDATE SET
+                  address=excluded.address,
+                  network=excluded.network
+                """,
+                (asset, address, network),
+            )
+        return ReceiveAddress(asset=asset, address=address, network=network)
+
     def save_transfer(self, record: TransferRecord) -> None:
         with self._connect() as conn:
             conn.execute(
