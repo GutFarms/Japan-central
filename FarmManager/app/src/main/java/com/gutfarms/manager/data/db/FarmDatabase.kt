@@ -9,6 +9,7 @@ import androidx.room.TypeConverters
 import com.gutfarms.manager.data.dao.AnimalArrivalDao
 import com.gutfarms.manager.data.dao.AnimalDao
 import com.gutfarms.manager.data.dao.BreedingScheduleDao
+import com.gutfarms.manager.data.dao.FarmProfileDao
 import com.gutfarms.manager.data.dao.FeedingScheduleDao
 import com.gutfarms.manager.data.dao.TransactionDao
 import com.gutfarms.manager.data.model.Animal
@@ -19,6 +20,7 @@ import com.gutfarms.manager.data.model.BreedingMethod
 import com.gutfarms.manager.data.model.BreedingSchedule
 import com.gutfarms.manager.data.model.BreedingStatus
 import com.gutfarms.manager.data.model.ExpenseCategory
+import com.gutfarms.manager.data.model.FarmProfile
 import com.gutfarms.manager.data.model.FarmTransaction
 import com.gutfarms.manager.data.model.FeedFrequency
 import com.gutfarms.manager.data.model.FeedingSchedule
@@ -64,9 +66,10 @@ class Converters {
         FeedingSchedule::class,
         BreedingSchedule::class,
         AnimalArrival::class,
-        FarmTransaction::class
+        FarmTransaction::class,
+        FarmProfile::class
     ],
-    version = 3,
+    version = 4,
     exportSchema = false
 )
 @TypeConverters(Converters::class)
@@ -76,6 +79,7 @@ abstract class FarmDatabase : RoomDatabase() {
     abstract fun breedingScheduleDao(): BreedingScheduleDao
     abstract fun animalArrivalDao(): AnimalArrivalDao
     abstract fun transactionDao(): TransactionDao
+    abstract fun farmProfileDao(): FarmProfileDao
 
     companion object {
         @Volatile private var INSTANCE: FarmDatabase? = null
@@ -95,7 +99,14 @@ abstract class FarmDatabase : RoomDatabase() {
     }
 }
 
+suspend fun ensureFarmProfile(database: FarmDatabase) {
+    if (database.farmProfileDao().get() == null) {
+        database.farmProfileDao().upsert(FarmProfile(farmName = "Gut Farms"))
+    }
+}
+
 suspend fun seedSampleDataIfEmpty(database: FarmDatabase) {
+    ensureFarmProfile(database)
     val animals = database.openHelper.readableDatabase.query("SELECT COUNT(*) FROM animals").use { cursor ->
         cursor.moveToFirst()
         cursor.getInt(0)

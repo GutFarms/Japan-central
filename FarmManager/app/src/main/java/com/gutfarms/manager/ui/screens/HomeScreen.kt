@@ -17,8 +17,11 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -52,23 +55,28 @@ import kotlinx.coroutines.flow.StateFlow
 
 @Composable
 fun HomeScreen(
+    farmName: StateFlow<String>,
     animals: StateFlow<List<Animal>>,
     schedules: StateFlow<List<FeedingScheduleWithAnimal>>,
     breedingSchedules: StateFlow<List<BreedingScheduleWithAnimal>>,
     arrivals: StateFlow<List<AnimalArrivalWithGroup>>,
     profitSummary: StateFlow<ProfitSummary>,
+    onUpdateFarmName: (String) -> Unit,
     onOpenAnimals: () -> Unit,
     onOpenArrivals: () -> Unit,
     onOpenFeeding: () -> Unit,
     onOpenBreeding: () -> Unit,
     onOpenProfits: () -> Unit
 ) {
+    val brand by farmName.collectAsState()
     val animalList by animals.collectAsState()
     val scheduleList by schedules.collectAsState()
     val breedingList by breedingSchedules.collectAsState()
     val arrivalList by arrivals.collectAsState()
     val profit by profitSummary.collectAsState()
     var visible by remember { mutableStateOf(false) }
+    var showRename by remember { mutableStateOf(false) }
+    var draftName by remember { mutableStateOf(brand) }
 
     LaunchedEffect(Unit) {
         delay(80)
@@ -96,9 +104,13 @@ fun HomeScreen(
             .verticalScroll(rememberScrollState())
     ) {
         ScreenHeader(
-            brand = "Gut Farms",
+            brand = brand,
             title = "Farm management at a glance",
-            subtitle = "Track livestock, arrivals, feeding, breeding, and margins."
+            subtitle = "Track livestock, arrivals, feeding, breeding, and margins.",
+            onBrandClick = {
+                draftName = brand
+                showRename = true
+            }
         )
 
         AnimatedVisibility(
@@ -276,6 +288,34 @@ fun HomeScreen(
                 Spacer(Modifier.height(12.dp))
             }
         }
+    }
+
+    if (showRename) {
+        AlertDialog(
+            onDismissRequest = { showRename = false },
+            title = { Text("Farm name") },
+            text = {
+                OutlinedTextField(
+                    value = draftName,
+                    onValueChange = { draftName = it },
+                    label = { Text("Name") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth()
+                )
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        onUpdateFarmName(draftName)
+                        showRename = false
+                    },
+                    enabled = draftName.isNotBlank()
+                ) { Text("Save") }
+            },
+            dismissButton = {
+                TextButton(onClick = { showRename = false }) { Text("Cancel") }
+            }
+        )
     }
 }
 

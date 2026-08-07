@@ -19,6 +19,10 @@ import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 
 class FarmViewModel(private val repository: FarmRepository) : ViewModel() {
+    val farmName: StateFlow<String> = repository.farmName.stateIn(
+        viewModelScope, SharingStarted.WhileSubscribed(5_000), "Gut Farms"
+    )
+
     val animals: StateFlow<List<Animal>> = repository.animals.stateIn(
         viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList()
     )
@@ -45,6 +49,9 @@ class FarmViewModel(private val repository: FarmRepository) : ViewModel() {
         SharingStarted.WhileSubscribed(5_000),
         ProfitSummary(0.0, 0.0, 0.0, 0.0, 0.0)
     )
+
+    fun updateFarmName(name: String) =
+        viewModelScope.launch { repository.updateFarmName(name) }
 
     fun saveAnimal(animal: Animal) = viewModelScope.launch { repository.saveAnimal(animal) }
     fun deleteAnimal(animal: Animal) = viewModelScope.launch { repository.deleteAnimal(animal) }

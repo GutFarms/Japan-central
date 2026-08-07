@@ -64,12 +64,14 @@ import kotlinx.coroutines.flow.StateFlow
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun BreedingScreen(
+    farmName: StateFlow<String>,
     animals: StateFlow<List<Animal>>,
     breedingSchedules: StateFlow<List<BreedingScheduleWithAnimal>>,
     onSave: (BreedingSchedule) -> Unit,
     onDelete: (BreedingSchedule) -> Unit,
     onToggle: (BreedingSchedule) -> Unit
 ) {
+    val brand by farmName.collectAsState()
     val animalList by animals.collectAsState()
     val scheduleList by breedingSchedules.collectAsState()
     var showSheet by remember { mutableStateOf(false) }
@@ -102,7 +104,7 @@ fun BreedingScreen(
                 .background(Brush.verticalGradient(listOf(CreamLeaf, Mist)))
         ) {
             ScreenHeader(
-                brand = "Gut Farms",
+                brand = brand,
                 title = "Breeding schedules",
                 subtitle = "Plan matings and track expected due dates."
             )

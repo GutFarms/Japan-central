@@ -63,12 +63,14 @@ import kotlinx.coroutines.flow.StateFlow
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ArrivalsScreen(
+    farmName: StateFlow<String>,
     animals: StateFlow<List<Animal>>,
     arrivals: StateFlow<List<AnimalArrivalWithGroup>>,
     onSave: (AnimalArrival) -> Unit,
     onDelete: (AnimalArrival) -> Unit,
     onBack: (() -> Unit)? = null
 ) {
+    val brand by farmName.collectAsState()
     val animalList by animals.collectAsState()
     val arrivalList by arrivals.collectAsState()
     var showSheet by remember { mutableStateOf(false) }
@@ -117,7 +119,7 @@ fun ArrivalsScreen(
                 }
             }
             ScreenHeader(
-                brand = "Gut Farms",
+                brand = brand,
                 title = "New animal arrivals",
                 subtitle = "Record acquire or birth date, registration, and name."
             )

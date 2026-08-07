@@ -35,11 +35,13 @@ fun FarmNavHost(
     ) {
         composable(Routes.HOME) {
             HomeScreen(
+                farmName = viewModel.farmName,
                 animals = viewModel.animals,
                 schedules = viewModel.schedules,
                 breedingSchedules = viewModel.breedingSchedules,
                 arrivals = viewModel.arrivals,
                 profitSummary = viewModel.profitSummary,
+                onUpdateFarmName = viewModel::updateFarmName,
                 onOpenAnimals = { navController.navigate(Routes.ANIMALS) },
                 onOpenArrivals = { navController.navigate(Routes.ARRIVALS) },
                 onOpenFeeding = { navController.navigate(Routes.FEEDING) },
@@ -49,6 +51,7 @@ fun FarmNavHost(
         }
         composable(Routes.ANIMALS) {
             AnimalsScreen(
+                farmName = viewModel.farmName,
                 animals = viewModel.animals,
                 onSave = viewModel::saveAnimal,
                 onDelete = viewModel::deleteAnimal,
@@ -57,6 +60,7 @@ fun FarmNavHost(
         }
         composable(Routes.ARRIVALS) {
             ArrivalsScreen(
+                farmName = viewModel.farmName,
                 animals = viewModel.animals,
                 arrivals = viewModel.arrivals,
                 onSave = viewModel::saveArrival,
@@ -66,6 +70,7 @@ fun FarmNavHost(
         }
         composable(Routes.FEEDING) {
             FeedingScreen(
+                farmName = viewModel.farmName,
                 animals = viewModel.animals,
                 schedules = viewModel.schedules,
                 onSave = viewModel::saveSchedule,
@@ -75,6 +80,7 @@ fun FarmNavHost(
         }
         composable(Routes.BREEDING) {
             BreedingScreen(
+                farmName = viewModel.farmName,
                 animals = viewModel.animals,
                 breedingSchedules = viewModel.breedingSchedules,
                 onSave = viewModel::saveBreeding,
@@ -84,6 +90,7 @@ fun FarmNavHost(
         }
         composable(Routes.PROFITS) {
             ProfitsScreen(
+                farmName = viewModel.farmName,
                 profitSummary = viewModel.profitSummary,
                 transactions = viewModel.transactions,
                 onSave = viewModel::saveTransaction,

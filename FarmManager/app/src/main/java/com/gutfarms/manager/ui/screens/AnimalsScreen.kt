@@ -56,11 +56,13 @@ import kotlinx.coroutines.flow.StateFlow
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun AnimalsScreen(
+    farmName: StateFlow<String>,
     animals: StateFlow<List<Animal>>,
     onSave: (Animal) -> Unit,
     onDelete: (Animal) -> Unit,
     onOpenArrivals: () -> Unit = {}
 ) {
+    val brand by farmName.collectAsState()
     val list by animals.collectAsState()
     var showSheet by remember { mutableStateOf(false) }
     var editing by remember { mutableStateOf<Animal?>(null) }
@@ -85,7 +87,7 @@ fun AnimalsScreen(
                 .background(Brush.verticalGradient(listOf(CreamLeaf, Mist)))
         ) {
             ScreenHeader(
-                brand = "Gut Farms",
+                brand = brand,
                 title = "Livestock",
                 subtitle = "Groups and herds across the farm."
             )

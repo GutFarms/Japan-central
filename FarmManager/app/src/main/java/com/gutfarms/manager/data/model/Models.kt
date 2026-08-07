@@ -255,3 +255,9 @@ data class AnimalArrivalWithGroup(
     val arrival: AnimalArrival,
     val groupName: String?
 )
+
+@Entity(tableName = "farm_profile")
+data class FarmProfile(
+    @PrimaryKey val id: Int = 1,
+    val farmName: String = "Gut Farms"
+)

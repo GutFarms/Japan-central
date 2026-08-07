@@ -70,11 +70,13 @@ import kotlin.math.min
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ProfitsScreen(
+    farmName: StateFlow<String>,
     profitSummary: StateFlow<ProfitSummary>,
     transactions: StateFlow<List<FarmTransaction>>,
     onSave: (FarmTransaction) -> Unit,
     onDelete: (FarmTransaction) -> Unit
 ) {
+    val brand by farmName.collectAsState()
     val profit by profitSummary.collectAsState()
     val list by transactions.collectAsState()
     var showSheet by remember { mutableStateOf(false) }
@@ -100,7 +102,7 @@ fun ProfitsScreen(
                 .background(Brush.verticalGradient(listOf(CreamLeaf, Mist)))
         ) {
             ScreenHeader(
-                brand = "Gut Farms",
+                brand = brand,
                 title = "Profit margins",
                 subtitle = "Income, expenses, and projected feed costs."
             )

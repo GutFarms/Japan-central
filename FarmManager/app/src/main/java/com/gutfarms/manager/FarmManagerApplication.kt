@@ -23,7 +23,8 @@ class FarmManagerApplication : Application() {
             feedingScheduleDao = database.feedingScheduleDao(),
             breedingScheduleDao = database.breedingScheduleDao(),
             animalArrivalDao = database.animalArrivalDao(),
-            transactionDao = database.transactionDao()
+            transactionDao = database.transactionDao(),
+            farmProfileDao = database.farmProfileDao()
         )
         appScope.launch {
             seedSampleDataIfEmpty(database)

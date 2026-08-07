@@ -9,11 +9,24 @@ import androidx.room.Update
 import com.gutfarms.manager.data.model.Animal
 import com.gutfarms.manager.data.model.AnimalArrival
 import com.gutfarms.manager.data.model.BreedingSchedule
+import com.gutfarms.manager.data.model.FarmProfile
 import com.gutfarms.manager.data.model.FarmTransaction
 import com.gutfarms.manager.data.model.FeedingSchedule
 import com.gutfarms.manager.data.model.RegistrationStatus
 import com.gutfarms.manager.data.model.TransactionType
 import kotlinx.coroutines.flow.Flow
+
+@Dao
+interface FarmProfileDao {
+    @Query("SELECT * FROM farm_profile WHERE id = 1")
+    fun observe(): Flow<FarmProfile?>
+
+    @Query("SELECT * FROM farm_profile WHERE id = 1")
+    suspend fun get(): FarmProfile?
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun upsert(profile: FarmProfile)
+}
 
 @Dao
 interface AnimalDao {

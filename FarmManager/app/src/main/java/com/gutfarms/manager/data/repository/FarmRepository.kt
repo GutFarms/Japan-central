@@ -3,6 +3,7 @@ package com.gutfarms.manager.data.repository
 import com.gutfarms.manager.data.dao.AnimalArrivalDao
 import com.gutfarms.manager.data.dao.AnimalDao
 import com.gutfarms.manager.data.dao.BreedingScheduleDao
+import com.gutfarms.manager.data.dao.FarmProfileDao
 import com.gutfarms.manager.data.dao.FeedingScheduleDao
 import com.gutfarms.manager.data.dao.TransactionDao
 import com.gutfarms.manager.data.model.Animal
@@ -10,6 +11,7 @@ import com.gutfarms.manager.data.model.AnimalArrival
 import com.gutfarms.manager.data.model.AnimalArrivalWithGroup
 import com.gutfarms.manager.data.model.BreedingSchedule
 import com.gutfarms.manager.data.model.BreedingScheduleWithAnimal
+import com.gutfarms.manager.data.model.FarmProfile
 import com.gutfarms.manager.data.model.FarmTransaction
 import com.gutfarms.manager.data.model.FeedingSchedule
 import com.gutfarms.manager.data.model.FeedingScheduleWithAnimal
@@ -17,14 +19,20 @@ import com.gutfarms.manager.data.model.ProfitSummary
 import com.gutfarms.manager.data.model.TransactionType
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.map
 
 class FarmRepository(
     private val animalDao: AnimalDao,
     private val feedingScheduleDao: FeedingScheduleDao,
     private val breedingScheduleDao: BreedingScheduleDao,
     private val animalArrivalDao: AnimalArrivalDao,
-    private val transactionDao: TransactionDao
+    private val transactionDao: TransactionDao,
+    private val farmProfileDao: FarmProfileDao
 ) {
+    val farmName: Flow<String> = farmProfileDao.observe().map { profile ->
+        profile?.farmName?.takeIf { it.isNotBlank() } ?: "Gut Farms"
+    }
+
     val animals: Flow<List<Animal>> = animalDao.observeAll()
     val schedules: Flow<List<FeedingSchedule>> = feedingScheduleDao.observeAll()
     val breedingSchedules: Flow<List<BreedingSchedule>> = breedingScheduleDao.observeAll()
@@ -86,6 +94,11 @@ class FarmRepository(
                 marginPercent = margin
             )
         }
+
+    suspend fun updateFarmName(name: String) {
+        val trimmed = name.trim().ifBlank { "Gut Farms" }
+        farmProfileDao.upsert(FarmProfile(id = 1, farmName = trimmed))
+    }
 
     suspend fun saveAnimal(animal: Animal) = animalDao.upsert(animal)
     suspend fun deleteAnimal(animal: Animal) = animalDao.delete(animal)

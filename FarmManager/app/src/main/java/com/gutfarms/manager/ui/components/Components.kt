@@ -1,6 +1,7 @@
 package com.gutfarms.manager.ui.components
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -72,7 +73,8 @@ fun ScreenHeader(
     brand: String,
     title: String,
     subtitle: String,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    onBrandClick: (() -> Unit)? = null
 ) {
     Box(
         modifier = modifier
@@ -89,8 +91,23 @@ fun ScreenHeader(
             Text(
                 text = brand,
                 style = MaterialTheme.typography.displayMedium,
-                color = Wheat
+                color = Wheat,
+                modifier = if (onBrandClick != null) {
+                    Modifier.clickable(onClick = onBrandClick)
+                } else {
+                    Modifier
+                }
             )
+            if (onBrandClick != null) {
+                Text(
+                    text = "Tap name to rename farm",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = Mist.copy(alpha = 0.85f),
+                    modifier = Modifier
+                        .padding(top = 2.dp)
+                        .clickable(onClick = onBrandClick)
+                )
+            }
             Spacer(Modifier.height(8.dp))
             Text(
                 text = title,
