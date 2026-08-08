@@ -54,9 +54,8 @@ echo "==> Smoke check (worker preflight)"
 if [[ -n "${CURSOR_API_KEY:-}" ]] || grep -qE '^CURSOR_API_KEY=.+' "$ROOT/.env" 2>/dev/null; then
   # shellcheck disable=SC1091
   set -a && source "$ROOT/.env" && set +a
-  # `worker debug` is preflight-only; it does not stay attached like `worker start`.
-  agent worker debug --name "${CURSOR_APPLIANCE_NAME:-cursor-appliance}" \
-    --worker-dir "$REPO_ROOT" || true
+  # `worker debug` is preflight-only (accepts --json only).
+  agent worker debug || true
 else
   echo "    Skipping authenticated preflight (no API key yet)."
   echo "    After login or key setup, run: agent worker debug"

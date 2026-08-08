@@ -84,6 +84,7 @@ Copy `.env.example` → `.env` (gitignored).
 | `CURSOR_APPLIANCE_WORKER_DIR` | repo root | Git checkout exposed to agents |
 | `CURSOR_APPLIANCE_MANAGEMENT_ADDR` | `127.0.0.1:8733` | Local health bind |
 | `CURSOR_APPLIANCE_AUTH_TOKEN_FILE` | _(empty)_ | Optional rotating token file |
+| `CURSOR_APPLIANCE_IDLE_RELEASE_TIMEOUT` | `0` | Idle auto-exit seconds (`0` = stay online) |
 | `CURSOR_APPLIANCE_DEBUG` | `0` | Set `1` for worker debug diagnostics |
 
 Never commit API keys. Prefer `chmod 600 .env` (the service installer enforces this).
