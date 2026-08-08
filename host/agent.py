@@ -12,10 +12,10 @@ import psutil
 
 from cyd_core import (
     GpuReader,
+    MetricsStream,
     SerialTransport,
     UdpTransport,
     collect_metrics,
-    encode_metrics,
     list_serial_ports,
     pick_best_port,
 )
@@ -82,6 +82,7 @@ def main() -> int:
 
     psutil.cpu_percent(interval=None)
     gpu = GpuReader(index=args.gpu_index)
+    stream = MetricsStream(full_every=8)
     for t in transports:
         print(f"Sending metrics → {t.describe()} every {args.interval}s")
     if gpu.enabled:
@@ -92,11 +93,13 @@ def main() -> int:
     try:
         while True:
             payload = collect_metrics(gpu, args.name)
-            data = encode_metrics(payload)
+            data = stream.encode(payload)
             for t in transports:
                 t.send(data)
+                if hasattr(t, "poll_acks"):
+                    t.poll_acks()
             print(
-                f"cpu={payload['cpu']:5.1f}%  gpu={payload['gpu']:5.1f}%  "
+                f"seq={stream.seq}  cpu={payload['cpu']:5.1f}%  gpu={payload['gpu']:5.1f}%  "
                 f"ram={payload['ram']:5.1f}%  vram={payload['vram']:5.1f}%",
                 end="\r",
                 flush=True,

@@ -120,7 +120,7 @@ See [`protocol/metrics_v1.md`](protocol/metrics_v1.md).
 
 ## UI theme
 
-Soft midnight-blue canvas with raised “bubble” cards, capsule progress bars, and pill chips (`theme.h`). Cool azure fills for normal load; amber/coral only at high utilization or temperature.
+Dark/light blue speedometer dials with eased needles (sprite-composited on device). Host↔CYD link uses sequenced packets, ACK/RTT, and delta updates for a cleaner USB/Wi‑Fi stream.
 
 ## Project layout
 

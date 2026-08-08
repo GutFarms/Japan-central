@@ -16,6 +16,7 @@ MonitorGui gui;
 WiFiUDP udp;
 SerialLink serialLink;
 SystemMetrics metrics;
+LinkStats linkStats;
 
 char packetBuf[512];
 uint32_t lastUiMs = 0;
@@ -35,6 +36,8 @@ void beginWifi() {
     return;
   }
   WiFi.mode(WIFI_STA);
+  WiFi.persistent(true);
+  WiFi.setAutoReconnect(true);
   WiFi.setSleep(false);
   WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
   wifiAttempted = true;
@@ -44,12 +47,10 @@ void ensureWifi() {
   if (!wifiConfigured()) {
     return;
   }
-
   if (!wifiAttempted) {
     beginWifi();
     return;
   }
-
   if (WiFi.status() == WL_CONNECTED) {
     if (!wifiReady) {
       wifiReady = true;
@@ -57,7 +58,6 @@ void ensureWifi() {
     }
     return;
   }
-
   wifiReady = false;
   static uint32_t lastAttempt = 0;
   if (millis() - lastAttempt < 5000) {
@@ -68,29 +68,38 @@ void ensureWifi() {
   WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
 }
 
+void onMetricsPacket(LinkSource source) {
+  lastSource = source;
+  notePacketReceived(linkStats, metrics.seq, millis());
+}
+
 void pollUdp() {
   if (!wifiReady) {
     return;
   }
-
   const int packetSize = udp.parsePacket();
   if (packetSize <= 0) {
     return;
   }
-
   const int len = udp.read(packetBuf, sizeof(packetBuf) - 1);
   if (len <= 0) {
     return;
   }
   packetBuf[len] = '\0';
   if (parseMetricsJson(packetBuf, static_cast<size_t>(len), metrics)) {
-    lastSource = LinkSource::Udp;
+    onMetricsPacket(LinkSource::Udp);
+    // UDP ACK back to sender when possible.
+    udp.beginPacket(udp.remoteIP(), udp.remotePort());
+    char ack[48];
+    snprintf(ack, sizeof(ack), "{\"ok\":1,\"seq\":%lu}", static_cast<unsigned long>(metrics.seq));
+    udp.write(reinterpret_cast<const uint8_t *>(ack), strlen(ack));
+    udp.endPacket();
   }
 }
 
 void pollSerial() {
   if (serialLink.poll(metrics)) {
-    lastSource = LinkSource::Usb;
+    onMetricsPacket(LinkSource::Usb);
   }
 }
 }  // namespace
@@ -99,7 +108,7 @@ void setup() {
   serialLink.begin(115200);
   Serial.println();
   Serial.println(F("ESP32-CYD PC/GPU Monitor"));
-  Serial.println(F("USB NDJSON @115200 or UDP :4210"));
+  serialLink.sendHelloAck();
 
   tft.init();
   pinMode(TFT_BL, OUTPUT);
@@ -110,7 +119,6 @@ void setup() {
   delay(400);
   gui.drawChrome(tft);
 
-  // Wi-Fi is optional; USB serial works immediately.
   beginWifi();
 }
 
@@ -125,28 +133,29 @@ void loop() {
     ensureWifi();
   }
 
-  if (now - lastUiMs >= 200) {
+  // Higher UI rate for smoother needle animation.
+  if (now - lastUiMs >= 50) {
     lastUiMs = now;
 
     const bool stale = metricsAreStale(metrics, now, METRICS_STALE_MS);
     const bool linked = !stale && metrics.valid;
 
-    char status[48];
+    char status[40];
     if (linked) {
       if (lastSource == LinkSource::Usb) {
-        snprintf(status, sizeof(status), "USB serial");
+        snprintf(status, sizeof(status), "USB");
       } else if (lastSource == LinkSource::Udp) {
-        snprintf(status, sizeof(status), "WiFi UDP");
+        snprintf(status, sizeof(status), "WiFi");
       } else {
-        snprintf(status, sizeof(status), "Live metrics");
+        snprintf(status, sizeof(status), "Live");
       }
     } else if (wifiReady) {
       const IPAddress ip = WiFi.localIP();
-      snprintf(status, sizeof(status), "USB / %d.%d.%d.%d", ip[0], ip[1], ip[2], ip[3]);
+      snprintf(status, sizeof(status), "%d.%d.%d.%d", ip[0], ip[1], ip[2], ip[3]);
     } else {
-      snprintf(status, sizeof(status), "USB 115200 or WiFi...");
+      snprintf(status, sizeof(status), "Waiting");
     }
 
-    gui.render(tft, metrics, linked, status);
+    gui.render(tft, metrics, linkStats, linked, status);
   }
 }

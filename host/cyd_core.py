@@ -301,19 +301,45 @@ def pick_best_port(preferred: Optional[str] = None) -> Optional[SerialPortInfo]:
 
 
 class SerialTransport:
-    def __init__(self, port: str, baud: int = 115200, settle_s: float = 1.5) -> None:
+    def __init__(self, port: str, baud: int = 115200, settle_s: float = 1.2) -> None:
         if not _HAS_SERIAL:
             raise RuntimeError("pyserial is required for USB serial")
         self.port = port
         self.baud = baud
-        self.ser = serial.Serial(port=port, baudrate=baud, timeout=0.2)
+        self.ser = serial.Serial(port=port, baudrate=baud, timeout=0.05)
         time.sleep(max(0.0, settle_s))
         self.ser.reset_input_buffer()
+        self._rx_buf = ""
+        # Hello handshake so firmware confirms protocol.
+        self.send(json.dumps({"v": 1, "hello": 1}, separators=(",", ":")).encode("utf-8"))
 
     def send(self, data: bytes) -> None:
         payload = data if data.endswith(b"\n") else data + b"\n"
         self.ser.write(payload)
         self.ser.flush()
+
+    def poll_acks(self) -> list[dict[str, Any]]:
+        """Read NDJSON ACK lines from the CYD ({"ok":1,"seq":N})."""
+        acks: list[dict[str, Any]] = []
+        try:
+            waiting = self.ser.in_waiting
+        except Exception:  # noqa: BLE001
+            return acks
+        if waiting:
+            chunk = self.ser.read(waiting).decode("utf-8", errors="ignore")
+            self._rx_buf += chunk
+        while "\n" in self._rx_buf:
+            line, self._rx_buf = self._rx_buf.split("\n", 1)
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                obj = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if isinstance(obj, dict) and obj.get("ok"):
+                acks.append(obj)
+        return acks
 
     def close(self) -> None:
         try:
@@ -337,9 +363,27 @@ class UdpTransport:
         self.host = host
         self.port = port
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        self.sock.settimeout(0.0)
 
     def send(self, data: bytes) -> None:
         self.sock.sendto(data, (self.host, self.port))
+
+    def poll_acks(self) -> list[dict[str, Any]]:
+        acks: list[dict[str, Any]] = []
+        while True:
+            try:
+                raw, _addr = self.sock.recvfrom(256)
+            except BlockingIOError:
+                break
+            except OSError:
+                break
+            try:
+                obj = json.loads(raw.decode("utf-8", errors="ignore"))
+            except json.JSONDecodeError:
+                continue
+            if isinstance(obj, dict) and obj.get("ok"):
+                acks.append(obj)
+        return acks
 
     def close(self) -> None:
         self.sock.close()
@@ -348,21 +392,73 @@ class UdpTransport:
         return f"UDP {self.host}:{self.port}"
 
 
-def encode_metrics(payload: dict[str, Any]) -> bytes:
-    # Keep USB packets compact for the CYD 512-byte line buffer.
-    compact = {
-        "v": payload.get("v", 1),
-        "cpu": payload.get("cpu", 0),
-        "cpu_temp": payload.get("cpu_temp", 0),
-        "ram": payload.get("ram", 0),
-        "gpu": payload.get("gpu", 0),
-        "gpu_temp": payload.get("gpu_temp", 0),
-        "vram": payload.get("vram", 0),
-        "disk": payload.get("disk", 0),
-        "swap": payload.get("swap", 0),
-        "net_up": payload.get("net_up", 0),
-        "net_down": payload.get("net_down", 0),
-        "fps": payload.get("fps", 0),
-        "host": payload.get("host", "PC"),
-    }
+_WIRE_KEYS = (
+    "cpu",
+    "cpu_temp",
+    "ram",
+    "gpu",
+    "gpu_temp",
+    "vram",
+    "disk",
+    "swap",
+    "net_up",
+    "net_down",
+    "fps",
+    "host",
+)
+
+
+class MetricsStream:
+    """Sequence numbers + periodic full snapshots for reliable CYD updates."""
+
+    def __init__(self, full_every: int = 8) -> None:
+        self.seq = 0
+        self.full_every = max(1, full_every)
+        self._last_wire: dict[str, Any] = {}
+
+    def encode(self, payload: dict[str, Any], force_full: bool = False) -> bytes:
+        self.seq = (self.seq + 1) & 0xFFFFFFFF
+        wire = {k: payload.get(k, 0) for k in _WIRE_KEYS}
+        wire["v"] = 1
+        wire["seq"] = self.seq
+        wire["host"] = str(payload.get("host", "PC"))[:23]
+
+        send_full = force_full or (self.seq % self.full_every == 1) or not self._last_wire
+        if send_full:
+            out = wire
+        else:
+            out = {"v": 1, "seq": self.seq}
+            for k, val in wire.items():
+                if k in ("v", "seq"):
+                    continue
+                if self._last_wire.get(k) != val:
+                    out[k] = val
+            # Always keep host occasionally so a late join still labels.
+            if "host" not in out and self.seq % 20 == 0:
+                out["host"] = wire["host"]
+        self._last_wire = wire
+        return json.dumps(out, separators=(",", ":")).encode("utf-8")
+
+
+def encode_metrics(payload: dict[str, Any], seq: int = 0) -> bytes:
+    compact = {k: payload.get(k, 0) for k in _WIRE_KEYS}
+    compact["v"] = 1
+    compact["seq"] = seq
+    compact["host"] = str(payload.get("host", "PC"))[:23]
     return json.dumps(compact, separators=(",", ":")).encode("utf-8")
+
+
+@dataclass
+class LinkQuality:
+    rtt_ms: float = 0.0
+    acks: int = 0
+    sent: int = 0
+    last_ack_seq: int = 0
+
+    @property
+    def loss_pct(self) -> float:
+        if self.sent <= 0:
+            return 0.0
+        # Rough: missing acks relative to sent (USB is reliable; useful for UDP).
+        missed = max(0, self.sent - self.acks)
+        return min(100.0, 100.0 * missed / self.sent)

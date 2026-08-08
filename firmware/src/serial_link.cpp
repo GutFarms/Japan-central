@@ -1,11 +1,16 @@
 #include "serial_link.h"
 
+#include <ArduinoJson.h>
 #include <cstring>
 
 void SerialLink::begin(uint32_t baud) {
   Serial.begin(baud);
   lineLen_ = 0;
   delay(50);
+}
+
+void SerialLink::sendHelloAck() {
+  Serial.println(F("{\"ok\":1,\"fw\":\"cyd-monitor\",\"proto\":1}"));
 }
 
 bool SerialLink::poll(SystemMetrics &metrics) {
@@ -27,17 +32,25 @@ bool SerialLink::poll(SystemMetrics &metrics) {
         continue;
       }
       lineBuf_[lineLen_] = '\0';
+
+      JsonDocument probe;
+      if (!deserializeJson(probe, lineBuf_, lineLen_)) {
+        if (probe["hello"] | 0) {
+          sendHelloAck();
+          lineLen_ = 0;
+          continue;
+        }
+      }
+
       if (parseMetricsJson(lineBuf_, lineLen_, metrics)) {
         updated = true;
-        // Lightweight ACK so the host can confirm the link.
-        Serial.println(F("{\"ok\":1}"));
+        Serial.printf("{\"ok\":1,\"seq\":%lu}\n", static_cast<unsigned long>(metrics.seq));
       }
       lineLen_ = 0;
       continue;
     }
 
     if (lineLen_ + 1 >= sizeof(lineBuf_)) {
-      // Overflow — drop the line and resync on the next newline.
       lineLen_ = 0;
       continue;
     }

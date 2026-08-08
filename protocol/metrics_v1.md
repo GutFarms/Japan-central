@@ -1,31 +1,35 @@
 # Metrics protocol v1
 
-JSON metrics from the PC host agent / desktop app to the ESP32-CYD firmware.
+JSON metrics from the PC host / desktop app to the ESP32-CYD firmware.
 
 ## Transports
 
-### USB serial (recommended)
+### USB serial
 
 | Field | Value |
 | --- | --- |
-| Interface | USB CDC / UART |
-| Baud | `115200` (configurable in app Settings) |
-| Framing | NDJSON — one UTF-8 JSON object per line (`\n`) |
+| Baud | `115200` |
+| Framing | NDJSON (`\n` terminated) |
 | Max line | ≤ 512 bytes |
+
+On connect the host may send `{"v":1,"hello":1}`; firmware replies  
+`{"ok":1,"fw":"cyd-monitor","proto":1}`.
+
+Each accepted metrics line is ACKed as `{"ok":1,"seq":N}`.
 
 ### Wi‑Fi UDP
 
 | Field | Value |
 | --- | --- |
-| Protocol | UDP |
-| Default port | `4210` |
-| Encoding | UTF-8 JSON datagram |
+| Port | `4210` |
+| ACK | firmware replies `{"ok":1,"seq":N}` to the sender |
 
 ## Schema
 
 ```json
 {
   "v": 1,
+  "seq": 12,
   "cpu": 42.5,
   "cpu_temp": 61.0,
   "ram": 58.2,
@@ -41,15 +45,13 @@ JSON metrics from the PC host agent / desktop app to the ESP32-CYD firmware.
 }
 ```
 
-| Key | Type | Unit | Notes |
-| --- | --- | --- | --- |
-| `v` | int | — | Protocol version (`1`) |
-| `cpu` / `gpu` / `ram` / `vram` / `disk` / `swap` | number | % | 0–100 |
-| `cpu_temp` / `gpu_temp` | number | °C | `0` if unavailable |
-| `net_up` / `net_down` | number | Mbps | instantaneous rates |
-| `fps` | int | fps | optional |
-| `host` | string | — | max 23 chars |
+| Key | Notes |
+| --- | --- |
+| `seq` | Monotonic packet id (host → device), echoed in ACK |
+| metric keys | Missing keys keep previous on-device values (delta updates OK) |
+| full snapshot | Host sends a full object every ~8 packets |
 
-Unknown keys are ignored. Missing keys keep previous on-device values.
+## Link quality
 
-The desktop app may collect richer local fields (`cpu_mhz`, `ram_used_gb`, …) for its own dials; the wire payload stays compact for the CYD.
+Host measures RTT from ACK timestamps and shows ACK ratio in the desktop app.  
+Firmware shows approximate packets/sec in the footer.

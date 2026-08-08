@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""CYD Monitor desktop app — speedometer dials, settings, tray background mode."""
+"""CYD Monitor desktop app — smooth dials, settings, tray, sequenced link."""
 
 from __future__ import annotations
 
@@ -15,10 +15,11 @@ import psutil
 
 from cyd_core import (
     GpuReader,
+    LinkQuality,
+    MetricsStream,
     SerialTransport,
     UdpTransport,
     collect_metrics,
-    encode_metrics,
     list_serial_port_infos,
     load_settings,
     pick_best_port,
@@ -38,73 +39,96 @@ except Exception:  # noqa: BLE001
 
 
 def _tray_image() -> "Image.Image":
-    img = Image.new("RGBA", (64, 64), (10, 25, 48, 255))
+    img = Image.new("RGBA", (64, 64), (0, 12, 40, 255))
     draw = ImageDraw.Draw(img)
-    draw.ellipse((8, 8, 56, 56), fill=(47, 111, 237, 255))
-    draw.ellipse((22, 22, 42, 42), fill=(232, 241, 255, 255))
+    draw.ellipse((6, 6, 58, 58), fill=(60, 140, 255, 255))
+    draw.ellipse((20, 20, 44, 44), fill=(200, 230, 255, 255))
     return img
 
 
 class Speedometer(tk.Canvas):
-    """Classic 270° speedometer dial for 0–100% values."""
+    """Speedometer with eased needle motion."""
 
     def __init__(self, master: tk.Misc, title: str, **kwargs: Any) -> None:
-        super().__init__(master, highlightthickness=0, bg="#0F2248", **kwargs)
+        super().__init__(master, highlightthickness=0, bg="#071833", **kwargs)
         self.title = title
-        self.value = 0.0
+        self.target = 0.0
+        self.shown = 0.0
         self.sub = ""
+        self._animating = False
         self.bind("<Configure>", lambda _e: self.redraw())
 
     def set_value(self, value: float, sub: str = "") -> None:
-        self.value = max(0.0, min(100.0, float(value)))
+        self.target = max(0.0, min(100.0, float(value)))
         self.sub = sub
+        if not self._animating:
+            self._animating = True
+            self._tick()
+
+    def _tick(self) -> None:
+        self.shown += (self.target - self.shown) * 0.22
+        if abs(self.target - self.shown) < 0.15:
+            self.shown = self.target
+            self._animating = False
         self.redraw()
+        if self._animating:
+            self.after(33, self._tick)
 
     def redraw(self) -> None:
         self.delete("all")
         w = max(self.winfo_width(), 10)
         h = max(self.winfo_height(), 10)
-        cx, cy = w / 2, h / 2 + 8
-        r = min(w, h) * 0.38
+        cx, cy = w / 2, h / 2 + 10
+        r = min(w, h) * 0.40
 
-        # Face
-        self.create_oval(cx - r - 8, cy - r - 8, cx + r + 8, cy + r + 8, fill="#152B66", outline="#3D7CFF", width=2)
-        self.create_oval(cx - r, cy - r, cx + r, cy + r, fill="#0A1930", outline="#5CB8FF", width=2)
+        # Layered dark/light blue face
+        self.create_oval(cx - r - 10, cy - r - 10, cx + r + 10, cy + r + 10, fill="#0A2048", outline="#1E4F9E", width=1)
+        self.create_oval(cx - r - 4, cy - r - 4, cx + r + 4, cy + r + 4, fill="#153A7A", outline="#6EB6FF", width=2)
+        self.create_oval(cx - r, cy - r, cx + r, cy + r, fill="#071833", outline="#9FD2FF", width=2)
 
         for i in range(0, 101, 5):
             theta = math.radians(225.0 - 270.0 * (i / 100.0))
-            outer = r - 1
-            inner = r - (10 if i % 10 == 0 else 5)
+            outer = r - 2
+            inner = r - (12 if i % 10 == 0 else 6)
             x0 = cx + inner * math.cos(theta)
             y0 = cy - inner * math.sin(theta)
             x1 = cx + outer * math.cos(theta)
             y1 = cy - outer * math.sin(theta)
-            color = "#F07178" if i >= 90 else "#FFD166" if i >= 75 else "#5CB8FF"
+            color = "#FF8A8A" if i >= 90 else "#FFD27A" if i >= 75 else "#9FD2FF"
             self.create_line(x0, y0, x1, y1, fill=color, width=2 if i % 10 == 0 else 1)
 
-        # Arc ribbon (sampled)
         prev = None
         for i in range(0, 101, 2):
             theta = math.radians(225.0 - 270.0 * (i / 100.0))
-            x = cx + (r - 14) * math.cos(theta)
-            y = cy - (r - 14) * math.sin(theta)
+            x = cx + (r - 16) * math.cos(theta)
+            y = cy - (r - 16) * math.sin(theta)
             if prev is not None:
-                c = "#F07178" if i >= 90 else "#FFD166" if i >= 75 else "#2F6FED"
-                self.create_line(prev[0], prev[1], x, y, fill=c, width=4, capstyle=tk.ROUND)
+                c = "#FF8A8A" if i >= 90 else "#FFD27A" if i >= 75 else "#3D8CFF"
+                self.create_line(prev[0], prev[1], x, y, fill=c, width=5, capstyle=tk.ROUND)
             prev = (x, y)
 
-        # Needle
-        theta = math.radians(225.0 - 270.0 * (self.value / 100.0))
-        nx = cx + (r - 22) * math.cos(theta)
-        ny = cy - (r - 22) * math.sin(theta)
-        self.create_line(cx, cy, nx, ny, fill="#E8F1FF", width=3, arrow=tk.LAST)
-        self.create_oval(cx - 5, cy - 5, cx + 5, cy + 5, fill="#5CB8FF", outline="#E8F1FF")
+        # Value arc overlay to current shown value
+        prev = None
+        steps = max(2, int(self.shown / 2))
+        for i in range(0, steps + 1):
+            pct = self.shown * (i / steps) if steps else 0
+            theta = math.radians(225.0 - 270.0 * (pct / 100.0))
+            x = cx + (r - 16) * math.cos(theta)
+            y = cy - (r - 16) * math.sin(theta)
+            if prev is not None:
+                self.create_line(prev[0], prev[1], x, y, fill="#B8E0FF", width=3, capstyle=tk.ROUND)
+            prev = (x, y)
 
-        # Labels
-        self.create_text(cx, cy - r - 2, text=self.title, fill="#8FB4E8", font=("Segoe UI", 10, "bold"))
-        self.create_text(cx, cy + 18, text=f"{self.value:.0f}%", fill="#E8F1FF", font=("Segoe UI", 14, "bold"))
+        theta = math.radians(225.0 - 270.0 * (self.shown / 100.0))
+        nx = cx + (r - 24) * math.cos(theta)
+        ny = cy - (r - 24) * math.sin(theta)
+        self.create_line(cx, cy, nx, ny, fill="#F2F7FF", width=3, arrow=tk.LAST)
+        self.create_oval(cx - 6, cy - 6, cx + 6, cy + 6, fill="#5CB8FF", outline="#E8F1FF")
+
+        self.create_text(cx, cy - r - 4, text=self.title, fill="#9FD2FF", font=("Segoe UI", 11, "bold"))
+        self.create_text(cx, cy + 20, text=f"{self.shown:.0f}%", fill="#F2F7FF", font=("Segoe UI", 16, "bold"))
         if self.sub:
-            self.create_text(cx, cy + 36, text=self.sub, fill="#8FB4E8", font=("Segoe UI", 8))
+            self.create_text(cx, cy + 40, text=self.sub, fill="#8FB4E8", font=("Segoe UI", 8))
 
 
 class MonitorApp(tk.Tk):
@@ -112,24 +136,27 @@ class MonitorApp(tk.Tk):
         super().__init__()
         self.settings = load_settings()
         self.title(APP_TITLE)
-        self.geometry("860x640")
-        self.minsize(720, 520)
-        self.configure(bg="#0A1930")
+        self.geometry("900x680")
+        self.minsize(740, 540)
+        self.configure(bg="#071833")
 
         self._stop = threading.Event()
         self._worker: Optional[threading.Thread] = None
         self._transport: Optional[SerialTransport] = None
         self._udp: Optional[UdpTransport] = None
         self._gpu = GpuReader(index=int(self.settings.get("gpu_index", 0)))
+        self._stream = MetricsStream(full_every=8)
+        self._link = LinkQuality()
+        self._pending: dict[int, float] = {}
         self._lock = threading.Lock()
         self._tray_icon = None
-        self._latest: dict[str, Any] = {}
 
         host = (self.settings.get("host_name") or socket.gethostname())[:23]
         self.host_name = host
 
         self.status_var = tk.StringVar(value="Starting…")
         self.port_var = tk.StringVar(value="—")
+        self.link_var = tk.StringVar(value="Link: —")
         self.extra_var = tk.StringVar(value="")
         self.auto_var = tk.BooleanVar(value=bool(self.settings.get("auto_reconnect", True)))
         self.start_min_var = tk.BooleanVar(value=bool(self.settings.get("start_minimized", False)))
@@ -144,7 +171,6 @@ class MonitorApp(tk.Tk):
         self._build_style()
         self._build_ui()
         self.protocol("WM_DELETE_WINDOW", self._on_close_request)
-        self.bind("<Unmap>", self._on_unmap)
 
         psutil.cpu_percent(interval=None)
         self.after(200, self._start_worker)
@@ -157,21 +183,21 @@ class MonitorApp(tk.Tk):
             style.theme_use("clam")
         except tk.TclError:
             pass
-        bg, card, accent, text, muted = "#0A1930", "#122A69", "#2F6FED", "#E8F1FF", "#8FB4E8"
+        bg, card, accent, text, muted = "#071833", "#12326B", "#3D8CFF", "#F2F7FF", "#9FD2FF"
         style.configure("TNotebook", background=bg, borderwidth=0)
         style.configure("TNotebook.Tab", background=card, foreground=text, padding=(14, 6))
         style.map("TNotebook.Tab", background=[("selected", accent)])
         style.configure("Root.TFrame", background=bg)
         style.configure("Card.TFrame", background=card)
-        style.configure("Title.TLabel", background=bg, foreground="#5CB8FF", font=("Segoe UI", 18, "bold"))
+        style.configure("Title.TLabel", background=bg, foreground="#6EB6FF", font=("Segoe UI", 18, "bold"))
         style.configure("Body.TLabel", background=card, foreground=text, font=("Segoe UI", 10))
         style.configure("Muted.TLabel", background=card, foreground=muted, font=("Segoe UI", 9))
         style.configure("Status.TLabel", background=bg, foreground="#7DFFB2", font=("Segoe UI", 11, "bold"))
         style.configure("Accent.TButton", background=accent, foreground="#FFFFFF", font=("Segoe UI", 10, "bold"), padding=8)
-        style.map("Accent.TButton", background=[("active", "#4D8CFF")])
+        style.map("Accent.TButton", background=[("active", "#5CA0FF")])
         style.configure("TCheckbutton", background=card, foreground=text)
-        style.configure("TEntry", fieldbackground="#0A1930", foreground=text)
-        style.configure("TCombobox", fieldbackground="#0A1930", foreground=text)
+        style.configure("TEntry", fieldbackground="#071833", foreground=text)
+        style.configure("TCombobox", fieldbackground="#071833", foreground=text)
 
     def _build_ui(self) -> None:
         root = ttk.Frame(self, style="Root.TFrame", padding=12)
@@ -184,13 +210,11 @@ class MonitorApp(tk.Tk):
 
         nb = ttk.Notebook(root)
         nb.pack(fill=tk.BOTH, expand=True, pady=(10, 0))
-
         monitor = ttk.Frame(nb, style="Root.TFrame", padding=8)
         settings = ttk.Frame(nb, style="Card.TFrame", padding=16)
         nb.add(monitor, text="Monitor")
         nb.add(settings, text="Settings")
 
-        # Dial grid
         dials = ttk.Frame(monitor, style="Root.TFrame")
         dials.pack(fill=tk.BOTH, expand=True)
         for r in range(2):
@@ -198,10 +222,10 @@ class MonitorApp(tk.Tk):
         for c in range(2):
             dials.columnconfigure(c, weight=1)
 
-        self.dial_cpu = Speedometer(dials, "CPU", width=280, height=220)
-        self.dial_gpu = Speedometer(dials, "GPU", width=280, height=220)
-        self.dial_ram = Speedometer(dials, "RAM", width=280, height=220)
-        self.dial_vram = Speedometer(dials, "VRAM", width=280, height=220)
+        self.dial_cpu = Speedometer(dials, "CPU", width=300, height=230)
+        self.dial_gpu = Speedometer(dials, "GPU", width=300, height=230)
+        self.dial_ram = Speedometer(dials, "RAM", width=300, height=230)
+        self.dial_vram = Speedometer(dials, "VRAM", width=300, height=230)
         self.dial_cpu.grid(row=0, column=0, sticky="nsew", padx=6, pady=6)
         self.dial_gpu.grid(row=0, column=1, sticky="nsew", padx=6, pady=6)
         self.dial_ram.grid(row=1, column=0, sticky="nsew", padx=6, pady=6)
@@ -210,6 +234,7 @@ class MonitorApp(tk.Tk):
         info = ttk.Frame(monitor, style="Card.TFrame", padding=10)
         info.pack(fill=tk.X, pady=(8, 0))
         ttk.Label(info, textvariable=self.port_var, style="Muted.TLabel").pack(anchor=tk.W)
+        ttk.Label(info, textvariable=self.link_var, style="Body.TLabel").pack(anchor=tk.W, pady=(2, 0))
         ttk.Label(info, textvariable=self.extra_var, style="Body.TLabel").pack(anchor=tk.W, pady=(4, 0))
 
         btns = ttk.Frame(monitor, style="Root.TFrame")
@@ -218,8 +243,6 @@ class MonitorApp(tk.Tk):
             side=tk.LEFT
         )
         ttk.Button(btns, text="Rescan USB", style="Accent.TButton", command=self._rescan).pack(side=tk.RIGHT)
-
-        # Settings tab
         self._build_settings(settings)
 
     def _build_settings(self, parent: ttk.Frame) -> None:
@@ -228,17 +251,14 @@ class MonitorApp(tk.Tk):
             widget.grid(row=r, column=1, sticky="ew", pady=6, padx=(12, 0))
 
         parent.columnconfigure(1, weight=1)
-
         ports = ["auto"] + [p.device for p in list_serial_port_infos()]
         self.port_combo = ttk.Combobox(parent, textvariable=self.preferred_port_var, values=ports, width=36)
         row("USB port", self.port_combo, 0)
-
         row("Baud", ttk.Entry(parent, textvariable=self.baud_var, width=12), 1)
         row("Interval (s)", ttk.Entry(parent, textvariable=self.interval_var, width=12), 2)
         row("Host label", ttk.Entry(parent, textvariable=self.host_var, width=24), 3)
         row("UDP host (optional)", ttk.Entry(parent, textvariable=self.udp_host_var, width=24), 4)
         row("UDP port", ttk.Entry(parent, textvariable=self.udp_port_var, width=12), 5)
-
         ttk.Checkbutton(parent, text="Auto-reconnect USB", variable=self.auto_var).grid(
             row=6, column=0, columnspan=2, sticky="w", pady=4
         )
@@ -248,18 +268,15 @@ class MonitorApp(tk.Tk):
         ttk.Checkbutton(parent, text="Close button hides to tray (background)", variable=self.close_tray_var).grid(
             row=8, column=0, columnspan=2, sticky="w", pady=4
         )
-
         ttk.Button(parent, text="Save settings", style="Accent.TButton", command=self._save_settings).grid(
             row=9, column=0, columnspan=2, sticky="e", pady=(16, 0)
         )
-
-        note = (
-            "Runs in the background while minimized. No terminal window is shown when launched "
-            "via CYD Monitor.bat / CYD-Monitor (windowed app)."
-        )
-        ttk.Label(parent, text=note, style="Muted.TLabel", wraplength=520).grid(
-            row=10, column=0, columnspan=2, sticky="w", pady=(18, 0)
-        )
+        ttk.Label(
+            parent,
+            text="Uses sequenced packets + ACK/RTT. Delta updates keep the USB link light; full snapshots every few frames.",
+            style="Muted.TLabel",
+            wraplength=560,
+        ).grid(row=10, column=0, columnspan=2, sticky="w", pady=(18, 0))
 
     def _save_settings(self) -> None:
         self.host_name = (self.host_var.get() or socket.gethostname())[:23]
@@ -285,10 +302,15 @@ class MonitorApp(tk.Tk):
     def _set_port(self, text: str) -> None:
         self.after(0, lambda: self.port_var.set(text))
 
+    def _set_link(self, text: str) -> None:
+        self.after(0, lambda: self.link_var.set(text))
+
     def _set_metrics(self, payload: dict[str, Any]) -> None:
         def apply() -> None:
-            self._latest = payload
-            self.dial_cpu.set_value(payload.get("cpu", 0), f"{payload.get('cpu_temp', 0):.0f}°C  {payload.get('cpu_mhz', 0):.0f} MHz")
+            self.dial_cpu.set_value(
+                payload.get("cpu", 0),
+                f"{payload.get('cpu_temp', 0):.0f}°C  {payload.get('cpu_mhz', 0):.0f} MHz",
+            )
             self.dial_gpu.set_value(payload.get("gpu", 0), f"{payload.get('gpu_temp', 0):.0f}°C")
             self.dial_ram.set_value(
                 payload.get("ram", 0),
@@ -319,8 +341,12 @@ class MonitorApp(tk.Tk):
             if self._udp is not None:
                 self._udp.close()
                 self._udp = None
+            self._stream = MetricsStream(full_every=8)
+            self._link = LinkQuality()
+            self._pending.clear()
         self._set_status("Rescanning…")
         self._set_port("—")
+        self._set_link("Link: —")
 
     def _preferred(self) -> Optional[str]:
         val = (self.preferred_port_var.get() or "").strip()
@@ -335,7 +361,7 @@ class MonitorApp(tk.Tk):
             self._set_port("No serial ports found")
             return False
         try:
-            transport = SerialTransport(best.device, baud=int(self.baud_var.get()), settle_s=1.2)
+            transport = SerialTransport(best.device, baud=int(self.baud_var.get()), settle_s=1.0)
         except Exception as exc:  # noqa: BLE001
             self._set_status(f"Open failed: {exc}")
             self._set_port(best.label)
@@ -343,13 +369,23 @@ class MonitorApp(tk.Tk):
         with self._lock:
             self._transport = transport
             udp_host = self.udp_host_var.get().strip()
-            if udp_host:
-                self._udp = UdpTransport(udp_host, int(self.udp_port_var.get()))
-            else:
-                self._udp = None
+            self._udp = UdpTransport(udp_host, int(self.udp_port_var.get())) if udp_host else None
+            self._stream = MetricsStream(full_every=8)
+            self._link = LinkQuality()
+            self._pending.clear()
         self._set_status("Linked — streaming")
         self._set_port(best.label)
         return True
+
+    def _handle_acks(self, acks: list[dict[str, Any]]) -> None:
+        now = time.time()
+        for ack in acks:
+            seq = int(ack.get("seq") or 0)
+            self._link.acks += 1
+            self._link.last_ack_seq = seq
+            sent_at = self._pending.pop(seq, None)
+            if sent_at is not None:
+                self._link.rtt_ms = (now - sent_at) * 1000.0
 
     def _run_loop(self) -> None:
         while not self._stop.is_set():
@@ -365,16 +401,29 @@ class MonitorApp(tk.Tk):
                     continue
             try:
                 payload = collect_metrics(self._gpu, self.host_name)
-                data = encode_metrics(payload)
                 with self._lock:
+                    data = self._stream.encode(payload)
+                    seq = self._stream.seq
                     transport = self._transport
                     udp = self._udp
+                    self._pending[seq] = time.time()
+                    # Bound pending map
+                    if len(self._pending) > 40:
+                        for old in sorted(self._pending.keys())[:-20]:
+                            self._pending.pop(old, None)
                 if transport is not None:
                     transport.send(data)
+                    self._handle_acks(transport.poll_acks())
                 if udp is not None:
                     udp.send(data)
+                    self._handle_acks(udp.poll_acks())
+                self._link.sent += 1
                 self._set_metrics(payload)
                 self._set_status("Linked — streaming")
+                self._set_link(
+                    f"Link: seq {self._link.last_ack_seq}   RTT {self._link.rtt_ms:.0f} ms   "
+                    f"ACK {self._link.acks}/{self._link.sent}"
+                )
                 time.sleep(max(0.1, float(self.interval_var.get())))
             except Exception as exc:  # noqa: BLE001
                 self._set_status(f"Link lost: {exc}")
@@ -383,10 +432,6 @@ class MonitorApp(tk.Tk):
                         self._transport.close()
                         self._transport = None
                 time.sleep(RECONNECT_S)
-
-    def _on_unmap(self, _event: Any = None) -> None:
-        # Iconify keeps the worker thread alive in the background.
-        pass
 
     def _minimize_to_background(self) -> None:
         if _HAS_TRAY:
@@ -419,7 +464,6 @@ class MonitorApp(tk.Tk):
         self.deiconify()
         self.lift()
         self.focus_force()
-        self._set_status("Linked — streaming" if self._transport else "Restored")
 
     def _on_close_request(self) -> None:
         if self.close_tray_var.get():

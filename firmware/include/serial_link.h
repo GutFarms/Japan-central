@@ -7,8 +7,9 @@
 class SerialLink {
  public:
   void begin(uint32_t baud = 115200);
-  // Read available bytes; returns true when a full line was parsed into metrics.
+  // Returns true when a metrics line was parsed. Emits ACK {"ok":1,"seq":N}.
   bool poll(SystemMetrics &metrics);
+  void sendHelloAck();
 
  private:
   char lineBuf_[512];
