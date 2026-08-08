@@ -17,6 +17,14 @@ load_env_file() {
 load_env_file "$ROOT/.env"
 load_env_file "$ROOT/config/appliance.env"
 
+# GUI / operator offline latch — refuse to dial Cursor cloud.
+OFFLINE="$(echo "${CURSOR_APPLIANCE_OFFLINE:-0}" | tr '[:upper:]' '[:lower:]')"
+if [[ "$OFFLINE" == "1" || "$OFFLINE" == "true" || "$OFFLINE" == "yes" || "$OFFLINE" == "on" ]]; then
+  echo "error: CURSOR_APPLIANCE_OFFLINE=${CURSOR_APPLIANCE_OFFLINE} — cloud worker disabled" >&2
+  echo "Disable Offline mode in the GUI (or set CURSOR_APPLIANCE_OFFLINE=0) to connect." >&2
+  exit 2
+fi
+
 NAME="${CURSOR_APPLIANCE_NAME:-cursor-appliance}"
 WORKER_DIR="${CURSOR_APPLIANCE_WORKER_DIR:-$REPO_ROOT}"
 MGMT_ADDR="${CURSOR_APPLIANCE_MANAGEMENT_ADDR:-127.0.0.1:8733}"

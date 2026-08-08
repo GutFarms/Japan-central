@@ -1,6 +1,6 @@
 # Cursor Appliance
 
-**Version 0.1.0** — a lightweight, dedicated **local** [My Machines](https://cursor.com/docs/cloud-agent/self-hosted-guides/my-machines) worker for this repo.
+**Version 0.2.0** — a lightweight, dedicated **local** [My Machines](https://cursor.com/docs/cloud-agent/self-hosted-guides/my-machines) worker for this repo, with an **egui** control panel.
 
 Cursor keeps planning/inference in the cloud. Tool calls (shell, edits, browser, local MCP) run on **this machine**. No inbound ports or VPN required.
 
@@ -10,6 +10,8 @@ Use this when you want a always-on local box (laptop, mini PC, or Raspberry Pi) 
 
 | Piece | Role |
 |---|---|
+| `gui/` | egui desktop app — status, settings, dark mode, offline mode |
+| `scripts/run-gui.sh` | Build and launch the control panel |
 | `scripts/setup.sh` | Installs the Cursor Agent CLI and prepares config |
 | `scripts/start-worker.sh` | Starts a named My Machines worker for this checkout |
 | `systemd/cursor-appliance.service` | Keeps the worker alive across reboots |
@@ -44,9 +46,26 @@ agent login
 
 # Foreground smoke test
 ./scripts/start-worker.sh
+
+# Or use the desktop control panel
+./scripts/run-gui.sh
 ```
 
 Leave that process running, then open [cursor.com/agents](https://cursor.com/agents) and select **cursor-appliance** in the environment / “Run on” dropdown.
+
+### Desktop GUI
+
+```bash
+./scripts/run-gui.sh
+```
+
+The panel includes:
+
+- **Settings** — appliance name, worker dir, management addr, API key, idle timeout, auto-start
+- **Dark mode** — toggle in the top bar or Settings
+- **Offline mode** — local UI only; stops the cloud worker and blocks reconnects (`CURSOR_APPLIANCE_OFFLINE=1`)
+
+Settings persist to `data/gui-settings.json` and sync into `.env` for the shell/systemd scripts.
 
 ### Install as a boot service
 
@@ -85,6 +104,7 @@ Copy `.env.example` → `.env` (gitignored).
 | `CURSOR_APPLIANCE_MANAGEMENT_ADDR` | `127.0.0.1:8733` | Local health bind |
 | `CURSOR_APPLIANCE_AUTH_TOKEN_FILE` | _(empty)_ | Optional rotating token file |
 | `CURSOR_APPLIANCE_IDLE_RELEASE_TIMEOUT` | `0` | Idle auto-exit seconds (`0` = stay online) |
+| `CURSOR_APPLIANCE_OFFLINE` | `0` | `1` blocks cloud worker start (GUI offline mode) |
 | `CURSOR_APPLIANCE_DEBUG` | `0` | Set `1` for worker debug diagnostics |
 
 Never commit API keys. Prefer `chmod 600 .env` (the service installer enforces this).
