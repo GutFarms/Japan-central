@@ -1,11 +1,20 @@
 use anyhow::Result;
-use colored::Colorize;
-use std::io::{self, Write};
+use std::sync::mpsc::Sender;
 use std::sync::Arc;
 
 use crate::client::{InputItem, XaiClient};
 use crate::config::Config;
 use crate::tools::ToolRuntime;
+
+#[derive(Debug, Clone)]
+pub enum AgentEvent {
+    Status(String),
+    AssistantDelta(String),
+    ToolStart { name: String, args: String },
+    ToolResult { name: String, preview: String },
+    Finished,
+    Error(String),
+}
 
 pub struct Agent {
     client: XaiClient,
@@ -14,6 +23,8 @@ pub struct Agent {
     instructions: String,
     max_turns: usize,
     previous_response_id: Option<String>,
+    events: Option<Sender<AgentEvent>>,
+    echo_console: bool,
 }
 
 impl Agent {
@@ -27,11 +38,25 @@ impl Agent {
             instructions,
             max_turns: cfg.max_turns,
             previous_response_id: None,
+            events: None,
+            echo_console: true,
         }
+    }
+
+    pub fn with_events(mut self, tx: Sender<AgentEvent>) -> Self {
+        self.events = Some(tx);
+        self.echo_console = false;
+        self
     }
 
     pub fn reset(&mut self) {
         self.previous_response_id = None;
+    }
+
+    fn emit(&self, event: AgentEvent) {
+        if let Some(tx) = &self.events {
+            let _ = tx.send(event);
+        }
     }
 
     pub async fn run_turn(&mut self, user_message: &str) -> Result<String> {
@@ -39,6 +64,8 @@ impl Agent {
         let mut final_text = String::new();
 
         for turn in 1..=self.max_turns {
+            self.emit(AgentEvent::Status(format!("Thinking (turn {turn})…")));
+
             let instructions = if self.previous_response_id.is_none() {
                 Some(self.instructions.as_str())
             } else {
@@ -59,40 +86,59 @@ impl Agent {
 
             let text = response.text();
             if !text.trim().is_empty() {
-                println!("{}", text.green());
+                if self.echo_console {
+                    println!("{text}");
+                }
+                self.emit(AgentEvent::AssistantDelta(text.clone()));
                 final_text = text;
             }
 
             let calls = response.function_calls();
             if calls.is_empty() {
+                self.emit(AgentEvent::Finished);
                 return Ok(final_text);
             }
 
-            println!(
-                "{}",
-                format!("⚙ tool turn {turn}: {} call(s)", calls.len()).dimmed()
-            );
+            if self.echo_console {
+                println!("tool turn {turn}: {} call(s)", calls.len());
+            }
+            self.emit(AgentEvent::Status(format!(
+                "Running {} tool(s)…",
+                calls.len()
+            )));
 
             let mut outputs = Vec::with_capacity(calls.len());
             for (call_id, name, arguments) in calls {
-                println!(
-                    "{}",
-                    format!("→ {name}({})", compact_args(&arguments)).cyan()
-                );
-                let _ = io::stdout().flush();
+                let args_preview = compact_args(&arguments);
+                if self.echo_console {
+                    println!("→ {name}({args_preview})");
+                }
+                self.emit(AgentEvent::ToolStart {
+                    name: name.clone(),
+                    args: args_preview,
+                });
+
                 let result = self.tools.execute(&name, &arguments).await;
                 let preview = preview_result(&result);
-                println!("{}", format!("← {preview}").dimmed());
+                if self.echo_console {
+                    println!("← {preview}");
+                }
+                self.emit(AgentEvent::ToolResult {
+                    name: name.clone(),
+                    preview,
+                });
                 outputs.push(InputItem::function_result(call_id, result));
             }
 
             input = outputs;
         }
 
-        anyhow::bail!(
+        let err = format!(
             "Reached max tool turns ({}). Increase with --max-turns.",
             self.max_turns
         );
+        self.emit(AgentEvent::Error(err.clone()));
+        anyhow::bail!(err)
     }
 }
 

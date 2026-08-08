@@ -7,7 +7,7 @@ description = "Local AI coding agent powered by xAI Grok 4.5"
 license = "MIT"
 readme = "README.md"
 keywords = ["ai", "agent", "grok", "xai", "llm"]
-categories = ["command-line-utilities"]
+categories = ["command-line-utilities", "gui"]
 
 [[bin]]
 name = "grok-agent"
@@ -19,6 +19,7 @@ chrono = { version = "0.4", default-features = false, features = ["clock"] }
 clap = { version = "4", features = ["derive", "env"] }
 colored = "3"
 dotenvy = "0.15"
+eframe = { version = "0.31", default-features = true }
 glob = "0.3"
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 rustyline = "15"
@@ -27,3 +28,8 @@ serde_json = "1"
 thiserror = "2"
 tokio = { version = "1", features = ["fs", "io-std", "io-util", "macros", "process", "rt-multi-thread", "time"] }
 walkdir = "2"
+
+[profile.release]
+lto = true
+codegen-units = 1
+strip = true

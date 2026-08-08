@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=grok-agent
+Comment=Local AI coding agent powered by Grok 4.5
+Exec=grok-agent
+Icon=utilities-terminal
+Terminal=false
+Categories=Development;Utility;
+Keywords=ai;grok;agent;xai;

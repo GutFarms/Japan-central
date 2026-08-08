@@ -1,87 +1,92 @@
 # grok-agent
 
-Local AI coding agent written in Rust. The agent process runs on your PC; reasoning is powered by **xAI Grok 4.5** over the Responses API.
+Local AI coding agent written in Rust, with a **desktop GUI** for chatting with the agent. Reasoning is powered by **xAI Grok 4.5** over the Responses API.
 
-> Grok 4.5 model weights are hosted by xAI — this project is a local agent runtime (REPL + tools + tool loop), not an offline copy of the model.
+> Grok 4.5 model weights are hosted by xAI — this project is a local agent runtime (GUI + tools + tool loop), not an offline copy of the model.
+
+## Download / run
+
+### Build a downloadable package
+
+```bash
+./scripts/package.sh
+```
+
+Creates:
+
+```
+dist/grok-agent-<version>-<target>.tar.gz
+```
+
+Extract and launch:
+
+```bash
+tar -xzf dist/grok-agent-*.tar.gz
+cd grok-agent-*
+# Ubuntu/Debian GUI deps (once):
+sudo apt install libxkbcommon-x11-0 libxcb-xkb1
+./grok-agent
+```
+
+Then open **Settings**, paste your [xAI API key](https://console.x.ai/), and chat.
+
+Cross-platform note: build on each OS you want to ship (`cargo build --release` / `./scripts/package.sh`). The checked-in CI artifact from this repo is a Linux x86_64 tarball.
+
+### From source
+
+```bash
+cp .env.example .env   # optional; GUI can store the key in Settings
+cargo run --release
+```
+
+## Modes
+
+| Mode | Command |
+|------|---------|
+| GUI (default) | `grok-agent` |
+| Terminal REPL | `grok-agent --cli` |
+| One-shot | `grok-agent -p "Summarize this repo"` |
 
 ## Features
 
-- Interactive REPL or one-shot `-p` prompts
+- Native desktop chat UI (egui/eframe)
 - Agent loop with function calling against Grok 4.5
 - Local tools sandboxed to a workspace:
   - `list_dir`, `read_file`, `write_file`, `edit_file`, `glob_files`, `run_command`
+- Live tool activity in the conversation
+- Settings panel (API key, model, workspace, web search / code interpreter)
+- Persists settings to `~/.grok-agent/settings.json`
 - Optional xAI server tools: `--web-search`, `--code-interpreter`
-- Conversation continuity via `previous_response_id`
-
-## Requirements
-
-- Rust 1.75+ (edition 2021)
-- An [xAI API key](https://console.x.ai/)
-
-## Setup
-
-```bash
-cp .env.example .env
-# edit .env and set XAI_API_KEY=...
-
-cargo build --release
-```
-
-## Usage
-
-```bash
-# Interactive agent in the current directory
-cargo run --release
-
-# One-shot task
-cargo run --release -- -p "List Rust source files and summarize what this crate does"
-
-# Custom workspace + web search
-cargo run --release -- --workspace ~/projects/my-app --web-search
-```
-
-Installed binary:
-
-```bash
-cargo install --path .
-grok-agent -p "Fix the failing unit tests"
-```
-
-### REPL commands
-
-| Command       | Action                         |
-|---------------|--------------------------------|
-| `/help`       | Show help                      |
-| `/workspace`  | Print sandbox root            |
-| `/reset`      | Clear conversation state       |
-| `/quit`       | Exit                           |
 
 ## Configuration
 
-| Flag / env            | Default                 | Description                          |
-|-----------------------|-------------------------|--------------------------------------|
-| `XAI_API_KEY`         | _(required)_            | xAI API key                          |
-| `XAI_BASE_URL`        | `https://api.x.ai/v1`   | API base                             |
-| `GROK_MODEL`          | `grok-4.5`              | Model id                             |
-| `GROK_WORKSPACE`      | `.`                     | Tool sandbox root                    |
-| `--max-turns`         | `24`                    | Max tool rounds per user message     |
-| `--shell-timeout-secs`| `60`                    | Shell tool timeout                   |
+| Flag / env | Default | Description |
+|------------|---------|-------------|
+| `XAI_API_KEY` | _(required to chat)_ | xAI API key |
+| `XAI_BASE_URL` | `https://api.x.ai/v1` | API base |
+| `GROK_MODEL` | `grok-4.5` | Model id |
+| `GROK_WORKSPACE` | `.` | Tool sandbox root |
+| `--cli` | off | Force terminal mode |
+| `--max-turns` | `24` | Max tool rounds per message |
 
 ## Safety
 
-- File and shell tools resolve paths under `--workspace` and reject escapes.
-- Shell commands still run with your user privileges inside that directory — review prompts before letting the agent execute destructive work.
-- Do not commit `.env` (ignored by default).
+- File and shell tools resolve paths under the workspace and reject escapes.
+- Shell commands still run with your user privileges inside that directory.
+- Do not commit `.env` or share `~/.grok-agent/settings.json`.
 
 ## Project layout
 
 ```
 src/
-  main.rs       CLI / REPL
-  config.rs     Clap + env config
+  main.rs       Entry (GUI by default)
+  gui.rs        Desktop chat interface
+  cli.rs        Terminal REPL
+  config.rs     Clap + saved settings
   client.rs     xAI Responses API client
   agent.rs      Tool-calling agent loop
   tools/        Local filesystem + shell tools
+scripts/package.sh   Build downloadable tarball
 ```
 
 ## License
