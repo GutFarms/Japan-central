@@ -134,16 +134,12 @@ async fn main(spawner: Spawner) -> ! {
         "Touch: SPI3 XPT2046 1MHz CLK25/MOSI32/MISO39/CS33/IRQ36",
     );
 
-    // Prefer last-saved axis map before the short probe.
-    let mut map_before_probe = touch.map.id();
     if let Ok(saved) = store.load() {
         touch.map = TouchMap::from_id(saved.touch_map);
-        map_before_probe = touch.map.id();
     }
 
     let _ = display.draw_splash();
     Timer::after(Duration::from_millis(200)).await;
-    run_touch_probe(&mut usb, &mut display, &mut touch, &mut touch_delay, &boot_btn).await;
 
     let mut wifi_token: Option<WIFI<'static>> = Some(peripherals.WIFI);
     let (mut pool, from_flash) = resolve_pool_config(
@@ -158,9 +154,6 @@ async fn main(spawner: Spawner) -> ! {
     )
     .await;
     pool.touch_map = touch.map.id();
-    if from_flash && pool.touch_map != map_before_probe {
-        let _ = store.save(&pool);
-    }
 
     let _ = display.draw_config_summary(&pool, from_flash);
     serial_writeln(&mut usb, "");
@@ -1197,89 +1190,6 @@ fn log_touch(usb: &mut Serial<'_>, touch: &Touch, p: esp32_s3_scrypt_miner::keyb
         );
     }
     serial_writeln(usb, m.as_str());
-}
-
-/// Short touch self-test (≤2.5s): one screen, raw dump, optional tap confirm.
-async fn run_touch_probe<D: embedded_hal::delay::DelayNs>(
-    usb: &mut Serial<'_>,
-    display: &mut Display<'_, D>,
-    touch: &mut Touch,
-    touch_delay: &mut Delay,
-    boot: &Input<'_>,
-) {
-    serial_writeln(usb, "Touch probe (2s) — tap glass; BOOT=map; any key skips.");
-    let deadline = Instant::now() + Duration::from_millis(2500);
-    let mut boot_was_down = boot.is_low();
-    let mut saw_ok = false;
-    let mut logged = false;
-    let mut byte = [0u8; 1];
-
-    while Instant::now() < deadline {
-        let point = touch.poll_point(touch_delay);
-        let (irq_low, z, raw_xy) = match touch.last_raw {
-            Some((x, y, z, irq)) => {
-                let xy = if x > 0 || y > 0 { Some((x, y)) } else { None };
-                (irq, z, xy)
-            }
-            None => (touch.pressed_raw(), 0, None),
-        };
-        if point.is_some() {
-            saw_ok = true;
-        }
-        let screen = point.map(|p| (p.x, p.y));
-        let _ = display.draw_touch_probe(
-            irq_low,
-            z,
-            raw_xy,
-            screen,
-            touch.map.label(),
-            saw_ok,
-        );
-
-        if !logged {
-            logged = true;
-            let mut m: String<80> = String::new();
-            let _ = core::fmt::Write::write_fmt(
-                &mut m,
-                format_args!(
-                    "probe irq={} z={} raw={:?} err={} {}",
-                    if irq_low { "L" } else { "H" },
-                    z,
-                    raw_xy,
-                    touch.xfer_errors,
-                    touch.map.label()
-                ),
-            );
-            serial_writeln(usb, m.as_str());
-        }
-
-        let boot_down = boot.is_low();
-        if !boot_down && boot_was_down {
-            touch.cycle_map();
-            serial_write(usb, "Touch map → ");
-            serial_writeln(usb, touch.map.label());
-            logged = false;
-        }
-        boot_was_down = boot_down;
-
-        if usb.read(&mut byte).ok().filter(|&n| n > 0).is_some() {
-            serial_writeln(usb, "Touch probe skipped.");
-            return;
-        }
-        if saw_ok {
-            serial_writeln(usb, "Touch probe OK.");
-            Timer::after(Duration::from_millis(350)).await;
-            return;
-        }
-        Timer::after(Duration::from_millis(40)).await;
-    }
-
-    if !saw_ok {
-        serial_writeln(
-            usb,
-            "Touch probe: no tap — serial/BOOT keyboard nav still work.",
-        );
-    }
 }
 
 fn print_scan_list(usb: &mut Serial<'_>, networks: &[ScannedNetwork]) {
