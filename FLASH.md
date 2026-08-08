@@ -2,9 +2,24 @@
 
 Chip: **ESP32** (WROOM-32) · Board: **ESP32-2432S028** · Image: `esp,lite`
 
-## Quick flash (prebuilt merged image)
+## Drag & drop (browser)
 
-From this repo (after building, or using artifacts):
+Easiest on a PC with Chrome or Edge:
+
+```bash
+./scripts/build-flash-images.sh    # once
+./scripts/serve-web-flasher.sh     # opens http://127.0.0.1:8080/web/
+```
+
+1. Open **http://127.0.0.1:8080/web/**
+2. Drag `flash/esp32-2432s028-scrypt-miner-merged.bin` onto the page  
+   (or click **Load project merged.bin**)
+3. Click **Connect & flash** → pick the COM / tty port
+4. Wait for “Flash complete”
+
+Alternate one-click installer: http://127.0.0.1:8080/web/install.html
+
+## Quick flash (CLI)
 
 ```bash
 # Linux / macOS — replace PORT

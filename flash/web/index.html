@@ -1,0 +1,68 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>CYD Scrypt Miner — Drag &amp; Drop Flash</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600&family=Syne:wght@600;700&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <div class="bg"></div>
+  <main>
+    <header>
+      <p class="brand">Japan-central</p>
+      <h1>CYD flash</h1>
+      <p class="lede">Drag the merged <code>.bin</code> onto this page, connect USB, flash the ESP32-2432S028.</p>
+    </header>
+
+    <section id="drop" class="drop" tabindex="0" aria-label="Firmware drop zone">
+      <div class="drop-inner">
+        <p class="drop-title">Drop firmware here</p>
+        <p class="drop-sub">or click to browse · Chrome / Edge + Web Serial</p>
+        <p id="fileMeta" class="file-meta">No file loaded</p>
+      </div>
+      <input id="fileInput" type="file" accept=".bin,application/octet-stream" hidden />
+    </section>
+
+    <div class="row">
+      <button type="button" id="btnBundled" class="btn ghost">Load project merged.bin</button>
+      <label class="field">
+        Address
+        <select id="address">
+          <option value="0x0" selected>0x0 (merged image)</option>
+          <option value="0x10000">0x10000 (app only)</option>
+        </select>
+      </label>
+      <label class="field">
+        Baud
+        <select id="baud">
+          <option value="921600" selected>921600</option>
+          <option value="460800">460800</option>
+          <option value="115200">115200</option>
+        </select>
+      </label>
+    </div>
+
+    <div class="row actions">
+      <button type="button" id="btnFlash" class="btn primary" disabled>Connect &amp; flash</button>
+      <button type="button" id="btnReset" class="btn ghost" disabled>Reset</button>
+    </div>
+
+    <div class="progress-wrap" aria-hidden="true">
+      <div id="bar" class="bar"></div>
+    </div>
+    <p id="status" class="status">Ready</p>
+
+    <pre id="log" class="log" aria-live="polite"></pre>
+
+    <footer>
+      <p>Hold <strong>BOOT</strong> while tapping <strong>RESET</strong> if connect fails. CH340 drivers required on Windows.</p>
+      <p>Serve this folder over HTTP (see <code>scripts/serve-web-flasher.sh</code>) — <code>file://</code> blocks Web Serial in some browsers.</p>
+    </footer>
+  </main>
+  <script type="module" src="app.js"></script>
+</body>
+</html>

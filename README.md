@@ -61,23 +61,21 @@ Stratum worker/endpoint/password changes **reconnect without reboot**. After cha
 
 ## Build & flash (device)
 
-**See [FLASH.md](FLASH.md) for the full flash guide.**
+**See [FLASH.md](FLASH.md).** Easiest path — drag & drop in the browser:
 
 ```bash
-. ./export-esp.sh   # paths for espup / xtensa linker
-
-# Build .bin images into flash/
+. ./export-esp.sh
 ./scripts/build-flash-images.sh
-
-# Flash + serial monitor (Windows example: COM6)
-./scripts/flash-cyd.sh COM6
+./scripts/serve-web-flasher.sh
+# → http://127.0.0.1:8080/web/  (Chrome / Edge)
 ```
 
-Or flash a merged image directly:
+CLI:
 
 ```bash
+./scripts/flash-cyd.sh COM6
+# or
 espflash write-bin -p COM6 0x0 flash/esp32-2432s028-scrypt-miner-merged.bin
-espflash monitor -p COM6
 ```
 
 If upload fails, try a lower baud / hold **BOOT** while resetting. Install CH340 drivers if the serial port does not appear.
