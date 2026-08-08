@@ -67,8 +67,9 @@ Install **CH340** drivers on Windows if no COM port appears. Serial monitor: **1
 
 ## First boot
 
-1. Serial 115200 — enter address, password, stratum, WiFi, BLE (`-` to skip BLE)
-2. GUI on ILI9341; short/long **BOOT** for tabs/menu
+1. Serial or **touch keyboard** — address, password, stratum, WiFi, BLE (`-` / skip to skip)
+2. GUI on ILI9341; tap tabs or BOOT
+3. After WiFi DHCP, open **`http://<board-ip>/`** on your phone/PC (IP shown on MINE/RADIO tabs). JSON: `/api/status`
 
 ## Not for
 

@@ -9,6 +9,7 @@ Bare-metal Rust firmware that mines **scrypt** proof-of-work on an **ESP32-2432S
 - **After boot**, prompts over USB serial (CH340 / UART0) for **address**, **password**, **stratum**, optional **WiFi**, and **BLE name**
 - Starts **WiFi STA + DHCP** when an SSID is set; **BLE** is opt-in (`ble_name`, or `-` to skip)
 - **Stratum TCP client** over WiFi: subscribe, authorize, receive jobs, submit shares
+- **LAN web UI** at `http://<board-ip>/` after DHCP (status dashboard + JSON)
 - **On-device GUI**: splash, setup, mining dashboard, config tab, radio/pool tab, menu
 - Saves credentials to flash and auto-loads them on later boots
 - Host CLI (`host-miner`), **desktop GUI** (`host-gui`), and unit tests

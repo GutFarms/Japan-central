@@ -29,7 +29,7 @@ use static_cell::StaticCell;
 use crate::config::{PoolConfig, SetupField};
 use crate::gui::{GuiScreen, GuiState, MenuItem};
 use crate::keyboard::Keyboard;
-use crate::miner::{hash_to_hex, MinerStats, SCRYPT_LOG_N, SCRYPT_N};
+use crate::miner::{MinerStats, SCRYPT_LOG_N, SCRYPT_N};
 use crate::radio::RadioStatus;
 use crate::stratum::StratumStatus;
 
@@ -366,7 +366,9 @@ impl<'a, D: DelayNs> Display<'a, D> {
         }
 
         match gui.screen {
-            GuiScreen::Mining => self.draw_mining_body(stats, cfg, stratum, mining, screen_changed)?,
+            GuiScreen::Mining => {
+                self.draw_mining_body(stats, cfg, radio, stratum, mining, screen_changed)?
+            }
             GuiScreen::Config => {
                 if screen_changed {
                     self.draw_config_body(cfg)?;
@@ -382,6 +384,7 @@ impl<'a, D: DelayNs> Display<'a, D> {
         &mut self,
         stats: &MinerStats,
         cfg: &PoolConfig,
+        radio: &RadioStatus,
         stratum: &StratumStatus,
         mining: bool,
         full: bool,
@@ -390,7 +393,12 @@ impl<'a, D: DelayNs> Display<'a, D> {
             self.round_panel(8, 60, 200, 100, PANEL)?;
             self.round_panel(216, 60, 96, 100, PANEL)?;
             self.round_panel(8, 170, 304, 48, PANEL)?;
-            self.footer_hint("tap tabs · BOOT short=next long=menu")?;
+            let hint = if radio.ip.is_some() {
+                "web: http://IP/  · tap tabs"
+            } else {
+                "tap tabs · BOOT short=next long=menu"
+            };
+            self.footer_hint(hint)?;
         }
 
         self.fill_rect(16, 68, 184, 36, PANEL)?;
@@ -443,8 +451,6 @@ impl<'a, D: DelayNs> Display<'a, D> {
         } else {
             PoolConfig::ellipsize(stratum.job_id.as_str(), 10)
         };
-        let mut best: String<128> = String::new();
-        hash_to_hex(&stats.best_hash, 2, &mut best);
         let mut line: String<72> = String::new();
         let _ = write!(
             line,
@@ -455,9 +461,16 @@ impl<'a, D: DelayNs> Display<'a, D> {
             stratum.accepted,
             stratum.rejected
         );
-        self.draw_text(&line, Point::new(16, 198), LABEL)?;
+        // Prefer LAN URL when DHCP is up so the board is easy to find.
+        if let Some([a, b, c, d]) = radio.ip {
+            let mut url: String<40> = String::new();
+            let _ = write!(url, "http://{a}.{b}.{c}.{d}/");
+            self.draw_text(url.as_str(), Point::new(16, 206), KEY_TXT_DIM)?;
+        } else {
+            self.draw_text(&line, Point::new(16, 206), LABEL)?;
+        }
 
-        let _ = SCRYPT_LOG_N;
+        let _ = (SCRYPT_LOG_N, cfg, line);
         Ok(())
     }
 
@@ -536,7 +549,11 @@ impl<'a, D: DelayNs> Display<'a, D> {
             stratum.dropped
         );
         self.draw_text(&st_line, Point::new(18, 166), VALUE_SM)?;
-        if !stratum.detail.is_empty() {
+        if let Some([a, b, c, d]) = radio.ip {
+            let mut url: String<48> = String::new();
+            let _ = write!(url, "WEB  http://{a}.{b}.{c}.{d}/");
+            self.draw_text(url.as_str(), Point::new(18, 190), KEY_TXT_DIM)?;
+        } else if !stratum.detail.is_empty() {
             let detail = PoolConfig::ellipsize(stratum.detail.as_str(), 28);
             self.draw_text(detail.as_str(), Point::new(18, 190), VALUE_SM)?;
         }

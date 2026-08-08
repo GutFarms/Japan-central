@@ -14,6 +14,7 @@ pub mod miner;
 pub mod persist;
 pub mod radio;
 pub mod stratum;
+pub mod web;
 
 #[cfg(feature = "esp")]
 pub mod display;

@@ -106,8 +106,8 @@ mod stack {
         ble_name: heapless::String::new(),
     });
 
-    // DNS + TCP (+ spare) sockets for stratum over WiFi.
-    static STACK_RESOURCES: StaticCell<StackResources<4>> = StaticCell::new();
+    // DNS + stratum TCP + HTTP server (+ spare).
+    static STACK_RESOURCES: StaticCell<StackResources<8>> = StaticCell::new();
     static BLE_NAME_BUF: StaticCell<[u8; 24]> = StaticCell::new();
 
     /// Advertise-only BLE (no GATT) — avoids embassy-sync version skew with trouble-host.
@@ -225,7 +225,7 @@ mod stack {
         let (stack, runner) = embassy_net::new(
             wifi_interface,
             net_config,
-            STACK_RESOURCES.init(StackResources::<4>::new()),
+            STACK_RESOURCES.init(StackResources::<8>::new()),
             seed,
         );
 

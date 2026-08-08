@@ -46,6 +46,7 @@ use esp32_s3_scrypt_miner::persist::ConfigStore;
 use esp32_s3_scrypt_miner::radio::{self, RadioStatus};
 use esp32_s3_scrypt_miner::stratum::{self, JobMeta, StratumStatus};
 use esp32_s3_scrypt_miner::touch::{Touch, TouchPins};
+use esp32_s3_scrypt_miner::web::{self, WebStatus};
 
 esp_bootloader_esp_idf::esp_app_desc!();
 
@@ -138,12 +139,17 @@ async fn main(spawner: Spawner) -> ! {
         radio::start(&spawner, peripherals.WIFI, peripherals.BT, &pool)
     {
         stratum::start(&spawner, stack, &pool);
+        web::start(&spawner, stack);
         serial_writeln(&mut usb, "Stratum client starting (needs WiFi + DHCP).");
+        serial_writeln(
+            &mut usb,
+            "Web UI on port 80 after DHCP — open http://<board-ip>/",
+        );
         true
     } else {
         serial_writeln(
             &mut usb,
-            "No WiFi SSID — local demo mining only (no stratum).",
+            "No WiFi SSID — local demo mining only (no stratum / no web UI).",
         );
         false
     };
@@ -422,6 +428,23 @@ async fn main(spawner: Spawner) -> ! {
                 display.draw_gui(&gui, &stats, &pool, &radio_status, &stratum_status, true)
             {
                 info!("display error: {e}");
+            }
+
+            {
+                let mut ws = WebStatus::default();
+                ws.hashrate_x100 = hashrate_x100;
+                ws.shares = stats.shares;
+                ws.nonce = stats.nonce;
+                let _ = ws.address.push_str(pool.address.as_str());
+                let _ = ws.stratum.push_str(pool.stratum.as_str());
+                ws.wifi = radio_status.wifi;
+                ws.ip = radio_status.ip;
+                ws.pool_phase = stratum_status.phase;
+                ws.accepted = stratum_status.accepted;
+                ws.rejected = stratum_status.rejected;
+                ws.dropped = stratum_status.dropped;
+                ws.difficulty = stratum_status.difficulty;
+                web::publish(ws);
             }
 
             info!(
