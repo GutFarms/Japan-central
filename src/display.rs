@@ -262,6 +262,23 @@ impl<'a, D: DelayNs> Display<'a, D> {
         Ok(())
     }
 
+    /// Bottom-middle active hashrate (all main GUI tabs).
+    fn draw_hashrate_footer(&mut self, hashrate_x100: u32) -> Result<(), Error> {
+        self.fill_rect(0, 226, DISPLAY_WIDTH as u32, 14, PANEL)?;
+        let mut rate: String<24> = String::new();
+        let _ = write!(
+            rate,
+            "{}.{:02} H/s",
+            hashrate_x100 / 100,
+            hashrate_x100 % 100
+        );
+        // FONT_8X13_BOLD ≈ 8px/glyph; center in 320px.
+        let w = (rate.len() as i32) * 8;
+        let x = ((DISPLAY_WIDTH as i32) - w) / 2;
+        self.draw_text(rate.as_str(), Point::new(x.max(4), 236), VALUE_SM)?;
+        Ok(())
+    }
+
     pub fn draw_splash(&mut self) -> Result<(), Error> {
         self.wake_clear()?;
         self.last_screen = None;
@@ -597,6 +614,8 @@ impl<'a, D: DelayNs> Display<'a, D> {
             GuiScreen::Radio => self.draw_radio_body(cfg, radio, stratum, screen_changed)?,
             GuiScreen::Menu => self.draw_menu_body(gui.menu)?,
         }
+        // Always last so H/s stays visible bottom-center on every tab.
+        self.draw_hashrate_footer(stats.hashrate_x100)?;
         Ok(())
     }
 
