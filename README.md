@@ -57,7 +57,21 @@ See [`firmware/release/FLASH.md`](firmware/release/FLASH.md) for details.
 
 On boot the display is ready for **USB serial @ 115200** immediately; Wi‑Fi/UDP is optional in the background.
 
-## Host agent
+## Host application (auto USB)
+
+Downloadable app that **auto-detects** the CYD over USB and streams metrics:
+
+| File | Platform |
+| --- | --- |
+| [`host/release/CYD-Monitor-portable.zip`](host/release/CYD-Monitor-portable.zip) | Windows / Linux / macOS (Python launcher) |
+| [`host/release/CYD-Monitor`](host/release/CYD-Monitor) | Linux standalone binary |
+
+- **Windows:** unzip the portable zip → double-click `CYD Monitor.bat`
+- **Linux:** `chmod +x CYD-Monitor && ./CYD-Monitor` (or use `CYD-Monitor.sh` from the zip)
+
+See [`host/release/README.md`](host/release/README.md).
+
+### CLI agent
 
 ```bash
 cd host
@@ -66,7 +80,7 @@ source .venv/bin/activate   # Windows: .venv\Scripts\activate
 pip install -r requirements.txt
 ```
 
-### USB serial (direct PC → CYD)
+### USB serial (CLI)
 
 Plug the CYD into USB, then:
 
@@ -74,7 +88,8 @@ Plug the CYD into USB, then:
 python agent.py --list-ports
 python agent.py --serial COM3          # Windows
 python agent.py --serial /dev/ttyUSB0  # Linux
-python agent.py --serial auto          # first available port
+python agent.py --serial auto          # best CYD-like port
+python desktop_app.py                  # GUI auto-connect app
 ```
 
 ### Wi‑Fi UDP

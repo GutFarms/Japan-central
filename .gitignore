@@ -9,9 +9,13 @@ __pycache__/
 .venv/
 venv/
 host/.venv/
+host/.venv-build/
 *.egg-info/
 dist/
 build/
+host/build/
+host/dist/
+*.spec
 
 # Local overrides (optional)
 host/.env

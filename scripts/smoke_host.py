@@ -18,7 +18,7 @@ PY = str(VENV_PY if VENV_PY.exists() else Path(sys.executable))
 
 def main() -> int:
     sys.path.insert(0, str(ROOT / "host"))
-    from agent import GpuReader, collect_metrics  # noqa: E402
+    from cyd_core import GpuReader, collect_metrics, encode_metrics, pick_best_port  # noqa: E402
 
     gpu = GpuReader()
     payload = collect_metrics(gpu, "SMOKE")
@@ -32,12 +32,13 @@ def main() -> int:
     assert 0.0 <= payload["cpu"] <= 100.0
     assert 0.0 <= payload["ram"] <= 100.0
 
-    # NDJSON framing: one object + newline, under 512 bytes.
-    line = json.dumps(payload, separators=(",", ":")).encode("utf-8") + b"\n"
+    line = encode_metrics(payload) + b"\n"
     assert len(line) <= 512, f"packet too large: {len(line)}"
     assert line.endswith(b"\n")
 
-    # UDP round-trip through the real agent CLI.
+    # pick_best_port should be safe with zero devices.
+    _ = pick_best_port()
+
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     sock.bind(("127.0.0.1", 0))
     sock.settimeout(5)
@@ -47,6 +48,7 @@ def main() -> int:
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
         text=True,
+        cwd=str(ROOT / "host"),
     )
     data, _addr = sock.recvfrom(512)
     proc.wait(timeout=5)
