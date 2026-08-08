@@ -7,7 +7,7 @@ Bare-metal Rust firmware that mines **scrypt** proof-of-work on an **ESP32-2432S
 - Runs Litecoin-style scrypt: prefer **`N=64` (`lite`)** on this board; full `N=1024` is too RAM-heavy with WiFi
 - Reuses ROMix buffers across hashes
 - **After boot**, prompts (touch keyboard or USB serial) for **WiFi first**, then **address** / **password** / **stratum**, then optional **BLE**
-- Starts **WiFi STA + DHCP** when an SSID is set; **BLE** is opt-in (`ble_name`, or `-` to skip)
+- Starts **WiFi STA + DHCP** when an SSID is set; **BLE is not used** (RAM reserved for WiFi/stratum)
 - **Stratum TCP client** over WiFi: subscribe, authorize, receive jobs, submit shares
 - **LAN web UI** at `http://<board-ip>/` after DHCP (status dashboard + JSON)
 - **On-device GUI**: splash, setup, mining dashboard, config tab, radio/pool tab, menu
@@ -40,8 +40,7 @@ On **first boot**, use the **touch screen** or serial monitor (115200):
 2. `wifi_password` — PSK (skipped for open networks / WiFi off)  
 3. `stratum` — defaults to `stratum+tcp://ltc.viabtc.io:3333` (Enter keeps it; plain TCP only)  
 4. `worker` — worker name (wallet address OK)  
-5. `password` — pool password (often `x`)  
-6. `ble_name` — advertised name, or `-` / empty to **skip BLE** (recommended; WiFi mining skips BLE anyway)
+5. `password` — pool password (often `x`)
 
 After WiFi + DHCP, **ONLINE** / pool **CONNECTED** banners appear without pausing mining. Web UI: `http://IP/` · `/api/status` · `/api/reconnect`.
 

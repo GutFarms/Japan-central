@@ -310,7 +310,7 @@ impl<'a, D: DelayNs> Display<'a, D> {
         self.wake_clear()?;
         self.last_screen = None;
         self.header_bar("WIFI")?;
-        self.draw_text("1/6  pick a network", Point::new(12, 42), LABEL)?;
+        self.draw_text("1/5  pick a network", Point::new(12, 42), LABEL)?;
 
         if networks.is_empty() {
             self.round_panel(8, 56, 304, 130, PANEL)?;
@@ -392,7 +392,8 @@ impl<'a, D: DelayNs> Display<'a, D> {
         self.header_bar("SETUP")?;
 
         let step_n = field.step_number();
-        for i in 1..=6u8 {
+        let steps = SetupField::SETUP_STEPS;
+        for i in 1..=steps {
             let x = 12 + (i as i32 - 1) * 18;
             let color = if i < step_n {
                 ACCENT
@@ -405,7 +406,7 @@ impl<'a, D: DelayNs> Display<'a, D> {
         }
 
         let mut step: String<40> = String::new();
-        let _ = write!(step, "{}/6 {}", step_n, field.label());
+        let _ = write!(step, "{}/{} {}", step_n, steps, field.label());
         self.draw_text(&step, Point::new(130, 42), LABEL)?;
 
         // Value field
@@ -494,7 +495,6 @@ impl<'a, D: DelayNs> Display<'a, D> {
             PoolConfig::ellipsize("(wifi off)", 22)
         };
         self.draw_row(156, "wifi", wifi.as_str())?;
-        self.draw_row(182, "ble", cfg.ble_name_or_default())?;
 
         let hint = if from_flash {
             "tap tabs · long BOOT=menu · serial: change"
@@ -730,7 +730,6 @@ impl<'a, D: DelayNs> Display<'a, D> {
             PoolConfig::ellipsize("(off)", 22)
         };
         self.draw_row(156, "wifi", wifi.as_str())?;
-        self.draw_row(182, "ble", cfg.ble_name_or_default())?;
         self.footer_hint("tap body to change · serial also works")?;
         Ok(())
     }
@@ -767,21 +766,13 @@ impl<'a, D: DelayNs> Display<'a, D> {
         let _ = write!(ip_line, "IP   {}", radio.ip_string().as_str());
         self.draw_text(&ip_line, Point::new(18, 114), VALUE_SM)?;
 
-        let ble_state = if radio.ble_connected {
-            "conn"
-        } else if radio.ble_advertising {
-            "adv"
-        } else {
-            "off"
-        };
-        let mut ble_line: String<48> = String::new();
+        let mut pool_line: String<48> = String::new();
         let _ = write!(
-            ble_line,
-            "BLE  {} {}",
-            ble_state,
-            PoolConfig::ellipsize(cfg.ble_name_or_default(), 14).as_str()
+            pool_line,
+            "HOST {}",
+            PoolConfig::ellipsize(cfg.stratum.as_str(), 22).as_str()
         );
-        self.draw_text(&ble_line, Point::new(18, 140), VALUE_SM)?;
+        self.draw_text(&pool_line, Point::new(18, 140), VALUE_SM)?;
 
         let pool_state = if stratum.phase.is_connected() {
             "CONNECTED"

@@ -1,10 +1,10 @@
 //! ESP32 scrypt miner firmware for **ESP32-2432S028** (Cheap Yellow Display).
 //!
-//! After first boot, enter wallet **address**, pool **password**, **stratum**,
-//! optional **WiFi**, and **BLE name** over USB serial (CH340 UART0). Values are
-//! saved to flash and auto-loaded on later boots. Onboard WiFi (STA+DHCP) +
-//! optional BLE start from those settings. When WiFi is configured, a
-//! **stratum TCP client** connects to the pool and mines real jobs.
+//! After first boot, enter optional **WiFi**, then **stratum** / **worker** /
+//! **password** over touch or USB serial (CH340 UART0). Values are saved to
+//! flash and auto-loaded on later boots. Onboard WiFi (STA+DHCP) starts from
+//! those settings. When WiFi is configured, a **stratum TCP client** connects
+//! to the pool and mines real jobs. BLE is not used (keeps RAM for mining).
 //!
 //! Controls: **touch** tabs/menu/on-screen keyboard; **BOOT** short=next tab,
 //! long=menu. Serial still accepts `change` / `radio` / `stratum`.
@@ -211,12 +211,11 @@ async fn main(spawner: Spawner) -> ! {
     }
 
     info!(
-        "miner ready (N={}, log_n={}) stratum={} wifi={} ble={} from_flash={}",
+        "miner ready (N={}, log_n={}) stratum={} wifi={} from_flash={}",
         esp32_s3_scrypt_miner::SCRYPT_N,
         esp32_s3_scrypt_miner::SCRYPT_LOG_N,
         pool.stratum,
         pool.wifi_ssid,
-        pool.ble_name_or_default(),
         from_flash
     );
     let mut active_job: Option<JobMeta> = None;
@@ -290,12 +289,12 @@ async fn main(spawner: Spawner) -> ! {
                                 stratum::apply_pool_config(&pool).await;
                                 serial_writeln(
                                     &mut usb,
-                                    "Stratum worker/endpoint reloaded. WiFi/BLE still need reboot.",
+                                    "Stratum worker/endpoint reloaded. WiFi still needs reboot.",
                                 );
                             } else {
                                 serial_writeln(
                                     &mut usb,
-                                    "Note: WiFi/BLE keep prior session until reboot.",
+                                    "Note: WiFi keeps prior session until reboot.",
                                 );
                             }
                             gui.screen = esp32_s3_scrypt_miner::gui::GuiScreen::Config;
@@ -407,12 +406,12 @@ async fn main(spawner: Spawner) -> ! {
                         stratum::apply_pool_config(&pool).await;
                         serial_writeln(
                             &mut usb,
-                            "Stratum worker/endpoint reloaded. WiFi/BLE still need reboot.",
+                            "Stratum worker/endpoint reloaded. WiFi still needs reboot.",
                         );
                     } else {
                         serial_writeln(
                             &mut usb,
-                            "Note: WiFi/BLE keep prior session until reboot.",
+                            "Note: WiFi keeps prior session until reboot.",
                         );
                     }
                     let _ = display.draw_config_summary(&pool, true);
@@ -589,8 +588,7 @@ fn print_config_serial(usb: &mut Serial<'_>, pool: &PoolConfig) {
     }
     serial_write(usb, "  wifi_password = ");
     serial_writeln(usb, pool.wifi_password_masked().as_str());
-    serial_write(usb, "  ble_name = ");
-    serial_writeln(usb, pool.ble_name_or_default());
+    serial_writeln(usb, "  ble_name = (unused)");
 }
 
 fn print_radio_serial(
@@ -611,16 +609,7 @@ fn print_radio_serial(
     }
     serial_write(usb, "  ip = ");
     serial_writeln(usb, radio.ip_string().as_str());
-    serial_write(usb, "  ble = ");
-    if radio.ble_connected {
-        serial_write(usb, "connected");
-    } else if radio.ble_advertising {
-        serial_write(usb, "advertising");
-    } else {
-        serial_write(usb, "off");
-    }
-    serial_write(usb, "  name = ");
-    serial_writeln(usb, pool.ble_name_or_default());
+    serial_writeln(usb, "  ble = unused");
     serial_write(usb, "  stratum = ");
     serial_write(usb, stratum.phase.label());
     serial_write(usb, "  endpoint = ");
@@ -885,6 +874,7 @@ async fn collect_pool_config<D: embedded_hal::delay::DelayNs>(
     serial_writeln(usb, "Step 1: scan & tap a WiFi network (or type / skip).");
     serial_writeln(usb, "Serial: number from scan list, SSID text, or '-' to skip.");
     serial_writeln(usb, "BOOT: WiFi=select · keyboard short=next key, long=press.");
+    serial_writeln(usb, "BLE is off (not required).");
     serial_writeln(usb, "");
 
     for field in SetupField::ALL {

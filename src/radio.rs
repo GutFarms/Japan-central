@@ -182,6 +182,7 @@ mod stack {
         }
     }
 
+    #[allow(dead_code)] // retained if BLE is re-enabled later; unused on CYD miner build
     fn start_ble(spawner: &Spawner, bt: BT<'static>, ble_name: &str) {
         let name_buf = BLE_NAME_BUF.init([0u8; 24]);
         let ble_bytes = ble_name.as_bytes();
@@ -323,11 +324,11 @@ mod stack {
         Ok(out)
     }
 
-    /// Start optional BLE advertising and, when configured, WiFi STA + DHCP.
+    /// Start WiFi STA + DHCP when configured.
     ///
     /// Returns the embassy-net [`Stack`] when WiFi was started so callers can
-    /// open TCP (stratum) sockets. BLE is opt-in (`ble_name`) so WiFi/stratum
-    /// mining can keep more RAM free.
+    /// open TCP (stratum) sockets. **BLE is unused** on this build — classic
+    /// ESP32 RAM goes to WiFi/stratum instead.
     pub fn start(
         spawner: &Spawner,
         wifi: WIFI<'static>,
@@ -335,26 +336,15 @@ mod stack {
         cfg: &PoolConfig,
     ) -> Option<Stack<'static>> {
         seed_status(cfg);
+        let _ = bt; // BLE peripheral kept unused (no advertising / no coex cost).
 
-        // Prefer WiFi when both are set — classic ESP32 can't comfortably run
-        // WiFi+BLE without coexistence + a lot more RAM.
-        let stack = if cfg.wifi_enabled() {
-            if cfg.ble_enabled() {
-                info!("BLE requested but WiFi active — skipping BLE (no coex)");
-            }
-            let _ = bt;
+        if cfg.wifi_enabled() {
             start_wifi(spawner, wifi, cfg)
-        } else if cfg.ble_enabled() {
-            start_ble(spawner, bt, cfg.ble_name.as_str());
-            let _ = wifi;
-            None
         } else {
-            info!("WiFi skipped (no SSID); BLE skipped (no ble_name)");
+            info!("WiFi skipped (no SSID); BLE unused");
             let _ = wifi;
-            let _ = bt;
             None
-        };
-        stack
+        }
     }
 
     #[embassy_executor::task]
@@ -413,6 +403,7 @@ mod stack {
     }
 
     #[embassy_executor::task]
+    #[allow(dead_code)]
     async fn ble_task(
         controller: ExternalController<BleConnector<'static>, 1>,
         ble_name: &'static [u8],

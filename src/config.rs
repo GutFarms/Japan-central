@@ -41,14 +41,14 @@ pub enum SetupField {
 }
 
 impl SetupField {
-    /// First-time / change-credentials order: **WiFi**, then **stratum → worker → password**, then BLE.
-    pub const ALL: [SetupField; 6] = [
+    /// First-time / change-credentials order: **WiFi**, then **stratum → worker → password**.
+    /// BLE is not part of setup (stays off; saves RAM for WiFi/stratum).
+    pub const ALL: [SetupField; 5] = [
         SetupField::WifiSsid,
         SetupField::WifiPassword,
         SetupField::Stratum,
         SetupField::Address,
         SetupField::Password,
-        SetupField::BleName,
     ];
 
     /// Pool identity fields required before mining (stratum → worker → password).
@@ -101,12 +101,12 @@ impl SetupField {
             SetupField::WifiPassword => Some(SetupField::Stratum),
             SetupField::Stratum => Some(SetupField::Address),
             SetupField::Address => Some(SetupField::Password),
-            SetupField::Password => Some(SetupField::BleName),
+            SetupField::Password => None,
             SetupField::BleName => None,
         }
     }
 
-    /// 1-based step index in [`SetupField::ALL`].
+    /// 1-based step index in [`SetupField::ALL`] (BLE is not a setup step).
     pub fn step_number(self) -> u8 {
         match self {
             SetupField::WifiSsid => 1,
@@ -114,9 +114,11 @@ impl SetupField {
             SetupField::Stratum => 3,
             SetupField::Address => 4,
             SetupField::Password => 5,
-            SetupField::BleName => 6,
+            SetupField::BleName => 0,
         }
     }
+
+    pub const SETUP_STEPS: u8 = 5;
 }
 
 /// Pool / worker credentials + onboard radio settings entered after boot.
@@ -688,6 +690,9 @@ mod tests {
         );
         assert_eq!(SetupField::Stratum.next(), Some(SetupField::Address));
         assert_eq!(SetupField::Address.next(), Some(SetupField::Password));
+        assert_eq!(SetupField::Password.next(), None);
+        assert_eq!(SetupField::ALL.len(), 5);
+        assert!(!SetupField::ALL.contains(&SetupField::BleName));
     }
 
     #[test]
