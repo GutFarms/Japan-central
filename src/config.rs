@@ -38,26 +38,26 @@ pub enum SetupField {
 }
 
 impl SetupField {
-    /// First-time / change-credentials order: **WiFi first**, then pool, then BLE.
+    /// First-time / change-credentials order: **WiFi**, then **stratum → worker → password**, then BLE.
     pub const ALL: [SetupField; 6] = [
         SetupField::WifiSsid,
         SetupField::WifiPassword,
+        SetupField::Stratum,
         SetupField::Address,
         SetupField::Password,
-        SetupField::Stratum,
         SetupField::BleName,
     ];
 
-    /// Pool identity fields required before mining.
+    /// Pool identity fields required before mining (stratum → worker → password).
     pub const POOL: [SetupField; 3] = [
+        SetupField::Stratum,
         SetupField::Address,
         SetupField::Password,
-        SetupField::Stratum,
     ];
 
     pub fn label(self) -> &'static str {
         match self {
-            SetupField::Address => "address",
+            SetupField::Address => "worker",
             SetupField::Password => "password",
             SetupField::Stratum => "stratum",
             SetupField::WifiSsid => "wifi_ssid",
@@ -68,9 +68,9 @@ impl SetupField {
 
     pub fn prompt(self) -> &'static str {
         match self {
-            SetupField::Address => "Wallet address (worker name OK)",
+            SetupField::Address => "Worker name (wallet OK)",
             SetupField::Password => "Pool password (often 'x')",
-            SetupField::Stratum => "Stratum location (host:port)",
+            SetupField::Stratum => "Stratum host:port",
             SetupField::WifiSsid => "WiFi SSID first (- to skip)",
             SetupField::WifiPassword => "WiFi password (empty=open)",
             SetupField::BleName => "BLE name (- to skip; saves RAM with WiFi)",
@@ -92,10 +92,10 @@ impl SetupField {
     pub fn next(self) -> Option<SetupField> {
         match self {
             SetupField::WifiSsid => Some(SetupField::WifiPassword),
-            SetupField::WifiPassword => Some(SetupField::Address),
+            SetupField::WifiPassword => Some(SetupField::Stratum),
+            SetupField::Stratum => Some(SetupField::Address),
             SetupField::Address => Some(SetupField::Password),
-            SetupField::Password => Some(SetupField::Stratum),
-            SetupField::Stratum => Some(SetupField::BleName),
+            SetupField::Password => Some(SetupField::BleName),
             SetupField::BleName => None,
         }
     }
@@ -105,9 +105,9 @@ impl SetupField {
         match self {
             SetupField::WifiSsid => 1,
             SetupField::WifiPassword => 2,
-            SetupField::Address => 3,
-            SetupField::Password => 4,
-            SetupField::Stratum => 5,
+            SetupField::Stratum => 3,
+            SetupField::Address => 4,
+            SetupField::Password => 5,
             SetupField::BleName => 6,
         }
     }
@@ -283,20 +283,21 @@ impl PoolConfig {
         Ok(())
     }
 
-    /// Parse `address …` / `wifi_ssid …` / … assignment lines.
+    /// Parse `worker …` / `address …` / `wifi_ssid …` / … assignment lines.
     pub fn parse_assignment(line: &str) -> Result<(SetupField, &str), ConfigError> {
         let line = line.trim();
         // Longer labels first so `wifi_password` is not eaten by a shorter prefix.
-        const ORDER: [SetupField; 6] = [
-            SetupField::WifiPassword,
-            SetupField::WifiSsid,
-            SetupField::BleName,
-            SetupField::Address,
-            SetupField::Password,
-            SetupField::Stratum,
+        // `address` kept as a legacy alias for worker.
+        const PREFIXES: [(&str, SetupField); 7] = [
+            ("wifi_password", SetupField::WifiPassword),
+            ("wifi_ssid", SetupField::WifiSsid),
+            ("ble_name", SetupField::BleName),
+            ("stratum", SetupField::Stratum),
+            ("password", SetupField::Password),
+            ("worker", SetupField::Address),
+            ("address", SetupField::Address),
         ];
-        for field in ORDER {
-            let prefix = field.label();
+        for (prefix, field) in PREFIXES {
             if let Some(rest) = line
                 .strip_prefix(prefix)
                 .and_then(|r| r.strip_prefix([':', '=', ' ', '\t']))
@@ -634,15 +635,26 @@ mod tests {
     }
 
     #[test]
-    fn setup_order_starts_with_wifi() {
+    fn setup_order_wifi_then_stratum_worker_password() {
         assert_eq!(SetupField::ALL[0], SetupField::WifiSsid);
         assert_eq!(SetupField::ALL[1], SetupField::WifiPassword);
-        assert_eq!(SetupField::WifiSsid.step_number(), 1);
-        assert_eq!(SetupField::Address.step_number(), 3);
+        assert_eq!(SetupField::ALL[2], SetupField::Stratum);
+        assert_eq!(SetupField::ALL[3], SetupField::Address);
+        assert_eq!(SetupField::ALL[4], SetupField::Password);
+        assert_eq!(SetupField::POOL, [
+            SetupField::Stratum,
+            SetupField::Address,
+            SetupField::Password,
+        ]);
+        assert_eq!(SetupField::Stratum.step_number(), 3);
+        assert_eq!(SetupField::Address.step_number(), 4);
+        assert_eq!(SetupField::Password.step_number(), 5);
         assert_eq!(
-            SetupField::WifiSsid.next(),
-            Some(SetupField::WifiPassword)
+            SetupField::WifiPassword.next(),
+            Some(SetupField::Stratum)
         );
+        assert_eq!(SetupField::Stratum.next(), Some(SetupField::Address));
+        assert_eq!(SetupField::Address.next(), Some(SetupField::Password));
     }
 
     #[test]
@@ -657,6 +669,11 @@ mod tests {
         assert_eq!(field, SetupField::Address);
         cfg.set(field, value).unwrap();
         assert_eq!(cfg.address.as_str(), "LtcAddr99");
+
+        let (field, value) = PoolConfig::parse_assignment("worker: Rig1").unwrap();
+        assert_eq!(field, SetupField::Address);
+        cfg.set(field, value).unwrap();
+        assert_eq!(cfg.address.as_str(), "Rig1");
 
         let (field, value) = PoolConfig::parse_assignment("password=secret").unwrap();
         cfg.set(field, value).unwrap();

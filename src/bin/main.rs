@@ -544,12 +544,12 @@ async fn main(spawner: Spawner) -> ! {
 }
 
 fn print_config_serial(usb: &mut Serial<'_>, pool: &PoolConfig) {
-    serial_write(usb, "  address = ");
+    serial_write(usb, "  stratum  = ");
+    serial_writeln(usb, pool.stratum.as_str());
+    serial_write(usb, "  worker  = ");
     serial_writeln(usb, pool.address.as_str());
     serial_write(usb, "  password = ");
     serial_writeln(usb, pool.password_masked().as_str());
-    serial_write(usb, "  stratum  = ");
-    serial_writeln(usb, pool.stratum.as_str());
     serial_write(usb, "  wifi_ssid = ");
     if pool.wifi_enabled() {
         serial_writeln(usb, pool.wifi_ssid.as_str());
@@ -844,7 +844,7 @@ async fn collect_pool_config<D: embedded_hal::delay::DelayNs>(
     serial_writeln(usb, "=== ESP32-2432S028 Scrypt Miner setup ===");
     serial_writeln(usb, "Step 1: scan & tap a WiFi network (or type / skip).");
     serial_writeln(usb, "Serial: number from scan list, SSID text, or '-' to skip.");
-    serial_writeln(usb, "Then password (if needed), pool address / password / stratum, BLE.");
+    serial_writeln(usb, "Then WiFi password (if needed), stratum, worker, pool password, BLE.");
     serial_writeln(usb, "");
 
     for field in SetupField::ALL {

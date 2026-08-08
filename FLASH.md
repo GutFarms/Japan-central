@@ -67,7 +67,7 @@ Install **CH340** drivers on Windows if no COM port appears. Serial monitor: **1
 
 ## First boot
 
-1. **WiFi scan list** on first setup — tap a network (or **type** / **skip**). Then password (if needed), address / password / stratum, BLE. USB serial (115200) also works: enter scan index, SSID, or `-`
+1. **WiFi scan list** on first setup — tap a network (or **type** / **skip**). Then WiFi password (if needed), **stratum → worker → password**, then BLE. USB serial (115200) also works: enter scan index, SSID, or `-`
 2. If taps do nothing, use serial — it always works in parallel with touch
 3. After DHCP, an **ONLINE** screen shows the IP; also on the RADIO tab / MINE URL line
 4. Open **`http://<board-ip>/`** on your phone/PC. JSON: `/api/status`

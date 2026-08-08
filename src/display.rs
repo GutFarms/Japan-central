@@ -394,9 +394,9 @@ impl<'a, D: DelayNs> Display<'a, D> {
         self.tab_strip(GuiScreen::Config)?;
 
         self.round_panel(8, 60, 304, 150, PANEL)?;
-        self.draw_row(78, "address", &PoolConfig::ellipsize(cfg.address.as_str(), 26))?;
-        self.draw_row(104, "password", cfg.password_masked().as_str())?;
-        self.draw_row(130, "stratum", &PoolConfig::ellipsize(cfg.stratum.as_str(), 26))?;
+        self.draw_row(78, "stratum", &PoolConfig::ellipsize(cfg.stratum.as_str(), 26))?;
+        self.draw_row(104, "worker", &PoolConfig::ellipsize(cfg.address.as_str(), 26))?;
+        self.draw_row(130, "password", cfg.password_masked().as_str())?;
         let wifi = if cfg.wifi_enabled() {
             PoolConfig::ellipsize(cfg.wifi_ssid.as_str(), 22)
         } else {
@@ -630,9 +630,9 @@ impl<'a, D: DelayNs> Display<'a, D> {
 
     fn draw_config_body(&mut self, cfg: &PoolConfig) -> Result<(), Error> {
         self.round_panel(8, 60, 304, 150, PANEL)?;
-        self.draw_row(78, "address", &PoolConfig::ellipsize(cfg.address.as_str(), 26))?;
-        self.draw_row(104, "password", cfg.password_masked().as_str())?;
-        self.draw_row(130, "stratum", &PoolConfig::ellipsize(cfg.stratum.as_str(), 26))?;
+        self.draw_row(78, "stratum", &PoolConfig::ellipsize(cfg.stratum.as_str(), 26))?;
+        self.draw_row(104, "worker", &PoolConfig::ellipsize(cfg.address.as_str(), 26))?;
+        self.draw_row(130, "password", cfg.password_masked().as_str())?;
         let wifi = if cfg.wifi_enabled() {
             PoolConfig::ellipsize(cfg.wifi_ssid.as_str(), 22)
         } else {

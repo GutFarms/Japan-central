@@ -260,12 +260,12 @@ impl App for HostGuiApp {
             .show(ctx, |ui| {
                 ui.heading("Credentials");
                 ui.add_space(6.0);
-                ui.label("Address");
+                ui.label("Stratum");
+                ui.text_edit_singleline(&mut self.stratum);
+                ui.label("Worker");
                 ui.text_edit_singleline(&mut self.address);
                 ui.label("Password");
                 ui.add(egui::TextEdit::singleline(&mut self.password).password(true));
-                ui.label("Stratum");
-                ui.text_edit_singleline(&mut self.stratum);
                 ui.add_space(8.0);
                 ui.label("WiFi SSID (- to skip)");
                 ui.text_edit_singleline(&mut self.wifi_ssid);
