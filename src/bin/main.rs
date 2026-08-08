@@ -753,9 +753,10 @@ async fn collect_pool_config<D: embedded_hal::delay::DelayNs>(
 
     serial_writeln(usb, "");
     serial_writeln(usb, "=== ESP32-2432S028 Scrypt Miner setup ===");
-    serial_writeln(usb, "Step 1: WiFi (touch keyboard or USB serial).");
-    serial_writeln(usb, "Then pool address / password / stratum, then BLE.");
-    serial_writeln(usb, "WiFi SSID '-' / skip skips WiFi. BLE '-' skips BLE.");
+    serial_writeln(usb, "Type each value here at 115200, or use the on-screen keyboard.");
+    serial_writeln(usb, "Step 1: WiFi SSID ('-' or skip = no WiFi).");
+    serial_writeln(usb, "Then WiFi password, pool address / password / stratum, then BLE.");
+    serial_writeln(usb, "BLE '-' / skip disables BLE (saves RAM with WiFi).");
     serial_writeln(usb, "");
 
     for field in SetupField::ALL {

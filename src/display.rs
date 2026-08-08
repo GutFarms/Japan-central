@@ -269,7 +269,7 @@ impl<'a, D: DelayNs> Display<'a, D> {
             stars
         } else if typed.is_empty() {
             let mut s: String<96> = String::new();
-            let _ = s.push_str("tap keys...");
+            let _ = s.push_str("tap keys or USB serial…");
             s
         } else {
             PoolConfig::ellipsize(typed, 34)
