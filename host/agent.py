@@ -12,7 +12,8 @@ import json
 import socket
 import sys
 import time
-from typing import Any, Optional, Protocol
+import warnings
+from typing import Any, Protocol
 
 import psutil
 
@@ -25,16 +26,19 @@ except Exception:  # noqa: BLE001
     _HAS_SERIAL = False
 
 try:
-    from pynvml import (
-        nvmlDeviceGetHandleByIndex,
-        nvmlDeviceGetName,
-        nvmlDeviceGetTemperature,
-        nvmlDeviceGetUtilizationRates,
-        nvmlDeviceGetMemoryInfo,
-        nvmlInit,
-        nvmlShutdown,
-        NVML_TEMPERATURE_GPU,
-    )
+    # nvidia-ml-py still exposes the legacy pynvml import path.
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", FutureWarning)
+        from pynvml import (
+            nvmlDeviceGetHandleByIndex,
+            nvmlDeviceGetName,
+            nvmlDeviceGetTemperature,
+            nvmlDeviceGetUtilizationRates,
+            nvmlDeviceGetMemoryInfo,
+            nvmlInit,
+            nvmlShutdown,
+            NVML_TEMPERATURE_GPU,
+        )
 
     _HAS_NVML = True
 except Exception:  # noqa: BLE001 - optional dependency / missing driver

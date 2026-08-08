@@ -26,6 +26,7 @@ namespace Theme {
   inline uint16_t barColorFor(float pct) {
     if (pct >= 90.0f) return danger;
     if (pct >= 75.0f) return warn;
+    if (pct >= 60.0f) return barFillHi;
     if (pct >= 45.0f) return barFillMid;
     return barFillLo;
   }

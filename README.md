@@ -115,11 +115,22 @@ Soft midnight-blue canvas with raised “bubble” cards, capsule progress bars,
 ```
 firmware/
   platformio.ini
-  include/     theme, metrics, wifi config, GUI API
-  src/         main, GUI painter, JSON parser
+  include/     theme, metrics, wifi/serial config, GUI API
+  src/         main, GUI, JSON parser, serial link
+  release/     prebuilt .bin flash images
 host/
   agent.py
+  simulate_demo.py
   requirements.txt
 protocol/
   metrics_v1.md
+scripts/
+  verify.sh        full rebuild + smoke checks
+  smoke_host.py    offline host/protocol smoke test
+```
+
+## Verify
+
+```bash
+./scripts/verify.sh
 ```

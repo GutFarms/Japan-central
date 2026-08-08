@@ -25,7 +25,6 @@ class MonitorGui {
                         float tempC, bool hasTemp, bool force);
   void drawCapsuleBar(TFT_eSPI &tft, int x, int y, int w, int h, float pct);
   void drawSoftBubble(TFT_eSPI &tft, int x, int y, int w, int h, uint16_t fill);
-  void fillSoftCircle(TFT_eSPI &tft, int cx, int cy, int r, uint16_t color);
 
   bool chromeDrawn_ = false;
   char lastHost_[24] = "";

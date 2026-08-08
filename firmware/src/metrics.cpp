@@ -3,7 +3,6 @@
 #include <cstring>
 
 #include <ArduinoJson.h>
-#include "wifi_config.h"
 
 bool parseMetricsJson(const char *json, size_t len, SystemMetrics &out) {
   JsonDocument doc;

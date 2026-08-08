@@ -38,17 +38,13 @@ void MonitorGui::begin(TFT_eSPI &tft) {
   chromeDrawn_ = false;
 }
 
-void MonitorGui::fillSoftCircle(TFT_eSPI &tft, int cx, int cy, int r, uint16_t color) {
-  tft.fillCircle(cx, cy, r, color);
-}
-
 void MonitorGui::drawDecor(TFT_eSPI &tft) {
   // Soft ambient bubbles behind the UI (static, drawn once with chrome).
-  fillSoftCircle(tft, -8, 40, 36, Theme::bgDeep);
-  fillSoftCircle(tft, SCREEN_W + 10, 90, 44, Theme::bgDeep);
-  fillSoftCircle(tft, 40, SCREEN_H + 6, 28, Theme::bubbleGlow);
-  fillSoftCircle(tft, SCREEN_W - 30, -6, 22, Theme::bubbleGlow);
-  fillSoftCircle(tft, SCREEN_W / 2, SCREEN_H / 2 + 10, 50, Theme::bgDeep);
+  tft.fillCircle(-8, 40, 36, Theme::bgDeep);
+  tft.fillCircle(SCREEN_W + 10, 90, 44, Theme::bgDeep);
+  tft.fillCircle(40, SCREEN_H + 6, 28, Theme::bubbleGlow);
+  tft.fillCircle(SCREEN_W - 30, -6, 22, Theme::bubbleGlow);
+  tft.fillCircle(SCREEN_W / 2, SCREEN_H / 2 + 10, 50, Theme::bgDeep);
 }
 
 void MonitorGui::drawSoftBubble(TFT_eSPI &tft, int x, int y, int w, int h, uint16_t fill) {
@@ -233,12 +229,8 @@ void MonitorGui::drawMetricBubble(TFT_eSPI &tft, int index, const char *label, f
 
 void MonitorGui::drawFooter(TFT_eSPI &tft, const SystemMetrics &m, const char *statusLine) {
   const char *status = statusLine ? statusLine : "";
-  if (strcmp(lastStatus_, status) == 0 && lastFps_ == m.fps && chromeDrawn_) {
-    // Still need to paint once after chrome — handled by empty lastStatus_
-  }
-
   const bool same =
-      chromeDrawn_ && strcmp(lastStatus_, status) == 0 && lastFps_ == m.fps && lastStatus_[0] != '\0';
+      chromeDrawn_ && lastStatus_[0] != '\0' && strcmp(lastStatus_, status) == 0 && lastFps_ == m.fps;
   if (same) {
     return;
   }
