@@ -18,6 +18,7 @@ load_env_file "$ROOT/config/appliance.env"
 
 NAME="${CURSOR_APPLIANCE_NAME:-cursor-appliance}"
 MGMT_ADDR="${CURSOR_APPLIANCE_MANAGEMENT_ADDR:-127.0.0.1:8733}"
+LOCAL_ADDR="${CURSOR_APPLIANCE_LOCAL_ADDR:-127.0.0.1:8734}"
 VERSION="$(tr -d '[:space:]' <"$ROOT/VERSION" 2>/dev/null || echo unknown)"
 
 echo "Cursor appliance v${VERSION}"
@@ -36,14 +37,27 @@ else
 fi
 
 if curl -fsS --max-time 2 "http://${MGMT_ADDR}/healthz" >/dev/null 2>&1; then
-  echo "  healthz: OK (http://${MGMT_ADDR}/healthz)"
+  echo "  cloud healthz: OK (http://${MGMT_ADDR}/healthz)"
 else
-  echo "  healthz: unreachable (http://${MGMT_ADDR}/healthz)"
+  echo "  cloud healthz: unreachable (http://${MGMT_ADDR}/healthz)"
 fi
 
+if curl -fsS --max-time 2 "http://${LOCAL_ADDR}/healthz" >/dev/null 2>&1; then
+  echo "  local healthz: OK (http://${LOCAL_ADDR}/healthz)"
+else
+  echo "  local healthz: unreachable (http://${LOCAL_ADDR}/healthz)"
+fi
+
+echo "  cloud process:"
 if pgrep -af 'agent worker' >/dev/null 2>&1; then
-  echo "  process:"
   pgrep -af 'agent worker' | sed 's/^/    /'
 else
-  echo "  process: not running"
+  echo "    not running"
+fi
+
+echo "  local process:"
+if pgrep -af 'cursor-local-worker' >/dev/null 2>&1; then
+  pgrep -af 'cursor-local-worker' | sed 's/^/    /'
+else
+  echo "    not running"
 fi

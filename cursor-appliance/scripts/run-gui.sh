@@ -16,9 +16,9 @@ need_cmd cargo
 
 cd "$GUI_DIR"
 if [[ "${CURSOR_APPLIANCE_GUI_RELEASE:-0}" == "1" ]]; then
-  cargo build --release
+  cargo build --release --bins
   exec "$GUI_DIR/target/release/cursor-appliance-gui" "$@"
 fi
 
-cargo build
+cargo build --bins
 exec "$GUI_DIR/target/debug/cursor-appliance-gui" "$@"

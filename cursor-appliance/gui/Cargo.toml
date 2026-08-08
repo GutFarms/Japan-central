@@ -1,6 +1,6 @@
 [package]
 name = "cursor-appliance-gui"
-version = "0.2.0"
+version = "0.3.0"
 edition = "2021"
 description = "Local egui control panel for the Cursor My Machines appliance"
 license = "MIT"
@@ -9,6 +9,10 @@ publish = false
 [[bin]]
 name = "cursor-appliance-gui"
 path = "src/main.rs"
+
+[[bin]]
+name = "cursor-local-worker"
+path = "src/bin/local_worker.rs"
 
 [dependencies]
 chrono = "0.4.38"

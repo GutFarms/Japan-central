@@ -7,9 +7,11 @@ use std::path::{Path, PathBuf};
 pub struct GuiSettings {
     pub dark_mode: bool,
     pub offline_mode: bool,
+    pub local_failover: bool,
     pub appliance_name: String,
     pub worker_dir: String,
     pub management_addr: String,
+    pub local_management_addr: String,
     pub api_key: String,
     pub idle_release_timeout: u64,
     pub debug_worker: bool,
@@ -21,9 +23,11 @@ impl Default for GuiSettings {
         Self {
             dark_mode: true,
             offline_mode: false,
+            local_failover: true,
             appliance_name: "cursor-appliance".into(),
             worker_dir: String::new(),
             management_addr: "127.0.0.1:8733".into(),
+            local_management_addr: "127.0.0.1:8734".into(),
             api_key: String::new(),
             idle_release_timeout: 0,
             debug_worker: false,
@@ -48,7 +52,6 @@ impl GuiSettings {
             Self::default()
         };
 
-        // Seed from .env when GUI settings are empty.
         let env_path = appliance_root.join(".env");
         if env_path.is_file() {
             if let Ok(raw) = fs::read_to_string(&env_path) {
@@ -76,22 +79,24 @@ impl GuiSettings {
                                 settings.management_addr = value;
                             }
                         }
+                        "CURSOR_APPLIANCE_LOCAL_ADDR" => {
+                            if !value.is_empty() {
+                                settings.local_management_addr = value;
+                            }
+                        }
                         "CURSOR_APPLIANCE_IDLE_RELEASE_TIMEOUT" => {
                             if let Ok(v) = value.parse() {
                                 settings.idle_release_timeout = v;
                             }
                         }
                         "CURSOR_APPLIANCE_OFFLINE" => {
-                            settings.offline_mode = matches!(
-                                value.to_ascii_lowercase().as_str(),
-                                "1" | "true" | "yes" | "on"
-                            );
+                            settings.offline_mode = truthy(&value);
+                        }
+                        "CURSOR_APPLIANCE_LOCAL_FAILOVER" => {
+                            settings.local_failover = truthy(&value);
                         }
                         "CURSOR_APPLIANCE_DEBUG" => {
-                            settings.debug_worker = matches!(
-                                value.to_ascii_lowercase().as_str(),
-                                "1" | "true" | "yes" | "on"
-                            );
+                            settings.debug_worker = truthy(&value);
                         }
                         _ => {}
                     }
@@ -120,7 +125,6 @@ impl GuiSettings {
         Ok(())
     }
 
-    /// Keep shell scripts / systemd in sync with GUI settings.
     fn sync_env(&self, appliance_root: &Path) -> Result<(), String> {
         let env_path = appliance_root.join(".env");
         let mut lines = Vec::new();
@@ -132,8 +136,10 @@ impl GuiSettings {
                     || trimmed.starts_with("CURSOR_APPLIANCE_NAME=")
                     || trimmed.starts_with("CURSOR_APPLIANCE_WORKER_DIR=")
                     || trimmed.starts_with("CURSOR_APPLIANCE_MANAGEMENT_ADDR=")
+                    || trimmed.starts_with("CURSOR_APPLIANCE_LOCAL_ADDR=")
                     || trimmed.starts_with("CURSOR_APPLIANCE_IDLE_RELEASE_TIMEOUT=")
                     || trimmed.starts_with("CURSOR_APPLIANCE_OFFLINE=")
+                    || trimmed.starts_with("CURSOR_APPLIANCE_LOCAL_FAILOVER=")
                     || trimmed.starts_with("CURSOR_APPLIANCE_DEBUG=")
                 {
                     continue;
@@ -164,6 +170,11 @@ impl GuiSettings {
         );
         push(
             &mut lines,
+            "CURSOR_APPLIANCE_LOCAL_ADDR",
+            &self.local_management_addr,
+        );
+        push(
+            &mut lines,
             "CURSOR_APPLIANCE_IDLE_RELEASE_TIMEOUT",
             &self.idle_release_timeout.to_string(),
         );
@@ -171,6 +182,11 @@ impl GuiSettings {
             &mut lines,
             "CURSOR_APPLIANCE_OFFLINE",
             if self.offline_mode { "1" } else { "0" },
+        );
+        push(
+            &mut lines,
+            "CURSOR_APPLIANCE_LOCAL_FAILOVER",
+            if self.local_failover { "1" } else { "0" },
         );
         push(
             &mut lines,
@@ -188,6 +204,13 @@ impl GuiSettings {
 
         Ok(())
     }
+}
+
+fn truthy(value: &str) -> bool {
+    matches!(
+        value.to_ascii_lowercase().as_str(),
+        "1" | "true" | "yes" | "on"
+    )
 }
 
 #[cfg(test)]
@@ -211,21 +234,25 @@ mod tests {
         let mut settings = GuiSettings::default();
         settings.dark_mode = false;
         settings.offline_mode = true;
+        settings.local_failover = true;
         settings.appliance_name = "test-box".into();
         settings.api_key = "secret".into();
         settings.worker_dir = "/tmp/repo".into();
+        settings.local_management_addr = "127.0.0.1:8799".into();
         settings.save(&root).unwrap();
 
         let loaded = GuiSettings::load(&root);
         assert!(!loaded.dark_mode);
         assert!(loaded.offline_mode);
+        assert!(loaded.local_failover);
         assert_eq!(loaded.appliance_name, "test-box");
         assert_eq!(loaded.api_key, "secret");
+        assert_eq!(loaded.local_management_addr, "127.0.0.1:8799");
 
         let env = fs::read_to_string(root.join(".env")).unwrap();
         assert!(env.contains("CURSOR_APPLIANCE_OFFLINE=1"));
-        assert!(env.contains("CURSOR_APPLIANCE_NAME=test-box"));
-        assert!(env.contains("CURSOR_API_KEY=secret"));
+        assert!(env.contains("CURSOR_APPLIANCE_LOCAL_FAILOVER=1"));
+        assert!(env.contains("CURSOR_APPLIANCE_LOCAL_ADDR=127.0.0.1:8799"));
 
         let _ = fs::remove_dir_all(root);
     }

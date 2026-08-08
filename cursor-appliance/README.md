@@ -1,6 +1,6 @@
 # Cursor Appliance
 
-**Version 0.2.0** — a lightweight, dedicated **local** [My Machines](https://cursor.com/docs/cloud-agent/self-hosted-guides/my-machines) worker for this repo, with an **egui** control panel.
+**Version 0.3.0** — a lightweight, dedicated **local** [My Machines](https://cursor.com/docs/cloud-agent/self-hosted-guides/my-machines) worker for this repo, with an **egui** control panel and **local failover**.
 
 Cursor keeps planning/inference in the cloud. Tool calls (shell, edits, browser, local MCP) run on **this machine**. No inbound ports or VPN required.
 
@@ -10,13 +10,15 @@ Use this when you want a always-on local box (laptop, mini PC, or Raspberry Pi) 
 
 | Piece | Role |
 |---|---|
-| `gui/` | egui desktop app — status, settings, dark mode, offline mode |
+| `gui/` | egui desktop app — status, settings, dark mode, offline, failover |
+| `gui` `cursor-local-worker` | Lightweight local worker (no Cursor cloud) |
 | `scripts/run-gui.sh` | Build and launch the control panel |
 | `scripts/setup.sh` | Installs the Cursor Agent CLI and prepares config |
-| `scripts/start-worker.sh` | Starts a named My Machines worker for this checkout |
-| `systemd/cursor-appliance.service` | Keeps the worker alive across reboots |
+| `scripts/start-worker.sh` | Starts a named My Machines cloud worker |
+| `scripts/start-local-worker.sh` | Starts the local takeover worker |
+| `systemd/cursor-appliance.service` | Keeps the cloud worker alive across reboots |
 | `scripts/status.sh` | Local health / process check |
-| Local `:8733` | Optional `/healthz` `/readyz` `/metrics` |
+| Cloud `:8733` / Local `:8734` | `/healthz` `/readyz` `/status` |
 
 This is **not** an Enterprise Self-Hosted Pool and **not** a Cursor-managed cloud VM. It is a personal My Machines appliance.
 
@@ -61,11 +63,29 @@ Leave that process running, then open [cursor.com/agents](https://cursor.com/age
 
 The panel includes:
 
-- **Settings** — appliance name, worker dir, management addr, API key, idle timeout, auto-start
+- **Settings** — appliance name, worker dirs/addrs, API key, idle timeout, auto-start, failover
 - **Dark mode** — toggle in the top bar or Settings
-- **Offline mode** — local UI only; stops the cloud worker and blocks reconnects (`CURSOR_APPLIANCE_OFFLINE=1`)
+- **Offline mode** — disconnects the cloud worker and starts the lightweight local worker
+- **Local failover** — when the cloud worker stops (crash or Stop cloud), local worker takes over
 
 Settings persist to `data/gui-settings.json` and sync into `.env` for the shell/systemd scripts.
+
+### Local failover worker
+
+When the My Machines cloud worker is down, `cursor-local-worker` stays on-box and:
+
+- Serves `http://127.0.0.1:8734/healthz` and `/status`
+- Accepts local jobs at `POST /v1/jobs` (`note`, `inspect`, allowlisted `shell`)
+- Writes heartbeats under `data/local-worker-heartbeat.json`
+
+```bash
+./scripts/start-local-worker.sh
+curl -fsS http://127.0.0.1:8734/status
+# queue a note:
+curl -fsS -X POST http://127.0.0.1:8734/v1/jobs \
+  -H 'content-type: application/json' \
+  -d '{"kind":"note","note":"cloud down; local takeover"}'
+```
 
 ### Install as a boot service
 
@@ -101,10 +121,12 @@ Copy `.env.example` → `.env` (gitignored).
 | `CURSOR_API_KEY` | _(empty)_ | Personal user API key |
 | `CURSOR_APPLIANCE_NAME` | `cursor-appliance` | Name in the agents UI / `worker=` triggers |
 | `CURSOR_APPLIANCE_WORKER_DIR` | repo root | Git checkout exposed to agents |
-| `CURSOR_APPLIANCE_MANAGEMENT_ADDR` | `127.0.0.1:8733` | Local health bind |
+| `CURSOR_APPLIANCE_MANAGEMENT_ADDR` | `127.0.0.1:8733` | Cloud worker health bind |
+| `CURSOR_APPLIANCE_LOCAL_ADDR` | `127.0.0.1:8734` | Local failover worker bind |
 | `CURSOR_APPLIANCE_AUTH_TOKEN_FILE` | _(empty)_ | Optional rotating token file |
 | `CURSOR_APPLIANCE_IDLE_RELEASE_TIMEOUT` | `0` | Idle auto-exit seconds (`0` = stay online) |
-| `CURSOR_APPLIANCE_OFFLINE` | `0` | `1` blocks cloud worker start (GUI offline mode) |
+| `CURSOR_APPLIANCE_OFFLINE` | `0` | `1` blocks cloud start; local worker takes over |
+| `CURSOR_APPLIANCE_LOCAL_FAILOVER` | `1` | Auto-start local worker when cloud stops |
 | `CURSOR_APPLIANCE_DEBUG` | `0` | Set `1` for worker debug diagnostics |
 
 Never commit API keys. Prefer `chmod 600 .env` (the service installer enforces this).
