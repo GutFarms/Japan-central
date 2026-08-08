@@ -34,14 +34,16 @@ When WiFi is configured, the firmware connects to `stratum` (`host:port` or `str
 
 ## Post-boot credentials (saved to flash)
 
-On **first boot**, use the **touch keyboard** or serial monitor (115200):
+On **first boot**, use the **touch screen** or serial monitor (115200):
 
-1. `wifi_ssid` — AP name, or `-` / `skip` to disable WiFi  
-2. `wifi_password` — PSK (empty = open; skipped if WiFi off)  
+1. `wifi_ssid` — **scan & tap** a network (or **type** / **skip** / `-`)  
+2. `wifi_password` — PSK (skipped for open networks / WiFi off)  
 3. `address` — wallet address or worker name  
 4. `password` — pool password (often `x`)  
 5. `stratum` — pool location, e.g. `stratum.example.com:3333`  
 6. `ble_name` — advertised name, or `-` / empty to **skip BLE** (recommended; WiFi mining skips BLE anyway)
+
+After WiFi + DHCP, the board shows an **ONLINE** screen with the **IP address** and `http://IP/` (also on the RADIO tab).
 
 ### Change credentials (password required)
 

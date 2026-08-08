@@ -27,5 +27,5 @@ pub use miner::{
     hash_meets_target, hash_to_hex, target_from_leading_zero_nibbles, HashResult, MinerStats,
     ScryptMiner, HASH_LEN, HEADER_LEN, SCRYPT_LOG_N, SCRYPT_N, SCRYPT_P, SCRYPT_R, V_BYTES,
 };
-pub use radio::{RadioStatus, WifiPhase};
+pub use radio::{RadioStatus, ScannedNetwork, WifiPhase, WIFI_SCAN_MAX};
 pub use stratum::{Endpoint, StratumPhase, StratumStatus};

@@ -41,13 +41,15 @@ use log::info;
 use esp32_s3_scrypt_miner::config::{ConfigError, PoolConfig, SetupField};
 use esp32_s3_scrypt_miner::display::{Display, DisplayPeripherals};
 use esp32_s3_scrypt_miner::gui::GuiState;
-use esp32_s3_scrypt_miner::keyboard::{hit_gui, GuiHit, Keyboard};
+use esp32_s3_scrypt_miner::gui::GuiScreen;
+use esp32_s3_scrypt_miner::keyboard::{hit_gui, hit_wifi_scan, GuiHit, Keyboard, WifiScanHit};
 use esp32_s3_scrypt_miner::miner::ScryptMiner;
 use esp32_s3_scrypt_miner::persist::ConfigStore;
-use esp32_s3_scrypt_miner::radio::{self, RadioStatus};
+use esp32_s3_scrypt_miner::radio::{self, RadioStatus, ScannedNetwork};
 use esp32_s3_scrypt_miner::stratum::{self, JobMeta, StratumStatus};
 use esp32_s3_scrypt_miner::touch::{Touch, TouchPins};
 use esp32_s3_scrypt_miner::web::{self, WebStatus};
+use esp_hal::peripherals::WIFI;
 
 esp_bootloader_esp_idf::esp_app_desc!();
 
@@ -128,6 +130,7 @@ async fn main(spawner: Spawner) -> ! {
     let _ = display.draw_splash();
     Timer::after(Duration::from_millis(700)).await;
 
+    let mut wifi_token: Option<WIFI<'static>> = Some(peripherals.WIFI);
     let (mut pool, from_flash) = resolve_pool_config(
         &mut usb,
         &mut display,
@@ -135,6 +138,7 @@ async fn main(spawner: Spawner) -> ! {
         &mut touch_delay,
         &mut store,
         force_change,
+        &mut wifi_token,
     )
     .await;
 
@@ -156,8 +160,12 @@ async fn main(spawner: Spawner) -> ! {
     let mut miner = ScryptMiner::new_demo(DEMO_ZERO_NIBBLES);
     serial_writeln(&mut usb, "Starting radio…");
 
-    let stratum_enabled = if let Some(stack) =
-        radio::start(&spawner, peripherals.WIFI, peripherals.BT, &pool)
+    // Scan may have consumed WIFI; reclaim via steal after controller drop.
+    let wifi = wifi_token
+        .take()
+        .unwrap_or_else(|| unsafe { WIFI::steal() });
+
+    let stratum_enabled = if let Some(stack) = radio::start(&spawner, wifi, peripherals.BT, &pool)
     {
         stratum::start(&spawner, stack, &pool);
         web::start(&spawner, stack);
@@ -175,7 +183,11 @@ async fn main(spawner: Spawner) -> ! {
         false
     };
 
-    Timer::after(Duration::from_secs(2)).await;
+    if stratum_enabled {
+        wait_for_ip_screen(&mut usb, &mut display, &mut touch, &mut touch_delay, &pool).await;
+    } else {
+        Timer::after(Duration::from_secs(2)).await;
+    }
 
     info!(
         "miner ready (N={}, log_n={}) stratum={} wifi={} ble={} from_flash={}",
@@ -194,6 +206,7 @@ async fn main(spawner: Spawner) -> ! {
     let mut gui = GuiState::default();
     let mut boot_was_down = boot_btn.is_low();
     let mut boot_down_since: Option<Instant> = None;
+    let mut saw_ip = false;
 
     let mut stats = miner.stats();
     let mut radio_status = radio::snapshot().await;
@@ -202,6 +215,10 @@ async fn main(spawner: Spawner) -> ! {
     } else {
         StratumStatus::default()
     };
+    if radio_status.ip.is_some() {
+        saw_ip = true;
+        gui.screen = GuiScreen::Radio;
+    }
     let _ = display.draw_gui(&gui, &stats, &pool, &radio_status, &stratum_status, true);
 
     loop {
@@ -232,13 +249,14 @@ async fn main(spawner: Spawner) -> ! {
                     gui.on_action_press();
                     if gui.take_change_request() {
                         if let Some(updated) = password_gated_change(
-                            &mut usb,
-                            &mut display,
-                            &mut touch,
-                            &mut touch_delay,
-                            &mut store,
-                            &pool,
-                        )
+                        &mut usb,
+                        &mut display,
+                        &mut touch,
+                        &mut touch_delay,
+                        &mut store,
+                        &pool,
+                        &mut None,
+                    )
                         .await
                         {
                             pool = updated;
@@ -288,13 +306,14 @@ async fn main(spawner: Spawner) -> ! {
                     gui.activate_menu();
                     if gui.take_change_request() {
                         if let Some(updated) = password_gated_change(
-                            &mut usb,
-                            &mut display,
-                            &mut touch,
-                            &mut touch_delay,
-                            &mut store,
-                            &pool,
-                        )
+                        &mut usb,
+                        &mut display,
+                        &mut touch,
+                        &mut touch_delay,
+                        &mut store,
+                        &pool,
+                        &mut None,
+                    )
                         .await
                         {
                             pool = updated;
@@ -320,6 +339,7 @@ async fn main(spawner: Spawner) -> ! {
                         &mut touch_delay,
                         &mut store,
                         &pool,
+                        &mut None,
                     )
                     .await
                     {
@@ -343,13 +363,14 @@ async fn main(spawner: Spawner) -> ! {
             let cmd = cmd_line.as_str().trim();
             if is_change_command(cmd) {
                 if let Some(updated) = password_gated_change(
-                    &mut usb,
-                    &mut display,
-                    &mut touch,
-                    &mut touch_delay,
-                    &mut store,
-                    &pool,
-                )
+                        &mut usb,
+                        &mut display,
+                        &mut touch,
+                        &mut touch_delay,
+                        &mut store,
+                        &pool,
+                        &mut None,
+                    )
                 .await
                 {
                     pool = updated;
@@ -430,6 +451,16 @@ async fn main(spawner: Spawner) -> ! {
             radio_status = radio::snapshot().await;
             if stratum_enabled {
                 stratum_status = stratum::snapshot().await;
+            }
+            if !saw_ip {
+                if let Some(ip) = radio_status.ip {
+                    saw_ip = true;
+                    serial_write(&mut usb, "IP address: ");
+                    serial_writeln(&mut usb, radio_status.ip_string().as_str());
+                    let _ = display.draw_online(pool.wifi_ssid.as_str(), ip);
+                    Timer::after(Duration::from_secs(4)).await;
+                    gui.screen = GuiScreen::Radio;
+                }
             }
             if let Err(e) =
                 display.draw_gui(&gui, &stats, &pool, &radio_status, &stratum_status, true)
@@ -564,6 +595,7 @@ async fn resolve_pool_config<D: embedded_hal::delay::DelayNs>(
     touch_delay: &mut Delay,
     store: &mut ConfigStore<'_>,
     force_change: bool,
+    wifi_token: &mut Option<WIFI<'static>>,
 ) -> (PoolConfig, bool) {
     match store.load() {
         Ok(saved) => {
@@ -590,8 +622,16 @@ async fn resolve_pool_config<D: embedded_hal::delay::DelayNs>(
                 if force_change {
                     serial_writeln(usb, "BOOT held — password required to change credentials.");
                 }
-                if let Some(updated) =
-                    password_gated_change(usb, display, touch, touch_delay, store, &saved).await
+                if let Some(updated) = password_gated_change(
+                    usb,
+                    display,
+                    touch,
+                    touch_delay,
+                    store,
+                    &saved,
+                    wifi_token,
+                )
+                .await
                 {
                     return (updated, true);
                 }
@@ -603,7 +643,7 @@ async fn resolve_pool_config<D: embedded_hal::delay::DelayNs>(
         Err(_) => {
             serial_writeln(usb, "");
             serial_writeln(usb, "No saved credentials — first-time setup (touch or serial).");
-            let cfg = collect_pool_config(usb, display, touch, touch_delay).await;
+            let cfg = collect_pool_config(usb, display, touch, touch_delay, wifi_token).await;
             match store.save(&cfg) {
                 Ok(()) => serial_writeln(usb, "Credentials saved to flash."),
                 Err(_) => serial_writeln(usb, "WARNING: flash save failed."),
@@ -620,6 +660,7 @@ async fn password_gated_change<D: embedded_hal::delay::DelayNs>(
     touch_delay: &mut Delay,
     store: &mut ConfigStore<'_>,
     current: &PoolConfig,
+    wifi_token: &mut Option<WIFI<'static>>,
 ) -> Option<PoolConfig> {
     serial_writeln(usb, "");
     serial_writeln(usb, "=== Change credentials (password required) ===");
@@ -649,7 +690,8 @@ async fn password_gated_change<D: embedded_hal::delay::DelayNs>(
         match current.authorize(line.as_str()) {
             Ok(()) => {
                 serial_writeln(usb, "  ok — enter new values");
-                let cfg = collect_pool_config(usb, display, touch, touch_delay).await;
+                let cfg =
+                    collect_pool_config(usb, display, touch, touch_delay, wifi_token).await;
                 match store.save(&cfg) {
                     Ok(()) => {
                         serial_writeln(usb, "Updated credentials saved to flash.");
@@ -755,25 +797,54 @@ async fn collect_pool_config<D: embedded_hal::delay::DelayNs>(
     display: &mut Display<'_, D>,
     touch: &mut Touch,
     touch_delay: &mut Delay,
+    wifi_token: &mut Option<WIFI<'static>>,
 ) -> PoolConfig {
     let mut cfg = PoolConfig::new();
+    let mut skip_wifi_password = false;
 
     serial_writeln(usb, "");
     serial_writeln(usb, "=== ESP32-2432S028 Scrypt Miner setup ===");
-    serial_writeln(usb, "Type each value here at 115200, or use the on-screen keyboard.");
-    serial_writeln(usb, "Step 1: WiFi SSID ('-' or skip = no WiFi).");
-    serial_writeln(usb, "Then WiFi password, pool address / password / stratum, then BLE.");
-    serial_writeln(usb, "BLE '-' / skip disables BLE (saves RAM with WiFi).");
+    serial_writeln(usb, "Step 1: scan & tap a WiFi network (or type / skip).");
+    serial_writeln(usb, "Serial: number from scan list, SSID text, or '-' to skip.");
+    serial_writeln(usb, "Then password (if needed), pool address / password / stratum, BLE.");
     serial_writeln(usb, "");
 
     for field in SetupField::ALL {
-        // If WiFi was skipped, don't ask for a WiFi password.
-        if field == SetupField::WifiPassword && !cfg.wifi_enabled() {
+        if field == SetupField::WifiPassword && (!cfg.wifi_enabled() || skip_wifi_password) {
             continue;
         }
         if !field.allows_empty() && !cfg.get(field).is_empty() {
             continue;
         }
+
+        if field == SetupField::WifiSsid {
+            match pick_wifi_ssid(usb, display, touch, touch_delay, wifi_token).await {
+                WifiPick::Network { ssid, open } => {
+                    match cfg.set(SetupField::WifiSsid, ssid.as_str()) {
+                        Ok(()) => {
+                            serial_write(usb, "  ok (wifi_ssid=");
+                            serial_write(usb, ssid.as_str());
+                            serial_writeln(usb, ")");
+                            skip_wifi_password = open;
+                            if open {
+                                let _ = cfg.set(SetupField::WifiPassword, "");
+                                serial_writeln(usb, "  open network — no password");
+                            }
+                        }
+                        Err(e) => {
+                            serial_write(usb, "  error: ");
+                            serial_writeln(usb, config_error_msg(e));
+                        }
+                    }
+                }
+                WifiPick::Skip => {
+                    let _ = cfg.set(SetupField::WifiSsid, "-");
+                    serial_writeln(usb, "  ok (wifi skipped)");
+                }
+            }
+            continue;
+        }
+
         loop {
             serial_write(usb, field.label());
             serial_write(usb, ": ");
@@ -821,6 +892,242 @@ async fn collect_pool_config<D: embedded_hal::delay::DelayNs>(
     }
 
     cfg
+}
+
+enum WifiPick {
+    Network { ssid: String<32>, open: bool },
+    Skip,
+}
+
+async fn pick_wifi_ssid<D: embedded_hal::delay::DelayNs>(
+    usb: &mut Serial<'_>,
+    display: &mut Display<'_, D>,
+    touch: &mut Touch,
+    touch_delay: &mut Delay,
+    wifi_token: &mut Option<WIFI<'static>>,
+) -> WifiPick {
+    let mut networks: heapless::Vec<ScannedNetwork, 8> = heapless::Vec::new();
+    let mut scroll = 0usize;
+    let mut status: String<40> = String::new();
+    let mut dirty = true;
+    let mut byte = [0u8; 1];
+    let mut serial_buf: String<64> = String::new();
+
+    // Initial scan when the WIFI peripheral is still available.
+    if let Some(wifi) = wifi_token.take() {
+        let _ = status.push_str("scanning…");
+        let _ = display.draw_wifi_scan(&[], 0, status.as_str());
+        serial_writeln(usb, "Scanning WiFi…");
+        match radio::scan_networks(wifi).await {
+            Ok(list) => {
+                networks = list;
+                status.clear();
+                if networks.is_empty() {
+                    let _ = status.push_str("no networks — tap scan/type/skip");
+                }
+                print_scan_list(usb, &networks);
+            }
+            Err(()) => {
+                status.clear();
+                let _ = status.push_str("scan failed — tap type or skip");
+                serial_writeln(usb, "WiFi scan failed.");
+            }
+        }
+        dirty = true;
+    } else {
+        let _ = status.push_str("tap type to enter SSID");
+        serial_writeln(usb, "WiFi scan unavailable — type SSID or '-'.");
+    }
+
+    loop {
+        if dirty {
+            let _ = display.draw_wifi_scan(&networks, scroll, status.as_str());
+            dirty = false;
+        }
+
+        if let Some(p) = touch.poll_tap(touch_delay) {
+            match hit_wifi_scan(p, scroll, networks.len()) {
+                Some(WifiScanHit::Select(i)) => {
+                    if let Some(n) = networks.get(i) {
+                        let mut ssid: String<32> = String::new();
+                        let _ = ssid.push_str(n.ssid.as_str());
+                        return WifiPick::Network {
+                            ssid,
+                            open: n.open,
+                        };
+                    }
+                }
+                Some(WifiScanHit::ScrollUp) => {
+                    scroll = scroll.saturating_sub(1);
+                    dirty = true;
+                }
+                Some(WifiScanHit::ScrollDown) => {
+                    let max_scroll = networks.len().saturating_sub(1);
+                    if scroll < max_scroll {
+                        scroll += 1;
+                        dirty = true;
+                    }
+                }
+                Some(WifiScanHit::Rescan) => {
+                    // Reclaim WIFI after prior scan drop.
+                    let wifi = unsafe { WIFI::steal() };
+                    status.clear();
+                    let _ = status.push_str("scanning…");
+                    let _ = display.draw_wifi_scan(&networks, scroll, status.as_str());
+                    serial_writeln(usb, "Rescanning WiFi…");
+                    match radio::scan_networks(wifi).await {
+                        Ok(list) => {
+                            networks = list;
+                            scroll = 0;
+                            status.clear();
+                            if networks.is_empty() {
+                                let _ = status.push_str("no networks — tap scan/type/skip");
+                            }
+                            print_scan_list(usb, &networks);
+                        }
+                        Err(()) => {
+                            status.clear();
+                            let _ = status.push_str("scan failed — tap type or skip");
+                            serial_writeln(usb, "WiFi scan failed.");
+                        }
+                    }
+                    dirty = true;
+                }
+                Some(WifiScanHit::TypeManual) => {
+                    let mut line: String<128> = String::new();
+                    serial_write(usb, "wifi_ssid (type): ");
+                    let _ = usb.flush();
+                    read_field_touch_or_serial(
+                        usb,
+                        display,
+                        touch,
+                        touch_delay,
+                        SetupField::WifiSsid,
+                        &mut line,
+                        false,
+                        None,
+                    )
+                    .await;
+                    let trimmed = line.as_str().trim();
+                    if trimmed.is_empty() || trimmed == "-" || eq_ignore_ascii_case(trimmed, "skip")
+                    {
+                        return WifiPick::Skip;
+                    }
+                    let mut ssid: String<32> = String::new();
+                    let _ = ssid.push_str(trimmed);
+                    return WifiPick::Network {
+                        ssid,
+                        open: false,
+                    };
+                }
+                Some(WifiScanHit::Skip) => return WifiPick::Skip,
+                None => {}
+            }
+            continue;
+        }
+
+        match usb.read(&mut byte) {
+            Ok(0) | Err(_) => {
+                Timer::after(Duration::from_millis(12)).await;
+            }
+            Ok(_) => {
+                let c = byte[0];
+                match c {
+                    b'\n' | b'\r' => {
+                        let trimmed = serial_buf.as_str().trim();
+                        if trimmed.is_empty() {
+                            serial_buf.clear();
+                            continue;
+                        }
+                        if trimmed == "-" || eq_ignore_ascii_case(trimmed, "skip") {
+                            return WifiPick::Skip;
+                        }
+                        if let Ok(n) = trimmed.parse::<usize>() {
+                            if (1..=networks.len()).contains(&n) {
+                                let net = &networks[n - 1];
+                                let mut ssid: String<32> = String::new();
+                                let _ = ssid.push_str(net.ssid.as_str());
+                                return WifiPick::Network {
+                                    ssid,
+                                    open: net.open,
+                                };
+                            }
+                        }
+                        // Treat as typed SSID.
+                        let mut ssid: String<32> = String::new();
+                        let _ = ssid.push_str(trimmed);
+                        serial_buf.clear();
+                        return WifiPick::Network {
+                            ssid,
+                            open: false,
+                        };
+                    }
+                    0x08 | 0x7f => {
+                        let _ = serial_buf.pop();
+                        let _ = usb.write_all(b"\x08 \x08");
+                    }
+                    c if (32..127).contains(&c) => {
+                        if serial_buf.push(c as char).is_ok() {
+                            let _ = usb.write_all(&[c]);
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+    }
+}
+
+fn print_scan_list(usb: &mut Serial<'_>, networks: &[ScannedNetwork]) {
+    if networks.is_empty() {
+        serial_writeln(usb, "(no networks found)");
+        return;
+    }
+    serial_writeln(usb, "Networks:");
+    for (i, n) in networks.iter().enumerate() {
+        let mut line: String<64> = String::new();
+        let kind = if n.open { "open" } else { "lock" };
+        let _ = core::fmt::Write::write_fmt(
+            &mut line,
+            format_args!("  {}. {}  {} {}dBm", i + 1, n.ssid, kind, n.rssi),
+        );
+        serial_writeln(usb, line.as_str());
+    }
+    serial_writeln(usb, "Enter number, SSID, or '-' to skip.");
+}
+
+async fn wait_for_ip_screen<D: embedded_hal::delay::DelayNs>(
+    usb: &mut Serial<'_>,
+    display: &mut Display<'_, D>,
+    touch: &mut Touch,
+    touch_delay: &mut Delay,
+    pool: &PoolConfig,
+) {
+    serial_writeln(usb, "Waiting for DHCP / IP…");
+    let _ = display.draw_connecting(pool.wifi_ssid.as_str());
+    let deadline = Instant::now() + Duration::from_secs(45);
+    let mut byte = [0u8; 1];
+    while Instant::now() < deadline {
+        let st = radio::snapshot().await;
+        if let Some(ip) = st.ip {
+            serial_write(usb, "IP address: ");
+            serial_writeln(usb, st.ip_string().as_str());
+            let _ = display.draw_online(pool.wifi_ssid.as_str(), ip);
+            let show_until = Instant::now() + Duration::from_secs(6);
+            while Instant::now() < show_until {
+                if touch.poll_tap(touch_delay).is_some() {
+                    break;
+                }
+                let _ = usb.read(&mut byte);
+                Timer::after(Duration::from_millis(40)).await;
+            }
+            return;
+        }
+        let _ = usb.read(&mut byte);
+        Timer::after(Duration::from_millis(250)).await;
+    }
+    serial_writeln(usb, "DHCP timeout — check WiFi password / signal.");
+    Timer::after(Duration::from_secs(2)).await;
 }
 
 /// Collect one field via on-screen keyboard and/or USB serial.

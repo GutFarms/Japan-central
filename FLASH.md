@@ -67,10 +67,10 @@ Install **CH340** drivers on Windows if no COM port appears. Serial monitor: **1
 
 ## First boot
 
-1. **Touch keyboard** on the SETUP screen, **or USB serial at 115200** (same prompts — type value + Enter). Order: **WiFi first**, then address / password / stratum, then BLE (`-` / on-screen **skip** to skip)
+1. **WiFi scan list** on first setup — tap a network (or **type** / **skip**). Then password (if needed), address / password / stratum, BLE. USB serial (115200) also works: enter scan index, SSID, or `-`
 2. If taps do nothing, use serial — it always works in parallel with touch
-3. GUI on ILI9341; tap tabs or BOOT
-4. After WiFi DHCP, open **`http://<board-ip>/`** on your phone/PC (IP shown on MINE/RADIO tabs). JSON: `/api/status`
+3. After DHCP, an **ONLINE** screen shows the IP; also on the RADIO tab / MINE URL line
+4. Open **`http://<board-ip>/`** on your phone/PC. JSON: `/api/status`
 
 ## Not for
 

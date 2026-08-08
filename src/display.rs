@@ -28,9 +28,11 @@ use static_cell::StaticCell;
 
 use crate::config::{PoolConfig, SetupField};
 use crate::gui::{GuiScreen, GuiState, MenuItem};
-use crate::keyboard::Keyboard;
+use crate::keyboard::{
+    Keyboard, WIFI_SCAN_ROW0_Y, WIFI_SCAN_ROW_H, WIFI_SCAN_VISIBLE,
+};
 use crate::miner::{MinerStats, SCRYPT_LOG_N, SCRYPT_N};
-use crate::radio::RadioStatus;
+use crate::radio::{RadioStatus, ScannedNetwork};
 use crate::stratum::StratumStatus;
 
 /// Landscape resolution after Deg90 rotation of the native 240×320 panel.
@@ -228,6 +230,87 @@ impl<'a, D: DelayNs> Display<'a, D> {
 
     pub fn draw_setup(&mut self, field: SetupField, typed: &str) -> Result<(), Error> {
         self.draw_setup_keyboard(field, typed, &Keyboard::default())
+    }
+
+    /// WiFi scan picker (step 1 of setup).
+    pub fn draw_wifi_scan(
+        &mut self,
+        networks: &[ScannedNetwork],
+        scroll: usize,
+        status: &str,
+    ) -> Result<(), Error> {
+        self.wake_clear()?;
+        self.last_screen = None;
+        self.header_bar("WIFI")?;
+        self.draw_text("1/6  pick a network", Point::new(12, 42), LABEL)?;
+
+        if networks.is_empty() {
+            self.round_panel(8, 56, 304, 130, PANEL)?;
+            self.draw_text(status, Point::new(24, 110), VALUE_SM)?;
+        } else {
+            let visible = WIFI_SCAN_VISIBLE.min(networks.len().saturating_sub(scroll));
+            for row in 0..visible {
+                let idx = scroll + row;
+                let n = &networks[idx];
+                let y = WIFI_SCAN_ROW0_Y + row as i32 * WIFI_SCAN_ROW_H;
+                self.round_panel(8, y, 304, (WIFI_SCAN_ROW_H - 4) as u32, PANEL_HI)?;
+                let name = PoolConfig::ellipsize(n.ssid.as_str(), 22);
+                self.draw_text(name.as_str(), Point::new(16, y + 16), VALUE_SM)?;
+                let mut meta: String<16> = String::new();
+                let lock = if n.open { "open" } else { "lock" };
+                let _ = write!(meta, "{lock} {:>3}", n.rssi);
+                self.draw_text(meta.as_str(), Point::new(230, y + 16), MUTED)?;
+            }
+            if !status.is_empty() {
+                self.draw_text(status, Point::new(12, 196), MUTED)?;
+            }
+        }
+
+        // Footer actions
+        self.round_panel(8, 200, 32, 22, KEY_BG)?;
+        self.draw_text("^", Point::new(18, 214), KEY_TXT)?;
+        self.round_panel(48, 200, 32, 22, KEY_BG)?;
+        self.draw_text("v", Point::new(58, 214), KEY_TXT)?;
+        self.round_panel(88, 200, 72, 22, KEY_BG_HOT)?;
+        self.draw_text("scan", Point::new(106, 214), KEY_TXT)?;
+        self.round_panel(168, 200, 72, 22, KEY_BG)?;
+        self.draw_text("type", Point::new(188, 214), KEY_TXT)?;
+        self.round_panel(248, 200, 64, 22, ACCENT)?;
+        self.draw_text("skip", Point::new(262, 214), KEY_TXT)?;
+        Ok(())
+    }
+
+    /// Waiting for association / DHCP.
+    pub fn draw_connecting(&mut self, ssid: &str) -> Result<(), Error> {
+        self.wake_clear()?;
+        self.last_screen = None;
+        self.header_bar("WIFI")?;
+        self.round_panel(20, 70, 280, 100, PANEL)?;
+        self.draw_text("connecting…", Point::new(100, 100), VALUE_SM)?;
+        let ss = PoolConfig::ellipsize(ssid, 28);
+        self.draw_text(ss.as_str(), Point::new(40, 130), MUTED)?;
+        self.footer_hint("waiting for DHCP IP")?;
+        Ok(())
+    }
+
+    /// Full-screen IP after DHCP succeeds.
+    pub fn draw_online(&mut self, ssid: &str, ip: [u8; 4]) -> Result<(), Error> {
+        self.wake_clear()?;
+        self.last_screen = None;
+        self.fill_rect(0, 0, DISPLAY_WIDTH as u32, 8, ACCENT_HOT)?;
+        self.header_bar("ONLINE")?;
+        self.round_panel(20, 56, 280, 140, PANEL_HI)?;
+        self.draw_text("connected", Point::new(100, 80), LABEL)?;
+        let mut ip_s: String<20> = String::new();
+        let _ = write!(ip_s, "{}.{}.{}.{}", ip[0], ip[1], ip[2], ip[3]);
+        self.draw_text(ip_s.as_str(), Point::new(70, 120), BRAND)?;
+        let mut url: String<40> = String::new();
+        let _ = write!(url, "http://{}/", ip_s.as_str());
+        self.draw_text(url.as_str(), Point::new(60, 150), VALUE_SM)?;
+        let ss = PoolConfig::ellipsize(ssid, 28);
+        self.draw_text(ss.as_str(), Point::new(40, 176), MUTED)?;
+        self.footer_hint("tap or wait · web UI on port 80")?;
+        Ok(())
     }
 
     pub fn draw_setup_keyboard(

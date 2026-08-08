@@ -8,7 +8,18 @@
 use core::fmt;
 use heapless::String;
 
-use crate::config::{BleNameString, WIFI_SSID_MAX};
+use crate::config::{BleNameString, WifiSsidString, WIFI_SSID_MAX};
+
+/// Max networks kept after a setup scan (classic ESP32 RAM).
+pub const WIFI_SCAN_MAX: usize = 8;
+
+/// One AP from a setup-time WiFi scan (host + device).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ScannedNetwork {
+    pub ssid: WifiSsidString,
+    pub rssi: i8,
+    pub open: bool,
+}
 
 /// WiFi connection phase shown on the Radio tab / serial.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -88,14 +99,15 @@ mod stack {
     use esp_radio::ble::controller::BleConnector;
     use esp_radio::wifi::{
         AuthenticationMethod, Config, ControllerConfig, Interface, WifiController,
+        scan::ScanConfig,
         sta::StationConfig,
     };
     use log::info;
     use static_cell::StaticCell;
     use trouble_host::prelude::*;
 
-    use super::{RadioStatus, WifiPhase};
-    use crate::config::PoolConfig;
+    use super::{RadioStatus, ScannedNetwork, WifiPhase, WIFI_SCAN_MAX};
+    use crate::config::{PoolConfig, WifiSsidString};
 
     static STATUS: Mutex<CriticalSectionRawMutex, RadioStatus> = Mutex::new(RadioStatus {
         wifi: WifiPhase::Disabled,
@@ -234,6 +246,80 @@ mod stack {
         spawn_task(spawner, net_task(runner), "net runner");
         spawn_task(spawner, dhcp_watch(stack), "DHCP watch");
         Some(stack)
+    }
+
+    /// Brief STA scan for setup UI. Drops the controller afterward so a later
+    /// [`start`] can take WiFi again via `WIFI::steal()` if needed.
+    pub async fn scan_networks(
+        wifi: WIFI<'static>,
+    ) -> Result<heapless::Vec<ScannedNetwork, WIFI_SCAN_MAX>, ()> {
+        let mut controller = match WifiController::new(wifi, ControllerConfig::default()) {
+            Ok(c) => c,
+            Err(e) => {
+                info!("WiFi scan init failed: {e:?}");
+                return Err(());
+            }
+        };
+
+        let scan_config = ScanConfig::default().with_max(WIFI_SCAN_MAX.saturating_mul(2));
+        let aps = match controller.scan_async(&scan_config).await {
+            Ok(v) => v,
+            Err(e) => {
+                info!("WiFi scan failed: {e:?}");
+                drop(controller);
+                return Err(());
+            }
+        };
+
+        let mut out: heapless::Vec<ScannedNetwork, WIFI_SCAN_MAX> = heapless::Vec::new();
+        for ap in aps.iter() {
+            let ssid_str = ap.ssid.as_str();
+            if ssid_str.is_empty() {
+                continue;
+            }
+            let open = matches!(ap.auth_method, Some(AuthenticationMethod::None) | None);
+            // Dedupe SSID — keep strongest RSSI.
+            if let Some(existing) = out.iter_mut().find(|n| n.ssid.as_str() == ssid_str) {
+                if ap.signal_strength > existing.rssi {
+                    existing.rssi = ap.signal_strength;
+                    existing.open = open;
+                }
+                continue;
+            }
+            if out.is_full() {
+                // Replace weakest if this one is stronger.
+                if let Some((idx, weakest)) = out
+                    .iter()
+                    .enumerate()
+                    .min_by_key(|(_, n)| n.rssi)
+                {
+                    if ap.signal_strength > weakest.rssi {
+                        let mut ssid = WifiSsidString::new();
+                        let _ = ssid.push_str(ssid_str);
+                        out[idx] = ScannedNetwork {
+                            ssid,
+                            rssi: ap.signal_strength,
+                            open,
+                        };
+                    }
+                }
+                continue;
+            }
+            let mut ssid = WifiSsidString::new();
+            if ssid.push_str(ssid_str).is_err() {
+                continue;
+            }
+            let _ = out.push(ScannedNetwork {
+                ssid,
+                rssi: ap.signal_strength,
+                open,
+            });
+        }
+        out.sort_unstable_by(|a, b| b.rssi.cmp(&a.rssi));
+        drop(aps);
+        drop(controller);
+        info!("WiFi scan found {} network(s)", out.len());
+        Ok(out)
     }
 
     /// Start optional BLE advertising and, when configured, WiFi STA + DHCP.
@@ -393,4 +479,9 @@ mod stack {
 }
 
 #[cfg(feature = "esp")]
-pub use stack::{snapshot, start};
+pub use stack::{scan_networks, snapshot, start};
+
+/// Sort helper used by host tests (mirrors scan ranking).
+pub fn sort_networks_by_rssi(list: &mut [ScannedNetwork]) {
+    list.sort_unstable_by(|a, b| b.rssi.cmp(&a.rssi));
+}

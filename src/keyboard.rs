@@ -221,6 +221,64 @@ fn char_to_static(c: char) -> &'static str {
     }
 }
 
+/// Visible rows on the WiFi scan picker (320×240).
+pub const WIFI_SCAN_VISIBLE: usize = 5;
+/// Top Y of the first SSID row.
+pub const WIFI_SCAN_ROW0_Y: i32 = 56;
+/// Height of each SSID row.
+pub const WIFI_SCAN_ROW_H: i32 = 28;
+
+/// Hit-test results for the WiFi scan picker.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum WifiScanHit {
+    /// Absolute index into the scanned list.
+    Select(usize),
+    ScrollUp,
+    ScrollDown,
+    Rescan,
+    TypeManual,
+    Skip,
+}
+
+/// Hit-test the WiFi scan list + footer actions.
+pub fn hit_wifi_scan(p: TouchPoint, scroll: usize, count: usize) -> Option<WifiScanHit> {
+    let x = p.x as i32;
+    let y = p.y as i32;
+
+    // Side scroll chevrons
+    if (8..40).contains(&x) && (200..224).contains(&y) {
+        return Some(WifiScanHit::ScrollUp);
+    }
+    if (48..80).contains(&x) && (200..224).contains(&y) {
+        return Some(WifiScanHit::ScrollDown);
+    }
+
+    // Footer actions
+    if (200..224).contains(&y) {
+        if (88..160).contains(&x) {
+            return Some(WifiScanHit::Rescan);
+        }
+        if (168..240).contains(&x) {
+            return Some(WifiScanHit::TypeManual);
+        }
+        if (248..312).contains(&x) {
+            return Some(WifiScanHit::Skip);
+        }
+    }
+
+    if count == 0 {
+        return None;
+    }
+    let visible = WIFI_SCAN_VISIBLE.min(count.saturating_sub(scroll));
+    for row in 0..visible {
+        let top = WIFI_SCAN_ROW0_Y + row as i32 * WIFI_SCAN_ROW_H;
+        if (top..top + WIFI_SCAN_ROW_H - 2).contains(&y) && (8..312).contains(&x) {
+            return Some(WifiScanHit::Select(scroll + row));
+        }
+    }
+    None
+}
+
 /// Hit-test for main GUI chrome (tabs / menu rows).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum GuiHit {
@@ -274,6 +332,20 @@ mod tests {
             y: (kb.origin_y + 4 * 28 + 10) as u16,
         };
         assert_eq!(kb.hit_test(p), Some(KeyAction::Enter));
+    }
+
+    #[test]
+    fn wifi_scan_select_and_actions() {
+        let p = TouchPoint { x: 40, y: 70 };
+        assert_eq!(hit_wifi_scan(p, 0, 3), Some(WifiScanHit::Select(0)));
+        let p2 = TouchPoint { x: 200, y: 210 };
+        assert_eq!(hit_wifi_scan(p2, 0, 3), Some(WifiScanHit::TypeManual));
+        let p3 = TouchPoint { x: 280, y: 210 };
+        assert_eq!(hit_wifi_scan(p3, 0, 1), Some(WifiScanHit::Skip));
+        assert_eq!(
+            hit_wifi_scan(TouchPoint { x: 40, y: 98 }, 1, 4),
+            Some(WifiScanHit::Select(2))
+        );
     }
 
     #[test]
