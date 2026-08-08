@@ -63,15 +63,6 @@ mod esp_flash {
             Ok(())
         }
 
-        pub fn clear(&mut self) -> Result<(), PersistError> {
-            NorFlash::erase(
-                &mut self.flash,
-                CONFIG_FLASH_OFFSET,
-                CONFIG_FLASH_OFFSET + CONFIG_FLASH_SECTOR,
-            )
-            .map_err(|_| PersistError::Io)?;
-            Ok(())
-        }
     }
 }
 
@@ -105,14 +96,6 @@ mod host_file {
         fs::write(path, blob).map_err(|_| PersistError::Io)
     }
 
-    pub fn clear_path(path: impl AsRef<Path>) -> Result<(), PersistError> {
-        match fs::remove_file(path) {
-            Ok(()) => Ok(()),
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
-            Err(_) => Err(PersistError::Io),
-        }
-    }
-
     pub fn load() -> Result<PoolConfig, PersistError> {
         load_path(HOST_CONFIG_PATH)
     }
@@ -120,14 +103,10 @@ mod host_file {
     pub fn save(cfg: &PoolConfig) -> Result<(), PersistError> {
         save_path(HOST_CONFIG_PATH, cfg)
     }
-
-    pub fn clear() -> Result<(), PersistError> {
-        clear_path(HOST_CONFIG_PATH)
-    }
 }
 
 #[cfg(feature = "host")]
-pub use host_file::{clear, clear_path, load, load_path, save, save_path, HOST_CONFIG_PATH};
+pub use host_file::{load, load_path, save, save_path, HOST_CONFIG_PATH};
 
 #[cfg(all(test, feature = "host"))]
 mod tests {

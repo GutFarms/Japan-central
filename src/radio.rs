@@ -1,14 +1,13 @@
-//! Onboard WiFi (STA + DHCP) and Bluetooth LE advertising status / tasks.
+//! Onboard WiFi (STA + DHCP) status / tasks.
 //!
 //! Status types are available on host builds; the radio stack only runs with `esp`.
-//!
-//! Uses `esp-radio` + `embassy-net` for WiFi and `trouble-host` 0.6 (bt-hci 0.8)
-//! for BLE so versions stay aligned with `esp-radio` 1.0.0-beta.0.
+//! Uses `esp-radio` + `embassy-net`. BLE is not started (classic ESP32 RAM goes to
+//! WiFi / stratum / mining).
 
 use core::fmt;
 use heapless::String;
 
-use crate::config::{BleNameString, WifiSsidString, WIFI_SSID_MAX};
+use crate::config::{WifiSsidString, WIFI_SSID_MAX};
 
 /// Max networks kept after a setup scan (classic ESP32 RAM).
 pub const WIFI_SCAN_MAX: usize = 8;
@@ -51,9 +50,6 @@ pub struct RadioStatus {
     pub wifi: WifiPhase,
     pub ssid: String<WIFI_SSID_MAX>,
     pub ip: Option<[u8; 4]>,
-    pub ble_advertising: bool,
-    pub ble_connected: bool,
-    pub ble_name: BleNameString,
 }
 
 impl Default for RadioStatus {
@@ -62,9 +58,6 @@ impl Default for RadioStatus {
             wifi: WifiPhase::Disabled,
             ssid: String::new(),
             ip: None,
-            ble_advertising: false,
-            ble_connected: false,
-            ble_name: BleNameString::new(),
         }
     }
 }
@@ -89,14 +82,12 @@ mod stack {
     use alloc::string::String as AllocString;
 
     use embassy_executor::Spawner;
-    use embassy_futures::join::join;
     use embassy_net::{Runner, Stack, StackResources};
     use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
     use embassy_sync::mutex::Mutex;
     use embassy_time::{Duration, Timer};
-    use esp_hal::peripherals::{BT, WIFI};
+    use esp_hal::peripherals::WIFI;
     use esp_hal::rng::Rng;
-    use esp_radio::ble::controller::BleConnector;
     use esp_radio::wifi::{
         AuthenticationMethod, Config, ControllerConfig, Interface, WifiController,
         scan::ScanConfig,
@@ -104,7 +95,6 @@ mod stack {
     };
     use log::info;
     use static_cell::StaticCell;
-    use trouble_host::prelude::*;
 
     use super::{RadioStatus, ScannedNetwork, WifiPhase, WIFI_SCAN_MAX};
     use crate::config::{PoolConfig, WifiSsidString};
@@ -113,18 +103,10 @@ mod stack {
         wifi: WifiPhase::Disabled,
         ssid: heapless::String::new(),
         ip: None,
-        ble_advertising: false,
-        ble_connected: false,
-        ble_name: heapless::String::new(),
     });
 
     // DNS + stratum TCP + HTTP server (+ spare). Keep small — classic ESP32 RAM.
     static STACK_RESOURCES: StaticCell<StackResources<5>> = StaticCell::new();
-    static BLE_NAME_BUF: StaticCell<[u8; 24]> = StaticCell::new();
-
-    /// Advertise-only BLE (no GATT) — avoids embassy-sync version skew with trouble-host.
-    const CONNECTIONS_MAX: usize = 1;
-    const L2CAP_CHANNELS_MAX: usize = 2;
 
     fn spawn_task<S>(
         spawner: &Spawner,
@@ -157,12 +139,6 @@ mod stack {
         }
     }
 
-    async fn set_ble(advertising: bool, connected: bool) {
-        let mut s = STATUS.lock().await;
-        s.ble_advertising = advertising;
-        s.ble_connected = connected;
-    }
-
     fn seed_status(cfg: &PoolConfig) {
         if let Ok(mut s) = STATUS.try_lock() {
             s.wifi = if cfg.wifi_enabled() {
@@ -173,32 +149,7 @@ mod stack {
             s.ssid.clear();
             let _ = s.ssid.push_str(cfg.wifi_ssid.as_str());
             s.ip = None;
-            s.ble_advertising = false;
-            s.ble_connected = false;
-            s.ble_name.clear();
-            if cfg.ble_enabled() {
-                let _ = s.ble_name.push_str(cfg.ble_name.as_str());
-            }
         }
-    }
-
-    #[allow(dead_code)] // retained if BLE is re-enabled later; unused on CYD miner build
-    fn start_ble(spawner: &Spawner, bt: BT<'static>, ble_name: &str) {
-        let name_buf = BLE_NAME_BUF.init([0u8; 24]);
-        let ble_bytes = ble_name.as_bytes();
-        let n = core::cmp::min(ble_bytes.len(), name_buf.len());
-        name_buf[..n].copy_from_slice(&ble_bytes[..n]);
-        let ble_name_bytes: &'static [u8] = &name_buf[..n];
-
-        let connector = match BleConnector::new(bt, Default::default()) {
-            Ok(c) => c,
-            Err(e) => {
-                info!("BLE init failed: {e:?}");
-                return;
-            }
-        };
-        let ble_controller: ExternalController<_, 1> = ExternalController::new(connector);
-        spawn_task(spawner, ble_task(ble_controller, ble_name_bytes), "BLE");
     }
 
     fn start_wifi(
@@ -327,21 +278,18 @@ mod stack {
     /// Start WiFi STA + DHCP when configured.
     ///
     /// Returns the embassy-net [`Stack`] when WiFi was started so callers can
-    /// open TCP (stratum) sockets. **BLE is unused** on this build — classic
-    /// ESP32 RAM goes to WiFi/stratum instead.
+    /// open TCP (stratum) sockets.
     pub fn start(
         spawner: &Spawner,
         wifi: WIFI<'static>,
-        bt: BT<'static>,
         cfg: &PoolConfig,
     ) -> Option<Stack<'static>> {
         seed_status(cfg);
-        let _ = bt; // BLE peripheral kept unused (no advertising / no coex cost).
 
         if cfg.wifi_enabled() {
             start_wifi(spawner, wifi, cfg)
         } else {
-            info!("WiFi skipped (no SSID); BLE unused");
+            info!("WiFi skipped (no SSID)");
             let _ = wifi;
             None
         }
@@ -401,79 +349,7 @@ mod stack {
             }
         }
     }
-
-    #[embassy_executor::task]
-    #[allow(dead_code)]
-    async fn ble_task(
-        controller: ExternalController<BleConnector<'static>, 1>,
-        ble_name: &'static [u8],
-    ) {
-        let address = Address::random([0x42, 0x53, 0x43, 0x52, 0x59, 0x50]);
-        let mut resources: HostResources<DefaultPacketPool, CONNECTIONS_MAX, L2CAP_CHANNELS_MAX> =
-            HostResources::new();
-        let stack = trouble_host::new(controller, &mut resources).set_random_address(address);
-        let Host {
-            mut peripheral,
-            mut runner,
-            ..
-        } = stack.build();
-
-        let mut adv_data = [0; 31];
-        let adv_len = match AdStructure::encode_slice(
-            &[
-                AdStructure::Flags(LE_GENERAL_DISCOVERABLE | BR_EDR_NOT_SUPPORTED),
-                AdStructure::CompleteLocalName(ble_name),
-            ],
-            &mut adv_data[..],
-        ) {
-            Ok(len) => len,
-            Err(e) => {
-                info!("BLE adv encode failed: {e:?}");
-                return;
-            }
-        };
-
-        info!(
-            "BLE advertising (non-connectable) as {:?}",
-            core::str::from_utf8(ble_name)
-        );
-        let _ = join(runner.run(), async {
-            let mut params = AdvertisementParameters::default();
-            params.interval_min = Duration::from_millis(200);
-            params.interval_max = Duration::from_millis(200);
-
-            loop {
-                set_ble(true, false).await;
-                match peripheral
-                    .advertise(
-                        &params,
-                        Advertisement::NonconnectableScannableUndirected {
-                            adv_data: &adv_data[..adv_len],
-                            scan_data: &[],
-                        },
-                    )
-                    .await
-                {
-                    Ok(_advertiser) => {
-                        // Keep advertising until error; non-connectable has no accept loop.
-                        Timer::after(Duration::from_secs(30)).await;
-                    }
-                    Err(e) => {
-                        info!("BLE advertise error: {e:?}");
-                        set_ble(false, false).await;
-                        Timer::after(Duration::from_secs(2)).await;
-                    }
-                }
-            }
-        })
-        .await;
-    }
 }
 
 #[cfg(feature = "esp")]
 pub use stack::{scan_networks, snapshot, start};
-
-/// Sort helper used by host tests (mirrors scan ranking).
-pub fn sort_networks_by_rssi(list: &mut [ScannedNetwork]) {
-    list.sort_unstable_by(|a, b| b.rssi.cmp(&a.rssi));
-}

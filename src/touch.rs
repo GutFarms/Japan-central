@@ -122,10 +122,8 @@ pub struct Touch {
     last: Option<TouchPoint>,
     down: bool,
     pub map: TouchMap,
-    /// (x_raw, y_raw, z, irq_low)
+    /// (x_raw, y_raw, z, irq_low) — used for on-screen cursor while held.
     pub last_raw: Option<(u16, u16, u16, bool)>,
-    /// SPI transfer errors since boot (diagnostic).
-    pub xfer_errors: u32,
 }
 
 pub struct TouchPins {
@@ -159,20 +157,11 @@ impl Touch {
             down: false,
             map: TouchMap::DEFAULT,
             last_raw: None,
-            xfer_errors: 0,
         };
         t.cs.set_low();
         let _ = t.read_adc(CMD_PD);
         t.cs.set_high();
         t
-    }
-
-    pub fn pressed_raw(&self) -> bool {
-        self.irq.is_low()
-    }
-
-    pub fn is_down(&self) -> bool {
-        self.down
     }
 
     pub fn last_point(&self) -> Option<TouchPoint> {
@@ -263,7 +252,6 @@ impl Touch {
     fn read_adc(&mut self, cmd: u8) -> u16 {
         let mut data = [cmd, 0, 0];
         if self.spi.transfer(&mut data).is_err() {
-            self.xfer_errors = self.xfer_errors.saturating_add(1);
             return 0;
         }
         (u16::from(data[1]) << 8 | u16::from(data[2])) >> 3

@@ -178,8 +178,8 @@ async fn main(spawner: Spawner) -> ! {
         .take()
         .unwrap_or_else(|| unsafe { WIFI::steal() });
 
-    let stratum_enabled = if let Some(stack) = radio::start(&spawner, wifi, peripherals.BT, &pool)
-    {
+    let stratum_enabled = if let Some(stack) = radio::start(&spawner, wifi, &pool) {
+
         stratum::start(&spawner, stack, &pool);
         web::start(&spawner, stack);
         serial_writeln(&mut usb, "Stratum client starting (needs WiFi + DHCP).");
@@ -603,7 +603,6 @@ fn print_radio_serial(
     }
     serial_write(usb, "  ip = ");
     serial_writeln(usb, radio.ip_string().as_str());
-    serial_writeln(usb, "  ble = unused");
     serial_write(usb, "  stratum = ");
     serial_write(usb, stratum.phase.label());
     serial_write(usb, "  endpoint = ");
@@ -839,8 +838,6 @@ fn is_change_command(cmd: &str) -> bool {
 fn is_radio_command(cmd: &str) -> bool {
     eq_ignore_ascii_case(cmd, "radio")
         || eq_ignore_ascii_case(cmd, "wifi")
-        || eq_ignore_ascii_case(cmd, "ble")
-        || eq_ignore_ascii_case(cmd, "bt")
         || eq_ignore_ascii_case(cmd, "stratum")
         || eq_ignore_ascii_case(cmd, "pool")
 }
@@ -868,7 +865,6 @@ async fn collect_pool_config<D: embedded_hal::delay::DelayNs>(
     serial_writeln(usb, "Step 1: scan & tap a WiFi network (or type / skip).");
     serial_writeln(usb, "Serial: number from scan list, SSID text, or '-' to skip.");
     serial_writeln(usb, "BOOT: WiFi=select · keyboard short=next key, long=press.");
-    serial_writeln(usb, "BLE is off (not required).");
     serial_writeln(usb, "");
 
     for field in SetupField::ALL {
@@ -1016,7 +1012,6 @@ async fn pick_wifi_ssid<D: embedded_hal::delay::DelayNs>(
         }
 
         if let Some(p) = touch.poll_tap(touch_delay) {
-            log_touch(usb, &touch, p);
             match hit_wifi_scan(p, scroll, networks.len()) {
                 Some(WifiScanHit::Select(i)) => {
                     if let Some(n) = networks.get(i) {
@@ -1168,30 +1163,6 @@ async fn pick_wifi_ssid<D: embedded_hal::delay::DelayNs>(
     }
 }
 
-fn log_touch(usb: &mut Serial<'_>, touch: &Touch, p: esp32_s3_scrypt_miner::keyboard::TouchPoint) {
-    let mut m: String<80> = String::new();
-    if let Some((rx, ry, z, irq)) = touch.last_raw {
-        let _ = core::fmt::Write::write_fmt(
-            &mut m,
-            format_args!(
-                "tap screen=({},{}) raw=({},{},z={},irq={})",
-                p.x,
-                p.y,
-                rx,
-                ry,
-                z,
-                if irq { "L" } else { "H" }
-            ),
-        );
-    } else {
-        let _ = core::fmt::Write::write_fmt(
-            &mut m,
-            format_args!("tap screen=({},{})", p.x, p.y),
-        );
-    }
-    serial_writeln(usb, m.as_str());
-}
-
 fn print_scan_list(usb: &mut Serial<'_>, networks: &[ScannedNetwork]) {
     if networks.is_empty() {
         serial_writeln(usb, "(no networks found)");
@@ -1246,7 +1217,6 @@ async fn read_field_touch_or_serial<D: embedded_hal::delay::DelayNs>(
         // Release-edge tap using last sampled point.
         if finger_was_down && !finger_down {
             if let Some(p) = touch.last_point() {
-                log_touch(usb, touch, p);
                 if let Some(action) = kb.hit_test(p) {
                     if kb.apply(action, line) {
                         let _ = usb.write_all(b"\r\n");

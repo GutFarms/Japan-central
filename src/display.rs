@@ -296,10 +296,6 @@ impl<'a, D: DelayNs> Display<'a, D> {
         Ok(())
     }
 
-    pub fn draw_setup(&mut self, field: SetupField, typed: &str) -> Result<(), Error> {
-        self.draw_setup_keyboard(field, typed, &Keyboard::default())
-    }
-
     /// WiFi scan picker (step 1 of setup).
     pub fn draw_wifi_scan(
         &mut self,
@@ -826,10 +822,6 @@ impl<'a, D: DelayNs> Display<'a, D> {
         }
         self.footer_hint("tap row or BOOT short=select long=go")?;
         Ok(())
-    }
-
-    pub fn draw_auth_prompt(&mut self, attempt: u8, max: u8) -> Result<(), Error> {
-        self.draw_auth_keyboard(attempt, max, "", &Keyboard::default())
     }
 
     pub fn draw_auth_keyboard(

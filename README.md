@@ -1,13 +1,13 @@
 # ESP32-2432S028 Scrypt Miner (Cheap Yellow Display)
 
-Bare-metal Rust firmware that mines **scrypt** proof-of-work on an **ESP32-2432S028** (CYD) and shows a multi-screen **GUI** on the onboard **ILI9341** TFT. Uses onboard **WiFi** (STA + DHCP) and optional **Bluetooth LE** advertising.
+Bare-metal Rust firmware that mines **scrypt** proof-of-work on an **ESP32-2432S028** (CYD) and shows a multi-screen **GUI** on the onboard **ILI9341** TFT. Uses onboard **WiFi** (STA + DHCP) for stratum and a LAN web UI.
 
 ## What it does
 
 - Runs Litecoin-style scrypt: prefer **`N=64` (`lite`)** on this board; full `N=1024` is too RAM-heavy with WiFi
 - Reuses ROMix buffers across hashes
-- **After boot**, prompts (touch keyboard or USB serial) for **WiFi first**, then **address** / **password** / **stratum**, then optional **BLE**
-- Starts **WiFi STA + DHCP** when an SSID is set; **BLE is not used** (RAM reserved for WiFi/stratum)
+- **After boot**, prompts (touch keyboard or USB serial) for **WiFi → stratum → worker → password**
+- Starts **WiFi STA + DHCP** when an SSID is set (BLE unused — RAM kept for WiFi/stratum)
 - **Stratum TCP client** over WiFi: subscribe, authorize, receive jobs, submit shares
 - **LAN web UI** at `http://<board-ip>/` after DHCP (status dashboard + JSON)
 - **On-device GUI**: splash, setup, mining dashboard, config tab, radio/pool tab, menu
@@ -26,7 +26,7 @@ Educational / demo miner only — not profitable network mining.
 | **BOOT** short press | Next tab, or move menu highlight |
 | **BOOT** long press (~0.7s) | Open menu / activate selected item |
 | Serial `change` | Password-gated credential edit |
-| Serial `radio` / `wifi` / `ble` / `stratum` | Print live radio + pool status |
+| Serial `radio` / `wifi` / `stratum` | Print live radio + pool status |
 
 Tabs: **MINE** · **CONF** · **RADIO** · **MENU**.
 
@@ -49,7 +49,7 @@ After WiFi + DHCP, **ONLINE** / pool **CONNECTED** banners appear without pausin
 - Menu → **Change credentials**, or type `change` on serial  
 - Or hold **BOOT** at power-on  
 
-Stratum worker/endpoint/password changes **reconnect without reboot**. After changing WiFi/BLE settings, **reboot**.
+Stratum worker/endpoint/password changes **reconnect without reboot**. After changing WiFi settings, **reboot**.
 
 ## Hardware
 
@@ -62,7 +62,7 @@ Stratum worker/endpoint/password changes **reconnect without reboot**. After cha
 | Buttons | BOOT=GPIO0 (short/long); **touch** tabs + on-screen keyboard |
 | Touch | XPT2046 CLK=25 MOSI=32 MISO=39 CS=33 IRQ=36 |
 | Serial | USB-UART CH340 → UART0 (TX=1, RX=3) |
-| Radio | Onboard WiFi + BLE (`esp-radio` + `embassy-net` + `trouble-host` 0.6) |
+| Radio | Onboard WiFi (`esp-radio` + `embassy-net`) |
 | Flash config | Sector at `0x3FF000` (end of 4 MiB window) |
 
 ## Build & flash (device)

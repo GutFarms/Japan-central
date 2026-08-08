@@ -7,7 +7,7 @@ pub enum GuiScreen {
     Mining,
     /// Saved address / password / stratum.
     Config,
-    /// WiFi + Bluetooth status.
+    /// WiFi + stratum status.
     Radio,
     /// Soft menu: change credentials, back to mining.
     Menu,
@@ -36,15 +36,6 @@ impl GuiScreen {
             GuiScreen::Config => GuiScreen::Radio,
             GuiScreen::Radio => GuiScreen::Menu,
             GuiScreen::Menu => GuiScreen::Mining,
-        }
-    }
-
-    pub fn prev(self) -> Self {
-        match self {
-            GuiScreen::Mining => GuiScreen::Menu,
-            GuiScreen::Config => GuiScreen::Mining,
-            GuiScreen::Radio => GuiScreen::Config,
-            GuiScreen::Menu => GuiScreen::Radio,
         }
     }
 }

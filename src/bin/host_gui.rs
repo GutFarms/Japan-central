@@ -61,7 +61,6 @@ struct HostGuiApp {
     stratum: String,
     wifi_ssid: String,
     wifi_password: String,
-    ble_name: String,
     difficulty: u8,
     current_password: String,
     status: String,
@@ -80,7 +79,6 @@ impl HostGuiApp {
             stratum: String::new(),
             wifi_ssid: String::new(),
             wifi_password: String::new(),
-            ble_name: String::new(),
             difficulty: 4,
             current_password: String::new(),
             status: format!("Ready · config file {HOST_CONFIG_PATH}"),
@@ -103,7 +101,6 @@ impl HostGuiApp {
         self.stratum = cfg.stratum.to_string();
         self.wifi_ssid = cfg.wifi_ssid.to_string();
         self.wifi_password = cfg.wifi_password.to_string();
-        self.ble_name = cfg.ble_name.to_string();
     }
 
     fn to_config(&self) -> Result<PoolConfig, String> {
@@ -117,8 +114,6 @@ impl HostGuiApp {
         cfg.set(SetupField::WifiSsid, &self.wifi_ssid)
             .map_err(|e| e.to_string())?;
         cfg.set(SetupField::WifiPassword, &self.wifi_password)
-            .map_err(|e| e.to_string())?;
-        cfg.set(SetupField::BleName, &self.ble_name)
             .map_err(|e| e.to_string())?;
         Ok(cfg)
     }
@@ -271,8 +266,6 @@ impl App for HostGuiApp {
                 ui.text_edit_singleline(&mut self.wifi_ssid);
                 ui.label("WiFi password");
                 ui.add(egui::TextEdit::singleline(&mut self.wifi_password).password(true));
-                ui.label("BLE name");
-                ui.text_edit_singleline(&mut self.ble_name);
                 ui.add_space(8.0);
                 ui.horizontal(|ui| {
                     ui.label("Difficulty");

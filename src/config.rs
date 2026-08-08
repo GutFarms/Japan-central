@@ -1,7 +1,8 @@
 //! Post-boot mining identity + onboard radio credentials.
 //!
 //! Credentials can be serialized to a fixed flash/host blob and restored on boot.
-//! Blob **v1** (pool only) is still readable; new saves write **v2** (pool + WiFi + BLE).
+//! Blob **v1** (pool only) is still readable; new saves write **v2** (pool + WiFi).
+//! `ble_name` remains in the v2 layout for flash compatibility but is unused at runtime.
 
 use core::fmt;
 use heapless::String;

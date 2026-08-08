@@ -50,11 +50,6 @@ fn main() {
                     cfg.set(SetupField::WifiPassword, &v).expect("wifi_password");
                 }
             }
-            "--ble-name" => {
-                if let Some(v) = args.next() {
-                    cfg.set(SetupField::BleName, &v).expect("ble_name");
-                }
-            }
             "--difficulty" | "-d" => {
                 if let Some(v) = args.next() {
                     difficulty = v.parse().unwrap_or(4);
@@ -144,7 +139,6 @@ fn main() {
         }
     );
     println!("  wifi_password = {}", cfg.wifi_password_masked());
-    println!("  ble_name = {}", cfg.ble_name_or_default());
     println!();
 
     let mut miner = ScryptMiner::new_demo(difficulty);

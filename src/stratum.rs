@@ -968,7 +968,7 @@ mod client {
     }
 
     /// Apply updated pool identity (stratum/worker/password) and force reconnect.
-    /// WiFi/BLE still need a reboot to restart the radio stack.
+    /// WiFi still needs a reboot to restart the radio stack.
     pub async fn apply_pool_config(cfg: &PoolConfig) {
         let Some(session) = session_from_pool(cfg) else {
             set_phase(StratumPhase::Error, "bad endpoint").await;
@@ -1026,12 +1026,9 @@ mod client {
         let tx_buf = TX_BUF.init([0; 512]);
         let line_buf = LINE_BUF.init([0; 1024]);
         let line_text = LINE_TEXT.init(String::new());
-        let mut line_len = 0usize;
         let mut extranonce2_counter = 1u64;
         let mut difficulty = 1u32;
-        let mut sub = SubscribeResult::default();
         let mut next_id = 1u32;
-        let mut subscribe_id = 0u32;
         let mut pending_submit_ids: heapless::Vec<u32, 8> = heapless::Vec::new();
         let mut backoff_secs: u64 = 2;
         let mut fail_streak: u32 = 0;
@@ -1097,13 +1094,13 @@ mod client {
             );
             fail_streak = 0;
             backoff_secs = 2;
-            line_len = 0;
+            let mut line_len = 0usize;
             pending_submit_ids.clear();
-            sub = SubscribeResult::default();
+            let mut sub = SubscribeResult::default();
             let _ = RECONNECT.try_take();
 
             set_phase(StratumPhase::Subscribing, "mining.subscribe").await;
-            subscribe_id = next_id;
+            let subscribe_id = next_id;
             next_id = next_id.wrapping_add(1);
             let sub_msg = encode_subscribe(subscribe_id, "esp32-cyd-scrypt-miner/0.1");
             if write_all(&mut socket, sub_msg.as_bytes()).await.is_err() {
