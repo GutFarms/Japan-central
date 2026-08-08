@@ -108,7 +108,7 @@ See [`protocol/metrics_v1.md`](protocol/metrics_v1.md).
 
 ## UI theme
 
-Deep navy background with azure accents (`theme.h`): cool blue bars for normal load, amber/red only at high utilization or temperature.
+Soft midnight-blue canvas with raised “bubble” cards, capsule progress bars, and pill chips (`theme.h`). Cool azure fills for normal load; amber/coral only at high utilization or temperature.
 
 ## Project layout
 
