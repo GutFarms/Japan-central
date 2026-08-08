@@ -134,9 +134,13 @@ firmware/
   src/         main, GUI, JSON parser, serial link
   release/     prebuilt .bin flash images
 host/
-  agent.py
-  simulate_demo.py
-  requirements.txt
+  desktop_app.py           GUI auto-connect application
+  agent.py                 CLI agent
+  cyd_core.py              shared metrics + USB detect
+  CYD Monitor.bat          Windows launcher
+  CYD-Monitor.sh           Linux/macOS launcher
+  build_app.sh             build standalone + portable zip
+  release/                 downloadable app packages
 protocol/
   metrics_v1.md
 scripts/
