@@ -52,7 +52,7 @@ esptool.py --chip esp32 --port /dev/ttyUSB0 --baud 921600 \
 
 See [`firmware/release/FLASH.md`](firmware/release/FLASH.md) for details.
 
-On boot the display is ready for **USB serial @ 115200** immediately; Wi‑Fi/UDP is optional in the background.
+On boot the display is ready for **USB serial @ 115200** immediately. After **5 seconds** the firmware scans for your configured / previously stored Wi‑Fi network and auto-reconnects (UDP metrics optional in the background).
 
 ## Host application (auto USB)
 
