@@ -7,44 +7,42 @@
 
 #include "gui.h"
 #include "metrics.h"
+#include "serial_link.h"
 #include "wifi_config.h"
 
 namespace {
   TFT_eSPI tft;
   MonitorGui gui;
   WiFiUDP udp;
+  SerialLink serialLink;
   SystemMetrics metrics;
 
   char packetBuf[512];
   uint32_t lastUiMs = 0;
   uint32_t lastWifiCheckMs = 0;
   bool wifiReady = false;
+  bool wifiAttempted = false;
+  enum class LinkSource : uint8_t { None, Usb, Udp };
+  LinkSource lastSource = LinkSource::None;
 
-  void connectWifi() {
-    gui.showBoot(tft, "Connecting WiFi...");
+  void startWifiAsync() {
+    gui.showBoot(tft, "USB ready — WiFi...");
     WiFi.mode(WIFI_STA);
     WiFi.setSleep(false);
     WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
-
-    const uint32_t start = millis();
-    while (WiFi.status() != WL_CONNECTED && (millis() - start) < 20000) {
-      delay(250);
-    }
-
-    wifiReady = WiFi.status() == WL_CONNECTED;
-    if (wifiReady) {
-      udp.begin(METRICS_UDP_PORT);
-      char msg[48];
-      snprintf(msg, sizeof(msg), "UDP :%u", static_cast<unsigned>(METRICS_UDP_PORT));
-      gui.showBoot(tft, msg);
-      delay(600);
-      gui.drawChrome(tft);
-    } else {
-      gui.showBoot(tft, "WiFi failed — retrying");
-    }
+    wifiAttempted = true;
   }
 
   void ensureWifi() {
+    if (strcmp(WIFI_SSID, "YOUR_WIFI_SSID") == 0) {
+      return;  // credentials not configured — USB-only is fine
+    }
+
+    if (!wifiAttempted) {
+      startWifiAsync();
+      return;
+    }
+
     if (WiFi.status() == WL_CONNECTED) {
       if (!wifiReady) {
         wifiReady = true;
@@ -78,56 +76,71 @@ namespace {
       return;
     }
     packetBuf[len] = '\0';
-    parseMetricsJson(packetBuf, static_cast<size_t>(len), metrics);
+    if (parseMetricsJson(packetBuf, static_cast<size_t>(len), metrics)) {
+      lastSource = LinkSource::Udp;
+    }
+  }
+
+  void pollSerial() {
+    if (serialLink.poll(metrics)) {
+      lastSource = LinkSource::Usb;
+    }
   }
 }  // namespace
 
 void setup() {
-  Serial.begin(115200);
-  delay(100);
+  serialLink.begin(115200);
   Serial.println();
   Serial.println(F("ESP32-CYD PC/GPU Monitor"));
+  Serial.println(F("USB NDJSON @115200 or UDP :4210"));
 
   tft.init();
   pinMode(TFT_BL, OUTPUT);
   digitalWrite(TFT_BL, HIGH);
 
   gui.begin(tft);
+  gui.showBoot(tft, "USB 115200 ready");
+  delay(400);
+  gui.drawChrome(tft);
 
-  if (strcmp(WIFI_SSID, "YOUR_WIFI_SSID") == 0) {
-    gui.showBoot(tft, "Edit secrets.h / wifi_config");
-    Serial.println(F("Configure WIFI_SSID and WIFI_PASSWORD before flashing."));
+  // Wi-Fi is optional; USB serial works immediately.
+  if (strcmp(WIFI_SSID, "YOUR_WIFI_SSID") != 0) {
+    startWifiAsync();
   }
-
-  connectWifi();
 }
 
 void loop() {
   const uint32_t now = millis();
+
+  pollSerial();
+  pollUdp();
 
   if (now - lastWifiCheckMs >= 2000) {
     lastWifiCheckMs = now;
     ensureWifi();
   }
 
-  pollUdp();
-
   if (now - lastUiMs >= 200) {
     lastUiMs = now;
 
     const bool stale = metricsAreStale(metrics, now, METRICS_STALE_MS);
-    const bool linked = wifiReady && !stale && metrics.valid;
+    const bool linked = !stale && metrics.valid;
 
     char status[48];
-    if (!wifiReady) {
-      snprintf(status, sizeof(status), "WiFi connecting...");
-    } else if (!metrics.valid || stale) {
+    if (linked) {
+      if (lastSource == LinkSource::Usb) {
+        snprintf(status, sizeof(status), "USB serial");
+      } else if (lastSource == LinkSource::Udp) {
+        snprintf(status, sizeof(status), "WiFi UDP");
+      } else {
+        snprintf(status, sizeof(status), "Live metrics");
+      }
+    } else if (wifiReady) {
       IPAddress ip = WiFi.localIP();
-      snprintf(status, sizeof(status), "%d.%d.%d.%d:%u",
-               ip[0], ip[1], ip[2], ip[3],
-               static_cast<unsigned>(METRICS_UDP_PORT));
+      snprintf(status, sizeof(status), "USB / %d.%d.%d.%d",
+               ip[0], ip[1], ip[2], ip[3]);
     } else {
-      snprintf(status, sizeof(status), "Live metrics");
+      snprintf(status, sizeof(status), "USB 115200 or WiFi...");
     }
 
     gui.render(tft, metrics, linked, status);

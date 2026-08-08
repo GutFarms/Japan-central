@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """PC / GPU metrics agent for the ESP32-CYD monitor.
 
-Collects CPU, RAM, and NVIDIA GPU stats and sends JSON UDP packets
-to the firmware (see protocol/metrics_v1.md).
+Collects CPU, RAM, and NVIDIA GPU stats and sends JSON over USB serial
+(NDJSON) and/or UDP (see protocol/metrics_v1.md).
 """
 
 from __future__ import annotations
@@ -12,9 +12,17 @@ import json
 import socket
 import sys
 import time
-from typing import Any
+from typing import Any, Optional, Protocol
 
 import psutil
+
+try:
+    import serial  # type: ignore
+    from serial.tools import list_ports
+
+    _HAS_SERIAL = True
+except Exception:  # noqa: BLE001
+    _HAS_SERIAL = False
 
 try:
     from pynvml import (
@@ -103,6 +111,50 @@ class GpuReader:
                 pass
 
 
+class Transport(Protocol):
+    def send(self, data: bytes) -> None: ...
+    def close(self) -> None: ...
+    def describe(self) -> str: ...
+
+
+class UdpTransport:
+    def __init__(self, host: str, port: int) -> None:
+        self.host = host
+        self.port = port
+        self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+
+    def send(self, data: bytes) -> None:
+        self.sock.sendto(data, (self.host, self.port))
+
+    def close(self) -> None:
+        self.sock.close()
+
+    def describe(self) -> str:
+        return f"UDP {self.host}:{self.port}"
+
+
+class SerialTransport:
+    def __init__(self, port: str, baud: int = 115200) -> None:
+        if not _HAS_SERIAL:
+            raise RuntimeError("pyserial is required for --serial (pip install pyserial)")
+        self.port = port
+        self.baud = baud
+        self.ser = serial.Serial(port=port, baudrate=baud, timeout=0.2)
+        # Give the ESP32 a moment after the port opens (some boards reset on open).
+        time.sleep(1.5)
+        self.ser.reset_input_buffer()
+
+    def send(self, data: bytes) -> None:
+        self.ser.write(data if data.endswith(b"\n") else data + b"\n")
+        self.ser.flush()
+
+    def close(self) -> None:
+        self.ser.close()
+
+    def describe(self) -> str:
+        return f"USB serial {self.port} @ {self.baud}"
+
+
 def collect_metrics(gpu: GpuReader, host_name: str) -> dict[str, Any]:
     cpu = clamp_pct(psutil.cpu_percent(interval=None))
     ram = clamp_pct(psutil.virtual_memory().percent)
@@ -120,9 +172,23 @@ def collect_metrics(gpu: GpuReader, host_name: str) -> dict[str, Any]:
     }
 
 
+def list_serial_ports() -> list[str]:
+    if not _HAS_SERIAL:
+        return []
+    return [p.device for p in list_ports.comports()]
+
+
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Send PC/GPU metrics to ESP32-CYD")
-    parser.add_argument("--host", required=True, help="CYD IP address on the LAN")
+    parser = argparse.ArgumentParser(
+        description="Send PC/GPU metrics to ESP32-CYD over USB serial and/or UDP"
+    )
+    parser.add_argument(
+        "--serial",
+        metavar="PORT",
+        help="USB serial device (e.g. COM3, /dev/ttyUSB0). Use 'auto' to pick the first port.",
+    )
+    parser.add_argument("--baud", type=int, default=115200, help="Serial baud rate")
+    parser.add_argument("--host", help="CYD IP address for UDP mode")
     parser.add_argument("--port", type=int, default=4210, help="UDP port (default 4210)")
     parser.add_argument("--interval", type=float, default=0.5, help="Send interval seconds")
     parser.add_argument(
@@ -136,15 +202,47 @@ def main() -> int:
         action="store_true",
         help="Send a single packet and exit (useful for smoke tests)",
     )
+    parser.add_argument(
+        "--list-ports",
+        action="store_true",
+        help="List available serial ports and exit",
+    )
     args = parser.parse_args()
+
+    if args.list_ports:
+        ports = list_serial_ports()
+        if not ports:
+            print("No serial ports found.")
+            return 1
+        for p in ports:
+            print(p)
+        return 0
+
+    if not args.serial and not args.host:
+        parser.error("Provide --serial PORT and/or --host IP (or --list-ports)")
+
+    transports: list[Transport] = []
+
+    if args.serial:
+        port = args.serial
+        if port.lower() == "auto":
+            ports = list_serial_ports()
+            if not ports:
+                print("No serial ports found for --serial auto", file=sys.stderr)
+                return 1
+            port = ports[0]
+            print(f"Auto-selected serial port: {port}")
+        transports.append(SerialTransport(port, baud=args.baud))
+
+    if args.host:
+        transports.append(UdpTransport(args.host, args.port))
 
     # Prime cpu_percent so the first real sample is meaningful.
     psutil.cpu_percent(interval=None)
 
     gpu = GpuReader(index=args.gpu_index)
-    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-
-    print(f"Sending metrics → {args.host}:{args.port} every {args.interval}s")
+    for t in transports:
+        print(f"Sending metrics → {t.describe()} every {args.interval}s")
     if gpu.enabled:
         print(f"GPU: {gpu.name}")
     else:
@@ -154,7 +252,8 @@ def main() -> int:
         while True:
             payload = collect_metrics(gpu, args.name)
             data = json.dumps(payload, separators=(",", ":")).encode("utf-8")
-            sock.sendto(data, (args.host, args.port))
+            for t in transports:
+                t.send(data)
             print(
                 f"cpu={payload['cpu']:5.1f}%  gpu={payload['gpu']:5.1f}%  "
                 f"ram={payload['ram']:5.1f}%  vram={payload['vram']:5.1f}%",
@@ -168,7 +267,8 @@ def main() -> int:
     except KeyboardInterrupt:
         print("\nStopped.")
     finally:
-        sock.close()
+        for t in transports:
+            t.close()
         gpu.close()
 
     return 0

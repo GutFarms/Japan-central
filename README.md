@@ -20,13 +20,14 @@ Firmware and host agent for an **ESP32 Cheap Yellow Display (CYD)** that shows l
 | Path | Purpose |
 | --- | --- |
 | `firmware/` | PlatformIO project for ESP32-2432S028 (ILI9341, 320×240) |
-| `host/` | Python agent that samples CPU/RAM/GPU and sends UDP JSON |
+| `host/` | Python agent that samples CPU/RAM/GPU and sends over USB serial and/or UDP |
 | `protocol/` | Wire-format docs shared by both sides |
 
 ## Hardware
 
 - ESP32-CYD (**ESP32-2432S028**), 2.8" ILI9341 + backlight on GPIO 21
-- PC on the same Wi‑Fi LAN (NVIDIA GPU optional via NVML)
+- PC linked by **USB cable** (serial) and/or the same Wi‑Fi LAN
+- NVIDIA GPU optional via NVML
 
 ## Firmware setup
 
@@ -55,7 +56,7 @@ esptool.py --chip esp32 --port /dev/ttyUSB0 --baud 921600 \
 
 See [`firmware/release/FLASH.md`](firmware/release/FLASH.md) for details.
 
-On boot the display shows the device IP and UDP port (default **4210**).
+On boot the display is ready for **USB serial @ 115200** immediately; Wi‑Fi/UDP is optional in the background.
 
 ## Host agent
 
@@ -64,9 +65,26 @@ cd host
 python3 -m venv .venv
 source .venv/bin/activate   # Windows: .venv\Scripts\activate
 pip install -r requirements.txt
+```
 
+### USB serial (direct PC → CYD)
+
+Plug the CYD into USB, then:
+
+```bash
+python agent.py --list-ports
+python agent.py --serial COM3          # Windows
+python agent.py --serial /dev/ttyUSB0  # Linux
+python agent.py --serial auto          # first available port
+```
+
+### Wi‑Fi UDP
+
+```bash
 python agent.py --host 192.168.1.50 --port 4210
 ```
+
+Both at once: `python agent.py --serial auto --host 192.168.1.50`
 
 Useful flags:
 
@@ -74,12 +92,14 @@ Useful flags:
 - `--name RIG` — short label on the HUD
 - `--gpu-index 0` — NVIDIA adapter index
 - `--once` — single packet (smoke test)
+- `--baud 115200` — serial baud rate
 
 GPU fields require an NVIDIA driver + `nvidia-ml-py`. Without a supported GPU, CPU/RAM still update and GPU/VRAM stay at 0.
 
 For UI bring-up without real sensors:
 
 ```bash
+python simulate_demo.py --serial auto
 python simulate_demo.py --host 192.168.1.50
 ```
 

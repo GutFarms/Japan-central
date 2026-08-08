@@ -7,19 +7,50 @@ import argparse
 import json
 import math
 import socket
+import sys
 import time
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Send synthetic metrics to ESP32-CYD")
-    parser.add_argument("--host", required=True, help="CYD IP address")
+    parser.add_argument("--serial", metavar="PORT", help="USB serial device (or 'auto')")
+    parser.add_argument("--baud", type=int, default=115200)
+    parser.add_argument("--host", help="CYD IP address for UDP")
     parser.add_argument("--port", type=int, default=4210)
     parser.add_argument("--interval", type=float, default=0.5)
     args = parser.parse_args()
 
-    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    if not args.serial and not args.host:
+        parser.error("Provide --serial PORT and/or --host IP")
+
+    ser = None
+    sock = None
+
+    if args.serial:
+        try:
+            import serial
+            from serial.tools import list_ports
+        except ImportError as exc:
+            raise SystemExit("pyserial required: pip install pyserial") from exc
+
+        port = args.serial
+        if port.lower() == "auto":
+            found = [p.device for p in list_ports.comports()]
+            if not found:
+                print("No serial ports found", file=sys.stderr)
+                return 1
+            port = found[0]
+            print(f"Auto-selected serial port: {port}")
+        ser = serial.Serial(port=port, baudrate=args.baud, timeout=0.2)
+        time.sleep(1.5)
+        ser.reset_input_buffer()
+        print(f"Demo stream → USB {port} @{args.baud}")
+
+    if args.host:
+        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        print(f"Demo stream → UDP {args.host}:{args.port}")
+
     t0 = time.time()
-    print(f"Demo stream → {args.host}:{args.port}")
     try:
         while True:
             t = time.time() - t0
@@ -34,7 +65,12 @@ def main() -> int:
                 "fps": int(60 + 60 * (0.5 + 0.5 * math.sin(t / 1.5))),
                 "host": "DEMO",
             }
-            sock.sendto(json.dumps(payload, separators=(",", ":")).encode(), (args.host, args.port))
+            data = json.dumps(payload, separators=(",", ":")).encode("utf-8")
+            if ser is not None:
+                ser.write(data + b"\n")
+                ser.flush()
+            if sock is not None:
+                sock.sendto(data, (args.host, args.port))
             print(
                 f"cpu={payload['cpu']:5.1f}% gpu={payload['gpu']:5.1f}%",
                 end="\r",
@@ -44,7 +80,10 @@ def main() -> int:
     except KeyboardInterrupt:
         print("\nStopped.")
     finally:
-        sock.close()
+        if ser is not None:
+            ser.close()
+        if sock is not None:
+            sock.close()
     return 0
 
 

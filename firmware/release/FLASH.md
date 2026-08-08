@@ -37,3 +37,11 @@ pio run -t upload
 ```
 
 These prebuilt images are compiled with the Wi‑Fi credentials in `include/secrets.h` (SSID: `Stargate Command`).
+
+After flashing, leave the board plugged into USB and run the host agent over serial:
+
+```bash
+python host/agent.py --serial auto
+```
+
+Wi‑Fi/UDP remains available as an optional second path.
