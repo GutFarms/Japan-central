@@ -36,4 +36,4 @@ Or with PlatformIO from the `firmware/` folder:
 pio run -t upload
 ```
 
-Configure Wi‑Fi via `include/secrets.h` before building from source. The prebuilt `.bin` uses the placeholder SSID until you rebuild with your credentials.
+These prebuilt images are compiled with the Wi‑Fi credentials in `include/secrets.h` (SSID: `Stargate Command`).

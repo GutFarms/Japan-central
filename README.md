@@ -55,8 +55,6 @@ esptool.py --chip esp32 --port /dev/ttyUSB0 --baud 921600 \
 
 See [`firmware/release/FLASH.md`](firmware/release/FLASH.md) for details.
 
-> The prebuilt binary uses placeholder Wi‑Fi credentials. Copy `secrets.h.example` → `secrets.h`, set your SSID/password, then rebuild/flash so the device can join your network.
-
 On boot the display shows the device IP and UDP port (default **4210**).
 
 ## Host agent
