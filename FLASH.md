@@ -2,81 +2,75 @@
 
 Chip: **ESP32** (WROOM-32) · Board: **ESP32-2432S028** · Image: `esp,lite`
 
-## Save `.bin` to your PC
+## Save `.bin` to your PC (recommended)
 
 ```bash
 ./scripts/build-flash-images.sh
 ./scripts/serve-web-flasher.sh
 ```
 
-Open **http://127.0.0.1:8080/web/** and click **Save merged.bin to PC**.  
-File lands in your browser Downloads folder as:
+Open **http://127.0.0.1:8080/web/** → **Save merged.bin to PC**.
 
-`esp32-2432s028-scrypt-miner-merged.bin` (flash at address `0x0`)
+Downloads as:
 
-Or copy straight from the repo (no browser):
+`esp32-2432s028-scrypt-miner-merged.bin` — flash at **`0x0`** (~1 MiB, bootloader + partitions + app)
+
+Verify (optional):
 
 ```bash
-# after build-flash-images.sh
-cp flash/esp32-2432s028-scrypt-miner-merged.bin ~/Downloads/
+cd flash && sha256sum -c SHA256SUMS.txt
 ```
 
-## Drag & drop flash (browser)
-
-Chrome or Edge:
-
-1. Open **http://127.0.0.1:8080/web/**
-2. **Save merged.bin to PC**, then drag that file onto the page  
-   (or click **Load project merged.bin**)
-3. Click **Connect & flash** → pick the COM / tty port
-4. Wait for “Flash complete”
-
-Alternate one-click installer: http://127.0.0.1:8080/web/install.html
-
-## Quick flash (CLI)
+Or copy without the browser:
 
 ```bash
-# Linux / macOS — replace PORT
+cp flash/esp32-2432s028-scrypt-miner-merged.bin ~/Downloads/
+# Windows (Git Bash): cp flash/esp32-2432s028-scrypt-miner-merged.bin "$USERPROFILE/Downloads/"
+```
+
+## Flash from the browser
+
+Chrome / Edge only:
+
+1. http://127.0.0.1:8080/web/ (page auto-loads the project image when available)
+2. **Save merged.bin to PC** if you want a local copy
+3. **Connect & flash** → select the COM / tty port  
+   Hold **BOOT** while tapping **RESET** if connect stalls
+4. Wait for “Flash complete”
+
+One-click alternate: http://127.0.0.1:8080/web/install.html
+
+## Flash from the CLI
+
+```bash
+# Windows
+espflash write-bin -p COM6 0x0 flash/esp32-2432s028-scrypt-miner-merged.bin
+espflash monitor -p COM6
+
+# Linux / macOS
 espflash write-bin -p /dev/ttyUSB0 0x0 flash/esp32-2432s028-scrypt-miner-merged.bin
 espflash monitor -p /dev/ttyUSB0
 
-# Windows — replace COMx (Device Manager → Ports)
-espflash write-bin -p COM6 0x0 flash/esp32-2432s028-scrypt-miner-merged.bin
-espflash monitor -p COM6
-```
-
-Or one-shot ELF flash (builds bootloader segments automatically):
-
-```bash
+# Or ELF path (auto bootloader)
 ./scripts/flash-cyd.sh COM6
 ```
 
-Hold **BOOT** while tapping **RESET** if the port does not enter download mode. Use a data-capable USB cable; install **CH340** drivers on Windows if no COM port appears.
+Install **CH340** drivers on Windows if no COM port appears. Serial monitor: **115200**.
 
-Serial monitor baud: **115200**.
+## Image files
 
-## Build flashable images yourself
-
-```bash
-. ./export-esp.sh   # or: . $HOME/export-esp.sh
-./scripts/build-flash-images.sh
-```
-
-Produces:
-
-| File | Flash address | Notes |
-|------|---------------|-------|
-| `flash/esp32-2432s028-scrypt-miner-merged.bin` | `0x0` | Bootloader + partitions + app (recommended) |
-| `flash/esp32-2432s028-scrypt-miner.bin` | `0x10000` | App only (needs bootloader already on device) |
-| `target/xtensa-esp32-none-elf/release/esp32-s3-scrypt-miner` | via `espflash flash` | ELF (preferred when building from source) |
+| File | Address | Notes |
+|------|---------|-------|
+| `flash/esp32-2432s028-scrypt-miner-merged.bin` | `0x0` | **Use this** — padded only to end of app (~1 MiB) |
+| `flash/esp32-2432s028-scrypt-miner.bin` | `0x10000` | App only |
+| `flash/SHA256SUMS.txt` | — | Checksums from last build |
 
 ## First boot
 
-1. Open serial monitor at 115200.
-2. Enter address, password, stratum, WiFi SSID/password, BLE name (`-` to skip BLE).
-3. GUI should show on the ILI9341; tabs via short/long **BOOT**.
+1. Serial 115200 — enter address, password, stratum, WiFi, BLE (`-` to skip BLE)
+2. GUI on ILI9341; short/long **BOOT** for tabs/menu
 
 ## Not for
 
-- ESP32-S2 / ESP32-C3 / ESP32-S3 modules (wrong chip image)
-- JCHC-1 ASIC controller PCB (hardware-only; no firmware image yet)
+- ESP32-S2 / C3 / S3 modules (wrong chip image)
+- JCHC-1 ASIC controller (hardware-only package)

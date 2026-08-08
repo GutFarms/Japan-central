@@ -7,3 +7,6 @@
 *.elf
 scrypt-miner-config.bin
 export-esp.sh
+# Keep checksums for flash images (bins themselves stay ignored)
+!flash/SHA256SUMS.txt
+hardware/esp32-asic-controller/firmware-stub/target/

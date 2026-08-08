@@ -1,6 +1,6 @@
 /**
  * Browser drag-and-drop flasher for ESP32-2432S028 (CYD).
- * Uses Espressif esptool-js + Web Serial (Chrome / Edge).
+ * Espressif esptool-js + Web Serial (Chrome / Edge over http://localhost).
  */
 import { ESPLoader, Transport } from "https://unpkg.com/esptool-js@0.5.6/bundle.js";
 
@@ -21,8 +21,7 @@ const logEl = document.getElementById("log");
 
 let firmware = null; // Uint8Array
 let firmwareName = "";
-let transport = null;
-let esploader = null;
+let lastPort = null;
 
 function log(line) {
   logEl.textContent += `${line}\n`;
@@ -38,29 +37,90 @@ function setProgress(pct) {
   bar.style.width = `${Math.max(0, Math.min(100, pct))}%`;
 }
 
+function hasWebSerial() {
+  return "serial" in navigator;
+}
+
 function guessAddress(name, bytes) {
   const n = (name || "").toLowerCase();
-  if (n.includes("merged") || bytes.length >= 1_000_000) {
+  if (n.includes("merged") || bytes.length >= 900_000) {
     addressEl.value = "0x0";
   } else {
     addressEl.value = "0x10000";
   }
 }
 
+function validateFirmware(name, bytes) {
+  const n = (name || "").toLowerCase();
+  if (bytes.length < 1024) return "File too small to be firmware";
+  if (n.includes("merged") || bytes.length >= 900_000) {
+    if (bytes.length < 0x10000 + 256) return "Merged image looks truncated";
+    if (bytes[0x1000] !== 0xe9) return "Merged image missing bootloader magic at 0x1000";
+    if (bytes[0x10000] !== 0xe9) return "Merged image missing app magic at 0x10000";
+  } else if (bytes[0] !== 0xe9) {
+    return "App image should start with ESP magic 0xE9 — did you pick the wrong file?";
+  }
+  return null;
+}
+
+/** Skip leading 0xFF pages when flashing a merged image from 0x0 (faster on CH340). */
+function prepareFlashPayload(bytes, address) {
+  let addr = address;
+  let data = bytes;
+  if (addr === 0) {
+    let skip = 0;
+    while (skip < data.length && data[skip] === 0xff) skip += 1;
+    skip &= ~0xfff; // keep 4 KiB alignment
+    if (skip > 0 && skip < data.length) {
+      log(`Skipping ${skip} leading 0xFF bytes → flash starts at 0x${skip.toString(16)}`);
+      data = data.subarray(skip);
+      addr = skip;
+    }
+  }
+  return { data, address: addr };
+}
+
+function toBinaryString(u8) {
+  // esptool-js 0.5.x flash path historically expects a binary string.
+  const chunk = 0x8000;
+  let out = "";
+  for (let i = 0; i < u8.length; i += chunk) {
+    out += String.fromCharCode(...u8.subarray(i, i + chunk));
+  }
+  return out;
+}
+
 function adoptFile(name, buffer) {
-  firmware = new Uint8Array(buffer);
+  const bytes = buffer instanceof Uint8Array ? buffer : new Uint8Array(buffer);
+  const err = validateFirmware(name, bytes);
+  if (err) {
+    setStatus(err, "err");
+    log(`Reject ${name}: ${err}`);
+    return false;
+  }
+  firmware = bytes;
   firmwareName = name;
   guessAddress(name, firmware);
   fileMeta.textContent = `${name} · ${(firmware.length / 1024).toFixed(1)} KiB · flash @ ${addressEl.value}`;
   drop.classList.add("has-file");
-  btnFlash.disabled = !("serial" in navigator);
-  setStatus(navigator.serial ? "Firmware ready — connect & flash" : "Web Serial unavailable (use Chrome/Edge over HTTP)", navigator.serial ? "ok" : "err");
+  btnFlash.disabled = !hasWebSerial();
+  setStatus(
+    hasWebSerial() ? "Firmware ready — connect & flash" : "Web Serial unavailable (use Chrome/Edge over HTTP)",
+    hasWebSerial() ? "ok" : "err",
+  );
   log(`Loaded ${name} (${firmware.length} bytes)`);
+  return true;
 }
 
 async function readBlob(file) {
   const buf = await file.arrayBuffer();
   adoptFile(file.name, buf);
+}
+
+async function fetchBin(url) {
+  const res = await fetch(url, { cache: "no-cache" });
+  if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
+  return new Uint8Array(await res.arrayBuffer());
 }
 
 drop.addEventListener("click", () => fileInput.click());
@@ -95,23 +155,19 @@ drop.addEventListener("drop", (e) => {
 btnBundled.addEventListener("click", async () => {
   setStatus("Fetching project merged.bin…");
   try {
-    const res = await fetch(BUNDLED);
-    if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
-    const buf = await res.arrayBuffer();
-    adoptFile("esp32-2432s028-scrypt-miner-merged.bin", buf);
+    const bytes = await fetchBin(BUNDLED);
+    adoptFile("esp32-2432s028-scrypt-miner-merged.bin", bytes);
   } catch (err) {
     setStatus(`Could not load bundled image: ${err.message}. Use “Save merged.bin to PC”, then drag it here.`, "err");
     log(String(err));
   }
 });
 
-/** Force a browser download of a fetched binary (works even if the <a download> is blocked). */
-async function downloadBin(url, filename) {
+async function downloadBin(url, filename, alsoLoad) {
   setStatus(`Downloading ${filename}…`);
   try {
-    const res = await fetch(url);
-    if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
-    const blob = await res.blob();
+    const bytes = await fetchBin(url);
+    const blob = new Blob([bytes], { type: "application/octet-stream" });
     const objectUrl = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = objectUrl;
@@ -120,8 +176,9 @@ async function downloadBin(url, filename) {
     a.click();
     a.remove();
     URL.revokeObjectURL(objectUrl);
-    setStatus(`Saved ${filename} to your downloads folder`, "ok");
-    log(`Downloaded ${filename} (${blob.size} bytes)`);
+    if (alsoLoad) adoptFile(filename, bytes);
+    setStatus(`Saved ${filename} (${(bytes.length / 1024).toFixed(1)} KiB) to Downloads`, "ok");
+    log(`Downloaded ${filename} (${bytes.length} bytes)`);
   } catch (err) {
     setStatus(`Download failed: ${err.message}`, "err");
     log(String(err));
@@ -130,11 +187,11 @@ async function downloadBin(url, filename) {
 
 document.getElementById("dlMerged")?.addEventListener("click", (e) => {
   e.preventDefault();
-  downloadBin(BUNDLED, "esp32-2432s028-scrypt-miner-merged.bin");
+  downloadBin(BUNDLED, "esp32-2432s028-scrypt-miner-merged.bin", true);
 });
 document.getElementById("dlApp")?.addEventListener("click", (e) => {
   e.preventDefault();
-  downloadBin(BUNDLED_APP, "esp32-2432s028-scrypt-miner.bin");
+  downloadBin(BUNDLED_APP, "esp32-2432s028-scrypt-miner.bin", true);
 });
 
 function terminal() {
@@ -144,27 +201,13 @@ function terminal() {
       log(data);
     },
     write(data) {
-      if (data && data.trim()) log(data);
+      if (data && String(data).trim()) log(data);
     },
   };
 }
 
-async function md5Hex(data) {
-  // esptool-js expects an MD5 hex string; prefer SubtleCrypto when available.
-  if (crypto?.subtle) {
-    const digest = await crypto.subtle.digest("MD5", data).catch(() => null);
-    // SubtleCrypto often lacks MD5; fall back.
-    if (digest) {
-      return [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, "0")).join("");
-    }
-  }
-  // Lightweight MD5 (public-domain style) for flash verify.
-  return md5Fallback(data);
-}
-
-/** Minimal MD5 for Uint8Array → hex (enough for esptool verify). */
+/** Minimal MD5 for Uint8Array → hex (esptool verify). */
 function md5Fallback(bytes) {
-  // Import-free compact implementation
   function cmn(q, a, b, x, s, t) {
     a = (a + q + x + t) | 0;
     return (((a << s) | (a >>> (32 - s))) + b) | 0;
@@ -181,9 +224,15 @@ function md5Fallback(bytes) {
   blks[len >> 2] |= 0x80 << ((len % 4) * 8);
   blks[nblocks - 2] = len * 8;
 
-  let a0 = 0x67452301, b0 = 0xefcdab89, c0 = 0x98badcfe, d0 = 0x10325476;
+  let a0 = 0x67452301;
+  let b0 = 0xefcdab89;
+  let c0 = 0x98badcfe;
+  let d0 = 0x10325476;
   for (let i = 0; i < nblocks; i += 16) {
-    let a = a0, b = b0, c = c0, d = d0;
+    let a = a0;
+    let b = b0;
+    let c = c0;
+    let d = d0;
     a = ff(a, b, c, d, blks[i], 7, -680876936); d = ff(d, a, b, c, blks[i + 1], 12, -389564586);
     c = ff(c, d, a, b, blks[i + 2], 17, 606105819); b = ff(b, c, d, a, blks[i + 3], 22, -1044525330);
     a = ff(a, b, c, d, blks[i + 4], 7, -176418897); d = ff(d, a, b, c, blks[i + 5], 12, 1200080426);
@@ -228,10 +277,10 @@ function md5Fallback(bytes) {
 
 btnFlash.addEventListener("click", async () => {
   if (!firmware) {
-    setStatus("Drop a .bin first", "err");
+    setStatus("Save/load a .bin first", "err");
     return;
   }
-  if (!("serial" in navigator)) {
+  if (!hasWebSerial()) {
     setStatus("Web Serial requires Chrome or Edge over http://localhost", "err");
     return;
   }
@@ -241,29 +290,35 @@ btnFlash.addEventListener("click", async () => {
   setProgress(0);
   setStatus("Select the COM port in the browser dialog…");
 
+  let transport = null;
   try {
     const port = await navigator.serial.requestPort();
+    lastPort = port;
     transport = new Transport(port, true);
-    esploader = new ESPLoader({
+    const esploader = new ESPLoader({
       transport,
       baudrate: parseInt(baudEl.value, 10),
       romBaudrate: 115200,
       terminal: terminal(),
     });
 
-    setStatus("Connecting to bootloader…");
+    setStatus("Connecting to bootloader… (hold BOOT if this stalls)");
     const chip = await esploader.main();
     log(`Chip: ${chip}`);
+    if (String(chip).toLowerCase().includes("esp32s2") || String(chip).toLowerCase().includes("esp32-s3") || String(chip).toLowerCase().includes("esp32c")) {
+      log("Warning: this image targets classic ESP32 (CYD), not " + chip);
+    }
     setStatus(`Connected: ${chip} — writing flash…`, "ok");
 
     const address = parseInt(addressEl.value, 16);
-    // esptool-js expects binary as a binary string in some versions; pass Uint8Array if supported.
-    const data = firmware;
+    const prepared = prepareFlashPayload(firmware, address);
+    const payload = toBinaryString(prepared.data);
+
     const flashOptions = {
-      fileArray: [{ data, address }],
-      flashSize: "4MB",
-      flashMode: "dio",
-      flashFreq: "40m",
+      fileArray: [{ data: payload, address: prepared.address }],
+      flashSize: "keep",
+      flashMode: "keep",
+      flashFreq: "keep",
       eraseAll: false,
       compress: true,
       reportProgress: (_i, written, total) => {
@@ -274,21 +329,12 @@ btnFlash.addEventListener("click", async () => {
       calculateMD5Hash: (image) => {
         const u8 = typeof image === "string"
           ? Uint8Array.from(image, (c) => c.charCodeAt(0))
-          : image;
-        // sync wrapper over cached async is awkward; use sync fallback
-        return md5Fallback(u8 instanceof Uint8Array ? u8 : new Uint8Array(u8));
+          : image instanceof Uint8Array
+            ? image
+            : new Uint8Array(image);
+        return md5Fallback(u8);
       },
     };
-
-    // Prefer binary string for broader esptool-js compatibility
-    let payload = data;
-    try {
-      // Some builds want a binary string
-      payload = Array.from(data, (b) => String.fromCharCode(b)).join("");
-      flashOptions.fileArray = [{ data: payload, address }];
-    } catch (_) {
-      flashOptions.fileArray = [{ data, address }];
-    }
 
     await esploader.writeFlash(flashOptions);
     await esploader.after("hard_reset");
@@ -301,32 +347,46 @@ btnFlash.addEventListener("click", async () => {
     setStatus(`Flash failed: ${err.message || err}`, "err");
     log(String(err?.stack || err));
   } finally {
-    btnFlash.disabled = !firmware;
+    btnFlash.disabled = !firmware || !hasWebSerial();
     try {
       if (transport) await transport.disconnect();
-    } catch (_) {}
+    } catch (_) {
+      /* ignore */
+    }
   }
 });
 
 btnReset.addEventListener("click", async () => {
   try {
-    if (!transport) {
-      const port = await navigator.serial.requestPort();
-      transport = new Transport(port, true);
-      await transport.connect();
-    }
+    const port = lastPort || (await navigator.serial.requestPort());
+    lastPort = port;
+    const transport = new Transport(port, true);
+    await transport.connect();
     await transport.setDTR(false);
     await new Promise((r) => setTimeout(r, 100));
     await transport.setDTR(true);
+    await transport.disconnect();
     setStatus("Reset pulse sent", "ok");
   } catch (err) {
     setStatus(`Reset failed: ${err.message || err}`, "err");
   }
 });
 
-if (!("serial" in navigator)) {
-  setStatus("Open this page in Chrome/Edge via http://localhost (Web Serial required)", "err");
-  log("navigator.serial missing");
-} else {
-  log("Web Serial OK — drop esp32-2432s028-scrypt-miner-merged.bin or load project image.");
-}
+// Boot: try to preload project merged image when served over HTTP.
+(async () => {
+  if (!hasWebSerial()) {
+    setStatus("Open this page in Chrome/Edge via http://localhost (Web Serial required)", "err");
+    log("navigator.serial missing");
+  } else {
+    log("Web Serial OK.");
+  }
+  try {
+    const bytes = await fetchBin(BUNDLED);
+    if (adoptFile("esp32-2432s028-scrypt-miner-merged.bin", bytes)) {
+      setStatus("Project merged.bin loaded — Save to PC and/or Connect & flash", "ok");
+    }
+  } catch (err) {
+    log(`Bundled image not auto-loaded (${err.message}). Use Save merged.bin to PC after build.`);
+    setStatus("Build images, then Save merged.bin to PC (or drag a .bin here)");
+  }
+})();

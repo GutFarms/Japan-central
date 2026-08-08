@@ -1,22 +1,19 @@
 # Flash images & web flasher
 
-## Drag & drop (recommended)
+## Save `.bin` to PC + drag/drop flash
 
 ```bash
 ./scripts/build-flash-images.sh
 ./scripts/serve-web-flasher.sh
 ```
 
-Open **http://127.0.0.1:8080/web/** → drop `esp32-2432s028-scrypt-miner-merged.bin` → **Connect & flash**.
+Open **http://127.0.0.1:8080/web/**
 
-Files: [`web/`](web/)
+1. **Save merged.bin to PC** → Downloads folder  
+2. **Connect & flash** (Chrome / Edge) → pick COM port  
 
-## CLI images
+Files: [`web/`](web/) · checksums: [`SHA256SUMS.txt`](SHA256SUMS.txt) (after build)
 
-Run from repo root:
+## CLI
 
-```bash
-./scripts/build-flash-images.sh
-```
-
-Then see [`../FLASH.md`](../FLASH.md).
+See [`../FLASH.md`](../FLASH.md).

@@ -61,26 +61,21 @@ Stratum worker/endpoint/password changes **reconnect without reboot**. After cha
 
 ## Build & flash (device)
 
-**See [FLASH.md](FLASH.md).** Easiest path — drag & drop in the browser:
+**See [FLASH.md](FLASH.md).**
 
 ```bash
 . ./export-esp.sh
 ./scripts/build-flash-images.sh
 ./scripts/serve-web-flasher.sh
 # → http://127.0.0.1:8080/web/  (Chrome / Edge)
+#    Save merged.bin to PC  →  Connect & flash
 ```
 
-CLI:
+CLI: `./scripts/flash-cyd.sh COM6` or  
+`espflash write-bin -p COM6 0x0 flash/esp32-2432s028-scrypt-miner-merged.bin`
 
-```bash
-./scripts/flash-cyd.sh COM6
-# or
-espflash write-bin -p COM6 0x0 flash/esp32-2432s028-scrypt-miner-merged.bin
-```
-
-If upload fails, try a lower baud / hold **BOOT** while resetting. Install CH340 drivers if the serial port does not appear.
-
-Full scrypt `N=1024` (`--features esp` without `lite`) is not recommended on this board with WiFi enabled.
+Hold **BOOT** + **RESET** if connect stalls; install CH340 drivers on Windows if needed.  
+Full scrypt `N=1024` without `lite` is not recommended on this board with WiFi.
 
 ## Host demo, GUI & tests
 
