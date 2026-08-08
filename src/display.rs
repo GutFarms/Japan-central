@@ -32,7 +32,7 @@ use crate::keyboard::{
     Keyboard, WIFI_SCAN_ROW0_Y, WIFI_SCAN_ROW_H, WIFI_SCAN_VISIBLE,
 };
 use crate::miner::{MinerStats, SCRYPT_LOG_N, SCRYPT_N};
-use crate::radio::{RadioStatus, ScannedNetwork};
+use crate::radio::{RadioStatus, ScannedNetwork, WifiPhase};
 use crate::stratum::{StratumPhase, StratumStatus};
 
 /// Landscape resolution after Deg90 rotation of the native 240×320 panel.
@@ -181,10 +181,61 @@ impl<'a, D: DelayNs> Display<'a, D> {
     }
 
     fn header_bar(&mut self, tab: &str) -> Result<(), Error> {
+        self.header_bar_wifi(tab, WifiPhase::Disabled, None)
+    }
+
+    fn header_bar_wifi(
+        &mut self,
+        tab: &str,
+        wifi: WifiPhase,
+        ip: Option<[u8; 4]>,
+    ) -> Result<(), Error> {
         self.fill_rect(0, 0, DISPLAY_WIDTH as u32, 28, PANEL)?;
         self.accent_stripe()?;
         self.draw_text("SCRYPT", Point::new(10, 20), BRAND)?;
-        self.draw_text(tab, Point::new(250, 20), OK)?;
+        // Tab title stays compact mid-right; WiFi occupies the far corner.
+        let _ = tab;
+        self.draw_wifi_corner(wifi, ip)?;
+        Ok(())
+    }
+
+    /// Top-right WiFi connection chip (IP when up, else short phase).
+    fn draw_wifi_corner(&mut self, wifi: WifiPhase, ip: Option<[u8; 4]>) -> Result<(), Error> {
+        // Clear prior text in the corner (header refresh without full clear).
+        self.fill_rect(168, 8, 152, 18, PANEL)?;
+
+        let mut label: String<20> = String::new();
+        let style = match (wifi, ip) {
+            (WifiPhase::Connected, Some([a, b, c, d])) => {
+                let _ = write!(label, "{a}.{b}.{c}.{d}");
+                OK
+            }
+            (WifiPhase::Connected, None) => {
+                let _ = label.push_str("WiFi up");
+                OK
+            }
+            (WifiPhase::Connecting, _) | (WifiPhase::Starting, _) => {
+                let _ = label.push_str("WiFi…");
+                KEY_TXT_DIM
+            }
+            (WifiPhase::Failed, _) => {
+                let _ = label.push_str("WiFi fail");
+                MonoTextStyle::new(&FONT_6X12, Rgb565::CSS_ORANGE_RED)
+            }
+            (WifiPhase::Disconnected, _) => {
+                let _ = label.push_str("WiFi down");
+                KEY_TXT_DIM
+            }
+            (WifiPhase::Disabled, _) => {
+                let _ = label.push_str("WiFi off");
+                MUTED
+            }
+        };
+
+        // Right-align roughly within the 320px header.
+        let w = (label.len() as i32) * 6;
+        let x = (DISPLAY_WIDTH as i32 - 6 - w).max(170);
+        self.draw_text(label.as_str(), Point::new(x, 20), style)?;
         Ok(())
     }
 
@@ -525,12 +576,13 @@ impl<'a, D: DelayNs> Display<'a, D> {
         let screen_changed = self.last_screen != Some(gui.screen);
         if screen_changed {
             self.wake_clear()?;
-            self.header_bar(gui.screen.title())?;
+            self.header_bar_wifi(gui.screen.title(), radio.wifi, radio.ip)?;
             self.tab_strip(gui.screen)?;
             self.last_screen = Some(gui.screen);
         } else {
-            // Refresh accent pulse without full clear
+            // Refresh accent pulse + live WiFi corner without full clear
             let _ = self.accent_stripe();
+            let _ = self.draw_wifi_corner(radio.wifi, radio.ip);
         }
 
         match gui.screen {
