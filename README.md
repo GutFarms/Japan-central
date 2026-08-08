@@ -46,6 +46,22 @@ pio run -t upload
 pio device monitor
 ```
 
+### Prebuilt `.bin` files
+
+Flashable images are in [`firmware/release/`](firmware/release/):
+
+- **`esp32-cyd-pc-monitor-merged.bin`** — flash at address `0x0` (bootloader + partitions + app)
+- **`esp32-cyd-pc-monitor.bin`** — app only at `0x10000`
+
+```bash
+esptool.py --chip esp32 --port /dev/ttyUSB0 --baud 921600 \
+  write_flash 0x0 firmware/release/esp32-cyd-pc-monitor-merged.bin
+```
+
+See [`firmware/release/FLASH.md`](firmware/release/FLASH.md) for details.
+
+> The prebuilt binary uses placeholder Wi‑Fi credentials. Copy `secrets.h.example` → `secrets.h`, set your SSID/password, then rebuild/flash so the device can join your network.
+
 On boot the display shows the device IP and UDP port (default **4210**).
 
 ## Host agent
