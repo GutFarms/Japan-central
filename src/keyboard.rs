@@ -267,7 +267,6 @@ pub enum WifiScanHit {
     ScrollDown,
     Rescan,
     TypeManual,
-    Skip,
 }
 
 /// Hit-test the WiFi scan list + footer actions.
@@ -283,16 +282,13 @@ pub fn hit_wifi_scan(p: TouchPoint, scroll: usize, count: usize) -> Option<WifiS
         return Some(WifiScanHit::ScrollDown);
     }
 
-    // Footer actions (padded)
+    // Footer actions: scan + type (WiFi is required — no skip).
     if (196..228).contains(&y) {
-        if (84..164).contains(&x) {
+        if (84..196).contains(&x) {
             return Some(WifiScanHit::Rescan);
         }
-        if (164..244).contains(&x) {
+        if (196..316).contains(&x) {
             return Some(WifiScanHit::TypeManual);
-        }
-        if (244..316).contains(&x) {
-            return Some(WifiScanHit::Skip);
         }
     }
 
@@ -382,10 +378,10 @@ mod tests {
     fn wifi_scan_select_and_actions() {
         let p = TouchPoint { x: 40, y: 70 };
         assert_eq!(hit_wifi_scan(p, 0, 3), Some(WifiScanHit::Select(0)));
-        let p2 = TouchPoint { x: 200, y: 210 };
+        let p2 = TouchPoint { x: 240, y: 210 };
         assert_eq!(hit_wifi_scan(p2, 0, 3), Some(WifiScanHit::TypeManual));
-        let p3 = TouchPoint { x: 280, y: 210 };
-        assert_eq!(hit_wifi_scan(p3, 0, 1), Some(WifiScanHit::Skip));
+        let p3 = TouchPoint { x: 120, y: 210 };
+        assert_eq!(hit_wifi_scan(p3, 0, 1), Some(WifiScanHit::Rescan));
         assert_eq!(
             hit_wifi_scan(TouchPoint { x: 40, y: 98 }, 1, 4),
             Some(WifiScanHit::Select(2))

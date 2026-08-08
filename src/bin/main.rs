@@ -191,7 +191,7 @@ async fn main(spawner: Spawner) -> ! {
     } else {
         serial_writeln(
             &mut usb,
-            "No WiFi SSID — local demo mining only (no stratum / no web UI).",
+            "WiFi failed to start — check SSID/password (change + reboot).",
         );
         false
     };
@@ -862,13 +862,13 @@ async fn collect_pool_config<D: embedded_hal::delay::DelayNs>(
 
     serial_writeln(usb, "");
     serial_writeln(usb, "=== ESP32-2432S028 Scrypt Miner setup ===");
-    serial_writeln(usb, "Step 1: scan & tap a WiFi network (or type / skip).");
-    serial_writeln(usb, "Serial: number from scan list, SSID text, or '-' to skip.");
-    serial_writeln(usb, "BOOT: WiFi=select · keyboard short=next key, long=press.");
+    serial_writeln(usb, "Step 1: pick a WiFi network (required).");
+    serial_writeln(usb, "Serial: number from scan list, or type the SSID + Enter.");
+    serial_writeln(usb, "BOOT: select highlighted network · keyboard short=next, long=press.");
     serial_writeln(usb, "");
 
     for field in SetupField::ALL {
-        if field == SetupField::WifiPassword && (!cfg.wifi_enabled() || skip_wifi_password) {
+        if field == SetupField::WifiPassword && skip_wifi_password {
             continue;
         }
         if !field.allows_empty() && !cfg.get(field).is_empty() {
@@ -876,28 +876,26 @@ async fn collect_pool_config<D: embedded_hal::delay::DelayNs>(
         }
 
         if field == SetupField::WifiSsid {
-            match pick_wifi_ssid(usb, display, touch, touch_delay, wifi_token, boot).await {
-                WifiPick::Network { ssid, open } => {
-                    match cfg.set(SetupField::WifiSsid, ssid.as_str()) {
-                        Ok(()) => {
-                            serial_write(usb, "  ok (wifi_ssid=");
-                            serial_write(usb, ssid.as_str());
-                            serial_writeln(usb, ")");
-                            skip_wifi_password = open;
-                            if open {
-                                let _ = cfg.set(SetupField::WifiPassword, "");
-                                serial_writeln(usb, "  open network — no password");
-                            }
+            loop {
+                let WifiPick::Network { ssid, open } =
+                    pick_wifi_ssid(usb, display, touch, touch_delay, wifi_token, boot).await;
+                match cfg.set(SetupField::WifiSsid, ssid.as_str()) {
+                    Ok(()) => {
+                        serial_write(usb, "  ok (wifi_ssid=");
+                        serial_write(usb, ssid.as_str());
+                        serial_writeln(usb, ")");
+                        skip_wifi_password = open;
+                        if open {
+                            let _ = cfg.set(SetupField::WifiPassword, "");
+                            serial_writeln(usb, "  open network — no password");
                         }
-                        Err(e) => {
-                            serial_write(usb, "  error: ");
-                            serial_writeln(usb, config_error_msg(e));
-                        }
+                        break;
                     }
-                }
-                WifiPick::Skip => {
-                    let _ = cfg.set(SetupField::WifiSsid, "-");
-                    serial_writeln(usb, "  ok (wifi skipped)");
+                    Err(e) => {
+                        serial_write(usb, "  error: ");
+                        serial_writeln(usb, config_error_msg(e));
+                        serial_writeln(usb, " — WiFi is required, try again");
+                    }
                 }
             }
             continue;
@@ -966,7 +964,6 @@ async fn collect_pool_config<D: embedded_hal::delay::DelayNs>(
 
 enum WifiPick {
     Network { ssid: String<32>, open: bool },
-    Skip,
 }
 
 async fn pick_wifi_ssid<D: embedded_hal::delay::DelayNs>(
@@ -994,13 +991,13 @@ async fn pick_wifi_ssid<D: embedded_hal::delay::DelayNs>(
             networks = list;
             status.clear();
             if networks.is_empty() {
-                let _ = status.push_str("no networks — tap scan/type/skip");
+                let _ = status.push_str("no networks — tap scan or type");
             }
             print_scan_list(usb, &networks);
         }
         Err(()) => {
             status.clear();
-            let _ = status.push_str("scan failed — tap type or skip");
+            let _ = status.push_str("scan failed — tap scan or type");
             serial_writeln(usb, "WiFi scan failed.");
         }
     }
@@ -1045,13 +1042,13 @@ async fn pick_wifi_ssid<D: embedded_hal::delay::DelayNs>(
                             scroll = 0;
                             status.clear();
                             if networks.is_empty() {
-                                let _ = status.push_str("no networks — tap scan/type/skip");
+                                let _ = status.push_str("no networks — tap scan or type");
                             }
                             print_scan_list(usb, &networks);
                         }
                         Err(()) => {
                             status.clear();
-                            let _ = status.push_str("scan failed — tap type or skip");
+                            let _ = status.push_str("scan failed — tap scan or type");
                             serial_writeln(usb, "WiFi scan failed.");
                         }
                     }
@@ -1075,9 +1072,13 @@ async fn pick_wifi_ssid<D: embedded_hal::delay::DelayNs>(
                     )
                     .await;
                     let trimmed = line.as_str().trim();
-                    if trimmed.is_empty() || trimmed == "-" || eq_ignore_ascii_case(trimmed, "skip")
+                    if trimmed.is_empty()
+                        || trimmed == "-"
+                        || eq_ignore_ascii_case(trimmed, "skip")
                     {
-                        return WifiPick::Skip;
+                        serial_writeln(usb, "  WiFi SSID required — pick again");
+                        dirty = true;
+                        continue;
                     }
                     let mut ssid: String<32> = String::new();
                     let _ = ssid.push_str(trimmed);
@@ -1086,7 +1087,6 @@ async fn pick_wifi_ssid<D: embedded_hal::delay::DelayNs>(
                         open: false,
                     };
                 }
-                Some(WifiScanHit::Skip) => return WifiPick::Skip,
                 None => {}
             }
             continue;
@@ -1125,18 +1125,24 @@ async fn pick_wifi_ssid<D: embedded_hal::delay::DelayNs>(
                             continue;
                         }
                         if trimmed == "-" || eq_ignore_ascii_case(trimmed, "skip") {
-                            return WifiPick::Skip;
+                            serial_writeln(usb, "WiFi is required — enter a number or SSID.");
+                            serial_buf.clear();
+                            continue;
                         }
                         if let Ok(n) = trimmed.parse::<usize>() {
                             if (1..=networks.len()).contains(&n) {
                                 let net = &networks[n - 1];
                                 let mut ssid: String<32> = String::new();
                                 let _ = ssid.push_str(net.ssid.as_str());
+                                serial_buf.clear();
                                 return WifiPick::Network {
                                     ssid,
                                     open: net.open,
                                 };
                             }
+                            serial_writeln(usb, "Invalid number — try again.");
+                            serial_buf.clear();
+                            continue;
                         }
                         // Treat as typed SSID.
                         let mut ssid: String<32> = String::new();
@@ -1178,7 +1184,7 @@ fn print_scan_list(usb: &mut Serial<'_>, networks: &[ScannedNetwork]) {
         );
         serial_writeln(usb, line.as_str());
     }
-    serial_writeln(usb, "Enter number, SSID, or '-' to skip.");
+    serial_writeln(usb, "Enter number or SSID (WiFi required).");
 }
 
 /// Collect one field via on-screen keyboard and/or USB serial.

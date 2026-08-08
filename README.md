@@ -36,8 +36,8 @@ When WiFi is configured, the firmware connects to `stratum` (`host:port` or `str
 
 On **first boot**, use the **touch screen** or serial monitor (115200):
 
-1. `wifi_ssid` — **scan & tap** a network (or **type** / **skip** / `-`)  
-2. `wifi_password` — PSK (skipped for open networks / WiFi off)  
+1. `wifi_ssid` — **required**: scan & tap a network, or **type** the SSID (PuTTY: list number or SSID + Enter)  
+2. `wifi_password` — PSK (skipped for open networks)  
 3. `stratum` — defaults to `stratum+tcp://ltc.viabtc.io:3333` (Enter keeps it; plain TCP only)  
 4. `worker` — worker name (wallet address OK)  
 5. `password` — pool password (often `x`)

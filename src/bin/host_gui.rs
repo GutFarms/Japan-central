@@ -262,7 +262,7 @@ impl App for HostGuiApp {
                 ui.label("Password");
                 ui.add(egui::TextEdit::singleline(&mut self.password).password(true));
                 ui.add_space(8.0);
-                ui.label("WiFi SSID (- to skip)");
+                ui.label("WiFi SSID (required)");
                 ui.text_edit_singleline(&mut self.wifi_ssid);
                 ui.label("WiFi password");
                 ui.add(egui::TextEdit::singleline(&mut self.wifi_password).password(true));

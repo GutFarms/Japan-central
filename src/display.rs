@@ -330,17 +330,15 @@ impl<'a, D: DelayNs> Display<'a, D> {
             }
         }
 
-        // Footer actions
+        // Footer actions (WiFi required — no skip)
         self.round_panel(8, 200, 32, 22, KEY_BG)?;
         self.draw_text("^", Point::new(18, 214), KEY_TXT)?;
         self.round_panel(48, 200, 32, 22, KEY_BG)?;
         self.draw_text("v", Point::new(58, 214), KEY_TXT)?;
-        self.round_panel(88, 200, 72, 22, KEY_BG_HOT)?;
-        self.draw_text("scan", Point::new(106, 214), KEY_TXT)?;
-        self.round_panel(168, 200, 72, 22, KEY_BG)?;
-        self.draw_text("type", Point::new(188, 214), KEY_TXT)?;
-        self.round_panel(248, 200, 64, 22, ACCENT)?;
-        self.draw_text("skip", Point::new(262, 214), KEY_TXT)?;
+        self.round_panel(88, 200, 100, 22, KEY_BG_HOT)?;
+        self.draw_text("scan", Point::new(120, 214), KEY_TXT)?;
+        self.round_panel(196, 200, 116, 22, ACCENT)?;
+        self.draw_text("type", Point::new(236, 214), KEY_TXT)?;
         Ok(())
     }
 

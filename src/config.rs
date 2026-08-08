@@ -75,7 +75,7 @@ impl SetupField {
             SetupField::Address => "Worker name (wallet OK)",
             SetupField::Password => "Pool password (often 'x')",
             SetupField::Stratum => "Stratum (Enter=ViaBTC LTC)",
-            SetupField::WifiSsid => "WiFi SSID first (- to skip)",
+            SetupField::WifiSsid => "WiFi SSID (required)",
             SetupField::WifiPassword => "WiFi password (empty=open)",
             SetupField::BleName => "BLE name (- to skip; saves RAM with WiFi)",
         }
@@ -89,10 +89,7 @@ impl SetupField {
     pub fn allows_empty(self) -> bool {
         matches!(
             self,
-            SetupField::WifiSsid
-                | SetupField::WifiPassword
-                | SetupField::BleName
-                | SetupField::Stratum
+            SetupField::WifiPassword | SetupField::BleName | SetupField::Stratum
         )
     }
 
@@ -179,9 +176,13 @@ impl PoolConfig {
     }
 
     pub fn is_complete(&self) -> bool {
-        !self.address.is_empty() && !self.password.is_empty() && !self.stratum.is_empty()
+        !self.address.is_empty()
+            && !self.password.is_empty()
+            && !self.stratum.is_empty()
+            && self.wifi_enabled()
     }
 
+    /// WiFi is required for this firmware — empty SSID means not configured.
     pub fn wifi_enabled(&self) -> bool {
         !self.wifi_ssid.is_empty()
     }
@@ -265,11 +266,11 @@ impl PoolConfig {
             }
             SetupField::WifiSsid => {
                 let trimmed = raw.trim();
-                self.wifi_ssid.clear();
                 if trimmed.is_empty() || is_skip_token(trimmed) {
-                    return Ok(());
+                    return Err(ConfigError::Empty);
                 }
                 let value = normalize_value(trimmed)?;
+                self.wifi_ssid.clear();
                 self.wifi_ssid
                     .push_str(value)
                     .map_err(|_| ConfigError::TooLong)?;
@@ -631,11 +632,13 @@ mod tests {
         cfg.set(SetupField::Password, "x").unwrap();
         cfg.set(SetupField::Stratum, "stratum.example.com:3333")
             .unwrap();
+        assert!(!cfg.is_complete()); // WiFi still required
+        cfg.set(SetupField::WifiSsid, "HomeNet").unwrap();
         assert!(cfg.is_complete());
         assert_eq!(cfg.address.as_str(), "LWallet123");
         assert_eq!(cfg.password.as_str(), "x");
         assert_eq!(cfg.stratum.as_str(), "stratum.example.com:3333");
-        assert!(!cfg.wifi_enabled());
+        assert!(cfg.wifi_enabled());
         assert!(!cfg.ble_enabled());
         assert_eq!(cfg.ble_name_or_default(), "(off)");
     }
@@ -649,17 +652,18 @@ mod tests {
     }
 
     #[test]
-    fn wifi_and_ble_optional_fields() {
+    fn wifi_required_ble_optional() {
         let mut cfg = PoolConfig::new();
         cfg.set(SetupField::Address, "LWallet").unwrap();
         cfg.set(SetupField::Password, "x").unwrap();
         cfg.set(SetupField::Stratum, "pool:3333").unwrap();
-        cfg.set(SetupField::WifiSsid, "-").unwrap();
-        assert!(!cfg.wifi_enabled());
+        assert_eq!(cfg.set(SetupField::WifiSsid, "-"), Err(ConfigError::Empty));
+        assert_eq!(cfg.set(SetupField::WifiSsid, ""), Err(ConfigError::Empty));
         cfg.set(SetupField::WifiSsid, "MyAP").unwrap();
         cfg.set(SetupField::WifiPassword, "").unwrap();
         cfg.set(SetupField::BleName, "").unwrap();
         assert!(cfg.wifi_enabled());
+        assert!(cfg.is_complete());
         assert_eq!(cfg.wifi_ssid.as_str(), "MyAP");
         assert!(cfg.wifi_password.is_empty());
         assert!(!cfg.ble_enabled());
@@ -782,7 +786,7 @@ mod tests {
     }
 
     #[test]
-    fn blob_roundtrip_wifi_open_and_disabled() {
+    fn blob_roundtrip_wifi_open() {
         let mut cfg = PoolConfig::new();
         cfg.set(SetupField::Address, "LWallet").unwrap();
         cfg.set(SetupField::Password, "x").unwrap();
@@ -794,15 +798,12 @@ mod tests {
         assert_eq!(restored.wifi_ssid.as_str(), "OpenCafe");
         assert!(restored.wifi_password.is_empty());
         assert_eq!(restored.ble_name.as_str(), "Rig");
-
-        cfg.set(SetupField::WifiSsid, "skip").unwrap();
-        let restored = PoolConfig::from_blob(&cfg.to_blob().unwrap()).unwrap();
-        assert!(!restored.wifi_enabled());
+        assert!(restored.is_complete());
     }
 
     #[test]
-    fn reads_legacy_v1_blob() {
-        // Build a v1-shaped blob manually (320 bytes).
+    fn reads_legacy_v1_blob_incomplete_without_wifi() {
+        // Build a v1-shaped blob manually (320 bytes) — no WiFi fields.
         let mut blob = [0u8; 320];
         blob[0..4].copy_from_slice(b"SCFG");
         blob[4] = 1;
@@ -818,12 +819,10 @@ mod tests {
         let crc = crc32(&blob[12..]);
         blob[8..12].copy_from_slice(&crc.to_le_bytes());
 
-        let cfg = PoolConfig::from_blob(&blob).unwrap();
-        assert_eq!(cfg.address.as_str(), "LWallet");
-        assert_eq!(cfg.password.as_str(), "x");
-        assert_eq!(cfg.stratum.as_str(), "pool:3333");
-        assert!(!cfg.wifi_enabled());
-        assert!(!cfg.ble_enabled());
-        assert_eq!(cfg.ble_name_or_default(), "(off)");
+        // WiFi is required now — legacy blobs without SSID are treated as incomplete.
+        assert!(matches!(
+            PoolConfig::from_blob(&blob),
+            Err(ConfigError::Corrupt)
+        ));
     }
 }

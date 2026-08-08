@@ -67,7 +67,7 @@ Install **CH340** drivers on Windows if no COM port appears. Serial monitor: **1
 
 ## First boot
 
-1. **WiFi scan** — tap a network (or **type** / **skip**). **BOOT** selects the highlighted row. On keyboards: **BOOT** short = next key, long = press. On an empty scan list, **BOOT** cycles the touch axis map (saved to flash)
+1. **WiFi scan (required)** — tap a network or **type** the SSID. In PuTTY: enter the list **number** or SSID + Enter. **BOOT** selects the highlighted row. On keyboards: **BOOT** short = next key, long = press. On an empty scan list, **BOOT** cycles the touch axis map (saved to flash)
 2. **Stratum** prefills `stratum+tcp://ltc.viabtc.io:3333` (Enter keeps it). Plain TCP only — no `stratum+ssl://`
 3. Then **worker → password**. USB serial (115200) always works
 4. After DHCP, **ONLINE** / **CONNECTED** banners do not stop mining. Web UI: `http://<board-ip>/` · JSON `/api/status` · reconnect `/api/reconnect`

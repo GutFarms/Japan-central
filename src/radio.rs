@@ -275,10 +275,9 @@ mod stack {
         Ok(out)
     }
 
-    /// Start WiFi STA + DHCP when configured.
+    /// Start WiFi STA + DHCP (SSID is required by setup / saved config).
     ///
-    /// Returns the embassy-net [`Stack`] when WiFi was started so callers can
-    /// open TCP (stratum) sockets.
+    /// Returns the embassy-net [`Stack`] so callers can open TCP (stratum) sockets.
     pub fn start(
         spawner: &Spawner,
         wifi: WIFI<'static>,
@@ -286,13 +285,12 @@ mod stack {
     ) -> Option<Stack<'static>> {
         seed_status(cfg);
 
-        if cfg.wifi_enabled() {
-            start_wifi(spawner, wifi, cfg)
-        } else {
-            info!("WiFi skipped (no SSID)");
+        if !cfg.wifi_enabled() {
+            info!("WiFi missing SSID — refusing to start");
             let _ = wifi;
-            None
+            return None;
         }
+        start_wifi(spawner, wifi, cfg)
     }
 
     #[embassy_executor::task]
