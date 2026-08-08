@@ -1,6 +1,6 @@
 # Cursor Appliance
 
-**Version 0.3.0** — a lightweight, dedicated **local** [My Machines](https://cursor.com/docs/cloud-agent/self-hosted-guides/my-machines) worker for this repo, with an **egui** control panel and **local failover**.
+**Version 0.4.0** — a lightweight, dedicated **local** [My Machines](https://cursor.com/docs/cloud-agent/self-hosted-guides/my-machines) worker for this repo, with an **egui** control panel, **local failover**, and a **Windows downloadable build**.
 
 Cursor keeps planning/inference in the cloud. Tool calls (shell, edits, browser, local MCP) run on **this machine**. No inbound ports or VPN required.
 
@@ -10,31 +10,48 @@ Use this when you want a always-on local box (laptop, mini PC, or Raspberry Pi) 
 
 | Piece | Role |
 |---|---|
-| `gui/` | egui desktop app — status, settings, dark mode, offline, failover |
-| `gui` `cursor-local-worker` | Lightweight local worker (no Cursor cloud) |
-| `scripts/run-gui.sh` | Build and launch the control panel |
-| `scripts/setup.sh` | Installs the Cursor Agent CLI and prepares config |
-| `scripts/start-worker.sh` | Starts a named My Machines cloud worker |
-| `scripts/start-local-worker.sh` | Starts the local takeover worker |
-| `systemd/cursor-appliance.service` | Keeps the cloud worker alive across reboots |
-| `scripts/status.sh` | Local health / process check |
+| `gui/` | egui desktop app + `cursor-local-worker` |
+| `Start-CursorAppliance.bat` | Windows one-click launcher |
+| `scripts/windows/*.ps1` | Windows setup / cloud / local / status |
+| `scripts/run-gui.sh` | Linux build + launch control panel |
+| `scripts/setup.sh` | Linux Cursor Agent CLI bootstrap |
+| `scripts/start-worker.sh` | Linux My Machines cloud worker |
+| `scripts/start-local-worker.sh` | Linux local takeover worker |
+| `scripts/package-windows.sh` | Assemble portable Windows zip |
+| `systemd/cursor-appliance.service` | Linux boot service for cloud worker |
 | Cloud `:8733` / Local `:8734` | `/healthz` `/readyz` `/status` |
 
 This is **not** an Enterprise Self-Hosted Pool and **not** a Cursor-managed cloud VM. It is a personal My Machines appliance.
 
+## Windows download (portable)
+
+1. Grab **`cursor-appliance-windows-x64-v*.zip`** from  
+   [GitHub Releases](https://github.com/GutFarms/Japan-central/releases)  
+   (or the `cursor-appliance-windows-x64` Actions artifact).
+2. Unzip anywhere.
+3. Double-click **`Start-CursorAppliance.bat`**.
+
+Full Windows notes: [WINDOWS.md](./WINDOWS.md).
+
+```powershell
+.\scripts\windows\Setup.ps1
+.\Start-CursorAppliance.bat
+.\scripts\windows\Status.ps1
+```
+
 ## Requirements
 
-- Linux with systemd (Debian / Ubuntu / Raspberry Pi OS 64-bit work well)
+- **Windows 10/11 x64** (portable zip) or Linux with systemd (Debian / Ubuntu / Raspberry Pi OS 64-bit)
 - Outbound HTTPS to:
   - `api2.cursor.sh`
   - `api2direct.cursor.sh`
-  - `cloud-agent-artifacts.s3.us-east-1.amazonaws.com` (artifacts uploads)
-- A **personal** Cursor credential ([API Keys](https://cursor.com/dashboard/api) or `agent login`)
-- This repository checked out with a valid `origin` remote
+  - `cloud-agent-artifacts.s3.us-east-1.amazonaws.com` (cloud uploads)
+- A **personal** Cursor credential ([API Keys](https://cursor.com/dashboard/api) or `agent login`) for cloud mode
+- A git checkout with a valid `origin` remote (cloud My Machines worker)
 
 Service-account keys only work with `--pool` (Enterprise). Do not use them here.
 
-## Quick start
+## Quick start (Linux)
 
 ```bash
 cd Japan-central/cursor-appliance

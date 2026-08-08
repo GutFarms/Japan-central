@@ -3,3 +3,5 @@ config/appliance.env
 data/
 *.log
 gui/target/
+dist/
+*.zip

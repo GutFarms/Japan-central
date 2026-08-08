@@ -330,10 +330,17 @@ fn run_job(shared: &Shared, job: &Job) -> serde_json::Value {
                     "allow": shared.allow_prefixes,
                 });
             }
-            let output = Command::new("bash")
-                .args(["-lc", cmd])
-                .current_dir(&shared.worker_dir)
-                .output();
+            let output = if cfg!(windows) {
+                Command::new("cmd")
+                    .args(["/C", cmd])
+                    .current_dir(&shared.worker_dir)
+                    .output()
+            } else {
+                Command::new("bash")
+                    .args(["-lc", cmd])
+                    .current_dir(&shared.worker_dir)
+                    .output()
+            };
             match output {
                 Ok(out) => {
                     let stdout = String::from_utf8_lossy(&out.stdout).trim().to_string();

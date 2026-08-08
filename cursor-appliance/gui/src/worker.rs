@@ -1,3 +1,6 @@
+use crate::process_util::{
+    find_binary, kill_cloud_helpers, kill_local_helpers, run_script,
+};
 use crate::settings::GuiSettings;
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
@@ -55,14 +58,28 @@ impl WorkerController {
         }
     }
 
-    pub fn start_cloud_script(&self) -> PathBuf {
-        self.appliance_root.join("scripts").join("start-worker.sh")
+    fn cloud_script(&self) -> PathBuf {
+        if cfg!(windows) {
+            self.appliance_root
+                .join("scripts")
+                .join("windows")
+                .join("Start-CloudWorker.ps1")
+        } else {
+            self.appliance_root.join("scripts").join("start-worker.sh")
+        }
     }
 
-    pub fn start_local_script(&self) -> PathBuf {
-        self.appliance_root
-            .join("scripts")
-            .join("start-local-worker.sh")
+    fn local_script(&self) -> PathBuf {
+        if cfg!(windows) {
+            self.appliance_root
+                .join("scripts")
+                .join("windows")
+                .join("Start-LocalWorker.ps1")
+        } else {
+            self.appliance_root
+                .join("scripts")
+                .join("start-local-worker.sh")
+        }
     }
 
     pub fn start_cloud(&mut self, settings: &GuiSettings) -> Result<(), String> {
@@ -80,14 +97,14 @@ impl WorkerController {
             return Ok(());
         }
 
-        let script = self.start_cloud_script();
+        let script = self.cloud_script();
         if !script.is_file() {
-            return Err(format!("missing start script: {}", script.display()));
+            return Err(format!("missing cloud start script: {}", script.display()));
         }
 
         settings.save(&self.appliance_root)?;
 
-        let mut cmd = Command::new(&script);
+        let mut cmd = run_script(&script);
         cmd.current_dir(&self.appliance_root)
             .env("CURSOR_APPLIANCE_OFFLINE", "0")
             .stdout(Stdio::piped())
@@ -113,28 +130,48 @@ impl WorkerController {
             return Ok(());
         }
 
-        let script = self.start_local_script();
-        if !script.is_file() {
-            return Err(format!("missing local worker script: {}", script.display()));
-        }
-
-        // Ensure local binary exists (script builds if needed).
         let _ = settings.save(&self.appliance_root);
+        let data_dir = self.appliance_root.join("data");
+        let _ = std::fs::create_dir_all(data_dir.join("local-queue/incoming"));
 
-        let mut cmd = Command::new(&script);
-        cmd.current_dir(&self.appliance_root)
-            .env(
-                "CURSOR_APPLIANCE_LOCAL_ADDR",
-                &settings.local_management_addr,
-            )
-            .env("CURSOR_APPLIANCE_NAME", &settings.appliance_name)
-            .env("CURSOR_APPLIANCE_WORKER_DIR", &settings.worker_dir)
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped());
+        let mut child = if let Some(bin) = find_binary(&self.appliance_root, "cursor-local-worker")
+        {
+            let mut cmd = Command::new(&bin);
+            cmd.current_dir(&self.appliance_root)
+                .arg("--name")
+                .arg(&settings.appliance_name)
+                .arg("--worker-dir")
+                .arg(&settings.worker_dir)
+                .arg("--data-dir")
+                .arg(&data_dir)
+                .arg("--listen")
+                .arg(&settings.local_management_addr)
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped());
+            cmd.spawn()
+                .map_err(|e| format!("spawn local worker binary: {e}"))?
+        } else {
+            let script = self.local_script();
+            if !script.is_file() {
+                return Err(format!(
+                    "missing local worker binary/script under {}",
+                    self.appliance_root.display()
+                ));
+            }
+            let mut cmd = run_script(&script);
+            cmd.current_dir(&self.appliance_root)
+                .env(
+                    "CURSOR_APPLIANCE_LOCAL_ADDR",
+                    &settings.local_management_addr,
+                )
+                .env("CURSOR_APPLIANCE_NAME", &settings.appliance_name)
+                .env("CURSOR_APPLIANCE_WORKER_DIR", &settings.worker_dir)
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped());
+            cmd.spawn()
+                .map_err(|e| format!("spawn local worker script: {e}"))?
+        };
 
-        let mut child = cmd
-            .spawn()
-            .map_err(|e| format!("spawn local worker: {e}"))?;
         self.attach_log_readers(&mut child, "local");
         self.local_child = Some(child);
         self.backend = Backend::Local;
@@ -148,7 +185,6 @@ impl WorkerController {
         Ok(())
     }
 
-    /// Stop cloud worker only. When failover is enabled, local takes over.
     pub fn stop_cloud(&mut self, settings: &GuiSettings) {
         self.kill_cloud_process();
         if settings.local_failover || settings.offline_mode {
@@ -175,12 +211,7 @@ impl WorkerController {
         let _ = ureq::post(&format!("http://{addr}/v1/shutdown"))
             .timeout(Duration::from_millis(400))
             .call();
-        let _ = Command::new("pkill")
-            .args(["-f", "scripts/start-local-worker.sh"])
-            .status();
-        let _ = Command::new("pkill")
-            .args(["-f", "cursor-local-worker"])
-            .status();
+        kill_local_helpers();
         if self.backend == Backend::Local {
             self.backend = Backend::None;
         }
@@ -215,7 +246,8 @@ impl WorkerController {
                 }
             }
         } else if matches!(self.state, WorkerState::Offline | WorkerState::Local) {
-            self.last_log = "online mode — local worker still running; start cloud when ready".into();
+            self.last_log =
+                "online mode — local worker still running; start cloud when ready".into();
             self.state = WorkerState::Local;
         }
     }
@@ -224,12 +256,8 @@ impl WorkerController {
         let cloud_alive = self.cloud_alive();
         let local_alive = self.local_alive();
 
-        // Unexpected cloud death → failover.
         if !cloud_alive
-            && matches!(
-                self.state,
-                WorkerState::Starting | WorkerState::Running
-            )
+            && matches!(self.state, WorkerState::Starting | WorkerState::Running)
             && self.backend == Backend::Cloud
             && !self.suppress_failover
         {
@@ -285,12 +313,7 @@ impl WorkerController {
             let _ = child.kill();
             let _ = child.wait();
         }
-        let _ = Command::new("pkill")
-            .args(["-f", "scripts/start-worker.sh"])
-            .status();
-        let _ = Command::new("pkill")
-            .args(["-f", "agent worker.*--name"])
-            .status();
+        kill_cloud_helpers();
     }
 
     fn cloud_alive(&mut self) -> bool {
@@ -419,9 +442,31 @@ pub fn appliance_root_from_exe() -> PathBuf {
     }
 
     if let Ok(exe) = std::env::current_exe() {
-        for ancestor in exe.ancestors().take(6) {
-            if ancestor.join("scripts").join("start-worker.sh").is_file() {
-                return ancestor.to_path_buf();
+        if let Some(dir) = exe.parent() {
+            let portable_markers = [
+                dir.join("cursor-local-worker.exe"),
+                dir.join("cursor-local-worker"),
+                dir.join(".env.example"),
+                dir.join("Start-CursorAppliance.bat"),
+                dir.join("VERSION"),
+            ];
+            if portable_markers.iter().any(|p| p.is_file())
+                || dir.join("scripts").join("windows").is_dir()
+                || dir.join("scripts").join("start-local-worker.sh").is_file()
+            {
+                return dir.to_path_buf();
+            }
+
+            for ancestor in exe.ancestors().take(6) {
+                if ancestor.join("scripts").join("start-worker.sh").is_file()
+                    || ancestor
+                        .join("scripts")
+                        .join("windows")
+                        .join("Start-CloudWorker.ps1")
+                        .is_file()
+                {
+                    return ancestor.to_path_buf();
+                }
             }
         }
     }
@@ -432,4 +477,3 @@ pub fn appliance_root_from_exe() -> PathBuf {
 pub fn path_exists(path: &str) -> bool {
     Path::new(path).exists()
 }
-
