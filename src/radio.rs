@@ -106,8 +106,8 @@ mod stack {
         ble_name: heapless::String::new(),
     });
 
-    // DNS + stratum TCP + HTTP server (+ spare).
-    static STACK_RESOURCES: StaticCell<StackResources<8>> = StaticCell::new();
+    // DNS + stratum TCP + HTTP server (+ spare). Keep small — classic ESP32 RAM.
+    static STACK_RESOURCES: StaticCell<StackResources<5>> = StaticCell::new();
     static BLE_NAME_BUF: StaticCell<[u8; 24]> = StaticCell::new();
 
     /// Advertise-only BLE (no GATT) — avoids embassy-sync version skew with trouble-host.
@@ -225,7 +225,7 @@ mod stack {
         let (stack, runner) = embassy_net::new(
             wifi_interface,
             net_config,
-            STACK_RESOURCES.init(StackResources::<8>::new()),
+            STACK_RESOURCES.init(StackResources::<5>::new()),
             seed,
         );
 
@@ -248,20 +248,26 @@ mod stack {
         cfg: &PoolConfig,
     ) -> Option<Stack<'static>> {
         seed_status(cfg);
-        if cfg.ble_enabled() {
-            start_ble(spawner, bt, cfg.ble_name.as_str());
-        } else {
-            info!("BLE skipped (no ble_name)");
-            let _ = bt;
-        }
 
-        if cfg.wifi_enabled() {
+        // Prefer WiFi when both are set — classic ESP32 can't comfortably run
+        // WiFi+BLE without coexistence + a lot more RAM.
+        let stack = if cfg.wifi_enabled() {
+            if cfg.ble_enabled() {
+                info!("BLE requested but WiFi active — skipping BLE (no coex)");
+            }
+            let _ = bt;
             start_wifi(spawner, wifi, cfg)
-        } else {
-            info!("WiFi skipped (no SSID)");
+        } else if cfg.ble_enabled() {
+            start_ble(spawner, bt, cfg.ble_name.as_str());
             let _ = wifi;
             None
-        }
+        } else {
+            info!("WiFi skipped (no SSID); BLE skipped (no ble_name)");
+            let _ = wifi;
+            let _ = bt;
+            None
+        };
+        stack
     }
 
     #[embassy_executor::task]

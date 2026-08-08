@@ -31,6 +31,7 @@ use esp_backtrace as _;
 use esp_hal::clock::CpuClock;
 use esp_hal::delay::Delay;
 use esp_hal::gpio::{Input, InputConfig, Pin, Pull};
+use esp_hal::ram;
 use esp_hal::timer::timg::TimerGroup;
 use esp_hal::uart::{Config as UartConfig, Uart};
 use esp_hal::Blocking;
@@ -66,9 +67,11 @@ async fn main(spawner: Spawner) -> ! {
     let config = esp_hal::Config::default().with_cpu_clock(CpuClock::max());
     let peripherals = esp_hal::init(config);
 
-    // Classic ESP32 DRAM is tight (static heap lives in .bss). Keep modest;
-    // WiFi + lite scrypt (N=64 ≈ 8 KiB ROMix) share this pool.
-    esp_alloc::heap_allocator!(size: 48 * 1024);
+    // Classic ESP32: WiFi STA alone wants ~47–57 KiB. Use bootloader-reclaimed
+    // DRAM for the radio blobs, plus a smaller .bss heap for app buffers
+    // (lite scrypt ROMix ≈ 8 KiB, embassy-net, etc.).
+    esp_alloc::heap_allocator!(#[ram(reclaimed)] size: 64 * 1024);
+    esp_alloc::heap_allocator!(size: 28 * 1024);
 
     let timg0 = TimerGroup::new(peripherals.TIMG0);
     let sw_interrupt =
@@ -135,6 +138,24 @@ async fn main(spawner: Spawner) -> ! {
     )
     .await;
 
+    let _ = display.draw_config_summary(&pool, from_flash);
+    serial_writeln(&mut usb, "");
+    if from_flash {
+        serial_writeln(&mut usb, "Loaded saved credentials from flash.");
+        serial_writeln(
+            &mut usb,
+            "GUI: tap tabs/keyboard · BOOT short=tabs, long=menu · serial: change",
+        );
+    } else {
+        serial_writeln(&mut usb, "Credentials saved to flash for next boot.");
+    }
+    print_config_serial(&mut usb, &pool);
+
+    // Reserve scrypt buffers *before* WiFi eats the heap (OOM panic otherwise).
+    serial_writeln(&mut usb, "Allocating miner buffers…");
+    let mut miner = ScryptMiner::new_demo(DEMO_ZERO_NIBBLES);
+    serial_writeln(&mut usb, "Starting radio…");
+
     let stratum_enabled = if let Some(stack) =
         radio::start(&spawner, peripherals.WIFI, peripherals.BT, &pool)
     {
@@ -154,18 +175,6 @@ async fn main(spawner: Spawner) -> ! {
         false
     };
 
-    let _ = display.draw_config_summary(&pool, from_flash);
-    serial_writeln(&mut usb, "");
-    if from_flash {
-        serial_writeln(&mut usb, "Loaded saved credentials from flash.");
-        serial_writeln(
-            &mut usb,
-            "GUI: tap tabs/keyboard · BOOT short=tabs, long=menu · serial: change",
-        );
-    } else {
-        serial_writeln(&mut usb, "Credentials saved to flash for next boot.");
-    }
-    print_config_serial(&mut usb, &pool);
     Timer::after(Duration::from_secs(2)).await;
 
     info!(
@@ -177,8 +186,6 @@ async fn main(spawner: Spawner) -> ! {
         pool.ble_name_or_default(),
         from_flash
     );
-
-    let mut miner = ScryptMiner::new_demo(DEMO_ZERO_NIBBLES);
     let mut active_job: Option<JobMeta> = None;
     let mut pool_mode = false;
     let mut window_start = Instant::now();

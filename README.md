@@ -41,7 +41,7 @@ On **first boot**, use the **touch keyboard** or serial monitor (115200):
 3. `address` — wallet address or worker name  
 4. `password` — pool password (often `x`)  
 5. `stratum` — pool location, e.g. `stratum.example.com:3333`  
-6. `ble_name` — advertised name, or `-` / empty to **skip BLE** (recommended)
+6. `ble_name` — advertised name, or `-` / empty to **skip BLE** (recommended; WiFi mining skips BLE anyway)
 
 ### Change credentials (password required)
 
