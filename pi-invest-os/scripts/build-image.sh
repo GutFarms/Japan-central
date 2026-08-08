@@ -70,9 +70,9 @@ echo "==> Decompressing"
 rm -f "$RAW"
 xz -T0 -dkc "$ARCHIVE" > "$RAW"
 
-# Grow image by 3.5GiB so first-boot Chromium + updates fit comfortably
-echo "==> Expanding image +3.5GiB"
-dd if=/dev/zero bs=1M count=3584 status=none >> "$RAW"
+# Grow image by 8GiB so first-boot desktop + Chromium packages fit
+echo "==> Expanding image +8GiB"
+dd if=/dev/zero bs=1M count=8192 status=none >> "$RAW"
 LOOP="$(losetup -f --show -P "$RAW")"
 cleanup() {
   set +e
@@ -192,9 +192,9 @@ cat > "$MNT_ROOT/etc/pi-invest-os-release" <<EOF
 NAME="Pi Invest OS"
 VERSION="$VERSION"
 ID=pi-invest-os
-VARIANT="Raspberry Pi 5 / arm64 Lite + Chromium kiosk"
+VARIANT="Raspberry Pi 5 / arm64 Desktop (Wayland) + Chromium"
 AGENT_PATH=/opt/pi-invest-agent
-FEATURES="auto-update,chromium-kiosk,unattended-upgrades"
+FEATURES="desktop,auto-update,chromium,unattended-upgrades"
 UPDATE_BRANCH=$UPDATE_BRANCH
 EOF
 

@@ -41,6 +41,8 @@ test -L "$MNT/etc/systemd/system/multi-user.target.wants/pi-invest-firstboot.ser
 test -L "$MNT/etc/systemd/system/timers.target.wants/pi-invest-update.timer"
 grep -q 'ConditionPathExists=/var/lib/pi-invest/firstboot-done' \
   "$MNT/etc/systemd/system/pi-invest.service"
+grep -q 'rpd-wayland-core\|Desktop:' "$MNT/usr/local/sbin/pi-invest-firstboot.sh"
+grep -q 'do_boot_behaviour B4\|graphical.target' "$MNT/usr/local/sbin/pi-invest-firstboot.sh"
 grep -q chromium "$MNT/usr/local/sbin/pi-invest-firstboot.sh"
 grep -q pi-invest-update.timer "$MNT/usr/local/sbin/pi-invest-firstboot.sh"
 test ! -e "$MNT/etc/systemd/system/multi-user.target.wants/pi-invest.service"

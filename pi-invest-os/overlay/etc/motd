@@ -1,10 +1,11 @@
 
 Pi Invest OS — Raspberry Pi 5 income agent
 ==========================================
-First boot installs Python deps, Chromium kiosk, and starts:
+First boot installs the Raspberry Pi desktop, Chromium, and starts:
+  • Graphical desktop (Wayland / labwc) with autologin
   • pi-invest.service           (paper trading loop)
   • pi-invest-dashboard.service (http://127.0.0.1:8787)
-  • pi-invest-kiosk.service     (fullscreen browser on HDMI)
+  • Chromium dashboard on login (Desktop + autostart)
   • pi-invest-update.timer      (daily agent auto-update)
 
 Secrets: edit /boot/firmware/pi-invest.env before first boot

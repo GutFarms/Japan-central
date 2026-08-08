@@ -55,7 +55,7 @@ for _ in $(seq 1 90); do
 done
 
 export DEBIAN_FRONTEND=noninteractive
-echo "==> Installing system packages (agent + browser kiosk + auto-update)"
+echo "==> Installing system packages (agent + desktop + browser + auto-update)"
 apt-get update -y
 apt-get install -y --no-install-recommends \
   python3 python3-venv python3-pip python3-dev \
@@ -63,14 +63,24 @@ apt-get install -y --no-install-recommends \
   avahi-daemon \
   unattended-upgrades apt-listchanges \
   chromium \
-  cage seatd \
-  fonts-liberation fonts-dejavu-core
+  fonts-liberation fonts-dejavu-core \
+  gvfs mousepad
 
-# X11 fallback stack if cage somehow missing (should be present)
-if ! command -v cage >/dev/null 2>&1; then
+echo "==> Installing Raspberry Pi desktop (Wayland / labwc)"
+# Trixie metapackages (replaces legacy raspberrypi-ui-mods)
+if ! apt-get install -y --no-install-recommends \
+  rpd-wayland-core rpd-theme rpd-preferences rpd-utilities; then
+  echo "WARN: rpd-wayland-core failed; trying XFCE fallback"
   apt-get install -y --no-install-recommends \
-    xserver-xorg xinit openbox unclutter chromium || true
+    xfce4 xfce4-terminal lightdm chromium || true
 fi
+
+# Optional extras (ignore failures on Lite repos)
+apt-get install -y --no-install-recommends \
+  rpd-applications rpd-graphics || true
+
+# Keep cage available as optional fullscreen kiosk (disabled when desktop is on)
+apt-get install -y --no-install-recommends cage seatd || true
 
 # Enable unattended security updates
 if [[ -f /etc/apt/apt.conf.d/50unattended-upgrades ]]; then
@@ -113,6 +123,8 @@ if [[ -f /etc/pi-invest-os-update-branch ]]; then
 fi
 ensure_env PI_INVEST_UPDATE_BRANCH "$DEFAULT_BRANCH"
 ensure_env PI_INVEST_KIOSK_URL http://127.0.0.1:8787
+ensure_env PI_INVEST_DESKTOP true
+ensure_env PI_INVEST_KIOSK false
 chown "$TARGET_USER:$TARGET_USER" "$AGENT_ROOT/.env"
 chmod 600 "$AGENT_ROOT/.env"
 
@@ -130,22 +142,37 @@ chown -R "$TARGET_USER:$TARGET_USER" "$AGENT_ROOT"
 mkdir -p "$AGENT_ROOT/data"
 chown "$TARGET_USER:$TARGET_USER" "$AGENT_ROOT/data"
 
-# Desktop shortcut for non-kiosk browser use (when a desktop exists later)
-mkdir -p "$TARGET_HOME/Desktop" "$TARGET_HOME/.local/share/applications"
+# Desktop launcher + autostart dashboard in a window
+mkdir -p \
+  "$TARGET_HOME/Desktop" \
+  "$TARGET_HOME/.local/share/applications" \
+  "$TARGET_HOME/.config/autostart"
 cat >"$TARGET_HOME/.local/share/applications/pi-invest-dashboard.desktop" <<EOF
 [Desktop Entry]
 Type=Application
 Name=Pi Invest Dashboard
 Comment=Open the local Pi Invest dashboard
-Exec=chromium --app=http://127.0.0.1:8787
+Exec=chromium --app=http://127.0.0.1:8787 --new-window
 Icon=chromium
 Terminal=false
 Categories=Network;Finance;
+StartupNotify=true
 EOF
 cp "$TARGET_HOME/.local/share/applications/pi-invest-dashboard.desktop" \
   "$TARGET_HOME/Desktop/" 2>/dev/null || true
+# Autostart on login (waits briefly for the local dashboard service)
+cat >"$TARGET_HOME/.config/autostart/pi-invest-dashboard.desktop" <<EOF
+[Desktop Entry]
+Type=Application
+Name=Pi Invest Dashboard
+Comment=Auto-open dashboard after login
+Exec=/bin/bash -lc 'for i in \$(seq 1 60); do curl -fsS http://127.0.0.1:8787/api/health >/dev/null 2>&1 && break; sleep 2; done; exec chromium --app=http://127.0.0.1:8787 --new-window'
+Icon=chromium
+Terminal=false
+X-GNOME-Autostart-enabled=true
+EOF
 chown -R "$TARGET_USER:$TARGET_USER" "$TARGET_HOME/Desktop" \
-  "$TARGET_HOME/.local" 2>/dev/null || true
+  "$TARGET_HOME/.local" "$TARGET_HOME/.config" 2>/dev/null || true
 chmod +x "$TARGET_HOME/Desktop/pi-invest-dashboard.desktop" 2>/dev/null || true
 
 cat > /etc/systemd/system/pi-invest.service <<EOF
@@ -220,9 +247,6 @@ RestartSec=10
 WantedBy=multi-user.target
 EOF
 
-# seatd helps cage/wayland sessions
-systemctl enable seatd.service 2>/dev/null || true
-
 echo "==> Creating Python venv + installing agent"
 sudo -u "$TARGET_USER" bash -lc "
   set -euo pipefail
@@ -240,19 +264,50 @@ sudo -u "$TARGET_USER" bash -lc "
   pi-invest once --preview --simulator || true
 "
 
-echo "==> Enabling services (agent, dashboard, kiosk, auto-update)"
+echo "==> Enabling services (agent, dashboard, desktop, auto-update)"
 systemctl daemon-reload
 systemctl enable pi-invest.service
 systemctl enable pi-invest-dashboard.service
-systemctl enable pi-invest-kiosk.service || true
 systemctl enable pi-invest-update.timer
 systemctl enable unattended-upgrades.service 2>/dev/null || true
+systemctl enable seatd.service 2>/dev/null || true
+
+# Boot to graphical desktop with autologin (B4)
+systemctl set-default graphical.target || true
+if command -v raspi-config >/dev/null 2>&1; then
+  raspi-config nonint do_boot_behaviour B4 || true
+fi
+
+# LightDM autologin fallback / reinforcement
+if [[ -d /etc/lightdm ]]; then
+  mkdir -p /etc/lightdm/lightdm.conf.d
+  cat >/etc/lightdm/lightdm.conf.d/90-pi-invest.conf <<EOF
+[Seat:*]
+autologin-user=${TARGET_USER}
+autologin-user-timeout=0
+user-session=rpd-labwc
+greeter-hide-users=false
+EOF
+  # If XFCE was the fallback, prefer that session when present
+  if [[ -f /usr/share/wayland-sessions/xfce-wayland.desktop ]] \
+    || [[ -f /usr/share/xsessions/xfce.desktop ]]; then
+    sed -i 's/^user-session=.*/user-session=xfce-wayland/' \
+      /etc/lightdm/lightdm.conf.d/90-pi-invest.conf || true
+  fi
+  systemctl enable lightdm.service 2>/dev/null || true
+fi
+
+# Desktop owns the display — keep cage kiosk off unless explicitly enabled
+if grep -qiE '^PI_INVEST_KIOSK=(true|1)' "$AGENT_ROOT/.env" 2>/dev/null; then
+  systemctl enable pi-invest-kiosk.service || true
+else
+  systemctl disable pi-invest-kiosk.service 2>/dev/null || true
+  systemctl mask pi-invest-kiosk.service 2>/dev/null || true
+fi
 
 systemctl restart pi-invest.service || true
 systemctl restart pi-invest-dashboard.service || true
 systemctl start pi-invest-update.timer || true
-# Kiosk starts when a display is present
-systemctl restart pi-invest-kiosk.service || true
 
 hostnamectl set-hostname pi-invest || true
 if ! grep -q 'pi-invest' /etc/hosts 2>/dev/null; then
@@ -265,9 +320,12 @@ systemctl disable pi-invest-firstboot.service || true
 
 IP="$(hostname -I 2>/dev/null | awk '{print $1}')"
 echo "==== First-boot complete ===="
-echo "Dashboard: http://127.0.0.1:8787 (Chromium kiosk on attached display)"
+echo "Desktop:   Raspberry Pi Wayland desktop with autologin as ${TARGET_USER}"
+echo "Dashboard: opens automatically in Chromium; also on the Desktop"
+echo "URL:       http://127.0.0.1:8787"
 echo "Remote:    ssh -L 8787:127.0.0.1:8787 ${TARGET_USER}@${IP:-pi-invest.local}"
 echo "Auto-update timer: systemctl status pi-invest-update.timer"
 echo "Manual update:     sudo pi-invest-update.sh --force"
+echo "Optional kiosk:    set PI_INVEST_KIOSK=true in .env then unmask/enable pi-invest-kiosk"
 echo "Agent dir: $AGENT_ROOT"
 echo "Secrets:   $AGENT_ROOT/.env"
