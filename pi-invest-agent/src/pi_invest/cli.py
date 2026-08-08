@@ -57,7 +57,7 @@ def run(
     config: Optional[str] = typer.Option(None, help="Path to config.yaml"),
 ) -> None:
     """Run continuously on the configured interval."""
-agent, cfg, _env, _db, _wallet, safety, _journal, _alerts = _boot(config, simulator)
+    agent, cfg, _env, _db, _wallet, safety, _journal, _alerts = _boot(config, simulator)
     interval = max(1, cfg.schedule.interval_minutes) * 60
     console.print(
         f"Starting loop every {cfg.schedule.interval_minutes}m "
@@ -82,7 +82,7 @@ def status(
     config: Optional[str] = typer.Option(None, help="Path to config.yaml"),
 ) -> None:
     """Show portfolio, wallet, halt state, and recent decisions."""
-agent, cfg, _env, db, wallet, safety, journal, _alerts = _boot(config, True)
+    agent, cfg, _env, db, wallet, safety, journal, _alerts = _boot(config, True)
     marks = {}
     for sym in cfg.universe:
         try:
@@ -96,6 +96,19 @@ agent, cfg, _env, db, wallet, safety, journal, _alerts = _boot(config, True)
         console.print(f"[bold red]HALTED[/bold red] — {st.reason or 'kill switch'}")
     else:
         console.print("[green]Running[/green] (orders + sends allowed)")
+
+    if _env.pi_invest_local_only:
+        console.print(
+            "[cyan]Local-only AI[/cyan] — "
+            f"LLM {cfg.llm.provider} ({_env.ollama_model}) @ {_env.ollama_base_url}  ·  "
+            f"market {cfg.market.provider}  ·  "
+            f"broker {cfg.broker.backend}  ·  wallet {cfg.wallet.backend}"
+        )
+    else:
+        console.print(
+            f"LLM {cfg.llm.provider}  ·  market {cfg.market.provider}  ·  "
+            f"broker {cfg.broker.backend}"
+        )
 
     console.print(
         f"[bold]Equity[/bold] ${acct.equity:,.2f}  "
@@ -153,7 +166,7 @@ def halt(
     config: Optional[str] = typer.Option(None, help="Path to config.yaml"),
 ) -> None:
     """Freeze brokerage orders and outbound wallet sends."""
-_agent, _cfg, _env, _db, _wallet, safety, _journal, _alerts = _boot(config, True)
+    _agent, _cfg, _env, _db, _wallet, safety, _journal, _alerts = _boot(config, True)
     st = safety.halt(reason)
     console.print(f"[red]HALTED[/red] — {st.reason}")
     console.print("Inbound receives still work. Use `pi-invest resume` to unlock.")
@@ -164,7 +177,7 @@ def resume(
     config: Optional[str] = typer.Option(None, help="Path to config.yaml"),
 ) -> None:
     """Clear the kill switch so trading and sends can resume."""
-_agent, _cfg, _env, _db, _wallet, safety, _journal, _alerts = _boot(config, True)
+    _agent, _cfg, _env, _db, _wallet, safety, _journal, _alerts = _boot(config, True)
     safety.resume()
     console.print("[green]Resumed[/green] — orders and sends allowed again.")
 
@@ -175,7 +188,7 @@ def journal(
     config: Optional[str] = typer.Option(None, help="Path to config.yaml"),
 ) -> None:
     """Show performance journal (NAV, peak, drawdown)."""
-_agent, _cfg, _env, _db, _wallet, _safety, journal, _alerts = _boot(config, True)
+    _agent, _cfg, _env, _db, _wallet, _safety, journal, _alerts = _boot(config, True)
     summary = journal.summary()
     if summary.latest_nav is None:
         console.print("No journal points yet — run `pi-invest once` first.")
@@ -215,7 +228,7 @@ def export_journal(
     config: Optional[str] = typer.Option(None, help="Path to config.yaml"),
 ) -> None:
     """Export the performance journal to CSV."""
-_agent, _cfg, _env, _db, _wallet, _safety, journal, _alerts = _boot(config, True)
+    _agent, _cfg, _env, _db, _wallet, _safety, journal, _alerts = _boot(config, True)
     out = journal.export_csv(path)
     console.print(f"Wrote {out}")
 
@@ -228,7 +241,7 @@ def reset_paper(
     """Wipe the local paper brokerage ledger back to starting cash."""
     if not yes and not typer.confirm("Reset paper brokerage account?"):
         raise typer.Abort()
-agent, cfg, _env, _db, _wallet, _safety, _journal, _alerts = _boot(config, True)
+    agent, cfg, _env, _db, _wallet, _safety, _journal, _alerts = _boot(config, True)
     agent.broker.reset()
     console.print(f"Paper account reset to ${cfg.broker.starting_cash:,.2f}")
 
@@ -280,7 +293,7 @@ def wallet_balances(
     config: Optional[str] = typer.Option(None, help="Path to config.yaml"),
 ) -> None:
     """Show USD + crypto wallet balances and receive addresses."""
-_a, _c, _e, _d, wallet, _s, _j, _alerts = _boot(config, True)
+    _a, _c, _e, _d, wallet, _s, _j, _alerts = _boot(config, True)
     _print_wallet(wallet.snapshot())
 
 
@@ -290,7 +303,7 @@ def wallet_receive_address(
     config: Optional[str] = typer.Option(None, help="Path to config.yaml"),
 ) -> None:
     """Show the address/account id others can send to."""
-_a, _c, _e, _d, wallet, _s, _j, _alerts = _boot(config, True)
+    _a, _c, _e, _d, wallet, _s, _j, _alerts = _boot(config, True)
     try:
         info = wallet.receive_info(asset)
     except WalletError as exc:
@@ -322,7 +335,7 @@ def wallet_send(
     """Send USD or cryptocurrency from the wallet (allowlist + confirm)."""
     from pi_invest.wallet.confirm import confirmation_phrase
 
-_a, cfg, _e, _d, wallet, _s, _j, _alerts = _boot(config, True)
+    _a, cfg, _e, _d, wallet, _s, _j, _alerts = _boot(config, True)
     phrase = confirmation_phrase(asset, amount)
     if cfg.wallet.require_send_confirmation and not confirm:
         console.print(f"Confirmation required. Re-run with: --confirm \"{phrase}\"")
@@ -343,7 +356,7 @@ def wallet_allowlist(
     config: Optional[str] = typer.Option(None, help="Path to config.yaml"),
 ) -> None:
     """Show withdrawal allowlist destinations."""
-_a, cfg, _e, _d, wallet, _s, _j, _alerts = _boot(config, True)
+    _a, cfg, _e, _d, wallet, _s, _j, _alerts = _boot(config, True)
     rows = wallet.allowlist()
     console.print(
         f"allowlist_required={cfg.wallet.allowlist_required}  "
@@ -365,7 +378,7 @@ def wallet_allowlist_add(
     config: Optional[str] = typer.Option(None, help="Path to config.yaml"),
 ) -> None:
     """Allow a destination for future sends."""
-_a, _c, _e, _d, wallet, _s, _j, _alerts = _boot(config, True)
+    _a, _c, _e, _d, wallet, _s, _j, _alerts = _boot(config, True)
     wallet.allowlist_add(destination, label=label)
     console.print(f"[green]allowlisted[/green] {destination}")
 
@@ -376,7 +389,7 @@ def wallet_allowlist_remove(
     config: Optional[str] = typer.Option(None, help="Path to config.yaml"),
 ) -> None:
     """Remove a destination from the withdrawal allowlist."""
-_a, _c, _e, _d, wallet, _s, _j, _alerts = _boot(config, True)
+    _a, _c, _e, _d, wallet, _s, _j, _alerts = _boot(config, True)
     try:
         wallet.allowlist_remove(destination)
     except WalletError as exc:
@@ -394,7 +407,7 @@ def wallet_credit(
     config: Optional[str] = typer.Option(None, help="Path to config.yaml"),
 ) -> None:
     """Credit an inbound payment (paper receive / webhook stand-in)."""
-_a, _c, _e, _d, wallet, _s, _j, _alerts = _boot(config, True)
+    _a, _c, _e, _d, wallet, _s, _j, _alerts = _boot(config, True)
     try:
         record = wallet.receive(asset, amount, from_address=frm, memo=memo)
     except WalletError as exc:
@@ -412,7 +425,7 @@ def wallet_history(
     config: Optional[str] = typer.Option(None, help="Path to config.yaml"),
 ) -> None:
     """Show recent wallet transfers."""
-_a, _c, _e, _d, wallet, _s, _j, _alerts = _boot(config, True)
+    _a, _c, _e, _d, wallet, _s, _j, _alerts = _boot(config, True)
     rows = wallet.history(limit=limit)
     table = Table(title="Transfers")
     table.add_column("When")
@@ -443,7 +456,7 @@ def wallet_bridge_to_broker(
     from pi_invest.broker import PaperBroker
     from pi_invest.wallet.confirm import bridge_phrase
 
-_a, cfg, _e, db, wallet, _s, _j, _alerts = _boot(config, True)
+    _a, cfg, _e, db, wallet, _s, _j, _alerts = _boot(config, True)
     if cfg.broker.backend == "paper":
         PaperBroker(db, cfg.broker.starting_cash)
     phrase = bridge_phrase(amount)
@@ -468,7 +481,7 @@ def wallet_bridge_from_broker(
     from pi_invest.broker import PaperBroker
     from pi_invest.wallet.confirm import bridge_phrase
 
-_a, cfg, _e, db, wallet, _s, _j, _alerts = _boot(config, True)
+    _a, cfg, _e, db, wallet, _s, _j, _alerts = _boot(config, True)
     if cfg.broker.backend == "paper":
         PaperBroker(db, cfg.broker.starting_cash)
     phrase = bridge_phrase(amount)
@@ -490,7 +503,7 @@ def coinbase_status(
     """Test Coinbase CDP credentials and show live balances."""
     from pi_invest.wallet.coinbase_client import CoinbaseAPIError, CoinbaseClient
 
-_a, cfg, env, _d, wallet, _s, _j, _alerts = _boot(config, True)
+    _a, cfg, env, _d, wallet, _s, _j, _alerts = _boot(config, True)
     if not env.coinbase_api_key or not env.coinbase_api_secret:
         console.print(
             "[red]Missing credentials.[/red] Set COINBASE_API_KEY and "
@@ -543,7 +556,7 @@ def coinbase_address(
     """Fetch or create a Coinbase receive address for an asset."""
     from pi_invest.wallet.coinbase_client import CoinbaseAPIError, CoinbaseClient
 
-_a, _c, env, _d, _w, _s, _j, _alerts = _boot(config, True)
+    _a, _c, env, _d, _w, _s, _j, _alerts = _boot(config, True)
     try:
         client = CoinbaseClient(env)
         addr = client.get_or_create_receive_address(asset.upper())

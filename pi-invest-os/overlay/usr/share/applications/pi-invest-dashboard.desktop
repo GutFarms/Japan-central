@@ -2,8 +2,8 @@
 Version=1.0
 Type=Application
 Name=Pi Invest Dashboard
-GenericName=Investment Dashboard
-Comment=Open the local Pi Invest agent dashboard
+GenericName=Local AI Investment Agent
+Comment=Open the on-device Pi Invest AI agent dashboard (no cloud)
 Exec=/usr/local/bin/pi-invest-dashboard
 TryExec=/usr/local/bin/pi-invest-dashboard
 Icon=utilities-system-monitor

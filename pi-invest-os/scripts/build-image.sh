@@ -156,6 +156,10 @@ install -m 755 "$ROOT/overlay/usr/local/sbin/pi-invest-update.sh" \
   "$MNT_ROOT/usr/local/sbin/pi-invest-update.sh"
 install -m 755 "$ROOT/overlay/usr/local/sbin/pi-invest-kiosk.sh" \
   "$MNT_ROOT/usr/local/sbin/pi-invest-kiosk.sh"
+install -m 755 "$ROOT/scripts/setup-local-ai.sh" \
+  "$MNT_ROOT/usr/local/sbin/pi-invest-setup-local-ai.sh"
+install -m 755 "$ROOT/scripts/enable-local-ai-on-pi.sh" \
+  "$MNT_ROOT/usr/local/sbin/pi-invest-enable-local-ai.sh"
 install -m 755 "$ROOT/overlay/usr/local/bin/pi-invest-dashboard" \
   "$MNT_ROOT/usr/local/bin/pi-invest-dashboard"
 install -m 644 "$ROOT/overlay/usr/share/applications/pi-invest-dashboard.desktop" \
@@ -177,14 +181,13 @@ done
 install -m 644 "$ROOT/overlay/etc/hostname" "$MNT_ROOT/etc/hostname"
 install -m 644 "$ROOT/overlay/etc/motd" "$MNT_ROOT/etc/motd"
 
-# Enable first-boot + auto-update timer (agent/kiosk wait on firstboot-done)
+# Enable first-boot only (local-only AI — GitHub update timer stays installed but off)
 mkdir -p \
   "$MNT_ROOT/etc/systemd/system/multi-user.target.wants" \
   "$MNT_ROOT/etc/systemd/system/timers.target.wants"
 ln -sf /etc/systemd/system/pi-invest-firstboot.service \
   "$MNT_ROOT/etc/systemd/system/multi-user.target.wants/pi-invest-firstboot.service"
-ln -sf /etc/systemd/system/pi-invest-update.timer \
-  "$MNT_ROOT/etc/systemd/system/timers.target.wants/pi-invest-update.timer"
+# Update timer unit is shipped but not enabled; local-only mode skips GitHub pulls.
 
 # Version stamp on rootfs
 echo "$VERSION" > "$MNT_ROOT/etc/pi-invest-os-version"

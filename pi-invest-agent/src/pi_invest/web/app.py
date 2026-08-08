@@ -95,7 +95,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
 <body>
   <main>
     <h1>Pi Invest</h1>
-    <p class="sub">Income agent + secured wallet · <span id="mode" class="pill">…</span> <span id="haltpill" class="pill">…</span> <span id="rolepill" class="pill">…</span></p>
+    <p class="sub">On-device income agent + secured wallet · <span id="mode" class="pill">…</span> <span id="localpill" class="pill" style="display:none">LOCAL AI</span> <span id="haltpill" class="pill">…</span> <span id="rolepill" class="pill">…</span></p>
 
     <div class="grid">
       <div class="stat"><div class="label">Equity</div><div class="value" id="equity">—</div></div>
@@ -263,8 +263,17 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       document.getElementById('viewer-note').style.display = isAdmin ? 'none' : '';
       document.getElementById('viewer-allowlist').style.display = isAdmin ? 'none' : '';
       document.getElementById('rolepill').textContent = role.toUpperCase();
+      const llm = d.llm || {};
       document.getElementById('mode').textContent =
-        `${d.mode} / ${d.backend} · wallet ${d.wallet.backend}`;
+        `${d.mode} / ${d.backend} · wallet ${d.wallet.backend}` +
+        (llm.provider ? ` · ${llm.provider}` : '');
+      const lp = document.getElementById('localpill');
+      if (d.local_only) {
+        lp.style.display = '';
+        lp.textContent = llm.model ? `LOCAL AI · ${llm.model}` : 'LOCAL AI';
+      } else {
+        lp.style.display = 'none';
+      }
       const hp = document.getElementById('haltpill');
       hp.textContent = d.halted ? 'HALTED' : 'LIVE';
       hp.className = d.halted ? 'pill danger' : 'pill';
@@ -525,6 +534,17 @@ def create_app(
             "mode": cfg.agent.mode,
             "backend": cfg.broker.backend,
             "agent": cfg.agent.name,
+            "local_only": bool(env.pi_invest_local_only),
+            "llm": {
+                "provider": cfg.llm.provider,
+                "model": env.ollama_model
+                if cfg.llm.provider == "ollama"
+                else env.openai_model,
+                "base_url": env.ollama_base_url
+                if cfg.llm.provider == "ollama"
+                else None,
+            },
+            "market_provider": cfg.market.provider,
             "role": user.role,
             "username": user.username,
             "halted": halt.halted,

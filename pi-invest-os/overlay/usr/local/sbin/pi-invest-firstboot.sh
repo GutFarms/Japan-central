@@ -115,7 +115,9 @@ ensure_env() {
     printf '\n%s=%s\n' "$key" "$val" >>"$AGENT_ROOT/.env"
   fi
 }
-ensure_env PI_INVEST_AUTO_UPDATE true
+# Default: self-contained on-device agent (no GitHub pull, local Ollama AI)
+ensure_env PI_INVEST_LOCAL_ONLY true
+ensure_env PI_INVEST_AUTO_UPDATE false
 ensure_env PI_INVEST_UPDATE_URL https://github.com/GutFarms/Japan-central.git
 DEFAULT_BRANCH=master
 if [[ -f /etc/pi-invest-os-update-branch ]]; then
@@ -125,6 +127,9 @@ ensure_env PI_INVEST_UPDATE_BRANCH "$DEFAULT_BRANCH"
 ensure_env PI_INVEST_KIOSK_URL http://127.0.0.1:8787
 ensure_env PI_INVEST_DESKTOP true
 ensure_env PI_INVEST_KIOSK false
+ensure_env OLLAMA_BASE_URL http://127.0.0.1:11434
+ensure_env OLLAMA_MODEL llama3.2:3b
+ensure_env PI_INVEST_OLLAMA_MODEL llama3.2:3b
 chown "$TARGET_USER:$TARGET_USER" "$AGENT_ROOT/.env"
 chmod 600 "$AGENT_ROOT/.env"
 
@@ -200,9 +205,9 @@ chmod 440 /etc/sudoers.d/pi-invest-dashboard
 
 cat > /etc/systemd/system/pi-invest.service <<EOF
 [Unit]
-Description=Pi Invest Agent — autonomous income trader
-After=network-online.target pi-invest-firstboot.service
-Wants=network-online.target
+Description=Pi Invest Agent — local on-device income trader
+After=network-online.target pi-invest-firstboot.service ollama.service
+Wants=network-online.target ollama.service
 ConditionPathExists=/var/lib/pi-invest/firstboot-done
 
 [Service]
@@ -210,6 +215,7 @@ Type=simple
 User=${TARGET_USER}
 WorkingDirectory=${AGENT_ROOT}
 Environment=PYTHONUNBUFFERED=1
+Environment=PI_INVEST_LOCAL_ONLY=true
 EnvironmentFile=-${AGENT_ROOT}/.env
 ExecStart=${AGENT_ROOT}/.venv/bin/pi-invest run
 Restart=on-failure
@@ -287,11 +293,28 @@ sudo -u "$TARGET_USER" bash -lc "
   pi-invest once --preview --simulator || true
 "
 
-echo "==> Enabling services (agent, dashboard, desktop, auto-update)"
+echo "==> Installing on-device AI (Ollama) — no cloud LLM"
+if [[ -x /usr/local/sbin/pi-invest-setup-local-ai.sh ]]; then
+  PI_INVEST_USER="$TARGET_USER" PI_INVEST_AGENT_ROOT="$AGENT_ROOT" \
+    /usr/local/sbin/pi-invest-setup-local-ai.sh || {
+      echo "WARN: local AI setup failed; agent will use rules-only until Ollama is installed"
+      echo "      Retry: sudo pi-invest-setup-local-ai.sh"
+    }
+else
+  echo "WARN: pi-invest-setup-local-ai.sh missing from image"
+fi
+
+echo "==> Enabling services (agent, dashboard, desktop)"
 systemctl daemon-reload
 systemctl enable pi-invest.service
 systemctl enable pi-invest-dashboard.service
-systemctl enable pi-invest-update.timer
+# Local-only default: do not enable GitHub auto-update timer
+if grep -qiE '^PI_INVEST_AUTO_UPDATE=(true|1)' "$AGENT_ROOT/.env" 2>/dev/null \
+  && ! grep -qiE '^PI_INVEST_LOCAL_ONLY=(true|1)' "$AGENT_ROOT/.env" 2>/dev/null; then
+  systemctl enable pi-invest-update.timer
+else
+  systemctl disable pi-invest-update.timer 2>/dev/null || true
+fi
 systemctl enable unattended-upgrades.service 2>/dev/null || true
 systemctl enable seatd.service 2>/dev/null || true
 
@@ -330,7 +353,9 @@ fi
 
 systemctl restart pi-invest.service || true
 systemctl restart pi-invest-dashboard.service || true
-systemctl start pi-invest-update.timer || true
+if systemctl is-enabled pi-invest-update.timer >/dev/null 2>&1; then
+  systemctl start pi-invest-update.timer || true
+fi
 
 hostnamectl set-hostname pi-invest || true
 if ! grep -q 'pi-invest' /etc/hosts 2>/dev/null; then
@@ -343,12 +368,14 @@ systemctl disable pi-invest-firstboot.service || true
 
 IP="$(hostname -I 2>/dev/null | awk '{print $1}')"
 echo "==== First-boot complete ===="
+echo "Mode:      LOCAL-ONLY AI on this Pi (Ollama + paper + simulator)"
 echo "Desktop:   Raspberry Pi Wayland desktop with autologin as ${TARGET_USER}"
 echo "Dashboard: opens automatically in Chromium; also on the Desktop"
 echo "URL:       http://127.0.0.1:8787"
 echo "Remote:    ssh -L 8787:127.0.0.1:8787 ${TARGET_USER}@${IP:-pi-invest.local}"
-echo "Auto-update timer: systemctl status pi-invest-update.timer"
-echo "Manual update:     sudo pi-invest-update.sh --force"
-echo "Optional kiosk:    set PI_INVEST_KIOSK=true in .env then unmask/enable pi-invest-kiosk"
+echo "Local AI:  sudo systemctl status ollama ; ollama list"
+echo "GitHub auto-update: disabled (PI_INVEST_LOCAL_ONLY=true)"
+echo "Manual update:      sudo pi-invest-update.sh --force  (optional)"
+echo "Optional kiosk:     set PI_INVEST_KIOSK=true in .env then unmask/enable pi-invest-kiosk"
 echo "Agent dir: $AGENT_ROOT"
 echo "Secrets:   $AGENT_ROOT/.env"

@@ -96,12 +96,21 @@ pi-invest run
 pi-invest dashboard
 ```
 
-Optional local LLM (strong on Pi 5 with 8GB+ RAM):
+### Local-only AI (no cloud)
+
+Run the agent solely on the Pi with Ollama — no OpenAI, Alpaca, Coinbase, or ntfy:
 
 ```bash
 curl -fsSL https://ollama.com/install.sh | sh
 ollama pull llama3.2:3b
-# set llm.provider: ollama in config/config.yaml
+# config: llm.provider: ollama, market.provider: simulator, broker/wallet: paper
+echo 'PI_INVEST_LOCAL_ONLY=true' >> .env
+```
+
+On Pi Invest OS, first boot installs Ollama automatically. Existing flashes:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/GutFarms/Japan-central/cursor/pi-invest-os-0b6b/pi-invest-os/scripts/enable-local-ai-on-pi.sh | bash
 ```
 
 Install as a systemd service:

@@ -35,16 +35,21 @@ test -f "$MNT/opt/pi-invest-agent/src/pi_invest/web/app.py"
 test -x "$MNT/usr/local/sbin/pi-invest-firstboot.sh"
 test -x "$MNT/usr/local/sbin/pi-invest-update.sh"
 test -x "$MNT/usr/local/sbin/pi-invest-kiosk.sh"
+test -x "$MNT/usr/local/sbin/pi-invest-setup-local-ai.sh"
 test -f "$MNT/etc/systemd/system/pi-invest-kiosk.service"
 test -f "$MNT/etc/systemd/system/pi-invest-update.timer"
 test -L "$MNT/etc/systemd/system/multi-user.target.wants/pi-invest-firstboot.service"
-test -L "$MNT/etc/systemd/system/timers.target.wants/pi-invest-update.timer"
+# Local-only: update timer must NOT be enabled by default
+test ! -e "$MNT/etc/systemd/system/timers.target.wants/pi-invest-update.timer"
 grep -q 'ConditionPathExists=/var/lib/pi-invest/firstboot-done' \
   "$MNT/etc/systemd/system/pi-invest.service"
+grep -q 'ollama.service' "$MNT/etc/systemd/system/pi-invest.service"
 grep -q 'rpd-wayland-core\|Desktop:' "$MNT/usr/local/sbin/pi-invest-firstboot.sh"
 grep -q 'do_boot_behaviour B4\|graphical.target' "$MNT/usr/local/sbin/pi-invest-firstboot.sh"
 grep -q chromium "$MNT/usr/local/sbin/pi-invest-firstboot.sh"
-grep -q pi-invest-update.timer "$MNT/usr/local/sbin/pi-invest-firstboot.sh"
+grep -q 'pi-invest-setup-local-ai\|LOCAL-ONLY' "$MNT/usr/local/sbin/pi-invest-firstboot.sh"
+grep -q 'provider: ollama' "$MNT/opt/pi-invest-agent/config/config.os.yaml"
+grep -q 'provider: simulator' "$MNT/opt/pi-invest-agent/config/config.os.yaml"
 test ! -e "$MNT/etc/systemd/system/multi-user.target.wants/pi-invest.service"
 test ! -f "$MNT/opt/pi-invest-agent/.env"
 echo "rootfs: OK"
@@ -56,7 +61,9 @@ mdir -i "${LOOP}p1" :: | grep -qi 'pi-invest.env'
 mdir -i "${LOOP}p1" :: | grep -qi 'userconf'
 mdir -i "${LOOP}p1" :: | grep -qiE '(^|[[:space:]])ssh([[:space:]]|$)'
 mdir -i "${LOOP}p1" :: | grep -qi 'bcm2712-rpi-5-b.dtb'
-mtype -i "${LOOP}p1" ::pi-invest.env | grep -q 'PI_INVEST_AUTO_UPDATE'
+mtype -i "${LOOP}p1" ::pi-invest.env | grep -q 'PI_INVEST_AUTO_UPDATE=false'
+mtype -i "${LOOP}p1" ::pi-invest.env | grep -q 'PI_INVEST_LOCAL_ONLY=true'
+mtype -i "${LOOP}p1" ::pi-invest.env | grep -q 'OLLAMA_BASE_URL'
 mtype -i "${LOOP}p1" ::pi-invest.env | grep -q 'PI_INVEST_KIOSK_URL'
 echo "boot: OK"
 echo "VERIFY_OK $IMG"

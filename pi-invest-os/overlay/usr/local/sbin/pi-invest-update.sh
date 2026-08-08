@@ -20,10 +20,17 @@ if [[ -f "$ENV_FILE" ]]; then
   set +a
 fi
 
-AUTO="${PI_INVEST_AUTO_UPDATE:-true}"
-if [[ "${1:-}" != "--force" && "${AUTO,,}" != "true" && "${AUTO}" != "1" ]]; then
-  echo "Auto-update disabled (PI_INVEST_AUTO_UPDATE=${AUTO}); exiting"
-  exit 0
+LOCAL_ONLY="${PI_INVEST_LOCAL_ONLY:-false}"
+AUTO="${PI_INVEST_AUTO_UPDATE:-false}"
+if [[ "${1:-}" != "--force" ]]; then
+  if [[ "${LOCAL_ONLY,,}" == "true" || "${LOCAL_ONLY}" == "1" ]]; then
+    echo "Local-only mode (PI_INVEST_LOCAL_ONLY=${LOCAL_ONLY}); skipping GitHub update"
+    exit 0
+  fi
+  if [[ "${AUTO,,}" != "true" && "${AUTO}" != "1" ]]; then
+    echo "Auto-update disabled (PI_INVEST_AUTO_UPDATE=${AUTO}); exiting"
+    exit 0
+  fi
 fi
 
 REPO_URL="${PI_INVEST_UPDATE_URL:-https://github.com/GutFarms/Japan-central.git}"

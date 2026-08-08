@@ -42,6 +42,19 @@ def build_agent(
 
     cfg = load_config(cfg_path)
 
+    if env.pi_invest_local_only:
+        # Self-contained Pi mode: local LLM + offline market + paper books
+        cfg.llm.provider = "ollama"
+        cfg.llm.timeout_seconds = max(cfg.llm.timeout_seconds, 120)
+        cfg.alerts.enabled = False
+        cfg.agent.mode = "paper"
+        cfg.agent.allow_simulator_fallback = True
+        cfg.broker.backend = "paper"
+        cfg.wallet.backend = "paper"
+        cfg.schedule.prefer_market_hours = False
+        if not env.pi_invest_allow_online_quotes:
+            cfg.market.provider = "simulator"
+
     db_path = Path(env.pi_invest_db)
     if not db_path.is_absolute():
         db_path = root / db_path
@@ -52,6 +65,8 @@ def build_agent(
     journal = PerformanceJournal(db, safety, alerts=alerts)
 
     provider = "simulator" if force_simulator else cfg.market.provider
+    if env.pi_invest_local_only and provider not in {"simulator", "yahoo"}:
+        provider = "simulator"
     market = build_market_data(
         provider=provider,
         allow_simulator_fallback=cfg.agent.allow_simulator_fallback,

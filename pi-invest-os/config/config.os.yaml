@@ -1,5 +1,6 @@
+# Pi Invest OS — fully local (no cloud required after first boot)
 agent:
-  name: pi-income-agent
+  name: pi-income-agent-local
   mode: paper
   allow_simulator_fallback: true
 
@@ -29,26 +30,30 @@ broker:
 
 market:
   lookback_days: 60
-  provider: yahoo
+  # simulator = fully offline on-device quotes (no Yahoo/cloud)
+  # switch to yahoo later if you want live public quotes with offline fallback
+  provider: simulator
 
 llm:
-  provider: none
+  # Local AI via Ollama on this Pi (no OpenAI)
+  provider: ollama
   temperature: 0.2
-  timeout_seconds: 45
+  timeout_seconds: 120
 
 schedule:
   interval_minutes: 60
   market_tz: America/New_York
-  prefer_market_hours: true
+  # paper + simulator: run even outside US hours
+  prefer_market_hours: false
 
 dashboard:
-  # Localhost by default — SSH tunnel or Tailscale; set 0.0.0.0 only if intentional
   host: 127.0.0.1
   port: 8787
   require_auth: true
 
 alerts:
-  enabled: true
+  # ntfy is cloud push — off for local-only
+  enabled: false
   drawdown_alert_pct: 0.05
 
 wallet:

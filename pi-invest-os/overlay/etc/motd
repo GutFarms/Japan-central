@@ -1,17 +1,18 @@
 
-Pi Invest OS — Raspberry Pi 5 income agent
-==========================================
-First boot installs the Raspberry Pi desktop, Chromium, and starts:
+Pi Invest OS — local AI agent on this Raspberry Pi
+==================================================
+Runs solely on-device after first boot (Ollama + paper + simulator):
   • Graphical desktop (Wayland / labwc) with autologin
-  • pi-invest.service           (paper trading loop)
-  • pi-invest-dashboard.service (http://127.0.0.1:8787)
-  • Chromium dashboard on login (Desktop + autostart)
-  • pi-invest-update.timer      (daily agent auto-update)
+  • ollama.service                 (local LLM on :11434)
+  • pi-invest.service              (paper trading loop)
+  • pi-invest-dashboard.service    (http://127.0.0.1:8787)
+  • Chromium dashboard on login (Desktop + app menu)
+  • GitHub auto-update             OFF (local-only)
 
 Secrets: edit /boot/firmware/pi-invest.env before first boot
          or /opt/pi-invest-agent/.env after login.
 
-Manual update: sudo pi-invest-update.sh --force
+Local AI setup: sudo pi-invest-setup-local-ai.sh
+Status:         pi-invest status
 Login: user `pi` (password change-me — change it)
 Docs:  /opt/pi-invest-agent/README.md  and  /etc/pi-invest-os-release
-

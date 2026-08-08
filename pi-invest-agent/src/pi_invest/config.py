@@ -160,6 +160,10 @@ class EnvSettings(BaseSettings):
     ntfy_token: str = ""
     pi_invest_config: str = "config/config.yaml"
     pi_invest_db: str = "data/pi_invest.db"
+    # When true: force on-device Ollama, paper stack defaults, no cloud LLM/alerts
+    pi_invest_local_only: bool = False
+    # When true with local_only: keep yahoo quotes (still no cloud LLM)
+    pi_invest_allow_online_quotes: bool = False
 
 
 def load_config(path: str | Path | None = None) -> AppConfig:

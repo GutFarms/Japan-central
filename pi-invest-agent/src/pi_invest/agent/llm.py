@@ -70,6 +70,8 @@ class LlmAdvisor:
             if self.cfg.provider == "ollama":
                 raw = self._ollama(user)
             elif self.cfg.provider == "openai":
+                if self.env.pi_invest_local_only:
+                    return [], "llm error: OpenAI blocked (PI_INVEST_LOCAL_ONLY)"
                 raw = self._openai(user)
             else:
                 return [], None
