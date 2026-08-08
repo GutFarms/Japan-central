@@ -38,12 +38,12 @@ On **first boot**, use the **touch screen** or serial monitor (115200):
 
 1. `wifi_ssid` — **scan & tap** a network (or **type** / **skip** / `-`)  
 2. `wifi_password` — PSK (skipped for open networks / WiFi off)  
-3. `stratum` — pool location, e.g. `stratum.example.com:3333`  
+3. `stratum` — defaults to `stratum+tcp://ltc.viabtc.io:3333` (Enter keeps it; plain TCP only)  
 4. `worker` — worker name (wallet address OK)  
 5. `password` — pool password (often `x`)  
 6. `ble_name` — advertised name, or `-` / empty to **skip BLE** (recommended; WiFi mining skips BLE anyway)
 
-After WiFi + DHCP, the board shows an **ONLINE** screen with the **IP address** and `http://IP/` (also on the RADIO tab).
+After WiFi + DHCP, **ONLINE** / pool **CONNECTED** banners appear without pausing mining. Web UI: `http://IP/` · `/api/status` · `/api/reconnect`.
 
 ### Change credentials (password required)
 

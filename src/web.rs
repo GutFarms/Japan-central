@@ -128,6 +128,16 @@ mod server {
 
             let _ = match path {
                 "/api" | "/api/" | "/api/status" => write_json(&mut socket, &snap).await,
+                "/api/reconnect" => {
+                    crate::stratum::request_reconnect();
+                    write_text(
+                        &mut socket,
+                        "200 OK",
+                        "text/plain",
+                        "stratum reconnect requested\n",
+                    )
+                    .await
+                }
                 _ => write_html(&mut socket, &snap).await,
             };
 
@@ -194,7 +204,12 @@ a{{color:#7dffa0}}\
 <div class=card><div class=k>Stratum</div><div class=v style=font-size:1rem>{stratum}</div></div>\
 <div class=card><div class=k>WiFi</div><div class=v>{wifi} · {ip}</div>\
 <div class=k style=margin-top:.6rem>Diff {diff} · dropped {drop} · nonce {nonce:08x}</div></div>\
-<div class=card><a href=/api/status>JSON status</a> · auto-refresh 3s</div>\
+<div class=card>\
+<a href=/api/status>JSON</a> · \
+<a href=/api/reconnect>Reconnect pool</a> · \
+auto-refresh 3s<br>\
+<span style=color:#8aa08c;font-size:.85rem>Pool/WiFi edits: serial <code>change</code> or device menu</span>\
+</div>\
 </main></body></html>",
             ip = ip,
             rate = rate,
@@ -213,6 +228,20 @@ a{{color:#7dffa0}}\
 
         let header = format!(
             "HTTP/1.0 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+            body.len()
+        );
+        write_all(socket, header.as_bytes()).await?;
+        write_all(socket, body.as_bytes()).await
+    }
+
+    async fn write_text(
+        socket: &mut TcpSocket<'_>,
+        status: &str,
+        ctype: &str,
+        body: &str,
+    ) -> Result<(), ()> {
+        let header = format!(
+            "HTTP/1.0 {status}\r\nContent-Type: {ctype}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
             body.len()
         );
         write_all(socket, header.as_bytes()).await?;

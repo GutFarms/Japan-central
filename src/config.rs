@@ -13,6 +13,9 @@ pub const WIFI_SSID_MAX: usize = 32;
 pub const WIFI_PASSWORD_MAX: usize = 64;
 pub const BLE_NAME_MAX: usize = 24;
 
+/// Prefill / Enter-default for the stratum field (plain TCP — no TLS on device).
+pub const DEFAULT_STRATUM: &str = "stratum+tcp://ltc.viabtc.io:3333";
+
 /// On-disk / flash blob size (fits in one 4 KiB flash sector with room to spare).
 pub const CONFIG_BLOB_SIZE: usize = 512;
 const CONFIG_MAGIC: &[u8; 4] = b"SCFG";
@@ -70,7 +73,7 @@ impl SetupField {
         match self {
             SetupField::Address => "Worker name (wallet OK)",
             SetupField::Password => "Pool password (often 'x')",
-            SetupField::Stratum => "Stratum host:port",
+            SetupField::Stratum => "Stratum (Enter=ViaBTC LTC)",
             SetupField::WifiSsid => "WiFi SSID first (- to skip)",
             SetupField::WifiPassword => "WiFi password (empty=open)",
             SetupField::BleName => "BLE name (- to skip; saves RAM with WiFi)",
@@ -85,7 +88,10 @@ impl SetupField {
     pub fn allows_empty(self) -> bool {
         matches!(
             self,
-            SetupField::WifiSsid | SetupField::WifiPassword | SetupField::BleName
+            SetupField::WifiSsid
+                | SetupField::WifiPassword
+                | SetupField::BleName
+                | SetupField::Stratum
         )
     }
 
@@ -122,6 +128,8 @@ pub struct PoolConfig {
     pub wifi_ssid: WifiSsidString,
     pub wifi_password: WifiPasswordString,
     pub ble_name: BleNameString,
+    /// Persisted CYD touch axis-map id (see `TouchMap::id`).
+    pub touch_map: u8,
 }
 
 impl Default for PoolConfig {
@@ -134,6 +142,7 @@ impl Default for PoolConfig {
             wifi_password: WifiPasswordString::new(),
             // Empty = BLE off (saves RAM when WiFi/stratum mining).
             ble_name: BleNameString::new(),
+            touch_map: 0,
         }
     }
 }
@@ -239,7 +248,12 @@ impl PoolConfig {
                     .map_err(|_| ConfigError::TooLong)?;
             }
             SetupField::Stratum => {
-                let value = normalize_value(raw)?;
+                let trimmed = raw.trim();
+                let value = if trimmed.is_empty() {
+                    DEFAULT_STRATUM
+                } else {
+                    normalize_value(trimmed)?
+                };
                 validate_stratum(value)?;
                 self.stratum.clear();
                 self.stratum
@@ -367,6 +381,8 @@ impl PoolConfig {
         let mut blob = [0u8; CONFIG_BLOB_SIZE];
         blob[0..4].copy_from_slice(CONFIG_MAGIC);
         blob[4] = CONFIG_VERSION;
+        // Reserved header bytes 5..8 — touch map id (not covered by CRC body).
+        blob[5] = self.touch_map;
 
         let mut off = 12usize;
         off = write_field(&mut blob, off, self.address.as_str(), ADDRESS_MAX)?;
@@ -441,6 +457,7 @@ impl PoolConfig {
         }
 
         let mut cfg = Self::new();
+        cfg.touch_map = blob[5];
         let mut off = 12usize;
         let (addr, o) = read_field(blob, off, ADDRESS_MAX)?;
         off = o;
@@ -581,12 +598,20 @@ fn normalize_value(raw: &str) -> Result<&str, ConfigError> {
 }
 
 fn validate_stratum(value: &str) -> Result<(), ConfigError> {
-    // Accept host, host:port, stratum+tcp://host:port, etc.
+    // Accept host, host:port, stratum+tcp://host:port — not TLS (no SSL stack).
     if value.is_empty() {
         return Err(ConfigError::Empty);
     }
     if value.chars().any(|c| c.is_whitespace()) {
         return Err(ConfigError::InvalidChar);
+    }
+    let lower = value.as_bytes();
+    let ssl = b"stratum+ssl://";
+    if lower.len() >= ssl.len() {
+        let head = &lower[..ssl.len()];
+        if head.eq_ignore_ascii_case(ssl) {
+            return Err(ConfigError::InvalidChar);
+        }
     }
     Ok(())
 }
@@ -610,6 +635,14 @@ mod tests {
         assert!(!cfg.wifi_enabled());
         assert!(!cfg.ble_enabled());
         assert_eq!(cfg.ble_name_or_default(), "(off)");
+    }
+
+    #[test]
+    fn empty_stratum_uses_viabtc_ltc_default() {
+        let mut cfg = PoolConfig::new();
+        cfg.set(SetupField::Stratum, "").unwrap();
+        assert_eq!(cfg.stratum.as_str(), DEFAULT_STRATUM);
+        assert!(cfg.set(SetupField::Stratum, "stratum+ssl://x:3333").is_err());
     }
 
     #[test]

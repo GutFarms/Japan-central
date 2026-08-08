@@ -77,6 +77,33 @@ impl TouchMap {
         }
     }
 
+    pub fn id(self) -> u8 {
+        match (self.swap_xy, self.invert_x, self.invert_y) {
+            (true, true, true) => 0,
+            (false, true, false) => 1,
+            (false, false, true) => 2,
+            (true, false, false) => 3,
+            _ => 0,
+        }
+    }
+
+    pub fn from_id(id: u8) -> Self {
+        match id {
+            1 => Self::CYD_DEG90,
+            2 => Self {
+                swap_xy: false,
+                invert_x: false,
+                invert_y: true,
+            },
+            3 => Self {
+                swap_xy: true,
+                invert_x: false,
+                invert_y: false,
+            },
+            _ => Self::CYD_DEG90_SWAP,
+        }
+    }
+
     pub fn label(self) -> &'static str {
         match (self.swap_xy, self.invert_x, self.invert_y) {
             (true, true, true) => "map A swap",

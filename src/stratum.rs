@@ -107,14 +107,23 @@ pub struct Endpoint {
 
 impl Endpoint {
     /// Parse `host:port`, `stratum+tcp://host:port`, or bare `host` (port 3333).
+    ///
+    /// `stratum+ssl://` is rejected — this firmware has no TLS stack.
     pub fn parse(raw: &str) -> Result<Self, StratumError> {
         let mut s = raw.trim();
-        for prefix in [
-            "stratum+tcp://",
-            "stratum+ssl://",
-            "stratum://",
-            "tcp://",
-        ] {
+        if let Some(rest) = s.strip_prefix("stratum+ssl://")
+            .or_else(|| {
+                if s.len() >= 14 && s[..14].eq_ignore_ascii_case("stratum+ssl://") {
+                    Some(&s[14..])
+                } else {
+                    None
+                }
+            })
+        {
+            let _ = rest;
+            return Err(StratumError::SslUnsupported);
+        }
+        for prefix in ["stratum+tcp://", "stratum://", "tcp://"] {
             if let Some(rest) = s.strip_prefix(prefix) {
                 s = rest;
                 break;
@@ -146,6 +155,8 @@ impl Endpoint {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum StratumError {
     BadEndpoint,
+    /// Device speaks plain TCP only; use `stratum+tcp://`.
+    SslUnsupported,
     BadHex,
     BadJson,
     TooLong,
@@ -157,6 +168,7 @@ impl fmt::Display for StratumError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             StratumError::BadEndpoint => write!(f, "bad stratum endpoint"),
+            StratumError::SslUnsupported => write!(f, "stratum+ssl not supported (use tcp)"),
             StratumError::BadHex => write!(f, "bad hex"),
             StratumError::BadJson => write!(f, "bad json"),
             StratumError::TooLong => write!(f, "value too long"),
@@ -1029,9 +1041,14 @@ mod client {
             return;
         };
         *SESSION_CFG.lock().await = Some(session);
-        RECONNECT.signal(());
+        request_reconnect();
         set_phase(StratumPhase::Connecting, "config reload").await;
         info!("stratum: pool config applied; reconnecting");
+    }
+
+    /// Ask the stratum task to drop the TCP session and reconnect.
+    pub fn request_reconnect() {
+        RECONNECT.signal(());
     }
 
     pub fn start(spawner: &Spawner, stack: Stack<'static>, cfg: &PoolConfig) {
@@ -1148,7 +1165,7 @@ mod client {
             set_phase(StratumPhase::Subscribing, "mining.subscribe").await;
             subscribe_id = next_id;
             next_id = next_id.wrapping_add(1);
-            let sub_msg = encode_subscribe(subscribe_id, "esp32-s3-scrypt-miner/0.1");
+            let sub_msg = encode_subscribe(subscribe_id, "esp32-cyd-scrypt-miner/0.1");
             if write_all(&mut socket, sub_msg.as_bytes()).await.is_err() {
                 set_phase(StratumPhase::Error, "subscribe write fail").await;
                 bump_reconnect().await;
@@ -1310,12 +1327,12 @@ mod client {
             }
 
             if auth_rejected {
-                // Hard stop: do not spin reconnects on bad credentials.
-                set_phase(StratumPhase::Error, "auth rejected — fix creds").await;
-                loop {
-                    match select(RECONNECT.wait(), Timer::after(Duration::from_secs(30))).await {
-                        Either::First(()) => break,
-                        Either::Second(()) => {}
+                // Slow retry — wait for config reload or 2 minutes, then try again.
+                set_phase(StratumPhase::Error, "auth rejected — fix creds / wait").await;
+                match select(RECONNECT.wait(), Timer::after(Duration::from_secs(120))).await {
+                    Either::First(()) => {}
+                    Either::Second(()) => {
+                        info!("stratum: retrying after auth reject backoff");
                     }
                 }
                 continue;
@@ -1420,7 +1437,9 @@ mod client {
 }
 
 #[cfg(feature = "esp")]
-pub use client::{apply_pool_config, make_share, queue_share, snapshot, start, try_take_job};
+pub use client::{
+    apply_pool_config, make_share, queue_share, request_reconnect, snapshot, start, try_take_job,
+};
 
 #[cfg(test)]
 mod tests {
@@ -1434,6 +1453,10 @@ mod tests {
         let e = Endpoint::parse("192.168.1.5").unwrap();
         assert_eq!(e.port, 3333);
         assert!(Endpoint::parse("").is_err());
+        assert!(matches!(
+            Endpoint::parse("stratum+ssl://pool:3333"),
+            Err(StratumError::SslUnsupported)
+        ));
     }
 
     #[test]

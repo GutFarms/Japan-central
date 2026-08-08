@@ -248,11 +248,12 @@ mod stack {
         Some(stack)
     }
 
-    /// Brief STA scan for setup UI. Drops the controller afterward so a later
-    /// [`start`] can take WiFi again via `WIFI::steal()` if needed.
-    pub async fn scan_networks(
-        wifi: WIFI<'static>,
-    ) -> Result<heapless::Vec<ScannedNetwork, WIFI_SCAN_MAX>, ()> {
+    /// Brief STA scan for setup UI.
+    ///
+    /// Uses `WIFI::steal()` so the caller's owned `WIFI` token can still be
+    /// passed to [`start`] afterward (no token hand-off / second steal at boot).
+    pub async fn scan_networks() -> Result<heapless::Vec<ScannedNetwork, WIFI_SCAN_MAX>, ()> {
+        let wifi = unsafe { WIFI::steal() };
         let mut controller = match WifiController::new(wifi, ControllerConfig::default()) {
             Ok(c) => c,
             Err(e) => {

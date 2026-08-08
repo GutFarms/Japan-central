@@ -67,11 +67,11 @@ Install **CH340** drivers on Windows if no COM port appears. Serial monitor: **1
 
 ## First boot
 
-1. Short **touch check** (~2s): crosshair + raw ADC on serial. **BOOT** cycles axis maps
-2. **WiFi scan** — tap a network (or **type** / **skip**). **BOOT** selects the highlighted row. On keyboards: **BOOT** short = next key, long = press. Then **stratum → worker → password**, then BLE. USB serial (115200) also works
-3. If taps do nothing, use serial / BOOT keyboard nav — both work without perfect touch
-4. After DHCP, an **ONLINE** screen shows the IP; also on the RADIO tab / MINE URL line
-5. Open **`http://<board-ip>/`** on your phone/PC. JSON: `/api/status`
+1. Short **touch check** (~2s): crosshair + raw ADC on serial. **BOOT** cycles axis maps (saved to flash)
+2. **WiFi scan** — tap a network (or **type** / **skip**). **BOOT** selects the highlighted row. On keyboards: **BOOT** short = next key, long = press
+3. **Stratum** prefills `stratum+tcp://ltc.viabtc.io:3333` (Enter keeps it). Plain TCP only — no `stratum+ssl://`
+4. Then **worker → password → BLE**. USB serial (115200) always works
+5. After DHCP, **ONLINE** / **CONNECTED** banners do not stop mining. Web UI: `http://<board-ip>/` · JSON `/api/status` · reconnect `/api/reconnect`
 
 ## Not for
 
