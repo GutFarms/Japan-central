@@ -72,9 +72,10 @@ async fn main(spawner: Spawner) -> ! {
 
     // Classic ESP32: WiFi STA alone wants ~47–57 KiB. Use bootloader-reclaimed
     // DRAM for the radio blobs, plus a smaller .bss heap for app buffers
-    // (lite scrypt ROMix ≈ 8 KiB, embassy-net, etc.).
-    esp_alloc::heap_allocator!(#[ram(reclaimed)] size: 64 * 1024);
-    esp_alloc::heap_allocator!(size: 28 * 1024);
+    // (lite scrypt ROMix ≈ 8 KiB, embassy-net, etc.). Keep the .bss heap lean so
+    // the linker can leave a larger ProCpu stack (WiFi IRQs share that stack).
+    esp_alloc::heap_allocator!(#[ram(reclaimed)] size: 72 * 1024);
+    esp_alloc::heap_allocator!(size: 16 * 1024);
 
     let timg0 = TimerGroup::new(peripherals.TIMG0);
     let sw_interrupt =

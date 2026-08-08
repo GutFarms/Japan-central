@@ -92,13 +92,16 @@ mod server {
 
     #[embassy_executor::task]
     async fn http_task(stack: Stack<'static>) {
-        let mut rx_buf = [0u8; 512];
-        let mut tx_buf = [0u8; 512];
+        use static_cell::StaticCell;
+        static RX_BUF: StaticCell<[u8; 512]> = StaticCell::new();
+        static TX_BUF: StaticCell<[u8; 512]> = StaticCell::new();
+        let rx_buf = RX_BUF.init([0; 512]);
+        let tx_buf = TX_BUF.init([0; 512]);
 
         loop {
             stack.wait_config_up().await;
 
-            let mut socket = TcpSocket::new(stack, &mut rx_buf, &mut tx_buf);
+            let mut socket = TcpSocket::new(stack, rx_buf, tx_buf);
             socket.set_timeout(Some(Duration::from_secs(10)));
 
             if let Err(e) = socket.accept(80).await {

@@ -277,6 +277,10 @@ pub fn encode_submit(id: u32, share: &ShareSubmission) -> String<384> {
 }
 
 /// Parse one complete JSON line (no trailing newline required).
+///
+/// Heavy notify/subscribe paths live in `#[inline(never)]` helpers so this
+/// function's Xtensa `entry` frame stays small — a prior monolithic parse
+/// reserved ~29 KiB and tripped the ProCpu stack guard under WiFi IRQs.
 pub fn parse_line(line: &str, expect_subscribe_id: Option<u32>) -> Result<Inbound, StratumError> {
     let line = line.trim();
     if line.is_empty() {
@@ -285,10 +289,7 @@ pub fn parse_line(line: &str, expect_subscribe_id: Option<u32>) -> Result<Inboun
 
     if let Some(method) = json_str_field(line, "method") {
         match method {
-            "mining.notify" => {
-                let params = parse_notify_params(line)?;
-                return Ok(Inbound::Notify(params));
-            }
+            "mining.notify" => return parse_notify_inbound(line),
             "mining.set_difficulty" => {
                 let diff = parse_set_difficulty(line)?;
                 return Ok(Inbound::SetDifficulty(diff));
@@ -307,8 +308,7 @@ pub fn parse_line(line: &str, expect_subscribe_id: Option<u32>) -> Result<Inboun
             if has_error {
                 return Err(StratumError::BadJson);
             }
-            let sub = parse_subscribe_result(line)?;
-            return Ok(Inbound::SubscribeOk(sub));
+            return parse_subscribe_inbound(line);
         }
     }
 
@@ -336,8 +336,8 @@ pub fn parse_line(line: &str, expect_subscribe_id: Option<u32>) -> Result<Inboun
     if json_key_present(line, "result") {
         // subscribe-like without matching id expectation
         if line.contains("[[") {
-            if let Ok(sub) = parse_subscribe_result(line) {
-                return Ok(Inbound::SubscribeOk(sub));
+            if let Ok(inbound) = parse_subscribe_inbound(line) {
+                return Ok(inbound);
             }
         }
         // Some pools ack authorize with result:null, error:null
@@ -345,6 +345,16 @@ pub fn parse_line(line: &str, expect_subscribe_id: Option<u32>) -> Result<Inboun
     }
 
     Ok(Inbound::Other)
+}
+
+#[inline(never)]
+fn parse_notify_inbound(line: &str) -> Result<Inbound, StratumError> {
+    Ok(Inbound::Notify(parse_notify_params(line)?))
+}
+
+#[inline(never)]
+fn parse_subscribe_inbound(line: &str) -> Result<Inbound, StratumError> {
+    Ok(Inbound::SubscribeOk(parse_subscribe_result(line)?))
 }
 
 /// True when `"error"` is present and not JSON `null`.
@@ -410,14 +420,24 @@ fn parse_set_difficulty(line: &str) -> Result<u32, StratumError> {
     Ok(d.max(1))
 }
 
+#[inline(never)]
 fn parse_notify_params(line: &str) -> Result<NotifyParams, StratumError> {
-    let arr = json_array_after(line, "params")?;
-    let fields = split_json_array_strings(&arr)?;
-    // Optional: some pools send clean as bare true/false at end — already collected as token.
+    // Borrow top-level params slices from `line` (heap Vec<&str>) — do **not**
+    // materialize Vec<String<COINBASE_MAX>, 12> on the CPU stack.
+    let Some(params) = line.split("\"params\"").nth(1) else {
+        return Err(StratumError::MissingField);
+    };
+    let Some(start) = params.find('[') else {
+        return Err(StratumError::BadJson);
+    };
+    let end = find_matching_bracket(params, start)?;
+    let inner = &params[start + 1..end];
+    let fields = split_top_level_csv(inner);
     if fields.len() < 9 {
         return Err(StratumError::MissingField);
     }
-    let clean = match fields[8].as_str() {
+
+    let clean = match fields[8].trim() {
         "true" | "True" => true,
         "false" | "False" => false,
         other => other != "0",
@@ -425,37 +445,36 @@ fn parse_notify_params(line: &str) -> Result<NotifyParams, StratumError> {
 
     let mut job_id = JobIdString::new();
     job_id
-        .push_str(strip_quotes(&fields[0]))
+        .push_str(strip_quotes(fields[0].trim()))
         .map_err(|_| StratumError::TooLong)?;
 
     let mut prevhash_hex = String::<64>::new();
     prevhash_hex
-        .push_str(strip_quotes(&fields[1]))
+        .push_str(strip_quotes(fields[1].trim()))
         .map_err(|_| StratumError::TooLong)?;
 
     let mut coinb1_hex = String::<COINBASE_MAX>::new();
     coinb1_hex
-        .push_str(strip_quotes(&fields[2]))
+        .push_str(strip_quotes(fields[2].trim()))
         .map_err(|_| StratumError::TooLong)?;
     let mut coinb2_hex = String::<COINBASE_MAX>::new();
     coinb2_hex
-        .push_str(strip_quotes(&fields[3]))
+        .push_str(strip_quotes(fields[3].trim()))
         .map_err(|_| StratumError::TooLong)?;
 
-    // merkle branches: field 4 is a nested array — re-parse from original
-    let merkle_hex = parse_merkle_branch_array(line)?;
+    let merkle_hex = parse_merkle_branch_list(fields[4].trim())?;
 
     let mut version_hex = String::<8>::new();
     version_hex
-        .push_str(strip_quotes(&fields[5]))
+        .push_str(strip_quotes(fields[5].trim()))
         .map_err(|_| StratumError::TooLong)?;
     let mut nbits_hex = String::<8>::new();
     nbits_hex
-        .push_str(strip_quotes(&fields[6]))
+        .push_str(strip_quotes(fields[6].trim()))
         .map_err(|_| StratumError::TooLong)?;
     let mut ntime_hex = String::<8>::new();
     ntime_hex
-        .push_str(strip_quotes(&fields[7]))
+        .push_str(strip_quotes(fields[7].trim()))
         .map_err(|_| StratumError::TooLong)?;
 
     Ok(NotifyParams {
@@ -471,31 +490,15 @@ fn parse_notify_params(line: &str) -> Result<NotifyParams, StratumError> {
     })
 }
 
-fn parse_merkle_branch_array(line: &str) -> Result<heapless::Vec<String<64>, MERKLE_BRANCH_MAX>, StratumError> {
-    // After params:[ job, prev, coinb1, coinb2, [branches...], ...
-    let Some(params) = line.split("\"params\"").nth(1) else {
-        return Err(StratumError::MissingField);
-    };
-    // Find the merkle array: fourth '[' after params, but easier: look for pattern after coinb2.
-    // Walk: find "params": then first '[', then skip 4 string fields, then array.
-    let Some(mut i) = params.find('[') else {
-        return Err(StratumError::BadJson);
-    };
-    i += 1;
-    // skip 4 comma-separated values (job, prev, cb1, cb2)
-    for _ in 0..4 {
-        i = skip_json_value(params, i)?;
-        // skip comma/whitespace
-        while i < params.len() && (params.as_bytes()[i] == b',' || params.as_bytes()[i].is_ascii_whitespace())
-        {
-            i += 1;
-        }
-    }
-    if i >= params.len() || params.as_bytes()[i] != b'[' {
+fn parse_merkle_branch_list(
+    merkle_field: &str,
+) -> Result<heapless::Vec<String<64>, MERKLE_BRANCH_MAX>, StratumError> {
+    let field = merkle_field.trim();
+    if !field.starts_with('[') {
         return Err(StratumError::BadJson);
     }
-    let end = find_matching_bracket(params, i)?;
-    let inner = &params[i + 1..end];
+    let end = find_matching_bracket(field, 0)?;
+    let inner = &field[1..end];
     let mut out = heapless::Vec::new();
     for part in split_top_level_csv(inner) {
         let h = strip_quotes(part.trim());
@@ -564,6 +567,7 @@ fn parse_subscribe_result(line: &str) -> Result<SubscribeResult, StratumError> {
 }
 
 /// Build a mining job from notify + subscribe session + pool difficulty.
+#[inline(never)]
 pub fn build_job(
     notify: &NotifyParams,
     sub: &SubscribeResult,
@@ -777,22 +781,6 @@ fn json_u32_field(line: &str, key: &str) -> Option<u32> {
     num.parse().ok()
 }
 
-fn json_array_after(line: &str, key: &str) -> Result<String<1024>, StratumError> {
-    let mut pat = String::<32>::new();
-    let _ = fmt::Write::write_fmt(&mut pat, format_args!("\"{key}\""));
-    let Some(rest) = line.split(pat.as_str()).nth(1) else {
-        return Err(StratumError::MissingField);
-    };
-    let Some(start) = rest.find('[') else {
-        return Err(StratumError::BadJson);
-    };
-    let end = find_matching_bracket(rest, start)?;
-    let mut s = String::<1024>::new();
-    s.push_str(&rest[start..=end])
-        .map_err(|_| StratumError::TooLong)?;
-    Ok(s)
-}
-
 fn find_matching_bracket(s: &str, start: usize) -> Result<usize, StratumError> {
     let b = s.as_bytes();
     if start >= b.len() || b[start] != b'[' {
@@ -827,61 +815,6 @@ fn find_matching_bracket(s: &str, start: usize) -> Result<usize, StratumError> {
         i += 1;
     }
     Err(StratumError::BadJson)
-}
-
-fn skip_json_value(s: &str, mut i: usize) -> Result<usize, StratumError> {
-    let b = s.as_bytes();
-    while i < b.len() && b[i].is_ascii_whitespace() {
-        i += 1;
-    }
-    if i >= b.len() {
-        return Err(StratumError::BadJson);
-    }
-    match b[i] {
-        b'"' => {
-            i += 1;
-            while i < b.len() {
-                if b[i] == b'\\' {
-                    i += 2;
-                    continue;
-                }
-                if b[i] == b'"' {
-                    return Ok(i + 1);
-                }
-                i += 1;
-            }
-            Err(StratumError::BadJson)
-        }
-        b'[' => {
-            let end = find_matching_bracket(s, i)?;
-            Ok(end + 1)
-        }
-        b't' | b'f' | b'n' => {
-            while i < b.len() && b[i].is_ascii_alphabetic() {
-                i += 1;
-            }
-            Ok(i)
-        }
-        c if c.is_ascii_digit() || c == b'-' => {
-            while i < b.len() && (b[i].is_ascii_digit() || b[i] == b'.' || b[i] == b'-') {
-                i += 1;
-            }
-            Ok(i)
-        }
-        _ => Err(StratumError::BadJson),
-    }
-}
-
-fn split_json_array_strings(arr: &str) -> Result<heapless::Vec<String<COINBASE_MAX>, 12>, StratumError> {
-    let inner = arr.trim().trim_start_matches('[').trim_end_matches(']');
-    let mut out = heapless::Vec::new();
-    for part in split_top_level_csv(inner) {
-        let mut s = String::<COINBASE_MAX>::new();
-        s.push_str(part.trim())
-            .map_err(|_| StratumError::TooLong)?;
-        out.push(s).map_err(|_| StratumError::TooLong)?;
-    }
-    Ok(out)
 }
 
 fn split_top_level_csv(s: &str) -> alloc::vec::Vec<&str> {
@@ -939,6 +872,7 @@ mod client {
     use embassy_time::{Duration, Timer};
     use heapless::String;
     use log::info;
+    use static_cell::StaticCell;
 
     use super::{
         build_job, encode_authorize, encode_submit, encode_subscribe, nonce_to_hex, parse_line,
@@ -1083,9 +1017,15 @@ mod client {
 
     #[embassy_executor::task]
     async fn stratum_task(stack: Stack<'static>) {
-        let mut rx_buf = [0u8; 1024];
-        let mut tx_buf = [0u8; 512];
-        let mut line_buf = [0u8; 1024];
+        // Keep socket/line buffers in .bss (not the async future / poll frame).
+        static RX_BUF: StaticCell<[u8; 1024]> = StaticCell::new();
+        static TX_BUF: StaticCell<[u8; 512]> = StaticCell::new();
+        static LINE_BUF: StaticCell<[u8; 1024]> = StaticCell::new();
+        static LINE_TEXT: StaticCell<String<1024>> = StaticCell::new();
+        let rx_buf = RX_BUF.init([0; 1024]);
+        let tx_buf = TX_BUF.init([0; 512]);
+        let line_buf = LINE_BUF.init([0; 1024]);
+        let line_text = LINE_TEXT.init(String::new());
         let mut line_len = 0usize;
         let mut extranonce2_counter = 1u64;
         let mut difficulty = 1u32;
@@ -1134,7 +1074,7 @@ mod client {
             let mut detail = String::<48>::new();
             let _ = write!(detail, "tcp {}:{}", session.host.as_str(), session.port);
             set_phase(StratumPhase::Connecting, detail.as_str()).await;
-            let mut socket = TcpSocket::new(stack, &mut rx_buf, &mut tx_buf);
+            let mut socket = TcpSocket::new(stack, rx_buf, tx_buf);
             socket.set_timeout(Some(Duration::from_secs(60)));
             let endpoint = IpEndpoint::new(ip, session.port);
             if let Err(e) = socket.connect(endpoint).await {
@@ -1180,19 +1120,19 @@ mod client {
 
             'session: loop {
                 match select3(
-                    read_line(&mut socket, &mut line_buf, &mut line_len),
+                    read_line(&mut socket, line_buf, &mut line_len, line_text),
                     SHARE_CH.receive(),
                     RECONNECT.wait(),
                 )
                 .await
                 {
-                    Either3::First(Ok(line)) => {
+                    Either3::First(Ok(())) => {
                         let expect = if !subscribed {
                             Some(subscribe_id)
                         } else {
                             None
                         };
-                        match parse_line(line.as_str(), expect) {
+                        match parse_line(line_text.as_str(), expect) {
                             Ok(Inbound::SubscribeOk(s)) => {
                                 sub = s;
                                 subscribed = true;
@@ -1287,7 +1227,7 @@ mod client {
                                 }
                             }
                             Ok(Inbound::Other) => {}
-                            Err(e) => info!("stratum: parse error {e} line={}", line.as_str()),
+                            Err(e) => info!("stratum: parse error {e} line={}", line_text.as_str()),
                         }
                     }
                     Either3::First(Err(())) => {
@@ -1407,7 +1347,8 @@ mod client {
         socket: &mut TcpSocket<'_>,
         buf: &mut [u8],
         len: &mut usize,
-    ) -> Result<String<2048>, ()> {
+        out: &mut String<1024>,
+    ) -> Result<(), ()> {
         loop {
             if let Some(pos) = buf[..*len].iter().position(|&b| b == b'\n') {
                 let line_end = if pos > 0 && buf[pos - 1] == b'\r' {
@@ -1416,12 +1357,12 @@ mod client {
                     pos
                 };
                 let text = core::str::from_utf8(&buf[..line_end]).map_err(|_| ())?;
-                let mut out = String::<2048>::new();
+                out.clear();
                 out.push_str(text).map_err(|_| ())?;
                 let rest = *len - (pos + 1);
                 buf.copy_within(pos + 1..*len, 0);
                 *len = rest;
-                return Ok(out);
+                return Ok(());
             }
 
             if *len == buf.len() {
