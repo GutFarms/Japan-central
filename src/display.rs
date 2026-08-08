@@ -286,9 +286,9 @@ impl<'a, D: DelayNs> Display<'a, D> {
 
         self.draw_text(
             if ok {
-                "OK — BOOT or wait to continue"
+                "OK — continuing…"
             } else {
-                "BOOT=cycle map · serial always works"
+                "tap · BOOT=map · any key skips"
             },
             Point::new(12, 220),
             KEY_TXT_DIM,
@@ -420,7 +420,7 @@ impl<'a, D: DelayNs> Display<'a, D> {
             stars
         } else if typed.is_empty() {
             let mut s: String<96> = String::new();
-            let _ = s.push_str("tap keys or USB serial…");
+            let _ = s.push_str("tap / BOOT=next · long BOOT=OK");
             s
         } else {
             PoolConfig::ellipsize(typed, 34)
@@ -434,24 +434,47 @@ impl<'a, D: DelayNs> Display<'a, D> {
 
     pub fn draw_keyboard(&mut self, kb: &Keyboard) -> Result<(), Error> {
         self.fill_rect(0, kb.origin_y - 4, DISPLAY_WIDTH as u32, 240 - kb.origin_y as u32 + 4, PANEL)?;
-        for key in kb.keys() {
-            let bg = match key.action {
-                crate::keyboard::KeyAction::Enter => KEY_OK,
-                crate::keyboard::KeyAction::Shift | crate::keyboard::KeyAction::Symbols => KEY_BG_HOT,
-                crate::keyboard::KeyAction::Skip => ACCENT,
-                _ => KEY_BG,
+        for (i, key) in kb.keys().into_iter().enumerate() {
+            let focused = i == kb.focus;
+            let bg = if focused {
+                ACCENT_HOT
+            } else {
+                match key.action {
+                    crate::keyboard::KeyAction::Enter => KEY_OK,
+                    crate::keyboard::KeyAction::Shift | crate::keyboard::KeyAction::Symbols => {
+                        KEY_BG_HOT
+                    }
+                    crate::keyboard::KeyAction::Skip => ACCENT,
+                    _ => KEY_BG,
+                }
             };
             self.round_panel(key.x, key.y, key.w, key.h, bg)?;
-            // Center-ish label
             let tx = key.x + 4;
             let ty = key.y + (key.h as i32 / 2) + 3;
             let style = match key.action {
                 crate::keyboard::KeyAction::Enter => OK,
                 crate::keyboard::KeyAction::Skip => MonoTextStyle::new(&FONT_6X10, Rgb565::BLACK),
+                _ if focused => MonoTextStyle::new(&FONT_6X10, Rgb565::BLACK),
                 _ => KEY_TXT,
             };
             self.draw_text(key.label, Point::new(tx, ty), style)?;
         }
+        Ok(())
+    }
+
+    /// Overlay crosshair for live touch feedback (call after a full screen draw).
+    pub fn draw_touch_cursor(&mut self, x: u16, y: u16) -> Result<(), Error> {
+        let px = i32::from(x);
+        let py = i32::from(y);
+        let style = PrimitiveStyle::with_stroke(Rgb565::CSS_ORANGE, 1);
+        Line::new(Point::new(px.saturating_sub(10), py), Point::new(px + 10, py))
+            .into_styled(style)
+            .draw(&mut self.display)
+            .map_err(|_| Error::DisplayInterface("cursor"))?;
+        Line::new(Point::new(px, py.saturating_sub(10)), Point::new(px, py + 10))
+            .into_styled(style)
+            .draw(&mut self.display)
+            .map_err(|_| Error::DisplayInterface("cursor"))?;
         Ok(())
     }
 

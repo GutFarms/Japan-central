@@ -117,8 +117,9 @@ async fn main(spawner: Spawner) -> ! {
         }
     };
 
-    // XPT2046 bitbang on dedicated pins (CYD / witnessmenow style).
+    // XPT2046 on dedicated VSPI (SPI3) — ESPHome CYD pinout @ 1 MHz.
     let mut touch = Touch::new(TouchPins {
+        spi: peripherals.SPI3,
         clk: peripherals.GPIO25.degrade(),
         mosi: peripherals.GPIO32.degrade(),
         miso: peripherals.GPIO39.degrade(),
@@ -128,11 +129,11 @@ async fn main(spawner: Spawner) -> ! {
     let mut touch_delay = Delay::new();
     serial_writeln(
         &mut usb,
-        "Touch: bitbang XPT2046 CLK25/MOSI32/MISO39/CS33/IRQ36",
+        "Touch: SPI3 XPT2046 1MHz CLK25/MOSI32/MISO39/CS33/IRQ36",
     );
 
     let _ = display.draw_splash();
-    Timer::after(Duration::from_millis(400)).await;
+    Timer::after(Duration::from_millis(250)).await;
     run_touch_probe(&mut usb, &mut display, &mut touch, &mut touch_delay, &boot_btn).await;
 
     let mut wifi_token: Option<WIFI<'static>> = Some(peripherals.WIFI);
@@ -859,7 +860,7 @@ async fn collect_pool_config<D: embedded_hal::delay::DelayNs>(
     serial_writeln(usb, "=== ESP32-2432S028 Scrypt Miner setup ===");
     serial_writeln(usb, "Step 1: scan & tap a WiFi network (or type / skip).");
     serial_writeln(usb, "Serial: number from scan list, SSID text, or '-' to skip.");
-    serial_writeln(usb, "BOOT short=select/cycle map · Then stratum, worker, password, BLE.");
+    serial_writeln(usb, "BOOT: WiFi=select · keyboard short=next key, long=press.");
     serial_writeln(usb, "");
 
     for field in SetupField::ALL {
@@ -1179,7 +1180,7 @@ fn log_touch(usb: &mut Serial<'_>, touch: &Touch, p: esp32_s3_scrypt_miner::keyb
     serial_writeln(usb, m.as_str());
 }
 
-/// Live touch self-test with on-screen crosshair + serial raw dump.
+/// Short touch self-test (≤2.5s): one screen, raw dump, optional tap confirm.
 async fn run_touch_probe<D: embedded_hal::delay::DelayNs>(
     usb: &mut Serial<'_>,
     display: &mut Display<'_, D>,
@@ -1187,11 +1188,11 @@ async fn run_touch_probe<D: embedded_hal::delay::DelayNs>(
     touch_delay: &mut Delay,
     boot: &Input<'_>,
 ) {
-    serial_writeln(usb, "Touch probe — tap glass; BOOT cycles map / skips.");
-    let deadline = Instant::now() + Duration::from_secs(12);
+    serial_writeln(usb, "Touch probe (2s) — tap glass; BOOT=map; any key skips.");
+    let deadline = Instant::now() + Duration::from_millis(2500);
     let mut boot_was_down = boot.is_low();
     let mut saw_ok = false;
-    let mut last_log = Instant::now();
+    let mut logged = false;
     let mut byte = [0u8; 1];
 
     while Instant::now() < deadline {
@@ -1216,17 +1217,17 @@ async fn run_touch_probe<D: embedded_hal::delay::DelayNs>(
             saw_ok,
         );
 
-        if last_log.elapsed() >= Duration::from_millis(400) {
-            last_log = Instant::now();
-            let mut m: String<72> = String::new();
+        if !logged {
+            logged = true;
+            let mut m: String<80> = String::new();
             let _ = core::fmt::Write::write_fmt(
                 &mut m,
                 format_args!(
-                    "probe irq={} z={} raw={:?} screen={:?} {}",
+                    "probe irq={} z={} raw={:?} err={} {}",
                     if irq_low { "L" } else { "H" },
                     z,
                     raw_xy,
-                    screen,
+                    touch.xfer_errors,
                     touch.map.label()
                 ),
             );
@@ -1235,48 +1236,29 @@ async fn run_touch_probe<D: embedded_hal::delay::DelayNs>(
 
         let boot_down = boot.is_low();
         if !boot_down && boot_was_down {
-            if saw_ok {
-                serial_writeln(usb, "Touch probe OK — continuing.");
-                break;
-            }
             touch.cycle_map();
             serial_write(usb, "Touch map → ");
             serial_writeln(usb, touch.map.label());
+            logged = false;
         }
         boot_was_down = boot_down;
 
-        // Any serial key skips the probe early.
         if usb.read(&mut byte).ok().filter(|&n| n > 0).is_some() {
-            serial_writeln(usb, "Touch probe skipped (serial).");
-            break;
-        }
-
-        if saw_ok && Instant::now() + Duration::from_secs(2) >= deadline {
-            // Keep showing success briefly then exit.
-            break;
+            serial_writeln(usb, "Touch probe skipped.");
+            return;
         }
         if saw_ok {
-            // After first good sample, exit in ~1.5s unless user keeps probing.
-            Timer::after(Duration::from_millis(50)).await;
-            let settle = Instant::now() + Duration::from_millis(1500);
-            while Instant::now() < settle {
-                let _ = touch.poll_point(touch_delay);
-                if boot.is_low() {
-                    break;
-                }
-                Timer::after(Duration::from_millis(40)).await;
-            }
-            serial_writeln(usb, "Touch probe OK — continuing.");
-            break;
+            serial_writeln(usb, "Touch probe OK.");
+            Timer::after(Duration::from_millis(350)).await;
+            return;
         }
-
         Timer::after(Duration::from_millis(40)).await;
     }
 
     if !saw_ok {
         serial_writeln(
             usb,
-            "Touch probe: no tap seen — use serial setup; BOOT still cycles map.",
+            "Touch probe: no tap — serial/BOOT keyboard nav still work.",
         );
     }
 }
@@ -1334,6 +1316,7 @@ async fn wait_for_ip_screen<D: embedded_hal::delay::DelayNs>(
 }
 
 /// Collect one field via on-screen keyboard and/or USB serial.
+/// BOOT short = next key, BOOT long = activate key; finger-up taps also work.
 async fn read_field_touch_or_serial<D: embedded_hal::delay::DelayNs>(
     usb: &mut Serial<'_>,
     display: &mut Display<'_, D>,
@@ -1350,41 +1333,76 @@ async fn read_field_touch_or_serial<D: embedded_hal::delay::DelayNs>(
     let mut dirty = true;
     let mut byte = [0u8; 1];
     let mut boot_was_down = boot.is_low();
+    let mut boot_down_since: Option<Instant> = None;
+    let mut last_cursor: Option<(u16, u16)> = None;
+    let mut finger_was_down = false;
 
     loop {
+        let held = touch.poll_point(touch_delay);
+        let finger_down = held.is_some();
+        let cursor = held.map(|p| (p.x, p.y));
+        if cursor != last_cursor {
+            last_cursor = cursor;
+            dirty = true;
+        }
+
+        // Release-edge tap using last sampled point.
+        if finger_was_down && !finger_down {
+            if let Some(p) = touch.last_point() {
+                log_touch(usb, touch, p);
+                if let Some(action) = kb.hit_test(p) {
+                    if kb.apply(action, line) {
+                        let _ = usb.write_all(b"\r\n");
+                        return;
+                    }
+                    dirty = true;
+                } else {
+                    serial_writeln(usb, "  (tap missed — BOOT short=next key)");
+                }
+            }
+        }
+        finger_was_down = finger_down;
+
         if dirty {
             if let Some((attempt, max)) = auth {
                 let _ = display.draw_auth_keyboard(attempt, max, line.as_str(), &kb);
             } else {
                 let _ = display.draw_setup_keyboard(field, line.as_str(), &kb);
             }
+            if let Some((x, y)) = cursor {
+                let _ = display.draw_touch_cursor(x, y);
+            }
             dirty = false;
         }
 
-        if let Some(p) = touch.poll_tap(touch_delay) {
-            log_touch(usb, touch, p);
-            if let Some(action) = kb.hit_test(p) {
-                if kb.apply(action, line) {
-                    let _ = usb.write_all(b"\r\n");
-                    return;
-                }
-                dirty = true;
-                continue;
-            }
-            serial_writeln(usb, "  (tap missed key — BOOT cycles map)");
-        }
-
         let boot_down = boot.is_low();
+        if boot_down && !boot_was_down {
+            boot_down_since = Some(Instant::now());
+        }
         if !boot_down && boot_was_down {
-            touch.cycle_map();
-            serial_write(usb, "Touch map → ");
-            serial_writeln(usb, touch.map.label());
+            let long = boot_down_since
+                .take()
+                .map(|t| t.elapsed() >= Duration::from_millis(BOOT_LONG_PRESS_MS))
+                .unwrap_or(false);
+            if long {
+                if let Some(action) = kb.focused_action() {
+                    serial_writeln(usb, "BOOT long: key");
+                    if kb.apply(action, line) {
+                        let _ = usb.write_all(b"\r\n");
+                        return;
+                    }
+                    dirty = true;
+                }
+            } else {
+                kb.focus_next();
+                dirty = true;
+            }
         }
         boot_was_down = boot_down;
 
         match usb.read(&mut byte) {
             Ok(0) | Err(_) => {
-                Timer::after(Duration::from_millis(12)).await;
+                Timer::after(Duration::from_millis(16)).await;
             }
             Ok(_) => {
                 let c = byte[0];

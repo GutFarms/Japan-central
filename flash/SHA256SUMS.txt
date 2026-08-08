@@ -1,2 +1,2 @@
-806fc8ecfb8be48affedcb03cf6dea87a27cf0a595eb303ba53dd195c6b8b37b  esp32-2432s028-scrypt-miner.bin
-25c3caf54390fad5fb8e0befbabe8ef8a229d94e5a285e7306b195200caf8565  esp32-2432s028-scrypt-miner-merged.bin
+10f00a24635b73774724771347a9f465eb988aad96ceab294777f11c78af43e0  esp32-2432s028-scrypt-miner.bin
+1fd8a5dcdcf266e16c0812905f1e578534e886b4e5e2ef34adbfafc5cda5d8be  esp32-2432s028-scrypt-miner-merged.bin

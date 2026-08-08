@@ -47,6 +47,8 @@ pub struct Keyboard {
     pub layer: KeyLayer,
     /// Top of keyboard in screen pixels.
     pub origin_y: i32,
+    /// Focused key index for BOOT navigation (no-touch fallback).
+    pub focus: usize,
 }
 
 impl Default for Keyboard {
@@ -54,6 +56,7 @@ impl Default for Keyboard {
         Self {
             layer: KeyLayer::Lower,
             origin_y: 96,
+            focus: 0,
         }
     }
 }
@@ -151,18 +154,41 @@ impl Keyboard {
     pub fn hit_test(&self, p: TouchPoint) -> Option<KeyAction> {
         let x = p.x as i32;
         let y = p.y as i32;
-        // Small pad so near-miss taps still register on resistive panels.
-        const PAD: i32 = 3;
+        // Generous pad — resistive CYD taps often land slightly off-center.
+        const PAD: i32 = 8;
+        let mut best: Option<(i32, KeyAction)> = None;
         for key in self.keys() {
-            if x >= key.x - PAD
-                && x < key.x + key.w as i32 + PAD
-                && y >= key.y - PAD
-                && y < key.y + key.h as i32 + PAD
-            {
-                return Some(key.action);
+            let x0 = key.x - PAD;
+            let y0 = key.y - PAD;
+            let x1 = key.x + key.w as i32 + PAD;
+            let y1 = key.y + key.h as i32 + PAD;
+            if x >= x0 && x < x1 && y >= y0 && y < y1 {
+                let cx = key.x + key.w as i32 / 2;
+                let cy = key.y + key.h as i32 / 2;
+                let dist = (x - cx).abs() + (y - cy).abs();
+                if best.map(|(d, _)| dist < d).unwrap_or(true) {
+                    best = Some((dist, key.action));
+                }
             }
         }
-        None
+        best.map(|(_, a)| a)
+    }
+
+    pub fn focus_next(&mut self) {
+        let n = self.keys().len().max(1);
+        self.focus = (self.focus + 1) % n;
+    }
+
+    pub fn focused_action(&self) -> Option<KeyAction> {
+        self.keys().get(self.focus).map(|k| k.action)
+    }
+
+    /// Keep focus in range after layer changes.
+    pub fn clamp_focus(&mut self) {
+        let n = self.keys().len().max(1);
+        if self.focus >= n {
+            self.focus = n - 1;
+        }
     }
 
     /// Apply key. Returns `true` when the field is complete (Enter / Skip).
@@ -182,10 +208,12 @@ impl Keyboard {
             }
             KeyAction::Shift => {
                 self.layer = self.layer.toggle_shift();
+                self.clamp_focus();
                 false
             }
             KeyAction::Symbols => {
                 self.layer = self.layer.toggle_sym();
+                self.clamp_focus();
                 false
             }
             KeyAction::Enter => true,
@@ -247,23 +275,23 @@ pub fn hit_wifi_scan(p: TouchPoint, scroll: usize, count: usize) -> Option<WifiS
     let x = p.x as i32;
     let y = p.y as i32;
 
-    // Side scroll chevrons
-    if (8..40).contains(&x) && (200..224).contains(&y) {
+    // Side scroll chevrons (padded)
+    if (4..44).contains(&x) && (196..228).contains(&y) {
         return Some(WifiScanHit::ScrollUp);
     }
-    if (48..80).contains(&x) && (200..224).contains(&y) {
+    if (44..84).contains(&x) && (196..228).contains(&y) {
         return Some(WifiScanHit::ScrollDown);
     }
 
-    // Footer actions
-    if (200..224).contains(&y) {
-        if (88..160).contains(&x) {
+    // Footer actions (padded)
+    if (196..228).contains(&y) {
+        if (84..164).contains(&x) {
             return Some(WifiScanHit::Rescan);
         }
-        if (168..240).contains(&x) {
+        if (164..244).contains(&x) {
             return Some(WifiScanHit::TypeManual);
         }
-        if (248..312).contains(&x) {
+        if (244..316).contains(&x) {
             return Some(WifiScanHit::Skip);
         }
     }
@@ -274,7 +302,7 @@ pub fn hit_wifi_scan(p: TouchPoint, scroll: usize, count: usize) -> Option<WifiS
     let visible = WIFI_SCAN_VISIBLE.min(count.saturating_sub(scroll));
     for row in 0..visible {
         let top = WIFI_SCAN_ROW0_Y + row as i32 * WIFI_SCAN_ROW_H;
-        if (top..top + WIFI_SCAN_ROW_H - 2).contains(&y) && (8..312).contains(&x) {
+        if (top - 2..top + WIFI_SCAN_ROW_H).contains(&y) && (4..316).contains(&x) {
             return Some(WifiScanHit::Select(scroll + row));
         }
     }
@@ -292,19 +320,19 @@ pub enum GuiHit {
 pub fn hit_gui(p: TouchPoint, on_menu: bool) -> Option<GuiHit> {
     let x = p.x as i32;
     let y = p.y as i32;
-    if (28..54).contains(&y) {
+    if (24..58).contains(&y) {
         let tab = (x.clamp(0, 319) / 80) as usize;
         return Some(GuiHit::Tab(tab.min(3)));
     }
     if on_menu {
-        if (86..116).contains(&y) {
+        if (82..120).contains(&y) {
             return Some(GuiHit::MenuRow(0));
         }
-        if (122..152).contains(&y) {
+        if (118..156).contains(&y) {
             return Some(GuiHit::MenuRow(1));
         }
     }
-    if !on_menu && (60..200).contains(&y) && (8..312).contains(&x) {
+    if !on_menu && (56..204).contains(&y) && (4..316).contains(&x) {
         return Some(GuiHit::ChangeBanner);
     }
     None
@@ -334,6 +362,20 @@ mod tests {
             y: (kb.origin_y + 4 * 28 + 10) as u16,
         };
         assert_eq!(kb.hit_test(p), Some(KeyAction::Enter));
+    }
+
+    #[test]
+    fn boot_focus_cycles_and_activates() {
+        let mut kb = Keyboard::default();
+        let first = kb.focused_action();
+        kb.focus_next();
+        assert_ne!(kb.focused_action(), first);
+        let mut s: heapless::String<128> = heapless::String::new();
+        // Focus Enter (last action keys) by jumping near end.
+        kb.focus = kb.keys().len() - 2; // OK / Enter is typically near end
+        if let Some(KeyAction::Enter) = kb.focused_action() {
+            assert!(kb.apply(KeyAction::Enter, &mut s));
+        }
     }
 
     #[test]
