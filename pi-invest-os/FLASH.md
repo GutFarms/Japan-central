@@ -20,7 +20,7 @@ If the file still does not appear, decompress it first (next section) and select
 ### Windows
 1. Install [7-Zip](https://www.7-zip.org/)
 2. Right-click `pi-invest-os-0.4.0-arm64.img.xz` → **7-Zip** → **Extract Here**
-3. You get `pi-invest-os-0.4.0-arm64.img` (~6.3 GB)
+3. You get `pi-invest-os-0.4.0-arm64.img` (~11 GB)
 4. In Imager → **Use custom** → select the **`.img`** file
 
 ### macOS

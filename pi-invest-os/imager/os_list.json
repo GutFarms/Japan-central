@@ -5,14 +5,18 @@
     "devices": [
       {
         "name": "Raspberry Pi 5",
-        "tags": ["pi5-64bit"],
+        "tags": [
+          "pi5-64bit"
+        ],
         "icon": "https://downloads.raspberrypi.com/imager/icons/RPi_5.png",
         "description": "Raspberry Pi 5",
         "matching_type": "exclusive"
       },
       {
         "name": "Raspberry Pi 4",
-        "tags": ["pi4-64bit"],
+        "tags": [
+          "pi4-64bit"
+        ],
         "icon": "https://downloads.raspberrypi.com/imager/icons/RPi_4.png",
         "description": "Raspberry Pi 4 / 400",
         "matching_type": "exclusive"
@@ -21,18 +25,21 @@
   },
   "os_list": [
     {
-      "name": "Pi Invest OS 0.3.0",
-      "description": "Income agent appliance — Chromium kiosk, auto-update, paper trading (Raspberry Pi 5)",
+      "name": "Pi Invest OS 0.4.0",
+      "description": "Income agent appliance with Raspberry Pi desktop, Chromium, auto-update (Pi 5)",
       "icon": "https://downloads.raspberrypi.com/raspios_lite_arm64/Raspberry_Pi_OS_Logo_256px.png",
-      "url": "https://github.com/GutFarms/Japan-central/releases/download/pi-invest-os-v0.3.0/pi-invest-os-0.3.0-arm64.img.xz",
-      "extract_size": 6736052224,
-      "extract_sha256": "e3c67687d0647593720f980c7b8fd33e59dbca84af68790da11f10af557aba97",
-      "image_download_size": 525522064,
-      "image_download_sha256": "c14beb311c34d7a261d13ba1761023129cb6b89dd4e69be0d904bca8249e6ca4",
-      "release_date": "2026-08-07",
-      "devices": ["pi5-64bit", "pi4-64bit"],
+      "url": "https://github.com/GutFarms/Japan-central/releases/download/pi-invest-os-v0.4.0/pi-invest-os-0.4.0-arm64.img.xz",
+      "extract_size": 11567890432,
+      "extract_sha256": "eae9f6d22c956f9b8b65929fe7737d3eb593d211b33f436cc543405eb51c6325",
+      "image_download_size": 526226432,
+      "image_download_sha256": "7252eed50accfc5fb4e9f5ef35491a2ba4a53ee5731b96d17ead16ac1645ed78",
+      "release_date": "2026-08-08",
+      "devices": [
+        "pi5-64bit",
+        "pi4-64bit"
+      ],
       "init_format": "cloudinit-rpi",
-      "website": "https://github.com/GutFarms/Japan-central/releases/tag/pi-invest-os-v0.3.0"
+      "website": "https://github.com/GutFarms/Japan-central/releases/tag/pi-invest-os-v0.4.0"
     }
   ]
 }
