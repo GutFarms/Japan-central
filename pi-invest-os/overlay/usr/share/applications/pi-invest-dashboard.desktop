@@ -1,0 +1,15 @@
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=Pi Invest Dashboard
+GenericName=Investment Dashboard
+Comment=Open the local Pi Invest agent dashboard
+Exec=/usr/local/bin/pi-invest-dashboard
+TryExec=/usr/local/bin/pi-invest-dashboard
+Icon=utilities-system-monitor
+Terminal=false
+Categories=Network;Finance;Office;
+Keywords=invest;pi;trading;dashboard;wallet;
+StartupNotify=true
+StartupWMClass=chromium
+X-GNOME-UsesNotifications=false

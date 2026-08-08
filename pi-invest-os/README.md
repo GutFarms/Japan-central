@@ -7,8 +7,9 @@
 | Item | Detail |
 |---|---|
 | Base OS | Raspberry Pi OS **64-bit** (Trixie) |
-| Desktop | Official **Wayland / labwc** desktop (`rpd-wayland-core`) with autologin |
-| Browser | Chromium — dashboard opens on login + Desktop icon |
+| Desktop | Official **Wayland / labwc** desktop with autologin |
+| App menu | **Pi Invest Dashboard** local application (`pi-invest-dashboard`) |
+| Browser | Chromium opens the dashboard from the menu / Desktop icon |
 | Hostname | `pi-invest` |
 | Agent | `/opt/pi-invest-agent` paper trading + local dashboard |
 | Auto-update | Daily GitHub pull of the agent |

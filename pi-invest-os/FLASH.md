@@ -59,8 +59,8 @@ A failed GitHub download is sometimes saved as an HTML error page (small file). 
 
 | File | Expected size |
 |---|---|
-| `.img.xz` | ~501 MB (525,522,064 bytes) |
-| `.img` (after extract) | ~6.3 GB |
+| `.img.xz` | ~502 MB (~526,226,432 bytes) |
+| `.img` (after extract) | ~11 GB |
 
 ```bash
 # Linux / macOS

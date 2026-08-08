@@ -142,38 +142,61 @@ chown -R "$TARGET_USER:$TARGET_USER" "$AGENT_ROOT"
 mkdir -p "$AGENT_ROOT/data"
 chown "$TARGET_USER:$TARGET_USER" "$AGENT_ROOT/data"
 
-# Desktop launcher + autostart dashboard in a window
+# System application + Desktop / autostart launchers
+install -d -m 755 /usr/local/bin /usr/share/applications
+if [[ ! -x /usr/local/bin/pi-invest-dashboard ]]; then
+  cat >/usr/local/bin/pi-invest-dashboard <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+URL="${PI_INVEST_KIOSK_URL:-http://127.0.0.1:8787}"
+systemctl start pi-invest-dashboard.service 2>/dev/null || true
+for _ in $(seq 1 45); do
+  curl -fsS --max-time 2 "$URL/api/health" >/dev/null 2>&1 && break
+  sleep 1
+done
+BROWSER="$(command -v chromium || command -v chromium-browser || command -v xdg-open)"
+exec "$BROWSER" --new-window --app="$URL"
+EOF
+  chmod 755 /usr/local/bin/pi-invest-dashboard
+fi
+if [[ ! -f /usr/share/applications/pi-invest-dashboard.desktop ]]; then
+  cat >/usr/share/applications/pi-invest-dashboard.desktop <<'EOF'
+[Desktop Entry]
+Type=Application
+Name=Pi Invest Dashboard
+Comment=Open the local Pi Invest agent dashboard
+Exec=/usr/local/bin/pi-invest-dashboard
+Icon=utilities-system-monitor
+Terminal=false
+Categories=Network;Finance;Office;
+StartupNotify=true
+EOF
+fi
 mkdir -p \
   "$TARGET_HOME/Desktop" \
   "$TARGET_HOME/.local/share/applications" \
   "$TARGET_HOME/.config/autostart"
-cat >"$TARGET_HOME/.local/share/applications/pi-invest-dashboard.desktop" <<EOF
-[Desktop Entry]
-Type=Application
-Name=Pi Invest Dashboard
-Comment=Open the local Pi Invest dashboard
-Exec=chromium --app=http://127.0.0.1:8787 --new-window
-Icon=chromium
-Terminal=false
-Categories=Network;Finance;
-StartupNotify=true
-EOF
-cp "$TARGET_HOME/.local/share/applications/pi-invest-dashboard.desktop" \
-  "$TARGET_HOME/Desktop/" 2>/dev/null || true
-# Autostart on login (waits briefly for the local dashboard service)
-cat >"$TARGET_HOME/.config/autostart/pi-invest-dashboard.desktop" <<EOF
-[Desktop Entry]
-Type=Application
-Name=Pi Invest Dashboard
-Comment=Auto-open dashboard after login
-Exec=/bin/bash -lc 'for i in \$(seq 1 60); do curl -fsS http://127.0.0.1:8787/api/health >/dev/null 2>&1 && break; sleep 2; done; exec chromium --app=http://127.0.0.1:8787 --new-window'
-Icon=chromium
-Terminal=false
-X-GNOME-Autostart-enabled=true
-EOF
+install -m 644 /usr/share/applications/pi-invest-dashboard.desktop \
+  "$TARGET_HOME/.local/share/applications/pi-invest-dashboard.desktop"
+install -m 755 /usr/share/applications/pi-invest-dashboard.desktop \
+  "$TARGET_HOME/Desktop/pi-invest-dashboard.desktop"
+install -m 644 /usr/share/applications/pi-invest-dashboard.desktop \
+  "$TARGET_HOME/.config/autostart/pi-invest-dashboard.desktop"
+if command -v gio >/dev/null 2>&1; then
+  sudo -u "$TARGET_USER" gio set \
+    "$TARGET_HOME/Desktop/pi-invest-dashboard.desktop" \
+    metadata::trusted true 2>/dev/null || true
+fi
 chown -R "$TARGET_USER:$TARGET_USER" "$TARGET_HOME/Desktop" \
   "$TARGET_HOME/.local" "$TARGET_HOME/.config" 2>/dev/null || true
-chmod +x "$TARGET_HOME/Desktop/pi-invest-dashboard.desktop" 2>/dev/null || true
+update-desktop-database /usr/share/applications 2>/dev/null || true
+
+# Allow the desktop app to start the dashboard service without a password prompt
+cat >/etc/sudoers.d/pi-invest-dashboard <<EOF
+# Managed by Pi Invest OS — start local dashboard from the menu app
+${TARGET_USER} ALL=(root) NOPASSWD: /usr/bin/systemctl start pi-invest-dashboard.service, /usr/bin/systemctl restart pi-invest-dashboard.service, /bin/systemctl start pi-invest-dashboard.service, /bin/systemctl restart pi-invest-dashboard.service
+EOF
+chmod 440 /etc/sudoers.d/pi-invest-dashboard
 
 cat > /etc/systemd/system/pi-invest.service <<EOF
 [Unit]

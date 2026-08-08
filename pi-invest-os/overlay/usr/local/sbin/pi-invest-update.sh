@@ -80,6 +80,22 @@ if [[ -f "$TMP/repo/pi-invest-os/overlay/usr/local/sbin/pi-invest-kiosk.sh" ]]; 
   install -m 755 "$TMP/repo/pi-invest-os/overlay/usr/local/sbin/pi-invest-kiosk.sh" \
     /usr/local/sbin/pi-invest-kiosk.sh
 fi
+if [[ -f "$TMP/repo/pi-invest-os/overlay/usr/local/bin/pi-invest-dashboard" ]]; then
+  install -d -m 755 /usr/local/bin /usr/share/applications
+  install -m 755 "$TMP/repo/pi-invest-os/overlay/usr/local/bin/pi-invest-dashboard" \
+    /usr/local/bin/pi-invest-dashboard
+fi
+if [[ -f "$TMP/repo/pi-invest-os/overlay/usr/share/applications/pi-invest-dashboard.desktop" ]]; then
+  install -m 644 \
+    "$TMP/repo/pi-invest-os/overlay/usr/share/applications/pi-invest-dashboard.desktop" \
+    /usr/share/applications/pi-invest-dashboard.desktop
+  update-desktop-database /usr/share/applications 2>/dev/null || true
+fi
+if [[ -f "$TMP/repo/pi-invest-os/scripts/install-desktop-app.sh" ]]; then
+  install -m 755 "$TMP/repo/pi-invest-os/scripts/install-desktop-app.sh" \
+    /usr/local/sbin/pi-invest-install-desktop-app.sh
+  /usr/local/sbin/pi-invest-install-desktop-app.sh || true
+fi
 
 chown -R "${TARGET_USER}:${TARGET_USER}" "$AGENT_ROOT"
 

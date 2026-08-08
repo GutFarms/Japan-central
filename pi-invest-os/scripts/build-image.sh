@@ -148,13 +148,20 @@ install -m 644 "$ROOT/overlay/etc/systemd/system/pi-invest-dashboard.service" \
 chown -R 1000:1000 "$MNT_ROOT/opt/pi-invest-agent" 2>/dev/null || true
 
 echo "==> Applying OS overlay"
-install -d -m 755 "$MNT_ROOT/usr/local/sbin"
+install -d -m 755 "$MNT_ROOT/usr/local/sbin" "$MNT_ROOT/usr/local/bin" \
+  "$MNT_ROOT/usr/share/applications"
 install -m 755 "$ROOT/overlay/usr/local/sbin/pi-invest-firstboot.sh" \
   "$MNT_ROOT/usr/local/sbin/pi-invest-firstboot.sh"
 install -m 755 "$ROOT/overlay/usr/local/sbin/pi-invest-update.sh" \
   "$MNT_ROOT/usr/local/sbin/pi-invest-update.sh"
 install -m 755 "$ROOT/overlay/usr/local/sbin/pi-invest-kiosk.sh" \
   "$MNT_ROOT/usr/local/sbin/pi-invest-kiosk.sh"
+install -m 755 "$ROOT/overlay/usr/local/bin/pi-invest-dashboard" \
+  "$MNT_ROOT/usr/local/bin/pi-invest-dashboard"
+install -m 644 "$ROOT/overlay/usr/share/applications/pi-invest-dashboard.desktop" \
+  "$MNT_ROOT/usr/share/applications/pi-invest-dashboard.desktop"
+install -m 755 "$ROOT/scripts/install-desktop-app.sh" \
+  "$MNT_ROOT/usr/local/sbin/pi-invest-install-desktop-app.sh"
 install -d -m 755 "$MNT_ROOT/etc/systemd/system"
 for unit in \
   pi-invest-firstboot.service \
