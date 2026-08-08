@@ -33,13 +33,28 @@ curl -fsSL https://raw.githubusercontent.com/GutFarms/Japan-central/cursor/pi-in
 
 ## Verify
 
+**Browser UI is the dashboard, not Ollama:**
+
+| URL | What it is |
+|---|---|
+| `http://127.0.0.1:8787` | Pi Invest dashboard (open this in Chromium) |
+| `http://127.0.0.1:11434` | Ollama **API only** — not a website (browser will look “broken”) |
+
+Check the API from a terminal instead:
+
 ```bash
+curl -s http://127.0.0.1:11434/api/tags
 systemctl is-active ollama pi-invest pi-invest-dashboard
 ollama list
 cd /opt/pi-invest-agent && . .venv/bin/activate && pi-invest status
 ```
 
-You should see `Local-only AI` with `ollama` and `simulator` / `paper`.
+You should see `Local-only AI` with `ollama` and `simulator` / `paper`. If Ollama is down:
+
+```bash
+sudo systemctl enable --now ollama
+sudo pi-invest-setup-local-ai.sh
+```
 
 ## Optional: live public quotes
 
