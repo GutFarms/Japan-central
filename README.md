@@ -3,16 +3,15 @@
 Firmware and host agent for an **ESP32 Cheap Yellow Display (CYD)** that shows live PC and GPU performance on a blue-hued landscape HUD.
 
 ```
-┌──────────────────────────────────────┐
-│ CYD   DESKTOP              [LINKED]  │
-│ CPU   42%                     61C    │
-│ ████████░░░░░░░░░░░░░░░░░░░░░░░░░░  │
-│ GPU   71%                     68C    │
-│ ██████████████░░░░░░░░░░░░░░░░░░░░  │
-│ RAM   58%                            │
-│ VRAM  44%                            │
-│ 192.168.1.50:4210           144 FPS  │
-└──────────────────────────────────────┘
+╭────────── CYD  DESKTOP  ● LIVE ──────────╮
+│  ╭─ CPU ── 61C ─╮   ╭─ GPU ── 68C ─╮    │
+│  │     42%      │   │     71%      │    │
+│  │  ●━━━━━━○    │   │  ●━━━━━━━━○  │    │
+│  ╰──────────────╯   ╰──────────────╯    │
+│  ╭─ RAM ────────╮   ╭─ VRAM ───────╮    │
+│  │     58%      │   │     44%      │    │
+│  ╰──────────────╯   ╰──────────────╯    │
+╰────── USB serial ──────── 144 FPS ───────╯
 ```
 
 ## What's in this workspace
