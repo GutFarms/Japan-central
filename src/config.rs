@@ -38,12 +38,13 @@ pub enum SetupField {
 }
 
 impl SetupField {
+    /// First-time / change-credentials order: **WiFi first**, then pool, then BLE.
     pub const ALL: [SetupField; 6] = [
+        SetupField::WifiSsid,
+        SetupField::WifiPassword,
         SetupField::Address,
         SetupField::Password,
         SetupField::Stratum,
-        SetupField::WifiSsid,
-        SetupField::WifiPassword,
         SetupField::BleName,
     ];
 
@@ -70,7 +71,7 @@ impl SetupField {
             SetupField::Address => "Wallet address (worker name OK)",
             SetupField::Password => "Pool password (often 'x')",
             SetupField::Stratum => "Stratum location (host:port)",
-            SetupField::WifiSsid => "WiFi SSID (- to skip)",
+            SetupField::WifiSsid => "WiFi SSID first (- to skip)",
             SetupField::WifiPassword => "WiFi password (empty=open)",
             SetupField::BleName => "BLE name (- to skip; saves RAM with WiFi)",
         }
@@ -90,12 +91,24 @@ impl SetupField {
 
     pub fn next(self) -> Option<SetupField> {
         match self {
+            SetupField::WifiSsid => Some(SetupField::WifiPassword),
+            SetupField::WifiPassword => Some(SetupField::Address),
             SetupField::Address => Some(SetupField::Password),
             SetupField::Password => Some(SetupField::Stratum),
-            SetupField::Stratum => Some(SetupField::WifiSsid),
-            SetupField::WifiSsid => Some(SetupField::WifiPassword),
-            SetupField::WifiPassword => Some(SetupField::BleName),
+            SetupField::Stratum => Some(SetupField::BleName),
             SetupField::BleName => None,
+        }
+    }
+
+    /// 1-based step index in [`SetupField::ALL`].
+    pub fn step_number(self) -> u8 {
+        match self {
+            SetupField::WifiSsid => 1,
+            SetupField::WifiPassword => 2,
+            SetupField::Address => 3,
+            SetupField::Password => 4,
+            SetupField::Stratum => 5,
+            SetupField::BleName => 6,
         }
     }
 }

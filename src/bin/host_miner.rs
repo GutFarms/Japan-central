@@ -220,6 +220,9 @@ fn prompt_secret(label: &str) -> String {
 
 fn prompt_all_fields(cfg: &mut PoolConfig) {
     for field in SetupField::ALL {
+        if field == SetupField::WifiPassword && !cfg.wifi_enabled() {
+            continue;
+        }
         prompt_field(cfg, field);
     }
 }

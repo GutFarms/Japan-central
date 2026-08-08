@@ -240,14 +240,7 @@ impl<'a, D: DelayNs> Display<'a, D> {
         self.last_screen = None;
         self.header_bar("SETUP")?;
 
-        let step_n = match field {
-            SetupField::Address => 1,
-            SetupField::Password => 2,
-            SetupField::Stratum => 3,
-            SetupField::WifiSsid => 4,
-            SetupField::WifiPassword => 5,
-            SetupField::BleName => 6,
-        };
+        let step_n = field.step_number();
         for i in 1..=6u8 {
             let x = 12 + (i as i32 - 1) * 18;
             let color = if i < step_n {

@@ -6,7 +6,7 @@ Bare-metal Rust firmware that mines **scrypt** proof-of-work on an **ESP32-2432S
 
 - Runs Litecoin-style scrypt: prefer **`N=64` (`lite`)** on this board; full `N=1024` is too RAM-heavy with WiFi
 - Reuses ROMix buffers across hashes
-- **After boot**, prompts over USB serial (CH340 / UART0) for **address**, **password**, **stratum**, optional **WiFi**, and **BLE name**
+- **After boot**, prompts (touch keyboard or USB serial) for **WiFi first**, then **address** / **password** / **stratum**, then optional **BLE**
 - Starts **WiFi STA + DHCP** when an SSID is set; **BLE** is opt-in (`ble_name`, or `-` to skip)
 - **Stratum TCP client** over WiFi: subscribe, authorize, receive jobs, submit shares
 - **LAN web UI** at `http://<board-ip>/` after DHCP (status dashboard + JSON)
@@ -34,13 +34,13 @@ When WiFi is configured, the firmware connects to `stratum` (`host:port` or `str
 
 ## Post-boot credentials (saved to flash)
 
-On **first boot**, open the serial monitor (115200) and enter:
+On **first boot**, use the **touch keyboard** or serial monitor (115200):
 
-1. `address` — wallet address or worker name  
-2. `password` — pool password (often `x`)  
-3. `stratum` — pool location, e.g. `stratum.example.com:3333`  
-4. `wifi_ssid` — AP name, or `-` / `skip` to disable WiFi  
-5. `wifi_password` — PSK (empty = open network)  
+1. `wifi_ssid` — AP name, or `-` / `skip` to disable WiFi  
+2. `wifi_password` — PSK (empty = open; skipped if WiFi off)  
+3. `address` — wallet address or worker name  
+4. `password` — pool password (often `x`)  
+5. `stratum` — pool location, e.g. `stratum.example.com:3333`  
 6. `ble_name` — advertised name, or `-` / empty to **skip BLE** (recommended)
 
 ### Change credentials (password required)
