@@ -24,17 +24,34 @@ def main() -> int:
     payload = collect_metrics(gpu, "SMOKE")
     gpu.close()
 
-    required = {"v", "cpu", "cpu_temp", "ram", "gpu", "gpu_temp", "vram", "fps", "host"}
+    required = {
+        "v",
+        "cpu",
+        "cpu_temp",
+        "ram",
+        "gpu",
+        "gpu_temp",
+        "vram",
+        "disk",
+        "swap",
+        "net_up",
+        "net_down",
+        "fps",
+        "host",
+    }
     missing = required - set(payload)
     assert not missing, f"missing keys: {missing}"
     assert payload["v"] == 1
     assert payload["host"] == "SMOKE"
     assert 0.0 <= payload["cpu"] <= 100.0
     assert 0.0 <= payload["ram"] <= 100.0
+    assert 0.0 <= payload["disk"] <= 100.0
 
     line = encode_metrics(payload) + b"\n"
     assert len(line) <= 512, f"packet too large: {len(line)}"
     assert line.endswith(b"\n")
+    wire = json.loads(line.decode())
+    assert "disk" in wire and "net_down" in wire
 
     # pick_best_port should be safe with zero devices.
     _ = pick_best_port()

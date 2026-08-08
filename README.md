@@ -4,14 +4,11 @@ Firmware and host agent for an **ESP32 Cheap Yellow Display (CYD)** that shows l
 
 ```
 ╭────────── CYD  DESKTOP  ● LIVE ──────────╮
-│  ╭─ CPU ── 61C ─╮   ╭─ GPU ── 68C ─╮    │
-│  │     42%      │   │     71%      │    │
-│  │  ●━━━━━━○    │   │  ●━━━━━━━━○  │    │
-│  ╰──────────────╯   ╰──────────────╯    │
-│  ╭─ RAM ────────╮   ╭─ VRAM ───────╮    │
-│  │     58%      │   │     44%      │    │
-│  ╰──────────────╯   ╰──────────────╯    │
-╰────── USB serial ──────── 144 FPS ───────╯
+│   (CPU dial)         (GPU dial)         │
+│      42% / 61C          71% / 68C       │
+│   (RAM dial)         (VRAM dial)        │
+│      58%                44%             │
+╰── Disk 62%  Net 8.5Mb  USB serial ──────╯
 ```
 
 ## What's in this workspace
@@ -59,7 +56,7 @@ On boot the display is ready for **USB serial @ 115200** immediately; Wi‑Fi/UD
 
 ## Host application (auto USB)
 
-Downloadable app that **auto-detects** the CYD over USB and streams metrics:
+Downloadable app with **speedometer dials**, a **Settings** tab, and **tray / background** mode. It auto-detects the CYD over USB (no terminal window on Windows):
 
 | File | Platform |
 | --- | --- |

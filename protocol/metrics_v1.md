@@ -1,30 +1,17 @@
 # Metrics protocol v1
 
-JSON metrics from the PC host agent to the ESP32-CYD firmware.
+JSON metrics from the PC host agent / desktop app to the ESP32-CYD firmware.
 
 ## Transports
 
-Both transports share the same JSON schema. Use either or both at once.
-
-### USB serial (recommended for direct PC link)
+### USB serial (recommended)
 
 | Field | Value |
 | --- | --- |
-| Interface | USB CDC / UART (`Serial` on the CYD) |
-| Baud | `115200` |
-| Framing | **NDJSON** — one UTF-8 JSON object per line, terminated by `\n` |
+| Interface | USB CDC / UART |
+| Baud | `115200` (configurable in app Settings) |
+| Framing | NDJSON — one UTF-8 JSON object per line (`\n`) |
 | Max line | ≤ 512 bytes |
-| Suggested rate | 2 Hz (every 500 ms) |
-| ACK | Firmware replies with `{"ok":1}` after a valid line |
-
-Host examples:
-
-```bash
-python agent.py --serial COM3
-python agent.py --serial /dev/ttyUSB0
-python agent.py --serial auto
-python agent.py --list-ports
-```
 
 ### Wi‑Fi UDP
 
@@ -32,19 +19,7 @@ python agent.py --list-ports
 | --- | --- |
 | Protocol | UDP |
 | Default port | `4210` |
-| Encoding | UTF-8 JSON, single object per datagram |
-| Max size | ≤ 512 bytes |
-| Suggested rate | 2 Hz (every 500 ms) |
-
-```bash
-python agent.py --host 192.168.1.50
-```
-
-USB + UDP together:
-
-```bash
-python agent.py --serial auto --host 192.168.1.50
-```
+| Encoding | UTF-8 JSON datagram |
 
 ## Schema
 
@@ -57,7 +32,11 @@ python agent.py --serial auto --host 192.168.1.50
   "gpu": 71.0,
   "gpu_temp": 68.0,
   "vram": 44.0,
-  "fps": 144,
+  "disk": 62.0,
+  "swap": 10.0,
+  "net_up": 1.25,
+  "net_down": 8.5,
+  "fps": 0,
   "host": "DESKTOP"
 }
 ```
@@ -65,17 +44,12 @@ python agent.py --serial auto --host 192.168.1.50
 | Key | Type | Unit | Notes |
 | --- | --- | --- | --- |
 | `v` | int | — | Protocol version (`1`) |
-| `cpu` | number | % | 0–100 CPU utilization |
-| `cpu_temp` | number | °C | `0` if unavailable |
-| `ram` | number | % | 0–100 system RAM used |
-| `gpu` | number | % | 0–100 GPU utilization |
-| `gpu_temp` | number | °C | `0` if unavailable |
-| `vram` | number | % | 0–100 VRAM used |
-| `fps` | int | fps | Optional; `0` hides FPS in footer |
-| `host` | string | — | Max 23 chars; label in header |
+| `cpu` / `gpu` / `ram` / `vram` / `disk` / `swap` | number | % | 0–100 |
+| `cpu_temp` / `gpu_temp` | number | °C | `0` if unavailable |
+| `net_up` / `net_down` | number | Mbps | instantaneous rates |
+| `fps` | int | fps | optional |
+| `host` | string | — | max 23 chars |
 
-Unknown keys are ignored. Missing keys keep the previous on-device value.
+Unknown keys are ignored. Missing keys keep previous on-device values.
 
-## Stale link
-
-If no valid packet arrives for **3 seconds**, the firmware shows `WAIT` and keeps the last painted values until the next packet. The footer shows `USB serial` or `WiFi UDP` based on the last successful source.
+The desktop app may collect richer local fields (`cpu_mhz`, `ram_used_gb`, …) for its own dials; the wire payload stays compact for the CYD.

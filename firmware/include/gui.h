@@ -11,19 +11,17 @@ class MonitorGui {
   void showBoot(TFT_eSPI &tft, const char *message);
 
  private:
-  struct BubbleCache {
+  struct DialCache {
     float pct = -1.0f;
     float temp = -1.0f;
-    bool hasTemp = false;
     bool drawn = false;
   };
 
   void drawDecor(TFT_eSPI &tft);
   void drawHeader(TFT_eSPI &tft, const char *host, bool linked);
   void drawFooter(TFT_eSPI &tft, const SystemMetrics &m, const char *statusLine);
-  void drawMetricBubble(TFT_eSPI &tft, int index, const char *label, float pct,
-                        float tempC, bool hasTemp, bool force);
-  void drawCapsuleBar(TFT_eSPI &tft, int x, int y, int w, int h, float pct);
+  void drawDial(TFT_eSPI &tft, int index, const char *label, float pct, float tempC, bool showTemp, bool force);
+  void drawArcSpan(TFT_eSPI &tft, int cx, int cy, int r, float startDeg, float endDeg, uint16_t color, int width);
   void drawSoftBubble(TFT_eSPI &tft, int x, int y, int w, int h, uint16_t fill);
 
   bool chromeDrawn_ = false;
@@ -31,5 +29,7 @@ class MonitorGui {
   bool lastLinked_ = false;
   char lastStatus_[48] = "";
   uint16_t lastFps_ = 0xFFFF;
-  BubbleCache bubbles_[4];
+  float lastDisk_ = -1.0f;
+  float lastNetDown_ = -1.0f;
+  DialCache dials_[4];
 };

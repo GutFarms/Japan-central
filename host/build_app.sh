@@ -20,6 +20,11 @@ pyinstaller \
   --hidden-import serial.tools.list_ports \
   --hidden-import pynvml \
   --hidden-import cyd_core \
+  --hidden-import pystray \
+  --hidden-import PIL \
+  --hidden-import PIL.Image \
+  --hidden-import PIL.ImageDraw \
+  --collect-all pystray \
   desktop_app.py
 
 mkdir -p release

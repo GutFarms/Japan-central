@@ -11,7 +11,6 @@ bool parseMetricsJson(const char *json, size_t len, SystemMetrics &out) {
     return false;
   }
 
-  // Accept v=1 payloads; ignore unknown future versions gracefully if fields exist.
   const int version = doc["v"] | 1;
   if (version < 1) {
     return false;
@@ -23,6 +22,10 @@ bool parseMetricsJson(const char *json, size_t len, SystemMetrics &out) {
   out.gpuLoad = doc["gpu"] | out.gpuLoad;
   out.gpuTemp = doc["gpu_temp"] | out.gpuTemp;
   out.vramUsed = doc["vram"] | out.vramUsed;
+  out.diskUsed = doc["disk"] | out.diskUsed;
+  out.swapUsed = doc["swap"] | out.swapUsed;
+  out.netUp = doc["net_up"] | out.netUp;
+  out.netDown = doc["net_down"] | out.netDown;
   out.fps = doc["fps"] | out.fps;
 
   const char *host = doc["host"] | "PC";

@@ -1,38 +1,35 @@
 # CYD Monitor — downloadable host app
 
-Auto-connects to an ESP32-CYD over USB and streams PC/GPU metrics.
+Auto-connects to an ESP32-CYD over USB, shows **speedometer dials**, and streams PC/GPU metrics in the background.
 
-## Options
+## Download
 
-### 1) Portable zip (Windows / Linux / macOS)
+| File | Platform |
+| --- | --- |
+| `CYD-Monitor-portable.zip` | Windows / Linux / macOS |
+| `CYD-Monitor` | Linux standalone (no Python) |
 
-Download **`CYD-Monitor-portable.zip`**, unzip, then:
+### Windows
+1. Unzip `CYD-Monitor-portable.zip`
+2. Double-click **`CYD Monitor.bat`**
+3. First run installs a local `.venv` (needs [Python 3](https://www.python.org/downloads/))
+4. App opens **without a terminal window** (`pythonw`)
 
-- **Windows:** double-click `CYD Monitor.bat`  
-  (first run installs a local `.venv` — needs Python 3 from python.org)
-- **Linux/macOS:**
-  ```bash
-  chmod +x CYD-Monitor.sh
-  ./CYD-Monitor.sh
-  ```
-
-### 2) Standalone binary (Linux)
-
-Run **`CYD-Monitor`** directly (no Python install needed):
-
+### Linux
 ```bash
 chmod +x CYD-Monitor
 ./CYD-Monitor
+# or from the portable zip:
+./CYD-Monitor.sh
 ```
 
-> Windows `.exe` builds need to be produced on a Windows machine:
-> `build_app.sh` / PyInstaller with the same `desktop_app.py` entrypoint.
+## Features
+- Speedometer dials for CPU / GPU / RAM / VRAM
+- Extra PC stats: disk, swap, network Mbps, CPU MHz, RAM GB, uptime
+- **Settings** tab: port, baud, interval, host label, optional UDP, tray behavior
+- Minimize / close to **system tray** (background streaming)
+- Window is freely resizable
+- Auto USB detect + reconnect
 
-## Behavior
-
-1. Scans USB serial ports for CYD-like adapters (CP210x, CH340, CH9102, FTDI, Espressif)
-2. Opens the best match at **115200** baud
-3. Streams NDJSON metrics every 0.5s
-4. Auto-reconnects if the cable is unplugged
-
-Plug the CYD in over USB, launch the app, and leave it running.
+## Pair with firmware
+Flash `firmware/release/esp32-cyd-pc-monitor-merged.bin`, plug USB, launch the app.

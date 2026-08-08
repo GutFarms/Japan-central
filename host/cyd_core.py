@@ -8,6 +8,7 @@ import sys
 import time
 import warnings
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Optional
 
 import psutil
@@ -66,9 +67,45 @@ _CYD_KEYWORDS = (
     "usb_serial",
 )
 
+_SETTINGS_PATH = Path.home() / ".cyd_monitor_settings.json"
+
+_DEFAULT_SETTINGS: dict[str, Any] = {
+    "interval": 0.5,
+    "baud": 115200,
+    "auto_reconnect": True,
+    "start_minimized": False,
+    "close_to_tray": True,
+    "host_name": "",
+    "preferred_port": "",
+    "udp_host": "",
+    "udp_port": 4210,
+    "gpu_index": 0,
+}
+
 
 def clamp_pct(value: float) -> float:
     return max(0.0, min(100.0, float(value)))
+
+
+def load_settings() -> dict[str, Any]:
+    data = dict(_DEFAULT_SETTINGS)
+    try:
+        if _SETTINGS_PATH.exists():
+            loaded = json.loads(_SETTINGS_PATH.read_text(encoding="utf-8"))
+            if isinstance(loaded, dict):
+                data.update(loaded)
+    except Exception:  # noqa: BLE001
+        pass
+    return data
+
+
+def save_settings(settings: dict[str, Any]) -> None:
+    merged = dict(_DEFAULT_SETTINGS)
+    merged.update(settings)
+    try:
+        _SETTINGS_PATH.write_text(json.dumps(merged, indent=2), encoding="utf-8")
+    except Exception:  # noqa: BLE001
+        pass
 
 
 def cpu_temperature_c() -> float:
@@ -93,6 +130,7 @@ class GpuReader:
         self.enabled = False
         self.handle = None
         self.name = ""
+        self.vram_total_mb = 0.0
         if not _HAS_NVML:
             return
         try:
@@ -100,6 +138,8 @@ class GpuReader:
             self.handle = nvmlDeviceGetHandleByIndex(index)
             raw = nvmlDeviceGetName(self.handle)
             self.name = raw.decode() if isinstance(raw, bytes) else str(raw)
+            mem = nvmlDeviceGetMemoryInfo(self.handle)
+            self.vram_total_mb = float(mem.total) / (1024.0 * 1024.0)
             self.enabled = True
         except Exception as exc:  # noqa: BLE001
             print(f"[warn] NVIDIA GPU unavailable: {exc}", file=sys.stderr)
@@ -107,7 +147,7 @@ class GpuReader:
 
     def read(self) -> dict[str, float]:
         if not self.enabled or self.handle is None:
-            return {"gpu": 0.0, "gpu_temp": 0.0, "vram": 0.0}
+            return {"gpu": 0.0, "gpu_temp": 0.0, "vram": 0.0, "vram_used_mb": 0.0}
         try:
             util = nvmlDeviceGetUtilizationRates(self.handle)
             mem = nvmlDeviceGetMemoryInfo(self.handle)
@@ -117,10 +157,11 @@ class GpuReader:
                 "gpu": clamp_pct(util.gpu),
                 "gpu_temp": float(temp),
                 "vram": clamp_pct(vram_pct),
+                "vram_used_mb": float(mem.used) / (1024.0 * 1024.0),
             }
         except Exception as exc:  # noqa: BLE001
             print(f"[warn] GPU read failed: {exc}", file=sys.stderr)
-            return {"gpu": 0.0, "gpu_temp": 0.0, "vram": 0.0}
+            return {"gpu": 0.0, "gpu_temp": 0.0, "vram": 0.0, "vram_used_mb": 0.0}
 
     def close(self) -> None:
         if self.enabled:
@@ -130,18 +171,57 @@ class GpuReader:
                 pass
 
 
+class NetRateTracker:
+    def __init__(self) -> None:
+        self._prev = psutil.net_io_counters()
+        self._prev_t = time.time()
+
+    def read_mbps(self) -> tuple[float, float]:
+        now = time.time()
+        cur = psutil.net_io_counters()
+        dt = max(0.001, now - self._prev_t)
+        up = (cur.bytes_sent - self._prev.bytes_sent) * 8.0 / dt / 1_000_000.0
+        down = (cur.bytes_recv - self._prev.bytes_recv) * 8.0 / dt / 1_000_000.0
+        self._prev = cur
+        self._prev_t = now
+        return max(0.0, up), max(0.0, down)
+
+
+_net_tracker = NetRateTracker()
+
+
 def collect_metrics(gpu: GpuReader, host_name: str) -> dict[str, Any]:
     cpu = clamp_pct(psutil.cpu_percent(interval=None))
-    ram = clamp_pct(psutil.virtual_memory().percent)
+    vm = psutil.virtual_memory()
+    swap = psutil.swap_memory()
+    try:
+        disk = psutil.disk_usage("/").percent
+    except Exception:  # noqa: BLE001
+        disk = 0.0
+    freq = psutil.cpu_freq()
+    cpu_mhz = float(freq.current) if freq and freq.current else 0.0
+    up_mbps, down_mbps = _net_tracker.read_mbps()
     gpu_stats = gpu.read()
+    boot = psutil.boot_time()
+    uptime_min = int(max(0.0, time.time() - boot) / 60.0)
+
     return {
         "v": 1,
         "cpu": round(cpu, 1),
         "cpu_temp": round(cpu_temperature_c(), 1),
-        "ram": round(ram, 1),
+        "cpu_mhz": round(cpu_mhz, 0),
+        "ram": round(clamp_pct(vm.percent), 1),
+        "ram_used_gb": round(vm.used / (1024**3), 2),
+        "ram_total_gb": round(vm.total / (1024**3), 2),
+        "swap": round(clamp_pct(swap.percent), 1),
+        "disk": round(clamp_pct(disk), 1),
         "gpu": round(gpu_stats["gpu"], 1),
         "gpu_temp": round(gpu_stats["gpu_temp"], 1),
         "vram": round(gpu_stats["vram"], 1),
+        "vram_used_mb": round(gpu_stats.get("vram_used_mb", 0.0), 0),
+        "net_up": round(up_mbps, 2),
+        "net_down": round(down_mbps, 2),
+        "uptime_min": uptime_min,
         "fps": 0,
         "host": host_name[:23],
     }
@@ -269,4 +349,20 @@ class UdpTransport:
 
 
 def encode_metrics(payload: dict[str, Any]) -> bytes:
-    return json.dumps(payload, separators=(",", ":")).encode("utf-8")
+    # Keep USB packets compact for the CYD 512-byte line buffer.
+    compact = {
+        "v": payload.get("v", 1),
+        "cpu": payload.get("cpu", 0),
+        "cpu_temp": payload.get("cpu_temp", 0),
+        "ram": payload.get("ram", 0),
+        "gpu": payload.get("gpu", 0),
+        "gpu_temp": payload.get("gpu_temp", 0),
+        "vram": payload.get("vram", 0),
+        "disk": payload.get("disk", 0),
+        "swap": payload.get("swap", 0),
+        "net_up": payload.get("net_up", 0),
+        "net_down": payload.get("net_down", 0),
+        "fps": payload.get("fps", 0),
+        "host": payload.get("host", "PC"),
+    }
+    return json.dumps(compact, separators=(",", ":")).encode("utf-8")
