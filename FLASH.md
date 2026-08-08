@@ -2,17 +2,31 @@
 
 Chip: **ESP32** (WROOM-32) · Board: **ESP32-2432S028** · Image: `esp,lite`
 
-## Drag & drop (browser)
-
-Easiest on a PC with Chrome or Edge:
+## Save `.bin` to your PC
 
 ```bash
-./scripts/build-flash-images.sh    # once
-./scripts/serve-web-flasher.sh     # opens http://127.0.0.1:8080/web/
+./scripts/build-flash-images.sh
+./scripts/serve-web-flasher.sh
 ```
 
+Open **http://127.0.0.1:8080/web/** and click **Save merged.bin to PC**.  
+File lands in your browser Downloads folder as:
+
+`esp32-2432s028-scrypt-miner-merged.bin` (flash at address `0x0`)
+
+Or copy straight from the repo (no browser):
+
+```bash
+# after build-flash-images.sh
+cp flash/esp32-2432s028-scrypt-miner-merged.bin ~/Downloads/
+```
+
+## Drag & drop flash (browser)
+
+Chrome or Edge:
+
 1. Open **http://127.0.0.1:8080/web/**
-2. Drag `flash/esp32-2432s028-scrypt-miner-merged.bin` onto the page  
+2. **Save merged.bin to PC**, then drag that file onto the page  
    (or click **Load project merged.bin**)
 3. Click **Connect & flash** → pick the COM / tty port
 4. Wait for “Flash complete”

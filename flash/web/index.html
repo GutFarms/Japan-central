@@ -15,8 +15,14 @@
     <header>
       <p class="brand">Japan-central</p>
       <h1>CYD flash</h1>
-      <p class="lede">Drag the merged <code>.bin</code> onto this page, connect USB, flash the ESP32-2432S028.</p>
+      <p class="lede">Save the firmware <code>.bin</code> to your PC, then drag it here (or flash from the browser).</p>
     </header>
+
+    <div class="row downloads">
+      <a class="btn primary" id="dlMerged" href="../esp32-2432s028-scrypt-miner-merged.bin" download="esp32-2432s028-scrypt-miner-merged.bin">Save merged.bin to PC</a>
+      <a class="btn ghost" id="dlApp" href="../esp32-2432s028-scrypt-miner.bin" download="esp32-2432s028-scrypt-miner.bin">Save app.bin</a>
+    </div>
+    <p class="dl-hint">Use <strong>merged.bin</strong> (flash at <code>0x0</code>). App-only is for advanced reflash at <code>0x10000</code>.</p>
 
     <section id="drop" class="drop" tabindex="0" aria-label="Firmware drop zone">
       <div class="drop-inner">

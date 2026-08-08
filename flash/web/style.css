@@ -114,6 +114,20 @@ code {
   align-items: end;
 }
 
+.downloads { margin-bottom: 0.35rem; }
+.downloads .btn {
+  text-decoration: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+.dl-hint {
+  margin: 0 0 1.25rem;
+  color: var(--muted);
+  font-size: 0.8rem;
+  line-height: 1.45;
+}
+
 .actions { margin-top: 0.75rem; }
 
 .field {

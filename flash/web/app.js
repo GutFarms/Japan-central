@@ -5,6 +5,7 @@
 import { ESPLoader, Transport } from "https://unpkg.com/esptool-js@0.5.6/bundle.js";
 
 const BUNDLED = "../esp32-2432s028-scrypt-miner-merged.bin";
+const BUNDLED_APP = "../esp32-2432s028-scrypt-miner.bin";
 
 const drop = document.getElementById("drop");
 const fileInput = document.getElementById("fileInput");
@@ -99,9 +100,41 @@ btnBundled.addEventListener("click", async () => {
     const buf = await res.arrayBuffer();
     adoptFile("esp32-2432s028-scrypt-miner-merged.bin", buf);
   } catch (err) {
-    setStatus(`Could not load bundled image: ${err.message}. Drag the .bin from flash/ instead.`, "err");
+    setStatus(`Could not load bundled image: ${err.message}. Use “Save merged.bin to PC”, then drag it here.`, "err");
     log(String(err));
   }
+});
+
+/** Force a browser download of a fetched binary (works even if the <a download> is blocked). */
+async function downloadBin(url, filename) {
+  setStatus(`Downloading ${filename}…`);
+  try {
+    const res = await fetch(url);
+    if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
+    const blob = await res.blob();
+    const objectUrl = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = objectUrl;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(objectUrl);
+    setStatus(`Saved ${filename} to your downloads folder`, "ok");
+    log(`Downloaded ${filename} (${blob.size} bytes)`);
+  } catch (err) {
+    setStatus(`Download failed: ${err.message}`, "err");
+    log(String(err));
+  }
+}
+
+document.getElementById("dlMerged")?.addEventListener("click", (e) => {
+  e.preventDefault();
+  downloadBin(BUNDLED, "esp32-2432s028-scrypt-miner-merged.bin");
+});
+document.getElementById("dlApp")?.addEventListener("click", (e) => {
+  e.preventDefault();
+  downloadBin(BUNDLED_APP, "esp32-2432s028-scrypt-miner.bin");
 });
 
 function terminal() {
