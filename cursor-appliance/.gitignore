@@ -1,0 +1,4 @@
+.env
+config/appliance.env
+data/
+*.log

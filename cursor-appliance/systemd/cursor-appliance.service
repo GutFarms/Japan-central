@@ -1,0 +1,29 @@
+[Unit]
+Description=Cursor appliance — local My Machines worker
+Documentation=https://cursor.com/docs/cloud-agent/self-hosted-guides/my-machines
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=pi
+Group=pi
+WorkingDirectory=/home/pi/Japan-central/cursor-appliance
+Environment=HOME=/home/pi
+Environment=PATH=/home/pi/.local/bin:/home/pi/.cursor/bin:/usr/local/bin:/usr/bin:/bin
+EnvironmentFile=-/home/pi/Japan-central/cursor-appliance/.env
+# Do not pass secrets on the argv beyond EnvironmentFile.
+ExecStart=/home/pi/Japan-central/cursor-appliance/scripts/start-worker.sh
+Restart=on-failure
+RestartSec=15
+KillMode=mixed
+TimeoutStopSec=30
+# Keep the appliance lean; raise if agents need more headroom.
+Nice=5
+
+# Outbound-only worker; no inbound ports required beyond optional localhost health.
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target
