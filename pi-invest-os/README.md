@@ -22,22 +22,33 @@ Flash this onto a microSD (or NVMe), boot a **Raspberry Pi 5**, and the agent pr
 
 ## Flash the image
 
+> **Raspberry Pi Imager tip:** Choose OS → **Use custom**, then set the file filter to **All files**. If `.img.xz` still does not show, extract it to `.img` with 7-Zip (Windows) or `xz -dk` (macOS/Linux). Full steps: [FLASH.md](./FLASH.md).
+
 ### Option A — download prebuilt (recommended)
 
 **Release:** [Pi Invest OS v0.3.0](https://github.com/GutFarms/Japan-central/releases/tag/pi-invest-os-v0.3.0)
-(rebuild publishes this tag; until then build locally or use the latest release)
 
 | File | Link |
 |---|---|
-| Image | [pi-invest-os-0.3.0-arm64.img.xz](https://github.com/GutFarms/Japan-central/releases/download/pi-invest-os-v0.3.0/pi-invest-os-0.3.0-arm64.img.xz) |
+| Image (~502 MB) | [pi-invest-os-0.3.0-arm64.img.xz](https://github.com/GutFarms/Japan-central/releases/download/pi-invest-os-v0.3.0/pi-invest-os-0.3.0-arm64.img.xz) |
 | Checksums | [pi-invest-os-0.3.0-arm64.sha256](https://github.com/GutFarms/Japan-central/releases/download/pi-invest-os-v0.3.0/pi-invest-os-0.3.0-arm64.sha256) |
 
 ```bash
+# Verify (optional)
 sha256sum -c pi-invest-os-0.3.0-arm64.sha256
+
+# Extract then flash with Imager (Use custom → select the .img)
+xz -dk pi-invest-os-0.3.0-arm64.img.xz
+
+# Or flash from CLI without Imager (Linux — replace sdX carefully)
 xzcat pi-invest-os-0.3.0-arm64.img.xz | sudo dd of=/dev/sdX bs=4M status=progress conv=fsync
 ```
 
-Or open the `.img.xz` in [Raspberry Pi Imager](https://www.raspberrypi.com/software/) → **Use custom**.
+**Imager custom OS list** (Imager downloads the image for you):
+
+```
+https://raw.githubusercontent.com/GutFarms/Japan-central/cursor/pi-invest-os-0b6b/pi-invest-os/imager/os_list.json
+```
 
 ### Option B — build it yourself
 
