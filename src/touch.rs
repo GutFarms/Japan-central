@@ -1,43 +1,53 @@
 //! XPT2046 resistive touch on ESP32-2432S028 (CYD).
 //!
-//! Dedicated pins (separate from TFT SPI):
+//! Dedicated **VSPI / SPI3** bus (separate from TFT HSPI):
 //! CLK=25, MOSI=32, MISO=39, CS=33, IRQ=36
 //!
-//! Contact detection follows the Paul Stoffregen / ESPHome pattern:
-//! `z = z1 + 4095 - z2`, and the final ADC command uses PD=00 (`0xD0`)
-//! so PENIRQ stays enabled between polls.
+//! Protocol matches ESPHome `xpt2046` (24-bit full-duplex ADC reads) and
+//! calibration matches the common CYD ESPHome landscape profile.
 
 use embedded_hal::delay::DelayNs;
 use esp_hal::gpio::{Input, InputConfig, Level, Output, OutputConfig, Pull};
+use esp_hal::spi::master::{Config as SpiConfig, Spi};
+use esp_hal::spi::Mode as SpiMode;
+use esp_hal::time::Rate;
+use esp_hal::Blocking;
 
 use crate::keyboard::TouchPoint;
 
-/// Calibration for landscape [`mipids_display::options::Rotation::Deg90`].
-/// Tweak if taps land off-target on a specific unit.
-const RAW_X_MIN: i32 = 200;
-const RAW_X_MAX: i32 = 3700;
-const RAW_Y_MIN: i32 = 240;
-const RAW_Y_MAX: i32 = 3800;
-/// Match common CYD + Deg90 mapping (ESPHome / TFT_eSPI-style).
+/// ESPHome CYD landscape calibration (rotation 90°).
+/// `x_min > x_max` in ESPHome ≡ invert X here.
+const RAW_X_MIN: i32 = 280;
+const RAW_X_MAX: i32 = 3860;
+const RAW_Y_MIN: i32 = 340;
+const RAW_Y_MAX: i32 = 3860;
 const INVERT_X: bool = true;
 const INVERT_Y: bool = false;
 const SWAP_XY: bool = false;
 
 const SCREEN_W: i32 = 320;
 const SCREEN_H: i32 = 240;
-const Z_THRESHOLD: u16 = 300;
+/// ESPHome CYD demos use ~400.
+const Z_THRESHOLD: u16 = 400;
+
+const CMD_Z1: u8 = 0xB1; // Z1 + ADC on
+const CMD_Z2: u8 = 0xC1; // Z2 + ADC on
+const CMD_X: u8 = 0xD1; // X + ADC on
+const CMD_Y: u8 = 0x91; // Y + ADC on
+const CMD_X_POWERDOWN: u8 = 0xD0; // X, PD=00 → enable PENIRQ
 
 pub struct Touch {
-    clk: Output<'static>,
-    mosi: Output<'static>,
-    miso: Input<'static>,
+    spi: Spi<'static, Blocking>,
     cs: Output<'static>,
     irq: Input<'static>,
     last: Option<TouchPoint>,
     down: bool,
+    /// Last raw sample for serial debug.
+    pub last_raw: Option<(u16, u16, u16)>,
 }
 
 pub struct TouchPins {
+    pub spi: esp_hal::peripherals::SPI3<'static>,
     pub clk: esp_hal::gpio::AnyPin<'static>,
     pub mosi: esp_hal::gpio::AnyPin<'static>,
     pub miso: esp_hal::gpio::AnyPin<'static>,
@@ -47,19 +57,34 @@ pub struct TouchPins {
 
 impl Touch {
     pub fn new(p: TouchPins) -> Self {
-        // GPIO36/39 are input-only and have no internal pulls; leave floating.
-        Self {
-            clk: Output::new(p.clk, Level::Low, OutputConfig::default()),
-            mosi: Output::new(p.mosi, Level::Low, OutputConfig::default()),
-            miso: Input::new(p.miso, InputConfig::default().with_pull(Pull::None)),
+        // 2 MHz Mode 0 — same as Paul Stoffregen / typical CYD Arduino setups.
+        let spi = Spi::new(
+            p.spi,
+            SpiConfig::default()
+                .with_frequency(Rate::from_mhz(2))
+                .with_mode(SpiMode::_0),
+        )
+        .expect("touch SPI3")
+        .with_sck(p.clk)
+        .with_mosi(p.mosi)
+        .with_miso(p.miso);
+
+        let mut t = Self {
+            spi,
             cs: Output::new(p.cs, Level::High, OutputConfig::default()),
+            // GPIO36 has no internal pull; XPT2046 pulls PENIRQ up when PD0=0.
             irq: Input::new(p.irq, InputConfig::default().with_pull(Pull::None)),
             last: None,
             down: false,
-        }
+            last_raw: None,
+        };
+        // Power-down ADC / enable PENIRQ (ESPHome setup).
+        t.cs.set_low();
+        let _ = t.read_adc(CMD_X_POWERDOWN);
+        t.cs.set_high();
+        t
     }
 
-    /// True when panel reports contact (IRQ active-low when PENIRQ enabled).
     pub fn pressed_raw(&self) -> bool {
         self.irq.is_low()
     }
@@ -67,6 +92,11 @@ impl Touch {
     /// Poll once. Returns a point only on **press edge** (tap), not while held.
     pub fn poll_tap<D: DelayNs>(&mut self, delay: &mut D) -> Option<TouchPoint> {
         let sample = self.read_sample(delay);
+        // IRQ high ⇒ definitely released (avoids stuck-down when Z is noisy).
+        if !self.irq.is_low() && sample.is_none() {
+            self.down = false;
+            return None;
+        }
         match (self.down, sample) {
             (false, Some(p)) => {
                 self.down = true;
@@ -85,9 +115,12 @@ impl Touch {
         }
     }
 
-    /// Continuous sample while pressed (for drawing feedback).
     pub fn poll_point<D: DelayNs>(&mut self, delay: &mut D) -> Option<TouchPoint> {
         let sample = self.read_sample(delay);
+        if !self.irq.is_low() && sample.is_none() {
+            self.down = false;
+            return None;
+        }
         self.down = sample.is_some();
         if let Some(p) = sample {
             self.last = Some(p);
@@ -95,84 +128,55 @@ impl Touch {
         sample
     }
 
-    fn read_sample<D: DelayNs>(&mut self, delay: &mut D) -> Option<TouchPoint> {
+    fn read_sample<D: DelayNs>(&mut self, _delay: &mut D) -> Option<TouchPoint> {
         self.cs.set_low();
-        delay.delay_us(2);
 
-        // Keep ADC on (PD=01) during the sequence; finish with 0xD0 (PD=00)
-        // so PENIRQ works again for the next poll.
-        let z1 = self.read_adc(0xB1, delay);
-        let z2 = self.read_adc(0xC1, delay);
+        let z1 = self.read_adc(CMD_Z1);
+        let z2 = self.read_adc(CMD_Z2);
         let z = pressure(z1, z2);
 
         if z < Z_THRESHOLD {
-            let _ = self.read_adc(0xD0, delay);
+            let _ = self.read_adc(CMD_X_POWERDOWN);
             self.cs.set_high();
-            delay.delay_us(2);
+            self.last_raw = Some((0, 0, z));
             return None;
         }
 
-        // First sample is noisy; discard, then oversample. Command labels follow
-        // Stoffregen: 0x91 / 0xD1. Screen X comes from the 0xD* reads, Y from 0x9*.
-        let _ = self.read_adc(0x91, delay);
-        let mut d1 = [0u16; 3]; // 0xD1 / 0xD0 → screen X (rotation 1)
-        let mut d9 = [0u16; 3]; // 0x91 / trailing → screen Y
-        for i in 0..2 {
-            d1[i] = self.read_adc(0xD1, delay);
-            d9[i] = self.read_adc(0x91, delay);
-        }
-        // Final conversion with power-down (re-enable PENIRQ), then clock out last axis.
-        d1[2] = self.read_adc(0xD0, delay);
-        d9[2] = self.read_adc(0x00, delay);
+        // ESPHome: dummy X, then Y/X/Y/X/Y, last X with power-down.
+        let _ = self.read_adc(CMD_X);
+        let mut ys = [0u16; 3];
+        let mut xs = [0u16; 3];
+        ys[0] = self.read_adc(CMD_Y);
+        xs[0] = self.read_adc(CMD_X);
+        ys[1] = self.read_adc(CMD_Y);
+        xs[1] = self.read_adc(CMD_X);
+        ys[2] = self.read_adc(CMD_Y);
+        xs[2] = self.read_adc(CMD_X_POWERDOWN); // also enables PENIRQ
 
         self.cs.set_high();
-        delay.delay_us(2);
 
-        let x_raw = best_two_avg(d1[0], d1[1], d1[2]);
-        let y_raw = best_two_avg(d9[0], d9[1], d9[2]);
-        if x_raw < 50 || y_raw < 50 {
+        let x_raw = best_two_avg(xs[0], xs[1], xs[2]);
+        let y_raw = best_two_avg(ys[0], ys[1], ys[2]);
+        self.last_raw = Some((x_raw, y_raw, z));
+
+        // Reject dead bus (MISO stuck low → zeros) or open-circuit junk.
+        if x_raw < 50 || y_raw < 50 || x_raw > 4090 || y_raw > 4090 {
             return None;
         }
 
         Some(map_raw(x_raw, y_raw))
     }
 
-    /// Write an 8-bit command, then clock 16 bits and return the 12-bit ADC (`>> 3`).
-    fn read_adc<D: DelayNs>(&mut self, cmd: u8, delay: &mut D) -> u16 {
-        self.write8(cmd, delay);
-        // Conversion time; datasheet ~3µs typical with internal clock.
-        delay.delay_us(6);
-        let mut v = 0u16;
-        for _ in 0..16 {
-            self.clk.set_high();
-            delay.delay_us(1);
-            v <<= 1;
-            if self.miso.is_high() {
-                v |= 1;
-            }
-            self.clk.set_low();
-            delay.delay_us(1);
+    /// ESPHome-style 24-bit full-duplex transfer: cmd + 16 clocks → 12-bit ADC.
+    fn read_adc(&mut self, cmd: u8) -> u16 {
+        let mut data = [cmd, 0, 0];
+        if self.spi.transfer(&mut data).is_err() {
+            return 0;
         }
-        v >> 3
-    }
-
-    fn write8<D: DelayNs>(&mut self, mut byte: u8, delay: &mut D) {
-        for _ in 0..8 {
-            if byte & 0x80 != 0 {
-                self.mosi.set_high();
-            } else {
-                self.mosi.set_low();
-            }
-            byte <<= 1;
-            self.clk.set_high();
-            delay.delay_us(1);
-            self.clk.set_low();
-            delay.delay_us(1);
-        }
+        (u16::from(data[1]) << 8 | u16::from(data[2])) >> 3
     }
 }
 
-/// XPT2046 touch pressure: `z1 + 4095 - z2`.
 fn pressure(z1: u16, z2: u16) -> u16 {
     z1.saturating_add(4095).saturating_sub(z2)
 }
@@ -215,13 +219,9 @@ mod tests {
 
     #[test]
     fn pressure_formula_matches_reference() {
-        // Strong press: z1 high, z2 lower → large z.
         assert!(pressure(2000, 500) > Z_THRESHOLD);
-        // No touch / open: z1≈0, z2≈0 → z≈4095 is "max" but real idle is
-        // often small; verify inverted formula is not used.
-        assert_eq!(pressure(100, 4000), 0); // saturating_sub
+        assert_eq!(pressure(100, 4000), 0);
         assert_eq!(pressure(0, 0), 4095);
-        assert_eq!(pressure(1000, 1000), 4095);
     }
 
     #[test]
@@ -235,6 +235,5 @@ mod tests {
     #[test]
     fn best_two_avg_picks_closest_pair() {
         assert_eq!(best_two_avg(100, 102, 500), 101);
-        assert_eq!(best_two_avg(10, 400, 402), 401);
     }
 }

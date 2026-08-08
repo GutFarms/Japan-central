@@ -117,8 +117,9 @@ async fn main(spawner: Spawner) -> ! {
         }
     };
 
-    // XPT2046 on dedicated SPI pins (bitbang).
+    // XPT2046 on dedicated VSPI (SPI3) — same pins as Arduino CYD examples.
     let mut touch = Touch::new(TouchPins {
+        spi: peripherals.SPI3,
         clk: peripherals.GPIO25.degrade(),
         mosi: peripherals.GPIO32.degrade(),
         miso: peripherals.GPIO39.degrade(),
@@ -126,6 +127,14 @@ async fn main(spawner: Spawner) -> ! {
         irq: peripherals.GPIO36.degrade(),
     });
     let mut touch_delay = Delay::new();
+    serial_writeln(&mut usb, "Touch: SPI3 XPT2046 CLK25/MOSI32/MISO39/CS33/IRQ36");
+    // Probe once so serial shows whether the panel answers.
+    let _ = touch.poll_point(&mut touch_delay);
+    if let Some((x, y, z)) = touch.last_raw {
+        let mut m: String<48> = String::new();
+        let _ = core::fmt::Write::write_fmt(&mut m, format_args!("Touch probe raw x={x} y={y} z={z}"));
+        serial_writeln(&mut usb, m.as_str());
+    }
 
     let _ = display.draw_splash();
     Timer::after(Duration::from_millis(700)).await;
@@ -984,6 +993,7 @@ async fn pick_wifi_ssid<D: embedded_hal::delay::DelayNs>(
         }
 
         if let Some(p) = touch.poll_tap(touch_delay) {
+            log_touch(usb, &touch, p);
             match hit_wifi_scan(p, scroll, networks.len()) {
                 Some(WifiScanHit::Select(i)) => {
                     if let Some(n) = networks.get(i) {
@@ -1116,6 +1126,22 @@ async fn pick_wifi_ssid<D: embedded_hal::delay::DelayNs>(
     }
 }
 
+fn log_touch(usb: &mut Serial<'_>, touch: &Touch, p: esp32_s3_scrypt_miner::keyboard::TouchPoint) {
+    let mut m: String<64> = String::new();
+    if let Some((rx, ry, z)) = touch.last_raw {
+        let _ = core::fmt::Write::write_fmt(
+            &mut m,
+            format_args!("tap screen=({},{}) raw=({},{},z={})", p.x, p.y, rx, ry, z),
+        );
+    } else {
+        let _ = core::fmt::Write::write_fmt(
+            &mut m,
+            format_args!("tap screen=({},{})", p.x, p.y),
+        );
+    }
+    serial_writeln(usb, m.as_str());
+}
+
 fn print_scan_list(usb: &mut Serial<'_>, networks: &[ScannedNetwork]) {
     if networks.is_empty() {
         serial_writeln(usb, "(no networks found)");
@@ -1195,6 +1221,7 @@ async fn read_field_touch_or_serial<D: embedded_hal::delay::DelayNs>(
         }
 
         if let Some(p) = touch.poll_tap(touch_delay) {
+            log_touch(usb, touch, p);
             if let Some(action) = kb.hit_test(p) {
                 if kb.apply(action, line) {
                     let _ = usb.write_all(b"\r\n");
@@ -1203,6 +1230,7 @@ async fn read_field_touch_or_serial<D: embedded_hal::delay::DelayNs>(
                 dirty = true;
                 continue;
             }
+            serial_writeln(usb, "  (tap missed key — try again)");
         }
 
         match usb.read(&mut byte) {

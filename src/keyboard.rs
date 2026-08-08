@@ -151,11 +151,13 @@ impl Keyboard {
     pub fn hit_test(&self, p: TouchPoint) -> Option<KeyAction> {
         let x = p.x as i32;
         let y = p.y as i32;
+        // Small pad so near-miss taps still register on resistive panels.
+        const PAD: i32 = 3;
         for key in self.keys() {
-            if x >= key.x
-                && x < key.x + key.w as i32
-                && y >= key.y
-                && y < key.y + key.h as i32
+            if x >= key.x - PAD
+                && x < key.x + key.w as i32 + PAD
+                && y >= key.y - PAD
+                && y < key.y + key.h as i32 + PAD
             {
                 return Some(key.action);
             }
