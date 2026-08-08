@@ -33,7 +33,7 @@ use crate::keyboard::{
 };
 use crate::miner::{MinerStats, SCRYPT_LOG_N, SCRYPT_N};
 use crate::radio::{RadioStatus, ScannedNetwork};
-use crate::stratum::StratumStatus;
+use crate::stratum::{StratumPhase, StratumStatus};
 
 /// Landscape resolution after Deg90 rotation of the native 240×320 panel.
 pub const DISPLAY_WIDTH: u16 = 320;
@@ -465,88 +465,166 @@ impl<'a, D: DelayNs> Display<'a, D> {
         mining: bool,
         full: bool,
     ) -> Result<(), Error> {
+        let connected = stratum.phase.is_connected();
+        let active = mining && (connected || stratum.phase == StratumPhase::Disabled);
+
         if full {
             self.round_panel(8, 60, 200, 100, PANEL)?;
             self.round_panel(216, 60, 96, 100, PANEL)?;
-            self.round_panel(8, 170, 304, 48, PANEL)?;
-            let hint = if radio.ip.is_some() {
-                "web: http://IP/  · tap tabs"
+            self.round_panel(8, 168, 304, 52, PANEL)?;
+            let hint = if connected {
+                "pool connected · live H/s"
+            } else if radio.ip.is_some() {
+                "wifi up · waiting for pool"
             } else {
-                "tap tabs · BOOT short=next long=menu"
+                "tap tabs · BOOT short=next"
             };
             self.footer_hint(hint)?;
         }
 
-        self.fill_rect(16, 68, 184, 36, PANEL)?;
+        // Primary: active hashes/sec
+        self.fill_rect(16, 68, 184, 40, PANEL)?;
+        self.draw_text("H/s active", Point::new(16, 76), LABEL)?;
         let mut rate: String<24> = String::new();
         let _ = write!(
             rate,
-            "{}.{:02} H/s",
+            "{}.{:02}",
             stats.hashrate_x100 / 100,
             stats.hashrate_x100 % 100
         );
-        self.draw_text("hashrate", Point::new(16, 76), LABEL)?;
-        self.draw_text(&rate, Point::new(16, 100), VALUE)?;
+        let rate_style = if connected { BRAND } else { VALUE };
+        self.draw_text(&rate, Point::new(16, 104), rate_style)?;
 
         let pct = core::cmp::min(100u32, stats.hashrate_x100 / 20);
         self.fill_rect(16, 130, 184, 12, BAR_BG)?;
-        let pulse = if mining {
+        let pulse = if active {
             4 + (self.tick as u32 % 12)
         } else {
             0
         };
         let w = (184 * pct / 100).max(pulse);
         if w > 0 {
-            let fg = if self.tick < 128 { BAR_FG } else { ACCENT_HOT };
+            let fg = if connected {
+                if self.tick < 128 {
+                    KEY_OK
+                } else {
+                    Rgb565::CSS_LIME_GREEN
+                }
+            } else if self.tick < 128 {
+                BAR_FG
+            } else {
+                ACCENT_HOT
+            };
             self.fill_rect(16, 130, w.min(184), 12, fg)?;
         }
 
-        // Status chip with soft border
-        let chip = if mining { KEY_OK } else { PANEL_HI };
-        self.round_panel(224, 70, 80, 36, chip)?;
-        let st = if mining { "LIVE" } else { "IDLE" };
-        let st_style = if mining { OK } else { LABEL };
-        self.draw_text(st, Point::new(240, 94), st_style)?;
-
-        let mut shares: String<16> = String::new();
-        let _ = write!(shares, "{} sh", stats.shares);
-        self.draw_text(&shares, Point::new(236, 130), VALUE_SM)?;
-
-        // Activity dots
-        for i in 0..4u8 {
-            let on = mining && ((self.tick.wrapping_add(i.wrapping_mul(40))) > 120);
-            let c = if on { ACCENT_HOT } else { BAR_BG };
-            self.fill_rect(236 + i as i32 * 14, 148, 8, 8, c)?;
-        }
-
-        self.fill_rect(16, 178, 288, 32, PANEL)?;
-        let mut nonce: String<20> = String::new();
-        let _ = write!(nonce, "{:08x}", stats.nonce);
-        let job = if stratum.job_id.is_empty() {
-            PoolConfig::ellipsize(cfg.address.as_str(), 10)
+        // Connection chip from stratum phase
+        let chip = if connected {
+            KEY_OK
+        } else if stratum.phase == StratumPhase::Error {
+            ACCENT
         } else {
-            PoolConfig::ellipsize(stratum.job_id.as_str(), 10)
+            PANEL_HI
         };
-        let mut line: String<72> = String::new();
-        let _ = write!(
-            line,
-            "{} {} {} a{}/r{}",
-            nonce,
-            job,
-            stratum.phase.label(),
-            stratum.accepted,
-            stratum.rejected
-        );
-        // Prefer LAN URL when DHCP is up so the board is easy to find.
-        if let Some([a, b, c, d]) = radio.ip {
-            let mut url: String<40> = String::new();
-            let _ = write!(url, "http://{a}.{b}.{c}.{d}/");
-            self.draw_text(url.as_str(), Point::new(16, 206), KEY_TXT_DIM)?;
+        self.round_panel(224, 70, 80, 36, chip)?;
+        let st = stratum.phase.chip();
+        let st_style = if connected {
+            OK
+        } else if stratum.phase == StratumPhase::Error {
+            KEY_TXT_DIM
         } else {
-            self.draw_text(&line, Point::new(16, 206), LABEL)?;
+            LABEL
+        };
+        // Center-ish short labels in the chip
+        let st_x = if st.len() >= 4 { 236 } else { 244 };
+        self.draw_text(st, Point::new(st_x, 94), st_style)?;
+
+        let mut shares: String<20> = String::new();
+        let _ = write!(
+            shares,
+            "a{}/r{}",
+            stratum.accepted, stratum.rejected
+        );
+        self.draw_text(&shares, Point::new(228, 124), VALUE_SM)?;
+
+        // Activity dots when hashing
+        for i in 0..4u8 {
+            let on = active && ((self.tick.wrapping_add(i.wrapping_mul(40))) > 120);
+            let c = if on {
+                if connected {
+                    Rgb565::CSS_LIME_GREEN
+                } else {
+                    ACCENT_HOT
+                }
+            } else {
+                BAR_BG
+            };
+            self.fill_rect(236 + i as i32 * 14, 146, 8, 8, c)?;
         }
 
-        let _ = (SCRYPT_LOG_N, cfg, line);
+        // Pool / connection detail (always visible — not replaced by IP)
+        self.fill_rect(16, 174, 288, 40, PANEL)?;
+        let conn = if connected {
+            "CONNECTED"
+        } else {
+            match stratum.phase {
+                StratumPhase::Disabled => "local demo",
+                StratumPhase::WaitingWifi => "wait wifi",
+                StratumPhase::Resolving => "resolving",
+                StratumPhase::Connecting => "connecting",
+                StratumPhase::Subscribing => "subscribe",
+                StratumPhase::Authorizing => "authorize",
+                StratumPhase::Error => "pool error",
+                StratumPhase::Idle | StratumPhase::Mining => "CONNECTED",
+            }
+        };
+        let mut line1: String<48> = String::new();
+        let _ = write!(line1, "{conn}  d{}", stratum.difficulty);
+        self.draw_text(
+            line1.as_str(),
+            Point::new(16, 188),
+            if connected { OK } else { LABEL },
+        )?;
+
+        let mut line2: String<56> = String::new();
+        if let Some([a, b, c, d]) = radio.ip {
+            let _ = write!(line2, "{a}.{b}.{c}.{d}");
+            if !stratum.job_id.is_empty() {
+                let job = PoolConfig::ellipsize(stratum.job_id.as_str(), 12);
+                let _ = write!(line2, "  {}", job.as_str());
+            }
+        } else {
+            let _ = write!(line2, "nonce {:08x}", stats.nonce);
+        }
+        self.draw_text(line2.as_str(), Point::new(16, 206), MUTED)?;
+
+        let _ = (SCRYPT_LOG_N, cfg, mining);
+        Ok(())
+    }
+
+    /// Splash when stratum authorizes / starts mining.
+    pub fn draw_pool_connected(
+        &mut self,
+        stratum_host: &str,
+        hashrate_x100: u32,
+    ) -> Result<(), Error> {
+        self.wake_clear()?;
+        self.last_screen = None;
+        self.fill_rect(0, 0, DISPLAY_WIDTH as u32, 8, Rgb565::CSS_LIME_GREEN)?;
+        self.header_bar("POOL")?;
+        self.round_panel(20, 56, 280, 140, PANEL_HI)?;
+        self.draw_text("CONNECTED", Point::new(90, 88), OK)?;
+        let host = PoolConfig::ellipsize(stratum_host, 28);
+        self.draw_text(host.as_str(), Point::new(36, 120), MUTED)?;
+        let mut rate: String<28> = String::new();
+        let _ = write!(
+            rate,
+            "{}.{:02} H/s",
+            hashrate_x100 / 100,
+            hashrate_x100 % 100
+        );
+        self.draw_text(rate.as_str(), Point::new(100, 156), BRAND)?;
+        self.footer_hint("live hashrate on MINE tab")?;
         Ok(())
     }
 
@@ -614,17 +692,26 @@ impl<'a, D: DelayNs> Display<'a, D> {
         );
         self.draw_text(&ble_line, Point::new(18, 140), VALUE_SM)?;
 
+        let pool_state = if stratum.phase.is_connected() {
+            "CONNECTED"
+        } else {
+            stratum.phase.label()
+        };
         let mut st_line: String<56> = String::new();
         let _ = write!(
             st_line,
-            "POOL {} d{} a{}/r{}/d{}",
-            stratum.phase.label(),
-            stratum.difficulty,
-            stratum.accepted,
-            stratum.rejected,
-            stratum.dropped
+            "POOL {} d{} a{}/r{}",
+            pool_state, stratum.difficulty, stratum.accepted, stratum.rejected
         );
-        self.draw_text(&st_line, Point::new(18, 166), VALUE_SM)?;
+        self.draw_text(
+            &st_line,
+            Point::new(18, 166),
+            if stratum.phase.is_connected() {
+                OK
+            } else {
+                VALUE_SM
+            },
+        )?;
         if let Some([a, b, c, d]) = radio.ip {
             let mut url: String<48> = String::new();
             let _ = write!(url, "WEB  http://{a}.{b}.{c}.{d}/");

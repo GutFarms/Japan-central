@@ -47,6 +47,26 @@ impl StratumPhase {
             StratumPhase::Error => "err",
         }
     }
+
+    /// Authorized with the pool (idle waiting for jobs, or actively mining).
+    pub fn is_connected(self) -> bool {
+        matches!(self, StratumPhase::Idle | StratumPhase::Mining)
+    }
+
+    /// Short chip text for the MINE status badge.
+    pub fn chip(self) -> &'static str {
+        match self {
+            StratumPhase::Disabled => "OFF",
+            StratumPhase::WaitingWifi => "WIFI",
+            StratumPhase::Resolving => "DNS",
+            StratumPhase::Connecting => "TCP",
+            StratumPhase::Subscribing => "SUB",
+            StratumPhase::Authorizing => "AUTH",
+            StratumPhase::Idle => "ON",
+            StratumPhase::Mining => "MINE",
+            StratumPhase::Error => "ERR",
+        }
+    }
 }
 
 /// Snapshot of stratum client state.
@@ -1414,6 +1434,15 @@ mod tests {
         let e = Endpoint::parse("192.168.1.5").unwrap();
         assert_eq!(e.port, 3333);
         assert!(Endpoint::parse("").is_err());
+    }
+
+    #[test]
+    fn connected_phases_and_chip() {
+        assert!(StratumPhase::Idle.is_connected());
+        assert!(StratumPhase::Mining.is_connected());
+        assert!(!StratumPhase::Connecting.is_connected());
+        assert_eq!(StratumPhase::Mining.chip(), "MINE");
+        assert_eq!(StratumPhase::Idle.chip(), "ON");
     }
 
     #[test]

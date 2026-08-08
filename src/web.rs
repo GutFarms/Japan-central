@@ -153,13 +153,20 @@ mod server {
             None => "—".into(),
         };
         let rate = format!("{}.{:02}", s.hashrate_x100 / 100, s.hashrate_x100 % 100);
+        let connected = s.pool_phase.is_connected();
+        let phase = if connected {
+            "CONNECTED"
+        } else {
+            s.pool_phase.label()
+        };
+        let phase_color = if connected { "#7dffa0" } else { "#e8f0e4" };
         let body = format!(
             "<!doctype html><html><head><meta charset=utf-8>\
 <meta name=viewport content=\"width=device-width,initial-scale=1\">\
-<meta http-equiv=refresh content=5>\
+<meta http-equiv=refresh content=3>\
 <title>SCRYPT · CYD</title>\
 <style>\
-body{{margin:0;font:15px/1.45 system-ui,sans-serif;background:#101612;color:#e8f0e4}}\
+body{{margin:0;font:15px/1.45 Georgia,'Times New Roman',serif;background:#101612;color:#e8f0e4}}\
 header{{padding:1.2rem 1.4rem;background:linear-gradient(120deg,#1a2a1c,#142018);border-bottom:3px solid #c45c26}}\
 h1{{margin:0;font-size:1.6rem;letter-spacing:.04em;color:#ff8c1a}}\
 .sub{{color:#8aa08c;margin-top:.35rem}}\
@@ -167,16 +174,17 @@ main{{padding:1.2rem 1.4rem;display:grid;gap:.9rem;max-width:520px}}\
 .card{{background:#1a241c;border-radius:12px;padding:1rem 1.1rem;border:1px solid #2a3a2c}}\
 .k{{color:#8aa08c;font-size:.75rem;text-transform:uppercase;letter-spacing:.06em}}\
 .v{{font-size:1.35rem;margin-top:.2rem;font-variant-numeric:tabular-nums}}\
+.rate{{font-size:2.2rem;color:#ff8c1a}}\
 .row{{display:grid;grid-template-columns:1fr 1fr;gap:.8rem}}\
 a{{color:#7dffa0}}\
 </style></head><body>\
 <header><h1>SCRYPT</h1>\
 <div class=sub>ESP32-2432S028 · http://{ip}/</div></header>\
 <main>\
-<div class=card><div class=k>Hashrate</div><div class=v>{rate} H/s</div></div>\
+<div class=card><div class=k>Active hashrate</div><div class=\"v rate\">{rate} H/s</div></div>\
 <div class=row>\
+<div class=card><div class=k>Pool</div><div class=v style=color:{phase_color}>{phase}</div></div>\
 <div class=card><div class=k>Shares</div><div class=v>{shares}</div></div>\
-<div class=card><div class=k>Pool</div><div class=v>{phase}</div></div>\
 </div>\
 <div class=row>\
 <div class=card><div class=k>Accepted</div><div class=v>{acc}</div></div>\
@@ -186,12 +194,13 @@ a{{color:#7dffa0}}\
 <div class=card><div class=k>Stratum</div><div class=v style=font-size:1rem>{stratum}</div></div>\
 <div class=card><div class=k>WiFi</div><div class=v>{wifi} · {ip}</div>\
 <div class=k style=margin-top:.6rem>Diff {diff} · dropped {drop} · nonce {nonce:08x}</div></div>\
-<div class=card><a href=/api/status>JSON status</a> · auto-refresh 5s</div>\
+<div class=card><a href=/api/status>JSON status</a> · auto-refresh 3s</div>\
 </main></body></html>",
             ip = ip,
             rate = rate,
             shares = s.shares,
-            phase = s.pool_phase.label(),
+            phase = phase,
+            phase_color = phase_color,
             acc = s.accepted,
             rej = s.rejected,
             addr = html_escape(s.address.as_str()),
@@ -215,10 +224,15 @@ a{{color:#7dffa0}}\
             Some([a, b, c, d]) => format!("\"{a}.{b}.{c}.{d}\""),
             None => "null".into(),
         };
+        let pool = if s.pool_phase.is_connected() {
+            "CONNECTED"
+        } else {
+            s.pool_phase.label()
+        };
         let body = format!(
             "{{\"hashrate_hs\":{}.{:02},\"shares\":{},\"nonce\":\"{:08x}\",\
 \"address\":{},\"stratum\":{},\"wifi\":\"{}\",\"ip\":{},\
-\"pool\":\"{}\",\"accepted\":{},\"rejected\":{},\"dropped\":{},\"difficulty\":{}}}",
+\"pool\":\"{}\",\"connected\":{},\"accepted\":{},\"rejected\":{},\"dropped\":{},\"difficulty\":{}}}",
             s.hashrate_x100 / 100,
             s.hashrate_x100 % 100,
             s.shares,
@@ -227,7 +241,12 @@ a{{color:#7dffa0}}\
             json_str(s.stratum.as_str()),
             s.wifi.label(),
             ip,
-            s.pool_phase.label(),
+            pool,
+            if s.pool_phase.is_connected() {
+                "true"
+            } else {
+                "false"
+            },
             s.accepted,
             s.rejected,
             s.dropped,

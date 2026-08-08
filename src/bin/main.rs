@@ -46,7 +46,7 @@ use esp32_s3_scrypt_miner::keyboard::{hit_gui, hit_wifi_scan, GuiHit, Keyboard, 
 use esp32_s3_scrypt_miner::miner::ScryptMiner;
 use esp32_s3_scrypt_miner::persist::ConfigStore;
 use esp32_s3_scrypt_miner::radio::{self, RadioStatus, ScannedNetwork};
-use esp32_s3_scrypt_miner::stratum::{self, JobMeta, StratumStatus};
+use esp32_s3_scrypt_miner::stratum::{self, JobMeta, StratumPhase, StratumStatus};
 use esp32_s3_scrypt_miner::touch::{Touch, TouchPins};
 use esp32_s3_scrypt_miner::web::{self, WebStatus};
 use esp_hal::peripherals::WIFI;
@@ -207,6 +207,7 @@ async fn main(spawner: Spawner) -> ! {
     let mut boot_was_down = boot_btn.is_low();
     let mut boot_down_since: Option<Instant> = None;
     let mut saw_ip = false;
+    let mut saw_stratum = false;
 
     let mut stats = miner.stats();
     let mut radio_status = radio::snapshot().await;
@@ -217,8 +218,9 @@ async fn main(spawner: Spawner) -> ! {
     };
     if radio_status.ip.is_some() {
         saw_ip = true;
-        gui.screen = GuiScreen::Radio;
     }
+    // Prefer MINE so live H/s is visible once hashing starts.
+    gui.screen = GuiScreen::Mining;
     let _ = display.draw_gui(&gui, &stats, &pool, &radio_status, &stratum_status, true);
 
     loop {
@@ -458,8 +460,44 @@ async fn main(spawner: Spawner) -> ! {
                     serial_write(&mut usb, "IP address: ");
                     serial_writeln(&mut usb, radio_status.ip_string().as_str());
                     let _ = display.draw_online(pool.wifi_ssid.as_str(), ip);
-                    Timer::after(Duration::from_secs(4)).await;
-                    gui.screen = GuiScreen::Radio;
+                    Timer::after(Duration::from_secs(3)).await;
+                    gui.screen = GuiScreen::Mining;
+                    display.invalidate();
+                }
+            }
+            if !saw_stratum && stratum_status.phase.is_connected() {
+                saw_stratum = true;
+                serial_writeln(&mut usb, "Stratum CONNECTED — showing live H/s");
+                let mut msg: String<64> = String::new();
+                let _ = core::fmt::Write::write_fmt(
+                    &mut msg,
+                    format_args!(
+                        "H/s={}.{:02}  phase={}",
+                        hashrate_x100 / 100,
+                        hashrate_x100 % 100,
+                        stratum_status.phase.label()
+                    ),
+                );
+                serial_writeln(&mut usb, msg.as_str());
+                let _ = display.draw_pool_connected(pool.stratum.as_str(), hashrate_x100);
+                Timer::after(Duration::from_secs(3)).await;
+                gui.screen = GuiScreen::Mining;
+                display.invalidate();
+            }
+            if saw_stratum
+                && !matches!(
+                    stratum_status.phase,
+                    StratumPhase::Idle | StratumPhase::Mining | StratumPhase::Disabled
+                )
+            {
+                // Allow re-announce after reconnect.
+                if matches!(
+                    stratum_status.phase,
+                    StratumPhase::Error
+                        | StratumPhase::Connecting
+                        | StratumPhase::WaitingWifi
+                ) {
+                    saw_stratum = false;
                 }
             }
             if let Err(e) =
