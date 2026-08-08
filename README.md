@@ -31,12 +31,7 @@ Firmware and host agent for an **ESP32 Cheap Yellow Display (CYD)** that shows l
 ## Firmware setup
 
 1. Install [PlatformIO](https://platformio.org/) (CLI or VS Code / Cursor extension).
-2. Configure Wi‑Fi:
-
-```bash
-cp firmware/include/secrets.h.example firmware/include/secrets.h
-# edit WIFI_SSID / WIFI_PASSWORD
-```
+2. Wi‑Fi is set in `firmware/include/secrets.h` (SSID: `Stargate Command`). Edit that file if your network changes.
 
 3. Build and flash:
 
