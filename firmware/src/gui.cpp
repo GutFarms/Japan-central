@@ -11,15 +11,16 @@ constexpr int SCREEN_W = 320;
 constexpr int SCREEN_H = 240;
 constexpr int OUTER_PAD = 4;
 constexpr int HEADER_Y = 4;
-constexpr int HEADER_H = 30;
-constexpr int FOOTER_H = 26;
+constexpr int HEADER_H = 28;
+constexpr int FOOTER_H = 24;
 constexpr int FOOTER_Y = SCREEN_H - OUTER_PAD - FOOTER_H;
 constexpr int GRID_TOP = HEADER_Y + HEADER_H + 4;
 constexpr int GRID_GAP = 4;
 constexpr int DIAL_W = (SCREEN_W - OUTER_PAD * 2 - GRID_GAP) / 2;
 constexpr int DIAL_H = (FOOTER_Y - GRID_TOP - GRID_GAP) / 2;
-constexpr int RADIUS = 14;
+constexpr int RADIUS = 12;
 
+// Speedometer sweep in standard math degrees (0=east, CCW): 225 -> -45
 constexpr float ARC_START = 225.0f;
 constexpr float ARC_SWEEP = 270.0f;
 
@@ -45,59 +46,34 @@ void MonitorGui::begin(TFT_eSPI &tft) {
 }
 
 void MonitorGui::drawDecor(TFT_eSPI &tft) {
-  // Layered dark → light blue atmosphere
-  tft.fillRect(0, 0, SCREEN_W, SCREEN_H / 3, Theme::bgDeep);
-  tft.fillRect(0, SCREEN_H / 3, SCREEN_W, SCREEN_H / 3, Theme::bg);
-  tft.fillRect(0, (SCREEN_H * 2) / 3, SCREEN_W, SCREEN_H / 3, Theme::bgMid);
-
-  tft.fillCircle(-10, 30, 40, Theme::bgDeep);
-  tft.fillCircle(SCREEN_W + 12, 70, 48, Theme::bubbleGlow);
-  tft.fillCircle(36, SCREEN_H + 8, 34, Theme::bgPanel);
-  tft.fillCircle(SCREEN_W - 40, -10, 26, Theme::accentSoft);
-  tft.fillCircle(SCREEN_W / 2, SCREEN_H / 2 + 20, 70, Theme::bgDeep);
+  tft.fillCircle(-6, 36, 28, Theme::bgDeep);
+  tft.fillCircle(SCREEN_W + 8, 100, 34, Theme::bgDeep);
+  tft.fillCircle(SCREEN_W - 20, -4, 18, Theme::bubbleGlow);
 }
 
 void MonitorGui::drawSoftBubble(TFT_eSPI &tft, int x, int y, int w, int h, uint16_t fill) {
-  // Soft drop shadow
-  tft.fillRoundRect(x + 2, y + 3, w, h, RADIUS, Theme::bgDeep);
-  // Outer light-blue glow
-  tft.drawRoundRect(x - 1, y - 1, w + 2, h + 2, RADIUS + 1, Theme::bubbleGlow);
-  // Body
+  tft.fillRoundRect(x + 1, y + 2, w, h, RADIUS, Theme::bgDeep);
   tft.fillRoundRect(x, y, w, h, RADIUS, fill);
-  // Top sheen (light blue)
-  const int sheen = h / 3;
-  tft.fillRoundRect(x + 3, y + 2, w - 6, sheen, RADIUS - 4, Theme::bgPanelHi);
-  tft.fillRoundRect(x + 2, y + sheen - 2, w - 4, h - sheen + 2, RADIUS - 3, fill);
-  // Rim
   tft.drawRoundRect(x, y, w, h, RADIUS, Theme::border);
-  tft.drawRoundRect(x + 1, y + 1, w - 2, h - 2, RADIUS - 1, Theme::dialRingLo);
 }
 
 void MonitorGui::showBoot(TFT_eSPI &tft, const char *message) {
   tft.fillScreen(Theme::bg);
   drawDecor(tft);
   const int cx = SCREEN_W / 2;
-  const int cy = SCREEN_H / 2 - 10;
-
-  tft.fillCircle(cx + 3, cy + 4, 62, Theme::bgDeep);
-  tft.fillCircle(cx, cy, 58, Theme::bubbleGlow);
-  tft.fillCircle(cx, cy, 50, Theme::bgPanel);
-  tft.fillCircle(cx, cy, 42, Theme::dialFace);
-  // Shine
-  tft.fillCircle(cx - 14, cy - 16, 12, Theme::bgPanelHi);
-  tft.drawCircle(cx, cy, 50, Theme::dialRing);
-  tft.drawCircle(cx, cy, 44, Theme::accentPale);
-
+  const int cy = SCREEN_H / 2 - 8;
+  tft.fillCircle(cx + 2, cy + 3, 54, Theme::bgDeep);
+  tft.fillCircle(cx, cy, 52, Theme::bubbleGlow);
+  tft.fillCircle(cx, cy, 44, Theme::bgPanel);
   tft.setTextDatum(MC_DATUM);
-  tft.setTextColor(Theme::accentPale, Theme::dialFace);
-  tft.drawString("CYD", cx, cy - 8, 4);
-  tft.setTextColor(Theme::textMuted, Theme::dialFace);
-  tft.drawString("monitor", cx, cy + 14, 2);
-
-  tft.fillRoundRect(cx - 114, SCREEN_H - 38, 228, 26, 13, Theme::bgPanel);
-  tft.drawRoundRect(cx - 114, SCREEN_H - 38, 228, 26, 13, Theme::accent);
+  tft.setTextColor(Theme::accent, Theme::bgPanel);
+  tft.drawString("CYD", cx, cy - 6, 4);
+  tft.setTextColor(Theme::textMuted, Theme::bgPanel);
+  tft.drawString("dials online", cx, cy + 14, 2);
+  tft.fillRoundRect(cx - 110, SCREEN_H - 36, 220, 24, 12, Theme::bgPanel);
+  tft.drawRoundRect(cx - 110, SCREEN_H - 36, 220, 24, 12, Theme::border);
   tft.setTextColor(Theme::accentPale, Theme::bgPanel);
-  tft.drawString(message, cx, SCREEN_H - 25, 2);
+  tft.drawString(message, cx, SCREEN_H - 24, 2);
   tft.setTextDatum(TL_DATUM);
 
   chromeDrawn_ = false;
@@ -113,6 +89,7 @@ void MonitorGui::showBoot(TFT_eSPI &tft, const char *message) {
 }
 
 void MonitorGui::drawChrome(TFT_eSPI &tft) {
+  tft.fillScreen(Theme::bg);
   drawDecor(tft);
   chromeDrawn_ = true;
   lastHost_[0] = '\0';
@@ -133,26 +110,22 @@ void MonitorGui::drawHeader(TFT_eSPI &tft, const char *host, bool linked) {
   const int w = SCREEN_W - OUTER_PAD * 2;
   drawSoftBubble(tft, x, y, w, HEADER_H, Theme::bgPanel);
 
-  tft.fillRoundRect(x + 7, y + 6, 44, 18, 9, Theme::accent);
+  tft.fillRoundRect(x + 6, y + 5, 40, 18, 9, Theme::accentSoft);
   tft.setTextDatum(MC_DATUM);
-  tft.setTextColor(Theme::bgDeep, Theme::accent);
-  tft.drawString("CYD", x + 29, y + HEADER_H / 2, 2);
+  tft.setTextColor(Theme::textPrimary, Theme::accentSoft);
+  tft.drawString("CYD", x + 26, y + HEADER_H / 2, 2);
 
   tft.setTextDatum(ML_DATUM);
   tft.setTextColor(Theme::textPrimary, Theme::bgPanel);
-  tft.drawString(host && host[0] ? host : "PC", x + 58, y + HEADER_H / 2, 2);
+  tft.drawString(host && host[0] ? host : "PC", x + 52, y + HEADER_H / 2, 2);
 
-  const int pillW = 74;
-  const int pillX = x + w - pillW - 7;
-  const uint16_t pillFill = linked ? Theme::ok : Theme::dialFace;
-  tft.fillRoundRect(pillX, y + 6, pillW, 18, 9, pillFill);
-  tft.drawRoundRect(pillX, y + 6, pillW, 18, 9, linked ? Theme::accentPale : Theme::border);
-  if (linked) {
-    tft.fillCircle(pillX + 11, y + HEADER_H / 2, 3, Theme::accentPale);
-  }
+  const int pillW = 70;
+  const int pillX = x + w - pillW - 6;
+  const uint16_t pillFill = linked ? Theme::ok : Theme::barTrack;
+  tft.fillRoundRect(pillX, y + 5, pillW, 18, 9, pillFill);
   tft.setTextDatum(MC_DATUM);
   tft.setTextColor(Theme::textPrimary, pillFill);
-  tft.drawString(linked ? "LIVE" : "WAIT", pillX + pillW / 2 + 5, y + HEADER_H / 2, 2);
+  tft.drawString(linked ? "LIVE" : "WAIT", pillX + pillW / 2, y + HEADER_H / 2, 2);
   tft.setTextDatum(TL_DATUM);
 
   strncpy(lastHost_, host ? host : "", sizeof(lastHost_) - 1);
@@ -162,12 +135,13 @@ void MonitorGui::drawHeader(TFT_eSPI &tft, const char *host, bool linked) {
 
 void MonitorGui::drawArcSpan(TFT_eSPI &tft, int cx, int cy, int r, float startDeg, float endDeg,
                              uint16_t color, int width) {
-  const float step = 2.5f;
+  // Sample the arc; degrees decrease for clockwise visual sweep on y-up math.
+  const float step = 3.0f;
   float deg = startDeg;
   int px = 0;
   int py = 0;
   polar(cx, cy, deg, r, px, py);
-  while (deg > endDeg + 0.01f) {
+  while (deg > endDeg) {
     deg -= step;
     if (deg < endDeg) {
       deg = endDeg;
@@ -175,8 +149,9 @@ void MonitorGui::drawArcSpan(TFT_eSPI &tft, int cx, int cy, int r, float startDe
     int x = 0;
     int y = 0;
     polar(cx, cy, deg, r, x, y);
-    for (int t = 0; t < width; ++t) {
-      tft.drawLine(px, py + t, x, y + t, color);
+    tft.drawLine(px, py, x, y, color);
+    if (width > 1) {
+      tft.drawLine(px, py + 1, x, y + 1, color);
     }
     px = x;
     py = y;
@@ -198,56 +173,38 @@ void MonitorGui::drawDial(TFT_eSPI &tft, int index, const char *label, float pct
   drawSoftBubble(tft, x, y, DIAL_W, DIAL_H, Theme::bgPanel);
 
   const int cx = x + DIAL_W / 2;
-  const int cy = y + DIAL_H / 2 + 6;
-  const int r = (DIAL_W < DIAL_H ? DIAL_W : DIAL_H) / 2 - 12;
+  const int cy = y + DIAL_H / 2 + 4;
+  const int r = (DIAL_W < DIAL_H ? DIAL_W : DIAL_H) / 2 - 10;
 
-  // Dial face stack: dark core + light rings
-  tft.fillCircle(cx, cy, r + 6, Theme::dialRingLo);
-  tft.fillCircle(cx, cy, r + 3, Theme::dialRing);
-  tft.fillCircle(cx, cy, r, Theme::dialFace);
-  tft.drawCircle(cx, cy, r - 1, Theme::border);
-  // Inner light highlight crescent
-  tft.drawCircle(cx - 1, cy - 1, r - 6, Theme::dialRingLo);
+  tft.drawCircle(cx, cy, r + 2, Theme::border);
+  tft.drawCircle(cx, cy, r, Theme::accentSoft);
 
-  // Tick marks
-  for (int i = 0; i <= 100; i += 10) {
-    const float deg = ARC_START - ARC_SWEEP * (i / 100.0f);
-    int x0 = 0, y0 = 0, x1 = 0, y1 = 0;
-    const int outer = r - 3;
-    const int inner = r - ((i % 20 == 0) ? 11 : 7);
-    polar(cx, cy, deg, inner, x0, y0);
-    polar(cx, cy, deg, outer, x1, y1);
-    const uint16_t tickCol = (i >= 90) ? Theme::danger : (i >= 70 ? Theme::warn : Theme::accentPale);
-    tft.drawLine(x0, y0, x1, y1, tickCol);
-  }
+  // Track arc
+  drawArcSpan(tft, cx, cy, r - 4, ARC_START, ARC_START - ARC_SWEEP, Theme::barTrack, 2);
 
-  // Track + value arcs (dual width for depth)
-  drawArcSpan(tft, cx, cy, r - 5, ARC_START, ARC_START - ARC_SWEEP, Theme::barTrack, 3);
+  // Value arc
   if (pctQ > 0.0f) {
     const float endDeg = ARC_START - ARC_SWEEP * (pctQ / 100.0f);
-    const uint16_t fill = Theme::barColorFor(pctQ);
-    drawArcSpan(tft, cx, cy, r - 5, ARC_START, endDeg, fill, 4);
-    drawArcSpan(tft, cx, cy, r - 9, ARC_START, endDeg, Theme::accentGlow, 1);
+    drawArcSpan(tft, cx, cy, r - 4, ARC_START, endDeg, Theme::barColorFor(pctQ), 3);
   }
 
-  // Needle with light-blue hub
+  // Needle
   const float needleDeg = ARC_START - ARC_SWEEP * (pctQ / 100.0f);
   int nx = 0;
   int ny = 0;
-  polar(cx, cy, needleDeg, r - 12, nx, ny);
+  polar(cx, cy, needleDeg, r - 10, nx, ny);
   tft.drawLine(cx, cy, nx, ny, Theme::textPrimary);
-  tft.fillCircle(cx, cy, 5, Theme::accentSoft);
-  tft.fillCircle(cx, cy, 2, Theme::accentPale);
+  tft.fillCircle(cx, cy, 3, Theme::accent);
 
   // Labels
   tft.setTextDatum(MC_DATUM);
-  tft.setTextColor(Theme::accentPale, Theme::bgPanel);
-  tft.drawString(label, cx, y + 9, 2);
+  tft.setTextColor(Theme::textMuted, Theme::bgPanel);
+  tft.drawString(label, cx, y + 10, 2);
 
   char value[12];
   snprintf(value, sizeof(value), "%d%%", static_cast<int>(pctQ));
-  tft.setTextColor(Theme::textPrimary, Theme::dialFace);
-  tft.drawString(value, cx, cy + 16, 2);
+  tft.setTextColor(Theme::textPrimary, Theme::bgPanel);
+  tft.drawString(value, cx, cy + 14, 2);
 
   if (showTemp) {
     char tempBuf[12];
@@ -256,9 +213,8 @@ void MonitorGui::drawDial(TFT_eSPI &tft, int index, const char *label, float pct
     } else {
       snprintf(tempBuf, sizeof(tempBuf), "--");
     }
-    tft.fillRoundRect(cx - 18, y + DIAL_H - 18, 36, 14, 7, Theme::dialFace);
-    tft.setTextColor(Theme::tempColorFor(tempC), Theme::dialFace);
-    tft.drawString(tempBuf, cx, y + DIAL_H - 11, 2);
+    tft.setTextColor(Theme::tempColorFor(tempC), Theme::bgPanel);
+    tft.drawString(tempBuf, cx, y + DIAL_H - 10, 2);
   }
 
   tft.setTextDatum(TL_DATUM);
@@ -284,16 +240,15 @@ void MonitorGui::drawFooter(TFT_eSPI &tft, const SystemMetrics &m, const char *s
   snprintf(line, sizeof(line), "Disk %d%%  Net %.1fMb  %s", static_cast<int>(m.diskUsed + 0.5f),
            static_cast<double>(m.netDown), status);
   tft.setTextDatum(ML_DATUM);
-  tft.setTextColor(Theme::accentPale, Theme::bgPanel);
+  tft.setTextColor(Theme::textMuted, Theme::bgPanel);
   tft.drawString(line, x + 8, y + FOOTER_H / 2, 2);
 
   if (m.fps > 0) {
     char fpsBuf[12];
     snprintf(fpsBuf, sizeof(fpsBuf), "%u", static_cast<unsigned>(m.fps));
-    tft.fillRoundRect(x + w - 44, y + 5, 36, 16, 8, Theme::accentSoft);
-    tft.setTextDatum(MC_DATUM);
-    tft.setTextColor(Theme::textPrimary, Theme::accentSoft);
-    tft.drawString(fpsBuf, x + w - 26, y + FOOTER_H / 2, 2);
+    tft.setTextDatum(MR_DATUM);
+    tft.setTextColor(Theme::accentSoft, Theme::bgPanel);
+    tft.drawString(fpsBuf, x + w - 8, y + FOOTER_H / 2, 2);
   }
   tft.setTextDatum(TL_DATUM);
 
