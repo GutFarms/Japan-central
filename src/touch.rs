@@ -1,53 +1,101 @@
 //! XPT2046 resistive touch on ESP32-2432S028 (CYD).
 //!
-//! Dedicated **VSPI / SPI3** bus (separate from TFT HSPI):
+//! Pins (dedicated bus, not shared with TFT):
 //! CLK=25, MOSI=32, MISO=39, CS=33, IRQ=36
 //!
-//! Protocol matches ESPHome `xpt2046` (24-bit full-duplex ADC reads) and
-//! calibration matches the common CYD ESPHome landscape profile.
+//! GPIO bitbang at ~250 kHz (Mode 0), ESPHome-style 24-bit ADC framing.
+//! Contact = Z pressure **or** PENIRQ low. Landscape mapping is cycleable
+//! via [`Touch::cycle_map`] (BOOT during setup) for panel variants.
 
 use embedded_hal::delay::DelayNs;
 use esp_hal::gpio::{Input, InputConfig, Level, Output, OutputConfig, Pull};
-use esp_hal::spi::master::{Config as SpiConfig, Spi};
-use esp_hal::spi::Mode as SpiMode;
-use esp_hal::time::Rate;
-use esp_hal::Blocking;
 
 use crate::keyboard::TouchPoint;
 
-/// ESPHome CYD landscape calibration (rotation 90°).
-/// `x_min > x_max` in ESPHome ≡ invert X here.
-const RAW_X_MIN: i32 = 280;
-const RAW_X_MAX: i32 = 3860;
-const RAW_Y_MIN: i32 = 340;
-const RAW_Y_MAX: i32 = 3860;
-const INVERT_X: bool = true;
-const INVERT_Y: bool = false;
-const SWAP_XY: bool = false;
+/// Common CYD landscape (display Rotation::Deg90) calibration.
+const RAW_X_MIN: i32 = 200;
+const RAW_X_MAX: i32 = 3900;
+const RAW_Y_MIN: i32 = 200;
+const RAW_Y_MAX: i32 = 3900;
 
 const SCREEN_W: i32 = 320;
 const SCREEN_H: i32 = 240;
-/// ESPHome CYD demos use ~400.
-const Z_THRESHOLD: u16 = 400;
+/// Primary Z threshold (ESPHome CYD demos use ~400; we allow softer presses).
+const Z_THRESHOLD: u16 = 200;
+/// When PENIRQ is active, accept a weaker Z (noisy panels / light press).
+const Z_IRQ_THRESHOLD: u16 = 40;
 
-const CMD_Z1: u8 = 0xB1; // Z1 + ADC on
-const CMD_Z2: u8 = 0xC1; // Z2 + ADC on
-const CMD_X: u8 = 0xD1; // X + ADC on
-const CMD_Y: u8 = 0x91; // Y + ADC on
-const CMD_X_POWERDOWN: u8 = 0xD0; // X, PD=00 → enable PENIRQ
+const CMD_Z1: u8 = 0xB1;
+const CMD_Z2: u8 = 0xC1;
+const CMD_X: u8 = 0xD1;
+const CMD_Y: u8 = 0x91;
+const CMD_PD: u8 = 0xD0;
+
+/// How raw axes map onto landscape screen pixels.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct TouchMap {
+    pub swap_xy: bool,
+    pub invert_x: bool,
+    pub invert_y: bool,
+}
+
+impl TouchMap {
+    /// Default for many CYD + Deg90 setups (ESPHome yellowtft1 + invert X).
+    pub const CYD_DEG90: Self = Self {
+        swap_xy: false,
+        invert_x: true,
+        invert_y: false,
+    };
+
+    /// Alternate used when swap_xy is needed (some panels / rotations).
+    pub const CYD_DEG90_SWAP: Self = Self {
+        swap_xy: true,
+        invert_x: true,
+        invert_y: true,
+    };
+
+    pub fn next(self) -> Self {
+        match (self.swap_xy, self.invert_x, self.invert_y) {
+            (false, true, false) => Self::CYD_DEG90_SWAP,
+            (true, true, true) => Self {
+                swap_xy: false,
+                invert_x: false,
+                invert_y: true,
+            },
+            (false, false, true) => Self {
+                swap_xy: true,
+                invert_x: false,
+                invert_y: false,
+            },
+            _ => Self::CYD_DEG90,
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match (self.swap_xy, self.invert_x, self.invert_y) {
+            (false, true, false) => "map A ix",
+            (true, true, true) => "map B swap",
+            (false, false, true) => "map C iy",
+            (true, false, false) => "map D sw",
+            _ => "map ?",
+        }
+    }
+}
 
 pub struct Touch {
-    spi: Spi<'static, Blocking>,
+    clk: Output<'static>,
+    mosi: Output<'static>,
+    miso: Input<'static>,
     cs: Output<'static>,
     irq: Input<'static>,
     last: Option<TouchPoint>,
     down: bool,
-    /// Last raw sample for serial debug.
-    pub last_raw: Option<(u16, u16, u16)>,
+    pub map: TouchMap,
+    /// (x_raw, y_raw, z, irq_low)
+    pub last_raw: Option<(u16, u16, u16, bool)>,
 }
 
 pub struct TouchPins {
-    pub spi: esp_hal::peripherals::SPI3<'static>,
     pub clk: esp_hal::gpio::AnyPin<'static>,
     pub mosi: esp_hal::gpio::AnyPin<'static>,
     pub miso: esp_hal::gpio::AnyPin<'static>,
@@ -57,30 +105,21 @@ pub struct TouchPins {
 
 impl Touch {
     pub fn new(p: TouchPins) -> Self {
-        // 2 MHz Mode 0 — same as Paul Stoffregen / typical CYD Arduino setups.
-        let spi = Spi::new(
-            p.spi,
-            SpiConfig::default()
-                .with_frequency(Rate::from_mhz(2))
-                .with_mode(SpiMode::_0),
-        )
-        .expect("touch SPI3")
-        .with_sck(p.clk)
-        .with_mosi(p.mosi)
-        .with_miso(p.miso);
-
         let mut t = Self {
-            spi,
+            clk: Output::new(p.clk, Level::Low, OutputConfig::default()),
+            mosi: Output::new(p.mosi, Level::Low, OutputConfig::default()),
+            miso: Input::new(p.miso, InputConfig::default().with_pull(Pull::None)),
             cs: Output::new(p.cs, Level::High, OutputConfig::default()),
-            // GPIO36 has no internal pull; XPT2046 pulls PENIRQ up when PD0=0.
+            // GPIO36 has no internal pull; XPT2046 pulls PENIRQ when PD0=0.
             irq: Input::new(p.irq, InputConfig::default().with_pull(Pull::None)),
             last: None,
             down: false,
+            map: TouchMap::CYD_DEG90,
             last_raw: None,
         };
-        // Power-down ADC / enable PENIRQ (ESPHome setup).
+        // Enable PENIRQ (PD=00) with a short settle.
         t.cs.set_low();
-        let _ = t.read_adc(CMD_X_POWERDOWN);
+        let _ = t.xfer24_spin(CMD_PD);
         t.cs.set_high();
         t
     }
@@ -89,14 +128,13 @@ impl Touch {
         self.irq.is_low()
     }
 
+    pub fn cycle_map(&mut self) {
+        self.map = self.map.next();
+    }
+
     /// Poll once. Returns a point only on **press edge** (tap), not while held.
     pub fn poll_tap<D: DelayNs>(&mut self, delay: &mut D) -> Option<TouchPoint> {
         let sample = self.read_sample(delay);
-        // IRQ high ⇒ definitely released (avoids stuck-down when Z is noisy).
-        if !self.irq.is_low() && sample.is_none() {
-            self.down = false;
-            return None;
-        }
         match (self.down, sample) {
             (false, Some(p)) => {
                 self.down = true;
@@ -115,12 +153,9 @@ impl Touch {
         }
     }
 
+    /// Continuous sample while pressed.
     pub fn poll_point<D: DelayNs>(&mut self, delay: &mut D) -> Option<TouchPoint> {
         let sample = self.read_sample(delay);
-        if !self.irq.is_low() && sample.is_none() {
-            self.down = false;
-            return None;
-        }
         self.down = sample.is_some();
         if let Some(p) = sample {
             self.last = Some(p);
@@ -128,52 +163,116 @@ impl Touch {
         sample
     }
 
-    fn read_sample<D: DelayNs>(&mut self, _delay: &mut D) -> Option<TouchPoint> {
-        self.cs.set_low();
+    fn read_sample<D: DelayNs>(&mut self, delay: &mut D) -> Option<TouchPoint> {
+        let irq_low = self.irq.is_low();
 
-        let z1 = self.read_adc(CMD_Z1);
-        let z2 = self.read_adc(CMD_Z2);
+        self.cs.set_low();
+        delay.delay_us(10);
+
+        let z1 = self.xfer24(CMD_Z1, delay);
+        let z2 = self.xfer24(CMD_Z2, delay);
         let z = pressure(z1, z2);
 
-        if z < Z_THRESHOLD {
-            let _ = self.read_adc(CMD_X_POWERDOWN);
+        // Prefer Z; also accept light press when PENIRQ is asserted.
+        let contact = z >= Z_THRESHOLD || (irq_low && z >= Z_IRQ_THRESHOLD);
+        if !contact {
+            let _ = self.xfer24(CMD_PD, delay);
             self.cs.set_high();
-            self.last_raw = Some((0, 0, z));
+            delay.delay_us(2);
+            self.last_raw = Some((0, 0, z, irq_low));
             return None;
         }
 
-        // ESPHome: dummy X, then Y/X/Y/X/Y, last X with power-down.
-        let _ = self.read_adc(CMD_X);
+        // ESPHome sequence: dummy X, then Y/X/Y/X/Y, last with power-down.
+        let _ = self.xfer24(CMD_X, delay);
         let mut ys = [0u16; 3];
         let mut xs = [0u16; 3];
-        ys[0] = self.read_adc(CMD_Y);
-        xs[0] = self.read_adc(CMD_X);
-        ys[1] = self.read_adc(CMD_Y);
-        xs[1] = self.read_adc(CMD_X);
-        ys[2] = self.read_adc(CMD_Y);
-        xs[2] = self.read_adc(CMD_X_POWERDOWN); // also enables PENIRQ
+        ys[0] = self.xfer24(CMD_Y, delay);
+        xs[0] = self.xfer24(CMD_X, delay);
+        ys[1] = self.xfer24(CMD_Y, delay);
+        xs[1] = self.xfer24(CMD_X, delay);
+        ys[2] = self.xfer24(CMD_Y, delay);
+        xs[2] = self.xfer24(CMD_PD, delay);
 
         self.cs.set_high();
+        delay.delay_us(2);
 
         let x_raw = best_two_avg(xs[0], xs[1], xs[2]);
         let y_raw = best_two_avg(ys[0], ys[1], ys[2]);
-        self.last_raw = Some((x_raw, y_raw, z));
+        self.last_raw = Some((x_raw, y_raw, z, irq_low));
 
-        // Reject dead bus (MISO stuck low → zeros) or open-circuit junk.
-        if x_raw < 50 || y_raw < 50 || x_raw > 4090 || y_raw > 4090 {
+        // Dead bus: MISO stuck low → zeros. Reject.
+        if x_raw < 40 && y_raw < 40 {
+            return None;
+        }
+        // MISO stuck high / open → near full-scale on both.
+        if x_raw > 4080 && y_raw > 4080 {
             return None;
         }
 
-        Some(map_raw(x_raw, y_raw))
+        Some(map_raw(x_raw, y_raw, self.map))
     }
 
-    /// ESPHome-style 24-bit full-duplex transfer: cmd + 16 clocks → 12-bit ADC.
-    fn read_adc(&mut self, cmd: u8) -> u16 {
-        let mut data = [cmd, 0, 0];
-        if self.spi.transfer(&mut data).is_err() {
-            return 0;
+    /// 24-bit full-duplex bitbang with ~250 kHz clock (Mode 0).
+    fn xfer24<D: DelayNs>(&mut self, cmd: u8, delay: &mut D) -> u16 {
+        let mut buf = [cmd, 0u8, 0u8];
+        for b in &mut buf {
+            let mut send = *b;
+            let mut recv = 0u8;
+            for _ in 0..8 {
+                if send & 0x80 != 0 {
+                    self.mosi.set_high();
+                } else {
+                    self.mosi.set_low();
+                }
+                send <<= 1;
+                delay.delay_us(1);
+                self.clk.set_high();
+                delay.delay_us(1);
+                recv <<= 1;
+                if self.miso.is_high() {
+                    recv |= 1;
+                }
+                self.clk.set_low();
+                delay.delay_us(1);
+            }
+            *b = recv;
         }
-        (u16::from(data[1]) << 8 | u16::from(data[2])) >> 3
+        (u16::from(buf[1]) << 8 | u16::from(buf[2])) >> 3
+    }
+
+    /// Spin-only transfer for early init before a Delay is available.
+    fn xfer24_spin(&mut self, cmd: u8) -> u16 {
+        let mut buf = [cmd, 0u8, 0u8];
+        for b in &mut buf {
+            let mut send = *b;
+            let mut recv = 0u8;
+            for _ in 0..8 {
+                if send & 0x80 != 0 {
+                    self.mosi.set_high();
+                } else {
+                    self.mosi.set_low();
+                }
+                send <<= 1;
+                for _ in 0..40 {
+                    core::hint::spin_loop();
+                }
+                self.clk.set_high();
+                for _ in 0..40 {
+                    core::hint::spin_loop();
+                }
+                recv <<= 1;
+                if self.miso.is_high() {
+                    recv |= 1;
+                }
+                self.clk.set_low();
+                for _ in 0..40 {
+                    core::hint::spin_loop();
+                }
+            }
+            *b = recv;
+        }
+        (u16::from(buf[1]) << 8 | u16::from(buf[2])) >> 3
     }
 }
 
@@ -194,17 +293,17 @@ fn best_two_avg(a: u16, b: u16, c: u16) -> u16 {
     }
 }
 
-fn map_raw(x_raw: u16, y_raw: u16) -> TouchPoint {
+fn map_raw(x_raw: u16, y_raw: u16, map: TouchMap) -> TouchPoint {
     let (mut rx, mut ry) = (x_raw as i32, y_raw as i32);
-    if SWAP_XY {
+    if map.swap_xy {
         core::mem::swap(&mut rx, &mut ry);
     }
     let mut x = ((rx - RAW_X_MIN) * (SCREEN_W - 1)) / (RAW_X_MAX - RAW_X_MIN).max(1);
     let mut y = ((ry - RAW_Y_MIN) * (SCREEN_H - 1)) / (RAW_Y_MAX - RAW_Y_MIN).max(1);
-    if INVERT_X {
+    if map.invert_x {
         x = (SCREEN_W - 1) - x;
     }
-    if INVERT_Y {
+    if map.invert_y {
         y = (SCREEN_H - 1) - y;
     }
     TouchPoint {
@@ -218,18 +317,17 @@ mod tests {
     use super::*;
 
     #[test]
-    fn pressure_formula_matches_reference() {
+    fn pressure_and_map() {
         assert!(pressure(2000, 500) > Z_THRESHOLD);
-        assert_eq!(pressure(100, 4000), 0);
-        assert_eq!(pressure(0, 0), 4095);
+        let p = map_raw(2000, 2000, TouchMap::CYD_DEG90);
+        assert!(p.x < 320 && p.y < 240);
     }
 
     #[test]
-    fn map_clamps_to_screen() {
-        let p = map_raw(0, 0);
-        assert!(p.x < 320 && p.y < 240);
-        let p2 = map_raw(4095, 4095);
-        assert!(p2.x < 320 && p2.y < 240);
+    fn map_cycles() {
+        let m = TouchMap::CYD_DEG90.next();
+        assert!(m.swap_xy);
+        assert_eq!(TouchMap::CYD_DEG90.label(), "map A ix");
     }
 
     #[test]

@@ -117,9 +117,8 @@ async fn main(spawner: Spawner) -> ! {
         }
     };
 
-    // XPT2046 on dedicated VSPI (SPI3) — same pins as Arduino CYD examples.
+    // XPT2046 bitbang on dedicated pins (CYD / witnessmenow style).
     let mut touch = Touch::new(TouchPins {
-        spi: peripherals.SPI3,
         clk: peripherals.GPIO25.degrade(),
         mosi: peripherals.GPIO32.degrade(),
         miso: peripherals.GPIO39.degrade(),
@@ -127,17 +126,14 @@ async fn main(spawner: Spawner) -> ! {
         irq: peripherals.GPIO36.degrade(),
     });
     let mut touch_delay = Delay::new();
-    serial_writeln(&mut usb, "Touch: SPI3 XPT2046 CLK25/MOSI32/MISO39/CS33/IRQ36");
-    // Probe once so serial shows whether the panel answers.
-    let _ = touch.poll_point(&mut touch_delay);
-    if let Some((x, y, z)) = touch.last_raw {
-        let mut m: String<48> = String::new();
-        let _ = core::fmt::Write::write_fmt(&mut m, format_args!("Touch probe raw x={x} y={y} z={z}"));
-        serial_writeln(&mut usb, m.as_str());
-    }
+    serial_writeln(
+        &mut usb,
+        "Touch: bitbang XPT2046 CLK25/MOSI32/MISO39/CS33/IRQ36",
+    );
 
     let _ = display.draw_splash();
-    Timer::after(Duration::from_millis(700)).await;
+    Timer::after(Duration::from_millis(400)).await;
+    run_touch_probe(&mut usb, &mut display, &mut touch, &mut touch_delay, &boot_btn).await;
 
     let mut wifi_token: Option<WIFI<'static>> = Some(peripherals.WIFI);
     let (mut pool, from_flash) = resolve_pool_config(
@@ -148,6 +144,7 @@ async fn main(spawner: Spawner) -> ! {
         &mut store,
         force_change,
         &mut wifi_token,
+        &boot_btn,
     )
     .await;
 
@@ -260,14 +257,15 @@ async fn main(spawner: Spawner) -> ! {
                     gui.on_action_press();
                     if gui.take_change_request() {
                         if let Some(updated) = password_gated_change(
-                        &mut usb,
-                        &mut display,
-                        &mut touch,
-                        &mut touch_delay,
-                        &mut store,
-                        &pool,
-                        &mut None,
-                    )
+                            &mut usb,
+                            &mut display,
+                            &mut touch,
+                            &mut touch_delay,
+                            &mut store,
+                            &pool,
+                            &mut None,
+                            &boot_btn,
+                        )
                         .await
                         {
                             pool = updated;
@@ -317,14 +315,15 @@ async fn main(spawner: Spawner) -> ! {
                     gui.activate_menu();
                     if gui.take_change_request() {
                         if let Some(updated) = password_gated_change(
-                        &mut usb,
-                        &mut display,
-                        &mut touch,
-                        &mut touch_delay,
-                        &mut store,
-                        &pool,
-                        &mut None,
-                    )
+                            &mut usb,
+                            &mut display,
+                            &mut touch,
+                            &mut touch_delay,
+                            &mut store,
+                            &pool,
+                            &mut None,
+                            &boot_btn,
+                        )
                         .await
                         {
                             pool = updated;
@@ -351,6 +350,7 @@ async fn main(spawner: Spawner) -> ! {
                         &mut store,
                         &pool,
                         &mut None,
+                        &boot_btn,
                     )
                     .await
                     {
@@ -374,14 +374,15 @@ async fn main(spawner: Spawner) -> ! {
             let cmd = cmd_line.as_str().trim();
             if is_change_command(cmd) {
                 if let Some(updated) = password_gated_change(
-                        &mut usb,
-                        &mut display,
-                        &mut touch,
-                        &mut touch_delay,
-                        &mut store,
-                        &pool,
-                        &mut None,
-                    )
+                    &mut usb,
+                    &mut display,
+                    &mut touch,
+                    &mut touch_delay,
+                    &mut store,
+                    &pool,
+                    &mut None,
+                    &boot_btn,
+                )
                 .await
                 {
                     pool = updated;
@@ -643,6 +644,7 @@ async fn resolve_pool_config<D: embedded_hal::delay::DelayNs>(
     store: &mut ConfigStore<'_>,
     force_change: bool,
     wifi_token: &mut Option<WIFI<'static>>,
+    boot: &Input<'_>,
 ) -> (PoolConfig, bool) {
     match store.load() {
         Ok(saved) => {
@@ -677,6 +679,7 @@ async fn resolve_pool_config<D: embedded_hal::delay::DelayNs>(
                     store,
                     &saved,
                     wifi_token,
+                    boot,
                 )
                 .await
                 {
@@ -690,7 +693,7 @@ async fn resolve_pool_config<D: embedded_hal::delay::DelayNs>(
         Err(_) => {
             serial_writeln(usb, "");
             serial_writeln(usb, "No saved credentials — first-time setup (touch or serial).");
-            let cfg = collect_pool_config(usb, display, touch, touch_delay, wifi_token).await;
+            let cfg = collect_pool_config(usb, display, touch, touch_delay, wifi_token, boot).await;
             match store.save(&cfg) {
                 Ok(()) => serial_writeln(usb, "Credentials saved to flash."),
                 Err(_) => serial_writeln(usb, "WARNING: flash save failed."),
@@ -708,6 +711,7 @@ async fn password_gated_change<D: embedded_hal::delay::DelayNs>(
     store: &mut ConfigStore<'_>,
     current: &PoolConfig,
     wifi_token: &mut Option<WIFI<'static>>,
+    boot: &Input<'_>,
 ) -> Option<PoolConfig> {
     serial_writeln(usb, "");
     serial_writeln(usb, "=== Change credentials (password required) ===");
@@ -731,6 +735,7 @@ async fn password_gated_change<D: embedded_hal::delay::DelayNs>(
             &mut line,
             true,
             Some((attempt, MAX_PASSWORD_ATTEMPTS)),
+            boot,
         )
         .await;
 
@@ -738,7 +743,7 @@ async fn password_gated_change<D: embedded_hal::delay::DelayNs>(
             Ok(()) => {
                 serial_writeln(usb, "  ok — enter new values");
                 let cfg =
-                    collect_pool_config(usb, display, touch, touch_delay, wifi_token).await;
+                    collect_pool_config(usb, display, touch, touch_delay, wifi_token, boot).await;
                 match store.save(&cfg) {
                     Ok(()) => {
                         serial_writeln(usb, "Updated credentials saved to flash.");
@@ -845,6 +850,7 @@ async fn collect_pool_config<D: embedded_hal::delay::DelayNs>(
     touch: &mut Touch,
     touch_delay: &mut Delay,
     wifi_token: &mut Option<WIFI<'static>>,
+    boot: &Input<'_>,
 ) -> PoolConfig {
     let mut cfg = PoolConfig::new();
     let mut skip_wifi_password = false;
@@ -853,7 +859,7 @@ async fn collect_pool_config<D: embedded_hal::delay::DelayNs>(
     serial_writeln(usb, "=== ESP32-2432S028 Scrypt Miner setup ===");
     serial_writeln(usb, "Step 1: scan & tap a WiFi network (or type / skip).");
     serial_writeln(usb, "Serial: number from scan list, SSID text, or '-' to skip.");
-    serial_writeln(usb, "Then WiFi password (if needed), stratum, worker, pool password, BLE.");
+    serial_writeln(usb, "BOOT short=select/cycle map · Then stratum, worker, password, BLE.");
     serial_writeln(usb, "");
 
     for field in SetupField::ALL {
@@ -865,7 +871,7 @@ async fn collect_pool_config<D: embedded_hal::delay::DelayNs>(
         }
 
         if field == SetupField::WifiSsid {
-            match pick_wifi_ssid(usb, display, touch, touch_delay, wifi_token).await {
+            match pick_wifi_ssid(usb, display, touch, touch_delay, wifi_token, boot).await {
                 WifiPick::Network { ssid, open } => {
                     match cfg.set(SetupField::WifiSsid, ssid.as_str()) {
                         Ok(()) => {
@@ -907,6 +913,7 @@ async fn collect_pool_config<D: embedded_hal::delay::DelayNs>(
                 &mut line,
                 field.is_secret(),
                 None,
+                boot,
             )
             .await;
 
@@ -952,6 +959,7 @@ async fn pick_wifi_ssid<D: embedded_hal::delay::DelayNs>(
     touch: &mut Touch,
     touch_delay: &mut Delay,
     wifi_token: &mut Option<WIFI<'static>>,
+    boot: &Input<'_>,
 ) -> WifiPick {
     let mut networks: heapless::Vec<ScannedNetwork, 8> = heapless::Vec::new();
     let mut scroll = 0usize;
@@ -959,6 +967,7 @@ async fn pick_wifi_ssid<D: embedded_hal::delay::DelayNs>(
     let mut dirty = true;
     let mut byte = [0u8; 1];
     let mut serial_buf: String<64> = String::new();
+    let mut boot_was_down = boot.is_low();
 
     // Initial scan when the WIFI peripheral is still available.
     if let Some(wifi) = wifi_token.take() {
@@ -1054,6 +1063,7 @@ async fn pick_wifi_ssid<D: embedded_hal::delay::DelayNs>(
                         &mut line,
                         false,
                         None,
+                        boot,
                     )
                     .await;
                     let trimmed = line.as_str().trim();
@@ -1073,6 +1083,25 @@ async fn pick_wifi_ssid<D: embedded_hal::delay::DelayNs>(
             }
             continue;
         }
+
+        // BOOT short: select highlighted network (or cycle touch map if none).
+        let boot_down = boot.is_low();
+        if !boot_down && boot_was_down {
+            if let Some(n) = networks.get(scroll) {
+                let mut ssid: String<32> = String::new();
+                let _ = ssid.push_str(n.ssid.as_str());
+                serial_writeln(usb, "BOOT: selected network");
+                return WifiPick::Network {
+                    ssid,
+                    open: n.open,
+                };
+            }
+            touch.cycle_map();
+            serial_write(usb, "Touch map → ");
+            serial_writeln(usb, touch.map.label());
+            dirty = true;
+        }
+        boot_was_down = boot_down;
 
         match usb.read(&mut byte) {
             Ok(0) | Err(_) => {
@@ -1127,11 +1156,19 @@ async fn pick_wifi_ssid<D: embedded_hal::delay::DelayNs>(
 }
 
 fn log_touch(usb: &mut Serial<'_>, touch: &Touch, p: esp32_s3_scrypt_miner::keyboard::TouchPoint) {
-    let mut m: String<64> = String::new();
-    if let Some((rx, ry, z)) = touch.last_raw {
+    let mut m: String<80> = String::new();
+    if let Some((rx, ry, z, irq)) = touch.last_raw {
         let _ = core::fmt::Write::write_fmt(
             &mut m,
-            format_args!("tap screen=({},{}) raw=({},{},z={})", p.x, p.y, rx, ry, z),
+            format_args!(
+                "tap screen=({},{}) raw=({},{},z={},irq={})",
+                p.x,
+                p.y,
+                rx,
+                ry,
+                z,
+                if irq { "L" } else { "H" }
+            ),
         );
     } else {
         let _ = core::fmt::Write::write_fmt(
@@ -1140,6 +1177,108 @@ fn log_touch(usb: &mut Serial<'_>, touch: &Touch, p: esp32_s3_scrypt_miner::keyb
         );
     }
     serial_writeln(usb, m.as_str());
+}
+
+/// Live touch self-test with on-screen crosshair + serial raw dump.
+async fn run_touch_probe<D: embedded_hal::delay::DelayNs>(
+    usb: &mut Serial<'_>,
+    display: &mut Display<'_, D>,
+    touch: &mut Touch,
+    touch_delay: &mut Delay,
+    boot: &Input<'_>,
+) {
+    serial_writeln(usb, "Touch probe — tap glass; BOOT cycles map / skips.");
+    let deadline = Instant::now() + Duration::from_secs(12);
+    let mut boot_was_down = boot.is_low();
+    let mut saw_ok = false;
+    let mut last_log = Instant::now();
+    let mut byte = [0u8; 1];
+
+    while Instant::now() < deadline {
+        let point = touch.poll_point(touch_delay);
+        let (irq_low, z, raw_xy) = match touch.last_raw {
+            Some((x, y, z, irq)) => {
+                let xy = if x > 0 || y > 0 { Some((x, y)) } else { None };
+                (irq, z, xy)
+            }
+            None => (touch.pressed_raw(), 0, None),
+        };
+        if point.is_some() {
+            saw_ok = true;
+        }
+        let screen = point.map(|p| (p.x, p.y));
+        let _ = display.draw_touch_probe(
+            irq_low,
+            z,
+            raw_xy,
+            screen,
+            touch.map.label(),
+            saw_ok,
+        );
+
+        if last_log.elapsed() >= Duration::from_millis(400) {
+            last_log = Instant::now();
+            let mut m: String<72> = String::new();
+            let _ = core::fmt::Write::write_fmt(
+                &mut m,
+                format_args!(
+                    "probe irq={} z={} raw={:?} screen={:?} {}",
+                    if irq_low { "L" } else { "H" },
+                    z,
+                    raw_xy,
+                    screen,
+                    touch.map.label()
+                ),
+            );
+            serial_writeln(usb, m.as_str());
+        }
+
+        let boot_down = boot.is_low();
+        if !boot_down && boot_was_down {
+            if saw_ok {
+                serial_writeln(usb, "Touch probe OK — continuing.");
+                break;
+            }
+            touch.cycle_map();
+            serial_write(usb, "Touch map → ");
+            serial_writeln(usb, touch.map.label());
+        }
+        boot_was_down = boot_down;
+
+        // Any serial key skips the probe early.
+        if usb.read(&mut byte).ok().filter(|&n| n > 0).is_some() {
+            serial_writeln(usb, "Touch probe skipped (serial).");
+            break;
+        }
+
+        if saw_ok && Instant::now() + Duration::from_secs(2) >= deadline {
+            // Keep showing success briefly then exit.
+            break;
+        }
+        if saw_ok {
+            // After first good sample, exit in ~1.5s unless user keeps probing.
+            Timer::after(Duration::from_millis(50)).await;
+            let settle = Instant::now() + Duration::from_millis(1500);
+            while Instant::now() < settle {
+                let _ = touch.poll_point(touch_delay);
+                if boot.is_low() {
+                    break;
+                }
+                Timer::after(Duration::from_millis(40)).await;
+            }
+            serial_writeln(usb, "Touch probe OK — continuing.");
+            break;
+        }
+
+        Timer::after(Duration::from_millis(40)).await;
+    }
+
+    if !saw_ok {
+        serial_writeln(
+            usb,
+            "Touch probe: no tap seen — use serial setup; BOOT still cycles map.",
+        );
+    }
 }
 
 fn print_scan_list(usb: &mut Serial<'_>, networks: &[ScannedNetwork]) {
@@ -1204,11 +1343,13 @@ async fn read_field_touch_or_serial<D: embedded_hal::delay::DelayNs>(
     line: &mut String<128>,
     secret: bool,
     auth: Option<(u8, u8)>,
+    boot: &Input<'_>,
 ) {
     line.clear();
     let mut kb = Keyboard::default();
     let mut dirty = true;
     let mut byte = [0u8; 1];
+    let mut boot_was_down = boot.is_low();
 
     loop {
         if dirty {
@@ -1230,8 +1371,16 @@ async fn read_field_touch_or_serial<D: embedded_hal::delay::DelayNs>(
                 dirty = true;
                 continue;
             }
-            serial_writeln(usb, "  (tap missed key — try again)");
+            serial_writeln(usb, "  (tap missed key — BOOT cycles map)");
         }
+
+        let boot_down = boot.is_low();
+        if !boot_down && boot_was_down {
+            touch.cycle_map();
+            serial_write(usb, "Touch map → ");
+            serial_writeln(usb, touch.map.label());
+        }
+        boot_was_down = boot_down;
 
         match usb.read(&mut byte) {
             Ok(0) | Err(_) => {

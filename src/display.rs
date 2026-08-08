@@ -9,7 +9,7 @@ use embedded_graphics::mono_font::ascii::{FONT_10X20, FONT_6X10, FONT_6X12, FONT
 use embedded_graphics::mono_font::MonoTextStyle;
 use embedded_graphics::pixelcolor::{Rgb565, RgbColor};
 use embedded_graphics::prelude::{Primitive, WebColors};
-use embedded_graphics::primitives::{PrimitiveStyle, Rectangle, RoundedRectangle};
+use embedded_graphics::primitives::{Line, PrimitiveStyle, Rectangle, RoundedRectangle};
 use embedded_graphics::text::Text;
 use embedded_hal::delay::DelayNs;
 use embedded_hal_bus::spi::ExclusiveDevice;
@@ -225,6 +225,74 @@ impl<'a, D: DelayNs> Display<'a, D> {
         self.draw_text(&line, Point::new(48, 130), LABEL)?;
         self.draw_text("warming up…", Point::new(118, 160), MUTED)?;
         self.draw_text("tap the glass · type on keys", Point::new(70, 220), KEY_TXT_DIM)?;
+        Ok(())
+    }
+
+    /// Live touch self-test: raw ADC + optional crosshair.
+    pub fn draw_touch_probe(
+        &mut self,
+        irq_low: bool,
+        z: u16,
+        raw_xy: Option<(u16, u16)>,
+        screen: Option<(u16, u16)>,
+        map_label: &str,
+        ok: bool,
+    ) -> Result<(), Error> {
+        self.wake_clear()?;
+        self.last_screen = None;
+        self.fill_rect(0, 0, DISPLAY_WIDTH as u32, 8, if ok { Rgb565::CSS_LIME_GREEN } else { ACCENT_HOT })?;
+        self.draw_text("SCRYPT", Point::new(12, 28), BRAND)?;
+        self.draw_text("touch check", Point::new(200, 28), LABEL)?;
+
+        let mut l1: String<40> = String::new();
+        let _ = write!(
+            l1,
+            "irq={}  z={}  {}",
+            if irq_low { "LOW" } else { "high" },
+            z,
+            map_label
+        );
+        self.draw_text(l1.as_str(), Point::new(12, 52), VALUE_SM)?;
+
+        let mut l2: String<40> = String::new();
+        match raw_xy {
+            Some((x, y)) => {
+                let _ = write!(l2, "raw x={} y={}", x, y);
+            }
+            None => {
+                let _ = write!(l2, "raw (no contact)");
+            }
+        }
+        self.draw_text(l2.as_str(), Point::new(12, 72), MUTED)?;
+
+        if let Some((x, y)) = screen {
+            let mut l3: String<32> = String::new();
+            let _ = write!(l3, "screen {},{}", x, y);
+            self.draw_text(l3.as_str(), Point::new(12, 92), OK)?;
+            let px = i32::from(x);
+            let py = i32::from(y);
+            let style = PrimitiveStyle::with_stroke(Rgb565::CSS_ORANGE, 1);
+            Line::new(Point::new(px.saturating_sub(12), py), Point::new(px + 12, py))
+                .into_styled(style)
+                .draw(&mut self.display)
+                .map_err(|_| Error::DisplayInterface("line"))?;
+            Line::new(Point::new(px, py.saturating_sub(12)), Point::new(px, py + 12))
+                .into_styled(style)
+                .draw(&mut self.display)
+                .map_err(|_| Error::DisplayInterface("line"))?;
+        } else {
+            self.draw_text("tap the glass…", Point::new(12, 92), MUTED)?;
+        }
+
+        self.draw_text(
+            if ok {
+                "OK — BOOT or wait to continue"
+            } else {
+                "BOOT=cycle map · serial always works"
+            },
+            Point::new(12, 220),
+            KEY_TXT_DIM,
+        )?;
         Ok(())
     }
 
