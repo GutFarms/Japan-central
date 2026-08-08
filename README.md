@@ -19,6 +19,9 @@ Educational / demo miner only — not profitable network mining.
 
 | Control | Action |
 |---------|--------|
+| **Touch** tab strip | Jump to MINE / CONF / RADIO / MENU |
+| **Touch** keyboard | Type credentials during setup / auth (OK / skip) |
+| **Touch** menu row | Activate option |
 | **BOOT** short press | Next tab, or move menu highlight |
 | **BOOT** long press (~0.7s) | Open menu / activate selected item |
 | Serial `change` | Password-gated credential edit |
@@ -54,7 +57,8 @@ Stratum worker/endpoint/password changes **reconnect without reboot**. After cha
 | MCU | ESP32-WROOM-32 |
 | Display | ILI9341 SPI, 320×240 landscape, backlight GPIO21 |
 | TFT SPI | SCLK=14, MOSI=13, MISO=12, CS=15, DC=2 |
-| Buttons | BOOT=GPIO0 (short/long); no second button on stock PCB |
+| Buttons | BOOT=GPIO0 (short/long); **touch** tabs + on-screen keyboard |
+| Touch | XPT2046 CLK=25 MOSI=32 MISO=39 CS=33 IRQ=36 |
 | Serial | USB-UART CH340 → UART0 (TX=1, RX=3) |
 | Radio | Onboard WiFi + BLE (`esp-radio` + `embassy-net` + `trouble-host` 0.6) |
 | Flash config | Sector at `0x3FF000` (end of 4 MiB window) |

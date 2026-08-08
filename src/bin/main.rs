@@ -6,8 +6,8 @@
 //! optional BLE start from those settings. When WiFi is configured, a
 //! **stratum TCP client** connects to the pool and mines real jobs.
 //!
-//! Controls: **BOOT** short-press = next tab / menu highlight; long-press = menu
-//! activate. Type `change` / `radio` / `stratum` on serial.
+//! Controls: **touch** tabs/menu/on-screen keyboard; **BOOT** short=next tab,
+//! long=menu. Serial still accepts `change` / `radio` / `stratum`.
 //!
 //! Flash (ESP Rust toolchain + espflash required):
 //! ```text
@@ -40,10 +40,12 @@ use log::info;
 use esp32_s3_scrypt_miner::config::{ConfigError, PoolConfig, SetupField};
 use esp32_s3_scrypt_miner::display::{Display, DisplayPeripherals};
 use esp32_s3_scrypt_miner::gui::GuiState;
+use esp32_s3_scrypt_miner::keyboard::{hit_gui, GuiHit, Keyboard};
 use esp32_s3_scrypt_miner::miner::ScryptMiner;
 use esp32_s3_scrypt_miner::persist::ConfigStore;
 use esp32_s3_scrypt_miner::radio::{self, RadioStatus};
 use esp32_s3_scrypt_miner::stratum::{self, JobMeta, StratumStatus};
+use esp32_s3_scrypt_miner::touch::{Touch, TouchPins};
 
 esp_bootloader_esp_idf::esp_app_desc!();
 
@@ -109,11 +111,28 @@ async fn main(spawner: Spawner) -> ! {
         }
     };
 
-    let _ = display.draw_splash();
-    Timer::after(Duration::from_millis(600)).await;
+    // XPT2046 on dedicated SPI pins (bitbang).
+    let mut touch = Touch::new(TouchPins {
+        clk: peripherals.GPIO25.degrade(),
+        mosi: peripherals.GPIO32.degrade(),
+        miso: peripherals.GPIO39.degrade(),
+        cs: peripherals.GPIO33.degrade(),
+        irq: peripherals.GPIO36.degrade(),
+    });
+    let mut touch_delay = Delay::new();
 
-    let (mut pool, from_flash) =
-        resolve_pool_config(&mut usb, &mut display, &mut store, force_change).await;
+    let _ = display.draw_splash();
+    Timer::after(Duration::from_millis(700)).await;
+
+    let (mut pool, from_flash) = resolve_pool_config(
+        &mut usb,
+        &mut display,
+        &mut touch,
+        &mut touch_delay,
+        &mut store,
+        force_change,
+    )
+    .await;
 
     let stratum_enabled = if let Some(stack) =
         radio::start(&spawner, peripherals.WIFI, peripherals.BT, &pool)
@@ -135,7 +154,7 @@ async fn main(spawner: Spawner) -> ! {
         serial_writeln(&mut usb, "Loaded saved credentials from flash.");
         serial_writeln(
             &mut usb,
-            "GUI: BOOT short=tabs, long=menu. Serial: change | radio | stratum",
+            "GUI: tap tabs/keyboard · BOOT short=tabs, long=menu · serial: change",
         );
     } else {
         serial_writeln(&mut usb, "Credentials saved to flash for next boot.");
@@ -199,8 +218,15 @@ async fn main(spawner: Spawner) -> ! {
                 if long {
                     gui.on_action_press();
                     if gui.take_change_request() {
-                        if let Some(updated) =
-                            password_gated_change(&mut usb, &mut display, &mut store, &pool).await
+                        if let Some(updated) = password_gated_change(
+                            &mut usb,
+                            &mut display,
+                            &mut touch,
+                            &mut touch_delay,
+                            &mut store,
+                            &pool,
+                        )
+                        .await
                         {
                             pool = updated;
                             if stratum_enabled {
@@ -224,6 +250,7 @@ async fn main(spawner: Spawner) -> ! {
                 } else {
                     gui.on_boot_short_press();
                 }
+                display.invalidate();
                 radio_status = radio::snapshot().await;
                 if stratum_enabled {
                     stratum_status = stratum::snapshot().await;
@@ -233,11 +260,84 @@ async fn main(spawner: Spawner) -> ! {
         }
         boot_was_down = boot_down;
 
+        // Touch: tab strip, menu rows, config "change" band.
+        if let Some(p) = touch.poll_tap(&mut touch_delay) {
+            let on_menu = gui.screen == esp32_s3_scrypt_miner::gui::GuiScreen::Menu;
+            match hit_gui(p, on_menu) {
+                Some(GuiHit::Tab(i)) => {
+                    gui.set_tab(i);
+                    display.invalidate();
+                    let _ =
+                        display.draw_gui(&gui, &stats, &pool, &radio_status, &stratum_status, true);
+                }
+                Some(GuiHit::MenuRow(i)) => {
+                    gui.select_menu_row(i);
+                    gui.activate_menu();
+                    if gui.take_change_request() {
+                        if let Some(updated) = password_gated_change(
+                            &mut usb,
+                            &mut display,
+                            &mut touch,
+                            &mut touch_delay,
+                            &mut store,
+                            &pool,
+                        )
+                        .await
+                        {
+                            pool = updated;
+                            if stratum_enabled {
+                                stratum::apply_pool_config(&pool).await;
+                            }
+                            let _ = display.draw_config_summary(&pool, true);
+                            Timer::after(Duration::from_secs(2)).await;
+                        }
+                        gui.screen = esp32_s3_scrypt_miner::gui::GuiScreen::Mining;
+                    }
+                    display.invalidate();
+                    let _ =
+                        display.draw_gui(&gui, &stats, &pool, &radio_status, &stratum_status, true);
+                }
+                Some(GuiHit::ChangeBanner)
+                    if gui.screen == esp32_s3_scrypt_miner::gui::GuiScreen::Config =>
+                {
+                    if let Some(updated) = password_gated_change(
+                        &mut usb,
+                        &mut display,
+                        &mut touch,
+                        &mut touch_delay,
+                        &mut store,
+                        &pool,
+                    )
+                    .await
+                    {
+                        pool = updated;
+                        if stratum_enabled {
+                            stratum::apply_pool_config(&pool).await;
+                        }
+                        let _ = display.draw_config_summary(&pool, true);
+                        Timer::after(Duration::from_secs(2)).await;
+                    }
+                    gui.screen = esp32_s3_scrypt_miner::gui::GuiScreen::Mining;
+                    display.invalidate();
+                    let _ =
+                        display.draw_gui(&gui, &stats, &pool, &radio_status, &stratum_status, true);
+                }
+                _ => {}
+            }
+        }
+
         if poll_command_byte(&mut usb, &mut cmd_line) {
             let cmd = cmd_line.as_str().trim();
             if is_change_command(cmd) {
-                if let Some(updated) =
-                    password_gated_change(&mut usb, &mut display, &mut store, &pool).await
+                if let Some(updated) = password_gated_change(
+                    &mut usb,
+                    &mut display,
+                    &mut touch,
+                    &mut touch_delay,
+                    &mut store,
+                    &pool,
+                )
+                .await
                 {
                     pool = updated;
                     if stratum_enabled {
@@ -260,6 +360,7 @@ async fn main(spawner: Spawner) -> ! {
                 if stratum_enabled {
                     stratum_status = stratum::snapshot().await;
                 }
+                display.invalidate();
                 let _ = display.draw_gui(&gui, &stats, &pool, &radio_status, &stratum_status, true);
             } else if is_radio_command(cmd) {
                 radio_status = radio::snapshot().await;
@@ -429,6 +530,8 @@ fn print_radio_serial(
 async fn resolve_pool_config<D: embedded_hal::delay::DelayNs>(
     usb: &mut Serial<'_>,
     display: &mut Display<'_, D>,
+    touch: &mut Touch,
+    touch_delay: &mut Delay,
     store: &mut ConfigStore<'_>,
     force_change: bool,
 ) -> (PoolConfig, bool) {
@@ -439,19 +542,27 @@ async fn resolve_pool_config<D: embedded_hal::delay::DelayNs>(
             print_config_serial(usb, &saved);
             serial_writeln(
                 usb,
-                "Type 'change' within 8s to edit (current password required), or wait.",
+                "Tap CONF or type 'change' within 8s to edit, or wait.",
             );
 
             let _ = display.draw_config_summary(&saved, true);
 
             let want_change = force_change
-                || wait_for_change_command(usb, Duration::from_secs(SAVED_CONFIRM_SECS)).await;
+                || wait_for_change_or_touch(
+                    usb,
+                    touch,
+                    touch_delay,
+                    Duration::from_secs(SAVED_CONFIRM_SECS),
+                )
+                .await;
 
             if want_change {
                 if force_change {
                     serial_writeln(usb, "BOOT held — password required to change credentials.");
                 }
-                if let Some(updated) = password_gated_change(usb, display, store, &saved).await {
+                if let Some(updated) =
+                    password_gated_change(usb, display, touch, touch_delay, store, &saved).await
+                {
                     return (updated, true);
                 }
                 serial_writeln(usb, "Keeping previously saved credentials.");
@@ -461,8 +572,8 @@ async fn resolve_pool_config<D: embedded_hal::delay::DelayNs>(
         }
         Err(_) => {
             serial_writeln(usb, "");
-            serial_writeln(usb, "No saved credentials — first-time setup.");
-            let cfg = collect_pool_config(usb, display).await;
+            serial_writeln(usb, "No saved credentials — first-time setup (touch or serial).");
+            let cfg = collect_pool_config(usb, display, touch, touch_delay).await;
             match store.save(&cfg) {
                 Ok(()) => serial_writeln(usb, "Credentials saved to flash."),
                 Err(_) => serial_writeln(usb, "WARNING: flash save failed."),
@@ -475,14 +586,16 @@ async fn resolve_pool_config<D: embedded_hal::delay::DelayNs>(
 async fn password_gated_change<D: embedded_hal::delay::DelayNs>(
     usb: &mut Serial<'_>,
     display: &mut Display<'_, D>,
+    touch: &mut Touch,
+    touch_delay: &mut Delay,
     store: &mut ConfigStore<'_>,
     current: &PoolConfig,
 ) -> Option<PoolConfig> {
     serial_writeln(usb, "");
     serial_writeln(usb, "=== Change credentials (password required) ===");
+    serial_writeln(usb, "Use on-screen keyboard or USB serial.");
 
     for attempt in 1..=MAX_PASSWORD_ATTEMPTS {
-        let _ = display.draw_auth_prompt(attempt, MAX_PASSWORD_ATTEMPTS);
         serial_write(usb, "current password");
         if attempt > 1 {
             serial_write(usb, " (retry)");
@@ -491,12 +604,22 @@ async fn password_gated_change<D: embedded_hal::delay::DelayNs>(
         let _ = usb.flush();
 
         let mut line: String<128> = String::new();
-        read_line_secret(usb, &mut line).await;
+        read_field_touch_or_serial(
+            usb,
+            display,
+            touch,
+            touch_delay,
+            SetupField::Password,
+            &mut line,
+            true,
+            Some((attempt, MAX_PASSWORD_ATTEMPTS)),
+        )
+        .await;
 
         match current.authorize(line.as_str()) {
             Ok(()) => {
                 serial_writeln(usb, "  ok — enter new values");
-                let cfg = collect_pool_config(usb, display).await;
+                let cfg = collect_pool_config(usb, display, touch, touch_delay).await;
                 match store.save(&cfg) {
                     Ok(()) => {
                         serial_writeln(usb, "Updated credentials saved to flash.");
@@ -519,12 +642,22 @@ async fn password_gated_change<D: embedded_hal::delay::DelayNs>(
     None
 }
 
-async fn wait_for_change_command(usb: &mut Serial<'_>, timeout: Duration) -> bool {
+async fn wait_for_change_or_touch(
+    usb: &mut Serial<'_>,
+    touch: &mut Touch,
+    touch_delay: &mut Delay,
+    timeout: Duration,
+) -> bool {
     let deadline = Instant::now() + timeout;
     let mut line: String<32> = String::new();
     let mut byte = [0u8; 1];
 
     while Instant::now() < deadline {
+        if let Some(p) = touch.poll_tap(touch_delay) {
+            if matches!(hit_gui(p, false), Some(GuiHit::Tab(1) | GuiHit::ChangeBanner)) {
+                return true;
+            }
+        }
         match usb.read(&mut byte) {
             Ok(0) | Err(_) => {
                 Timer::after(Duration::from_millis(20)).await;
@@ -590,21 +723,15 @@ fn eq_ignore_ascii_case(a: &str, b: &str) -> bool {
 async fn collect_pool_config<D: embedded_hal::delay::DelayNs>(
     usb: &mut Serial<'_>,
     display: &mut Display<'_, D>,
+    touch: &mut Touch,
+    touch_delay: &mut Delay,
 ) -> PoolConfig {
     let mut cfg = PoolConfig::new();
 
     serial_writeln(usb, "");
     serial_writeln(usb, "=== ESP32-2432S028 Scrypt Miner setup ===");
-    serial_writeln(
-        usb,
-        "Enter address, password, stratum, then WiFi/BLE (one field at a time).",
-    );
-    serial_writeln(
-        usb,
-        "Prefixes: address | password | stratum | wifi_ssid | wifi_password | ble_name",
-    );
-    serial_writeln(usb, "WiFi SSID '-' skips WiFi. Empty WiFi password = open AP.");
-    serial_writeln(usb, "BLE name '-' / empty skips BLE (saves RAM).");
+    serial_writeln(usb, "Type on the touchscreen keyboard, or use USB serial.");
+    serial_writeln(usb, "WiFi SSID '-' / skip skips WiFi. BLE '-' skips BLE.");
     serial_writeln(usb, "");
 
     for field in SetupField::ALL {
@@ -612,17 +739,22 @@ async fn collect_pool_config<D: embedded_hal::delay::DelayNs>(
             continue;
         }
         loop {
-            let _ = display.draw_setup(field, "");
             serial_write(usb, field.label());
             serial_write(usb, ": ");
             let _ = usb.flush();
 
             let mut line: String<128> = String::new();
-            if field.is_secret() {
-                read_line_secret(usb, &mut line).await;
-            } else {
-                read_line(usb, &mut line).await;
-            }
+            read_field_touch_or_serial(
+                usb,
+                display,
+                touch,
+                touch_delay,
+                field,
+                &mut line,
+                field.is_secret(),
+                None,
+            )
+            .await;
 
             let (target, value) =
                 if let Ok((parsed_field, value)) = PoolConfig::parse_assignment(line.as_str()) {
@@ -636,7 +768,6 @@ async fn collect_pool_config<D: embedded_hal::delay::DelayNs>(
                     serial_write(usb, "  ok (");
                     serial_write(usb, target.label());
                     serial_writeln(usb, ")");
-                    let _ = display.draw_setup(target, cfg.get(target));
                     if target == field {
                         break;
                     }
@@ -654,6 +785,77 @@ async fn collect_pool_config<D: embedded_hal::delay::DelayNs>(
     }
 
     cfg
+}
+
+/// Collect one field via on-screen keyboard and/or USB serial.
+async fn read_field_touch_or_serial<D: embedded_hal::delay::DelayNs>(
+    usb: &mut Serial<'_>,
+    display: &mut Display<'_, D>,
+    touch: &mut Touch,
+    touch_delay: &mut Delay,
+    field: SetupField,
+    line: &mut String<128>,
+    secret: bool,
+    auth: Option<(u8, u8)>,
+) {
+    line.clear();
+    let mut kb = Keyboard::default();
+    let mut dirty = true;
+    let mut byte = [0u8; 1];
+
+    loop {
+        if dirty {
+            if let Some((attempt, max)) = auth {
+                let _ = display.draw_auth_keyboard(attempt, max, line.as_str(), &kb);
+            } else {
+                let _ = display.draw_setup_keyboard(field, line.as_str(), &kb);
+            }
+            dirty = false;
+        }
+
+        if let Some(p) = touch.poll_tap(touch_delay) {
+            if let Some(action) = kb.hit_test(p) {
+                if kb.apply(action, line) {
+                    let _ = usb.write_all(b"\r\n");
+                    return;
+                }
+                dirty = true;
+                continue;
+            }
+        }
+
+        match usb.read(&mut byte) {
+            Ok(0) | Err(_) => {
+                Timer::after(Duration::from_millis(12)).await;
+            }
+            Ok(_) => {
+                let c = byte[0];
+                match c {
+                    b'\n' | b'\r' => {
+                        let _ = usb.write_all(b"\r\n");
+                        return;
+                    }
+                    0x08 | 0x7f => {
+                        if line.pop().is_some() {
+                            let _ = usb.write_all(b"\x08 \x08");
+                            dirty = true;
+                        }
+                    }
+                    c if (32..127).contains(&c) => {
+                        if line.push(c as char).is_ok() {
+                            if secret {
+                                let _ = usb.write_all(b"*");
+                            } else {
+                                let _ = usb.write_all(&[c]);
+                            }
+                            dirty = true;
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+    }
 }
 
 fn config_error_msg(e: ConfigError) -> &'static str {
@@ -676,49 +878,3 @@ fn serial_writeln(usb: &mut Serial<'_>, text: &str) {
     let _ = usb.write_all(b"\r\n");
 }
 
-async fn read_line(usb: &mut Serial<'_>, line: &mut String<128>) {
-    read_line_inner(usb, line, false).await;
-}
-
-async fn read_line_secret(usb: &mut Serial<'_>, line: &mut String<128>) {
-    read_line_inner(usb, line, true).await;
-}
-
-async fn read_line_inner(usb: &mut Serial<'_>, line: &mut String<128>, secret: bool) {
-    line.clear();
-    let mut byte = [0u8; 1];
-    loop {
-        match usb.read(&mut byte) {
-            Ok(0) => {
-                Timer::after(Duration::from_millis(10)).await;
-            }
-            Ok(_) => {
-                let c = byte[0];
-                match c {
-                    b'\n' | b'\r' => {
-                        let _ = usb.write_all(b"\r\n");
-                        break;
-                    }
-                    0x08 | 0x7f => {
-                        if line.pop().is_some() {
-                            let _ = usb.write_all(b"\x08 \x08");
-                        }
-                    }
-                    c if (32..127).contains(&c) => {
-                        if line.push(c as char).is_ok() {
-                            if secret {
-                                let _ = usb.write_all(b"*");
-                            } else {
-                                let _ = usb.write_all(&[c]);
-                            }
-                        }
-                    }
-                    _ => {}
-                }
-            }
-            Err(_) => {
-                Timer::after(Duration::from_millis(10)).await;
-            }
-        }
-    }
-}

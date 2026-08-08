@@ -9,6 +9,7 @@ extern crate alloc;
 
 pub mod config;
 pub mod gui;
+pub mod keyboard;
 pub mod miner;
 pub mod persist;
 pub mod radio;
@@ -16,6 +17,9 @@ pub mod stratum;
 
 #[cfg(feature = "esp")]
 pub mod display;
+
+#[cfg(feature = "esp")]
+pub mod touch;
 
 pub use config::{ConfigError, PoolConfig, SetupField};
 pub use miner::{

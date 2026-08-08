@@ -118,6 +118,23 @@ impl GuiState {
         self.request_change = false;
         v
     }
+
+    /// Jump to a tab by index (0=MINE … 3=MENU) for touch strip.
+    pub fn set_tab(&mut self, index: usize) {
+        self.screen = GuiScreen::ALL[index.min(GuiScreen::ALL.len() - 1)];
+    }
+
+    pub fn select_menu_row(&mut self, index: usize) {
+        self.screen = GuiScreen::Menu;
+        self.menu = MenuItem::ALL[index.min(MenuItem::ALL.len() - 1)];
+    }
+
+    pub fn activate_menu(&mut self) {
+        match self.menu {
+            MenuItem::ChangeCredentials => self.request_change = true,
+            MenuItem::BackToMining => self.screen = GuiScreen::Mining,
+        }
+    }
 }
 
 #[cfg(test)]
