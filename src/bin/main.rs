@@ -574,12 +574,7 @@ async fn main(spawner: Spawner) -> ! {
 }
 
 fn print_config_serial(usb: &mut Serial<'_>, pool: &PoolConfig) {
-    serial_write(usb, "  stratum  = ");
-    serial_writeln(usb, pool.stratum.as_str());
-    serial_write(usb, "  worker  = ");
-    serial_writeln(usb, pool.address.as_str());
-    serial_write(usb, "  password = ");
-    serial_writeln(usb, pool.password_masked().as_str());
+    // Same top→bottom order as CONF GUI / setup.
     serial_write(usb, "  wifi_ssid = ");
     if pool.wifi_enabled() {
         serial_writeln(usb, pool.wifi_ssid.as_str());
@@ -588,7 +583,12 @@ fn print_config_serial(usb: &mut Serial<'_>, pool: &PoolConfig) {
     }
     serial_write(usb, "  wifi_password = ");
     serial_writeln(usb, pool.wifi_password_masked().as_str());
-    serial_writeln(usb, "  ble_name = (unused)");
+    serial_write(usb, "  stratum  = ");
+    serial_writeln(usb, pool.stratum.as_str());
+    serial_write(usb, "  worker  = ");
+    serial_writeln(usb, pool.address.as_str());
+    serial_write(usb, "  password = ");
+    serial_writeln(usb, pool.password_masked().as_str());
 }
 
 fn print_radio_serial(

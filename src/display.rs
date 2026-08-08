@@ -486,15 +486,16 @@ impl<'a, D: DelayNs> Display<'a, D> {
         self.tab_strip(GuiScreen::Config)?;
 
         self.round_panel(8, 60, 304, 150, PANEL)?;
-        self.draw_row(78, "stratum", &PoolConfig::ellipsize(cfg.stratum.as_str(), 26))?;
-        self.draw_row(104, "worker", &PoolConfig::ellipsize(cfg.address.as_str(), 26))?;
-        self.draw_row(130, "password", cfg.password_masked().as_str())?;
+        // Top→bottom matches setup: wifi → stratum → worker → password
         let wifi = if cfg.wifi_enabled() {
             PoolConfig::ellipsize(cfg.wifi_ssid.as_str(), 22)
         } else {
             PoolConfig::ellipsize("(wifi off)", 22)
         };
-        self.draw_row(156, "wifi", wifi.as_str())?;
+        self.draw_row(78, "wifi", wifi.as_str())?;
+        self.draw_row(104, "stratum", &PoolConfig::ellipsize(cfg.stratum.as_str(), 26))?;
+        self.draw_row(130, "worker", &PoolConfig::ellipsize(cfg.address.as_str(), 26))?;
+        self.draw_row(156, "password", cfg.password_masked().as_str())?;
 
         let hint = if from_flash {
             "tap tabs · long BOOT=menu · serial: change"
@@ -721,15 +722,16 @@ impl<'a, D: DelayNs> Display<'a, D> {
 
     fn draw_config_body(&mut self, cfg: &PoolConfig) -> Result<(), Error> {
         self.round_panel(8, 60, 304, 150, PANEL)?;
-        self.draw_row(78, "stratum", &PoolConfig::ellipsize(cfg.stratum.as_str(), 26))?;
-        self.draw_row(104, "worker", &PoolConfig::ellipsize(cfg.address.as_str(), 26))?;
-        self.draw_row(130, "password", cfg.password_masked().as_str())?;
+        // Top→bottom matches setup: wifi → stratum → worker → password
         let wifi = if cfg.wifi_enabled() {
             PoolConfig::ellipsize(cfg.wifi_ssid.as_str(), 22)
         } else {
             PoolConfig::ellipsize("(off)", 22)
         };
-        self.draw_row(156, "wifi", wifi.as_str())?;
+        self.draw_row(78, "wifi", wifi.as_str())?;
+        self.draw_row(104, "stratum", &PoolConfig::ellipsize(cfg.stratum.as_str(), 26))?;
+        self.draw_row(130, "worker", &PoolConfig::ellipsize(cfg.address.as_str(), 26))?;
+        self.draw_row(156, "password", cfg.password_masked().as_str())?;
         self.footer_hint("tap body to change · serial also works")?;
         Ok(())
     }
