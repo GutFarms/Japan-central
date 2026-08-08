@@ -1,14 +1,21 @@
 #!/usr/bin/env bash
 # Run ON an already-flashed Pi to switch to non-cloud / local-only AI.
-# Usage:
-#   curl -fsSL https://raw.githubusercontent.com/GutFarms/Japan-central/cursor/pi-invest-os-0b6b/pi-invest-os/scripts/enable-local-ai-on-pi.sh | bash
+# Usage (pipe into sudo — do not use plain `| bash`):
+#   curl -fsSL https://raw.githubusercontent.com/GutFarms/Japan-central/cursor/pi-invest-os-0b6b/pi-invest-os/scripts/enable-local-ai-on-pi.sh | sudo bash
 set -euo pipefail
 
 BRANCH="${PI_INVEST_UPDATE_BRANCH:-cursor/pi-invest-os-0b6b}"
 BASE="https://raw.githubusercontent.com/GutFarms/Japan-central/${BRANCH}/pi-invest-os"
 
 if [[ "$(id -u)" -ne 0 ]]; then
-  exec sudo bash "$0" "$@"
+  # When installed as a file, re-exec with sudo. When piped (curl | bash),
+  # $0 is /usr/bin/bash — re-execing that causes: cannot execute binary file.
+  if [[ -f "$0" && -r "$0" && "$0" != bash && "$0" != */bash ]]; then
+    exec sudo -E bash "$0" "$@"
+  fi
+  echo "Run as root. Prefer:" >&2
+  echo "  curl -fsSL ${BASE}/scripts/enable-local-ai-on-pi.sh | sudo bash" >&2
+  exit 1
 fi
 
 echo "==> Fetching local-AI setup script"

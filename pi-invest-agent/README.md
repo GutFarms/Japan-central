@@ -110,7 +110,7 @@ echo 'PI_INVEST_LOCAL_ONLY=true' >> .env
 On Pi Invest OS, first boot installs Ollama automatically. Existing flashes:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/GutFarms/Japan-central/cursor/pi-invest-os-0b6b/pi-invest-os/scripts/enable-local-ai-on-pi.sh | bash
+curl -fsSL https://raw.githubusercontent.com/GutFarms/Japan-central/cursor/pi-invest-os-0b6b/pi-invest-os/scripts/enable-local-ai-on-pi.sh | sudo bash
 ```
 
 Install as a systemd service:

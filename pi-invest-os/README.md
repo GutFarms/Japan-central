@@ -33,7 +33,7 @@ After that, the agent does **not** require cloud APIs. Decisions use Ollama on t
 ### Already flashed? Enable local-only AI
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/GutFarms/Japan-central/cursor/pi-invest-os-0b6b/pi-invest-os/scripts/enable-local-ai-on-pi.sh | bash
+curl -fsSL https://raw.githubusercontent.com/GutFarms/Japan-central/cursor/pi-invest-os-0b6b/pi-invest-os/scripts/enable-local-ai-on-pi.sh | sudo bash
 ```
 
 ## Local AI controls
