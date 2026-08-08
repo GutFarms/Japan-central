@@ -634,6 +634,18 @@ mod tests {
     }
 
     #[test]
+    fn setup_order_starts_with_wifi() {
+        assert_eq!(SetupField::ALL[0], SetupField::WifiSsid);
+        assert_eq!(SetupField::ALL[1], SetupField::WifiPassword);
+        assert_eq!(SetupField::WifiSsid.step_number(), 1);
+        assert_eq!(SetupField::Address.step_number(), 3);
+        assert_eq!(
+            SetupField::WifiSsid.next(),
+            Some(SetupField::WifiPassword)
+        );
+    }
+
+    #[test]
     fn rejects_empty_and_parses_assignments() {
         let mut cfg = PoolConfig::new();
         assert_eq!(
