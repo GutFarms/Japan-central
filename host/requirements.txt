@@ -1,0 +1,2 @@
+psutil>=6.0.0
+nvidia-ml-py>=12.560.30
