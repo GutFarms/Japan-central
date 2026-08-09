@@ -1,12 +1,15 @@
-/target/
-**/*.rs.bk
-.embuild/
-.vscode/
-.idea/
 *.bin
+# Companion build outputs (download from artifacts / CI)
+/dist/
 *.elf
-scrypt-miner-config.bin
+.embuild/
+*.exe
 export-esp.sh
-# Keep checksums for flash images (bins themselves stay ignored)
 !flash/SHA256SUMS.txt
 hardware/esp32-asic-controller/firmware-stub/target/
+.idea/
+# Keep checksums for flash images (bins themselves stay ignored)
+**/*.rs.bk
+scrypt-miner-config.bin
+/target/
+.vscode/
