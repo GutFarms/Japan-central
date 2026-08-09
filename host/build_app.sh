@@ -50,3 +50,8 @@ rm -rf "$STAGE"
 
 echo "Built:"
 ls -lah release/
+
+# Refresh top-level downloadable packages when firmware bins exist.
+if [[ -f ../firmware/release/esp32-cyd-pc-monitor-merged.bin ]]; then
+  bash ../scripts/package_downloads.sh
+fi

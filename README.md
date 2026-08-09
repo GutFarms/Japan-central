@@ -11,10 +11,32 @@ Firmware and host agent for an **ESP32 Cheap Yellow Display (CYD)** that shows l
 ╰──[USB] [VRAM 44%] [DISK 62%] [8.5 Mb]───╯
 ```
 
+## Downloads
+
+Ready-to-use packages (no build required):
+
+| Package | Download |
+| --- | --- |
+| **Everything (recommended)** | [`downloads/CYD-Monitor-bundle.zip`](downloads/CYD-Monitor-bundle.zip) |
+| Firmware flash images | [`downloads/CYD-Firmware.zip`](downloads/CYD-Firmware.zip) |
+| PC app (portable) | [`downloads/CYD-Monitor-portable.zip`](downloads/CYD-Monitor-portable.zip) |
+| Linux app binary | [`downloads/CYD-Monitor-linux`](downloads/CYD-Monitor-linux) |
+
+**Quick start:** unzip the bundle → flash `firmware/esp32-cyd-pc-monitor-merged.bin` at `0x0` → run the app → plug USB.
+
+```bash
+pip install esptool
+esptool.py --chip esp32 --port COMx --baud 921600 \
+  write_flash 0x0 esp32-cyd-pc-monitor-merged.bin
+```
+
+See [`downloads/README.md`](downloads/README.md) for details.
+
 ## What's in this workspace
 
 | Path | Purpose |
 | --- | --- |
+| `downloads/` | **Downloadable** firmware + app zip packages |
 | `firmware/` | PlatformIO project for ESP32-2432S028 (ILI9341, 320×240) |
 | `host/` | Python agent that samples CPU/RAM/GPU and sends over USB serial and/or UDP |
 | `protocol/` | Wire-format docs shared by both sides |

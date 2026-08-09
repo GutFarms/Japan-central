@@ -63,4 +63,9 @@ fi
 "$HOST_PY" "$ROOT/host/agent.py" --help >/dev/null
 "$HOST_PY" "$ROOT/scripts/smoke_host.py"
 
+if [[ -f "$ROOT/host/release/CYD-Monitor-portable.zip" ]]; then
+  echo "==> Packaging downloads/"
+  bash "$ROOT/scripts/package_downloads.sh"
+fi
+
 echo "OK: firmware + host verified"

@@ -2,12 +2,15 @@
 
 Prebuilt images for the ESP32-CYD PC/GPU monitor.
 
+**Download zip:** [`CYD-Firmware.zip`](CYD-Firmware.zip) (or the full [`../../downloads/CYD-Monitor-bundle.zip`](../../downloads/CYD-Monitor-bundle.zip)).
+
 | File | Use |
 | --- | --- |
 | `esp32-cyd-pc-monitor-merged.bin` | **Recommended** — full image (bootloader + partitions + app). Flash at `0x0`. |
 | `esp32-cyd-pc-monitor.bin` | App only. Flash at `0x10000` (needs bootloader + partitions already present). |
 | `bootloader.bin` | Bootloader at `0x1000` |
 | `partitions.bin` | Partition table at `0x8000` |
+| `CYD-Firmware.zip` | All of the above + flash notes, ready to download |
 
 ## One-shot flash (merged)
 
