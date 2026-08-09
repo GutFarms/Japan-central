@@ -1,6 +1,6 @@
 # ESP32-2432S028 Scrypt Miner (Cheap Yellow Display)
 
-Bare-metal Rust firmware that mines **scrypt** proof-of-work on an **ESP32-2432S028** (CYD) and shows a multi-screen **GUI** on the onboard **ILI9341** TFT. Uses onboard **WiFi** (STA + DHCP) for stratum and a LAN web UI.
+Companion-first **C++** firmware (`firmware-cpp/`) for the **ESP32-2432S028** (CYD): Litecoin-style **scrypt** mining, ILI9341 UI matching **CYD Companion**, and UART0 that speaks only the `cmp` protocol (no classic serial field prompts). A legacy Embassy **Rust** tree remains in `src/` for host tests and `BUILD_RUST=1` builds.
 
 ## What it does
 
@@ -25,8 +25,8 @@ Connects and submits real scrypt shares, but hashrate is tiny (MCU + TMTO) — n
 | | NMMiner | This firmware |
 |--|---------|----------------|
 | Algorithm | BTC SHA-256 (~1 MH/s) | Scrypt N=1024 (`lite` TMTO) |
-| Stack | Arduino + LVGL (~2.7 MiB) | Embassy Rust (~0.85 MiB) |
-| Config | SoftAP WiFiManager | UART/PuTTY + LCD scan (WiFi required) |
+| Stack | Arduino + LVGL (~2.7 MiB) | Arduino C++ companion-first (~0.8 MiB app) |
+| Config | SoftAP WiFiManager | **CYD Companion** USB `cmp` (WiFi required) |
 | LCD sleep | Screensaver prefs | No — LCD stays on |
 | WiFi | STA + SoftAP; reboot if down >10 min | STA always-on, no power save; soft-reset if DHCP missing >10 min |
 | Touch | Closed `cyd2.8` / `touch_read` HAL | Open XPT2046 SPI3; ESPHome map default; serial `touch` cycles map |
@@ -88,18 +88,20 @@ Stratum worker/endpoint/password changes **reconnect without reboot**. After cha
 
 ## Build & flash (device)
 
-**See [FLASH.md](FLASH.md).**
+**See [FLASH.md](FLASH.md)** and [`firmware-cpp/README.md`](firmware-cpp/README.md).
 
 ```bash
-. ./export-esp.sh
+# Default: PlatformIO C++ firmware → flash/*.bin
 ./scripts/build-flash-images.sh
+# Legacy Rust: BUILD_RUST=1 ./scripts/build-flash-images.sh
+
 ./scripts/serve-web-flasher.sh
 # → http://127.0.0.1:8080/web/  (Chrome / Edge)
-#    Save merged.bin to PC  →  Connect & flash
+#    Save merged.bin to PC  →  Connect & flash @ 0x0 (DIO, 4 MB, 40 MHz)
 ```
 
 CLI: `./scripts/flash-cyd.sh COM6` or  
-`espflash write-bin -p COM6 0x0 flash/esp32-2432s028-scrypt-miner-merged.bin`
+`esptool.py --chip esp32 write_flash -z 0x0 flash/esp32-2432s028-scrypt-miner-merged.bin`
 
 Hold **BOOT** + **RESET** if connect stalls; install CH340 drivers on Windows if needed.  
 Ship with `lite` (TMTO, 8 KiB V). Full-memory `N=1024` (128 KiB V) does not fit with WiFi on this board.

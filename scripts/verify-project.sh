@@ -101,17 +101,19 @@ mkdir -p /opt/cursor/artifacts
 cp -f "$MERGED_BIN" /opt/cursor/artifacts/
 cp -f "$ZIP" /opt/cursor/artifacts/
 cp -f "$PORTABLE_ZIP" /opt/cursor/artifacts/
+cp -f "$APP_ONLY_ZIP" /opt/cursor/artifacts/
 cp -f "$SETUP" /opt/cursor/artifacts/
 cp -f flash/SHA256SUMS.txt /opt/cursor/artifacts/esp32-2432s028-SHA256SUMS.txt
 
 echo
 echo "OK — verified clean build"
-ls -la "$MERGED_BIN" "$ZIP" "$PORTABLE_ZIP" "$SETUP" \
+ls -la "$MERGED_BIN" "$ZIP" "$PORTABLE_ZIP" "$APP_ONLY_ZIP" "$SETUP" \
   /opt/cursor/artifacts/esp32-2432s028-scrypt-miner-merged.bin \
   /opt/cursor/artifacts/cyd-companion-windows.zip \
   /opt/cursor/artifacts/CYD-Companion-Portable.zip \
+  /opt/cursor/artifacts/CYD-Companion-App-Only.zip \
   /opt/cursor/artifacts/CYD-Companion-Setup.exe
 echo
 echo "SHA256:"
-sha256sum "$MERGED_BIN" "$ZIP" "$PORTABLE_ZIP" "$SETUP"
+sha256sum "$MERGED_BIN" "$ZIP" "$PORTABLE_ZIP" "$APP_ONLY_ZIP" "$SETUP"
 cat flash/SHA256SUMS.txt
