@@ -132,6 +132,8 @@ pub struct PoolConfig {
     pub touch_map: u8,
     /// CPU clock MHz applied on next boot: 80, 160, or 240 (default).
     pub cpu_mhz: u8,
+    /// Prefer hashing over LCD redraws (slower GUI refresh).
+    pub hash_focus: bool,
 }
 
 impl Default for PoolConfig {
@@ -146,11 +148,15 @@ impl Default for PoolConfig {
             ble_name: BleNameString::new(),
             touch_map: 1, // ESPHome CYD default map id
             cpu_mhz: 240,
+            hash_focus: false,
         }
     }
 }
 
 /// Clamp / normalize a CPU MHz preference to a supported ESP32 rate.
+///
+/// Classic ESP32 PLL presets are only **80 / 160 / 240 MHz** (plus XTAL-derived
+/// underclocks we do not expose). Intermediate values snap to the nearest preset.
 pub fn normalize_cpu_mhz(mhz: u8) -> u8 {
     match mhz {
         0 | 240 => 240,
@@ -411,7 +417,7 @@ impl PoolConfig {
         // Reserved header bytes 5..8 — not covered by CRC body.
         blob[5] = self.touch_map;
         blob[6] = normalize_cpu_mhz(self.cpu_mhz);
-        // blob[7] reserved
+        blob[7] = u8::from(self.hash_focus);
 
         let mut off = 12usize;
         off = write_field(&mut blob, off, self.address.as_str(), ADDRESS_MAX)?;
@@ -488,6 +494,7 @@ impl PoolConfig {
         let mut cfg = Self::new();
         cfg.touch_map = blob[5];
         cfg.cpu_mhz = normalize_cpu_mhz(blob[6]);
+        cfg.hash_focus = blob[7] != 0;
         let mut off = 12usize;
         let (addr, o) = read_field(blob, off, ADDRESS_MAX)?;
         off = o;

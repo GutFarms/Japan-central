@@ -27,6 +27,7 @@ pub struct WebStatus {
     pub uptime_secs: u64,
     pub screen_on: bool,
     pub cpu_mhz: u8,
+    pub hash_focus: bool,
 }
 
 impl Default for WebStatus {
@@ -48,6 +49,7 @@ impl Default for WebStatus {
             uptime_secs: 0,
             screen_on: true,
             cpu_mhz: 240,
+            hash_focus: false,
         }
     }
 }
@@ -63,6 +65,7 @@ pub struct CompanionUpdate {
     pub wifi_password: Option<String<64>>,
     pub cpu_mhz: Option<u8>,
     pub touch_map: Option<u8>,
+    pub hash_focus: Option<bool>,
     pub reconnect: bool,
     pub reboot: bool,
 }
@@ -116,6 +119,9 @@ pub fn parse_companion_body(body: &str) -> CompanionUpdate {
                 if let Ok(v) = val.parse::<u8>() {
                     upd.touch_map = Some(v);
                 }
+            }
+            "hash_focus" | "perf" => {
+                upd.hash_focus = Some(val == "1" || val.eq_ignore_ascii_case("true"));
             }
             "reconnect" => {
                 upd.reconnect = val == "1" || val.eq_ignore_ascii_case("true");
@@ -214,6 +220,7 @@ mod server {
         uptime_secs: 0,
         screen_on: true,
         cpu_mhz: 240,
+        hash_focus: false,
     });
 
     static PENDING: Mutex<CriticalSectionRawMutex, Option<CompanionUpdate>> = Mutex::new(None);
@@ -451,13 +458,14 @@ mod server {
         let configured = !s.address.is_empty() && !s.stratum.is_empty() && !s.wifi_ssid.is_empty();
         let body = format!(
             "{{\"worker\":{w},\"stratum\":{st},\"wifi_ssid\":{ss},\"wifi_password\":\"{wm}\",\
-\"cpu_mhz\":{cpu},\"touch_map\":null,\"algo\":\"scrypt\",\"board\":\"ESP32-2432S028\",\
+\"cpu_mhz\":{cpu},\"hash_focus\":{hf},\"touch_map\":null,\"algo\":\"scrypt\",\"board\":\"ESP32-2432S028\",\
 \"fw\":\"{FW_VERSION}\",\"screen_on\":{scr},\"configured\":{cfg}}}",
             w = json_str(s.address.as_str()),
             st = json_str(s.stratum.as_str()),
             ss = json_str(s.wifi_ssid.as_str()),
             wm = wifi_mask.as_str(),
             cpu = s.cpu_mhz,
+            hf = if s.hash_focus { "true" } else { "false" },
             scr = if s.screen_on { "true" } else { "false" },
             cfg = if configured { "true" } else { "false" },
         );
@@ -596,7 +604,7 @@ a{{color:#7dffa0}}\
             "{{\"hashrate_hs\":{}.{:02},\"shares\":{},\"nonce\":\"{:08x}\",\
 \"address\":{},\"stratum\":{},\"wifi\":\"{}\",\"ip\":{},\
 \"pool\":\"{}\",\"connected\":{},\"accepted\":{},\"rejected\":{},\"dropped\":{},\
-\"difficulty\":{},\"uptime_secs\":{},\"screen_on\":{},\"cpu_mhz\":{}}}",
+\"difficulty\":{},\"uptime_secs\":{},\"screen_on\":{},\"cpu_mhz\":{},\"hash_focus\":{}}}",
             s.hashrate_x100 / 100,
             s.hashrate_x100 % 100,
             s.shares,
@@ -618,6 +626,7 @@ a{{color:#7dffa0}}\
             s.uptime_secs,
             if s.screen_on { "true" } else { "false" },
             s.cpu_mhz,
+            if s.hash_focus { "true" } else { "false" },
         );
         write_json_raw(socket, &body).await
     }

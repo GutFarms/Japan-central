@@ -37,7 +37,7 @@ Fallback: hold **BOOT** at power-on for classic on-device setup.
 | Markets | Live CoinGecko stats; pick which 5 coins are shown |
 | WiFi | SSID + optional **Update WiFi password** |
 | Pool | Stratum / worker / pool password |
-| Overclock | Default **160 MHz Balanced** (auto on Connect when configured) |
+| Overclock | 80 / 160 / 240 only (ESP32 PLL). Sample H/s, hash-focus, persist preferred |
 | More | Reconnect, discover, tips |
 
 Look: bubbly blue/black UI with **lime** accents.

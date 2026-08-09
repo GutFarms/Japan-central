@@ -63,6 +63,8 @@ const MAX_PASSWORD_ATTEMPTS: u8 = 3;
 const BOOT_LONG_PRESS_MS: u64 = 700;
 /// GUI redraw interval (LCD stays on — no sleep).
 const GUI_REFRESH_MS: u64 = 2000;
+/// Slower redraws when hash-focus mode is enabled (more CPU for scrypt).
+const GUI_REFRESH_FOCUS_MS: u64 = 8000;
 /// NMMiner: if WiFi stays down this long, soft-reset the chip to recover the radio.
 const WIFI_DOWN_RESET_SECS: u64 = 600;
 
@@ -684,7 +686,12 @@ async fn main(spawner: Spawner) -> ! {
                 // Full-screen ONLINE / CONNECTED banner — skip normal GUI redraw.
             } else {
                 banner_until = None;
-                if last_gui.elapsed() >= Duration::from_millis(GUI_REFRESH_MS) {
+                let gui_ms = if pool.hash_focus {
+                    GUI_REFRESH_FOCUS_MS
+                } else {
+                    GUI_REFRESH_MS
+                };
+                if last_gui.elapsed() >= Duration::from_millis(gui_ms) {
                     if let Err(e) =
                         display.draw_gui(&gui, &stats, &pool, &radio_status, &stratum_status, true)
                     {
@@ -712,6 +719,7 @@ async fn main(spawner: Spawner) -> ! {
                 ws.uptime_secs = boot_at.elapsed().as_secs();
                 ws.screen_on = true;
                 ws.cpu_mhz = running_mhz;
+                ws.hash_focus = pool.hash_focus;
                 web::publish(ws);
             }
 
@@ -1089,7 +1097,8 @@ async fn handle_cmp_command(
             format_args!(
                 "CMPSTATUS {{\"hashrate_hs\":{}.{:02},\"shares\":{},\"accepted\":{},\"rejected\":{},\
 \"dropped\":{},\"pool\":\"{}\",\"connected\":{},\"wifi\":\"{}\",\"ip\":\"{}\",\"address\":\"{}\",\
-\"stratum\":\"{}\",\"difficulty\":{},\"uptime_secs\":0,\"cpu_mhz\":{},\"nonce\":\"{:08x}\"}}",
+\"stratum\":\"{}\",\"difficulty\":{},\"uptime_secs\":0,\"cpu_mhz\":{},\"hash_focus\":{},\
+\"nonce\":\"{:08x}\"}}",
                 hashrate_x100 / 100,
                 hashrate_x100 % 100,
                 stats.shares,
@@ -1108,6 +1117,7 @@ async fn handle_cmp_command(
                 stratum_s.as_str(),
                 stratum.difficulty,
                 running_mhz,
+                if pool.hash_focus { "true" } else { "false" },
                 stats.nonce,
             ),
         );
@@ -1123,12 +1133,13 @@ async fn handle_cmp_command(
             &mut line,
             format_args!(
                 "CMPCONFIG {{\"worker\":\"{}\",\"stratum\":\"{}\",\"wifi_ssid\":\"{}\",\
-\"wifi_password\":\"{}\",\"cpu_mhz\":{},\"fw\":\"{}\",\"configured\":{}}}",
+\"wifi_password\":\"{}\",\"cpu_mhz\":{},\"hash_focus\":{},\"fw\":\"{}\",\"configured\":{}}}",
                 worker.as_str(),
                 stratum_s.as_str(),
                 ssid.as_str(),
                 pool.wifi_password_masked().as_str(),
                 pool.cpu_mhz,
+                if pool.hash_focus { "true" } else { "false" },
                 env!("CARGO_PKG_VERSION"),
                 if pool.is_complete() { "true" } else { "false" },
             ),
@@ -1714,6 +1725,17 @@ async fn apply_companion_update(
             clock_changed = true;
             stash_boot_cpu_mhz(mhz);
         }
+    }
+    if let Some(focus) = upd.hash_focus {
+        pool.hash_focus = focus;
+        serial_writeln(
+            usb,
+            if focus {
+                "companion: hash-focus ON (slower LCD)"
+            } else {
+                "companion: hash-focus OFF"
+            },
+        );
     }
 
     let saved = match store.save(pool) {

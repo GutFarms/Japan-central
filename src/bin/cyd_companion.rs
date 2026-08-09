@@ -253,6 +253,8 @@ struct StatusJson {
     #[serde(default)]
     cpu_mhz: u8,
     #[serde(default)]
+    hash_focus: bool,
+    #[serde(default)]
     nonce: String,
 }
 
@@ -270,9 +272,38 @@ struct ConfigJson {
     #[serde(default)]
     cpu_mhz: u8,
     #[serde(default)]
+    hash_focus: bool,
+    #[serde(default)]
     fw: String,
     #[serde(default)]
     configured: bool,
+}
+
+#[derive(Serialize, Deserialize, Default)]
+struct PersistedOc {
+    #[serde(default = "default_oc_mhz")]
+    preferred_mhz: u8,
+    #[serde(default = "default_true")]
+    auto_balanced: bool,
+    /// Last recorded H/s samples at 80 / 160 / 240 (index 0/1/2).
+    #[serde(default)]
+    samples_hs: [Option<f64>; 3],
+}
+
+fn default_oc_mhz() -> u8 {
+    160
+}
+fn default_true() -> bool {
+    true
+}
+
+fn oc_sample_index(mhz: u8) -> Option<usize> {
+    match mhz {
+        80 => Some(0),
+        160 => Some(1),
+        240 => Some(2),
+        _ => None,
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -349,8 +380,14 @@ struct CompanionApp {
     update_wifi_password: bool,
     show_wifi_password: bool,
     target_mhz: u8,
-    /// Apply 160 MHz Balanced once after the board first reports status.
+    /// Persisted: auto-apply preferred MHz once after Connect.
     auto_apply_balanced: bool,
+    /// Session: still need to apply preferred MHz this connection.
+    auto_oc_pending: bool,
+    /// Favor hashing over LCD redraws on the board.
+    hash_focus: bool,
+    /// H/s notebook for A/B tuning the three ESP32 PLL presets.
+    oc_samples_hs: [Option<f64>; 3],
     discover_base: String,
     discover_log: String,
     cmd_tx: Sender<NetCmd>,
@@ -378,6 +415,9 @@ impl CompanionApp {
         let _ = cmd_tx.send(NetCmd::ListPorts);
 
         let mut selected_coin_ids = DEFAULT_COIN_IDS.map(|s| s.to_string());
+        let mut target_mhz = 160u8;
+        let mut auto_apply_balanced = true;
+        let mut oc_samples_hs = [None, None, None];
         if let Some(storage) = storage {
             if let Some(raw) = storage.get_string("market_coins") {
                 if let Ok(saved) = serde_json::from_str::<PersistedCoins>(&raw) {
@@ -386,6 +426,16 @@ impl CompanionApp {
                             selected_coin_ids[i] = id;
                         }
                     }
+                }
+            }
+            if let Some(raw) = storage.get_string("oc_prefs") {
+                if let Ok(oc) = serde_json::from_str::<PersistedOc>(&raw) {
+                    target_mhz = match oc.preferred_mhz {
+                        80 | 160 | 240 => oc.preferred_mhz,
+                        _ => 160,
+                    };
+                    auto_apply_balanced = oc.auto_balanced;
+                    oc_samples_hs = oc.samples_hs;
                 }
             }
         }
@@ -408,8 +458,11 @@ impl CompanionApp {
             edit_wifi_password: String::new(),
             update_wifi_password: true,
             show_wifi_password: false,
-            target_mhz: 160, // Balanced
-            auto_apply_balanced: true,
+            target_mhz,
+            auto_apply_balanced,
+            auto_oc_pending: auto_apply_balanced,
+            hash_focus: false,
+            oc_samples_hs,
             discover_base: "192.168.1".into(),
             discover_log: String::new(),
             cmd_tx: cmd_tx.clone(),
@@ -532,12 +585,44 @@ impl CompanionApp {
 
     fn apply_clock(&mut self) {
         let body = format!(
-            "auth={}&cpu_mhz={}&reboot=true",
+            "auth={}&cpu_mhz={}&hash_focus={}&reboot=true",
             urlenc(&self.auth_password),
-            self.target_mhz
+            self.target_mhz,
+            if self.hash_focus { "true" } else { "false" },
         );
         self.post("/api/clock", body);
-        self.last_ok = format!("CPU {} MHz sent — board soft-resets.", self.target_mhz);
+        self.last_ok = format!(
+            "CPU {} MHz{} — board soft-resets.",
+            self.target_mhz,
+            if self.hash_focus { " + hash-focus" } else { "" }
+        );
+    }
+
+    fn apply_hash_focus(&mut self) {
+        let body = format!(
+            "auth={}&hash_focus={}",
+            urlenc(&self.auth_password),
+            if self.hash_focus { "true" } else { "false" },
+        );
+        self.post("/api/config", body);
+        self.last_ok = if self.hash_focus {
+            "Hash-focus ON — LCD redraws less often.".into()
+        } else {
+            "Hash-focus OFF — normal LCD refresh.".into()
+        };
+    }
+
+    fn record_oc_sample(&mut self) {
+        let mhz = self.status.cpu_mhz;
+        if let Some(i) = oc_sample_index(mhz) {
+            self.oc_samples_hs[i] = Some(self.status.hashrate_hs);
+            self.last_ok = format!(
+                "Recorded {:.2} H/s @ {} MHz — compare profiles below.",
+                self.status.hashrate_hs, mhz
+            );
+        } else {
+            self.last_error = "Connect first — need a live board MHz to sample.".into();
+        }
     }
 
     /// One-shot first-boot / full save: WiFi + pool + clock in a single `cmp set`.
@@ -607,15 +692,17 @@ impl CompanionApp {
                     self.status = s;
                     self.connected_ui = true;
                     self.last_error.clear();
-                    // Only auto-OC after the board already has credentials.
-                    if self.auto_apply_balanced && !self.needs_setup {
-                        self.target_mhz = 160;
-                        if self.status.cpu_mhz != 0 && self.status.cpu_mhz != 160 {
+                    self.hash_focus = self.status.hash_focus;
+                    // Auto-apply preferred profile once after credentials exist.
+                    if self.auto_oc_pending && !self.needs_setup {
+                        if self.status.cpu_mhz != 0 && self.status.cpu_mhz != self.target_mhz {
                             self.apply_clock();
-                            self.last_ok =
-                                "Auto overclock → 160 MHz Balanced (soft-reset)…".into();
+                            self.last_ok = format!(
+                                "Auto clock → {} MHz (your preferred profile)…",
+                                self.target_mhz
+                            );
                         }
-                        self.auto_apply_balanced = false;
+                        self.auto_oc_pending = false;
                     }
                 }
                 NetMsg::Status(Err(e)) => {
@@ -628,9 +715,10 @@ impl CompanionApp {
                         self.edit_stratum = c.stratum;
                     }
                     self.edit_wifi_ssid = c.wifi_ssid;
-                    if c.cpu_mhz != 0 && !self.auto_apply_balanced {
+                    if c.cpu_mhz != 0 && !self.auto_oc_pending {
                         self.target_mhz = c.cpu_mhz;
                     }
+                    self.hash_focus = c.hash_focus;
                     if !c.fw.is_empty() {
                         self.fw_label = c.fw;
                     }
@@ -643,12 +731,14 @@ impl CompanionApp {
                             "Board needs setup — fill the Setup tab (no on-device typing).".into();
                     } else {
                         self.last_ok = "Config loaded from board.".into();
-                        if self.auto_apply_balanced && c.cpu_mhz != 0 && c.cpu_mhz != 160 {
-                            self.target_mhz = 160;
+                        if self.auto_oc_pending && c.cpu_mhz != 0 && c.cpu_mhz != self.target_mhz
+                        {
                             self.apply_clock();
-                            self.last_ok =
-                                "Config loaded · auto overclock → 160 MHz…".into();
-                            self.auto_apply_balanced = false;
+                            self.last_ok = format!(
+                                "Config loaded · auto clock → {} MHz…",
+                                self.target_mhz
+                            );
+                            self.auto_oc_pending = false;
                         }
                     }
                 }
@@ -697,6 +787,13 @@ impl App for CompanionApp {
             ids: self.selected_coin_ids.to_vec(),
         }) {
             storage.set_string("market_coins", raw);
+        }
+        if let Ok(raw) = serde_json::to_string(&PersistedOc {
+            preferred_mhz: self.target_mhz,
+            auto_balanced: self.auto_apply_balanced,
+            samples_hs: self.oc_samples_hs,
+        }) {
+            storage.set_string("oc_prefs", raw);
         }
     }
 
@@ -1024,7 +1121,6 @@ impl CompanionApp {
                     };
                     if ui.selectable_label(selected, label).clicked() {
                         self.target_mhz = mhz;
-                        self.auto_apply_balanced = false;
                     }
                 }
                 ui.separator();
@@ -1455,68 +1551,120 @@ impl CompanionApp {
 
     fn ui_overclock(&mut self, ui: &mut egui::Ui) {
         ui.label(
-            RichText::new("CPU clock")
+            RichText::new("Overclock tuner")
                 .size(22.0)
-                .color(Color32::from_rgb(170, 198, 230)),
+                .color(C_LIME)
+                .strong(),
         );
         ui.label(
-            "Default: 160 MHz Balanced (auto-applied on Connect). Soft-reset applies the profile.",
+            RichText::new(
+                "ESP32 PLL clocks are only 80 / 160 / 240 MHz — no in-between steps. \
+Tune by sampling live H/s at each preset, then lock your favorite.",
+            )
+            .color(C_MUTED),
         );
         ui.add_space(12.0);
         ui.horizontal(|ui| {
             for mhz in [80_u8, 160, 240] {
                 let selected = self.target_mhz == mhz;
+                let sample = oc_sample_index(mhz).and_then(|i| self.oc_samples_hs[i]);
+                let sample_txt = sample
+                    .map(|h| format!("\n{h:.2} H/s"))
+                    .unwrap_or_else(|| "\n—".into());
                 let label = match mhz {
-                    80 => "80 MHz\nEfficient",
-                    160 => "160 MHz\nBalanced ★",
-                    _ => "240 MHz\nMax / OC",
+                    80 => format!("80 MHz\nCool / low{sample_txt}"),
+                    160 => format!("160 MHz\nBalanced{sample_txt}"),
+                    _ => format!("240 MHz\nMax heat{sample_txt}"),
                 };
-                let fill = if selected {
-                    Color32::from_rgb(88, 128, 172)
-                } else {
-                    Color32::from_rgb(36, 46, 60)
-                };
+                let fill = if selected { C_BUBBLE_HI } else { C_BUBBLE };
                 let text = if selected {
-                    Color32::from_rgb(236, 244, 252)
+                    Color32::from_rgb(12, 20, 28)
                 } else {
-                    Color32::from_rgb(170, 188, 210)
+                    Color32::from_rgb(220, 232, 245)
                 };
                 if ui
                     .add(
-                        egui::Button::new(RichText::new(label).size(15.0).color(text))
+                        egui::Button::new(RichText::new(label).size(14.0).color(text))
                             .fill(fill)
-                            .min_size(Vec2::new(140.0, 72.0))
-                            .rounding(Rounding::same(10.0)),
+                            .min_size(Vec2::new(150.0, 88.0))
+                            .rounding(Rounding::same(12.0)),
                     )
                     .clicked()
                 {
                     self.target_mhz = mhz;
-                    self.auto_apply_balanced = false;
                 }
             }
         });
-        ui.add_space(16.0);
-        Self::card(ui, "ACTIVE", |ui| {
-            ui.label(format!(
-                "Running: {} MHz · Target: {} MHz",
-                self.status.cpu_mhz, self.target_mhz
-            ));
-        });
         ui.add_space(12.0);
-        if ui
-            .add(
-                egui::Button::new(
-                    RichText::new("Apply clock & reboot")
-                        .strong()
-                        .color(Color32::from_rgb(20, 28, 36)),
+        Self::card(ui, "LIVE", |ui| {
+            ui.label(format!(
+                "Board: {} MHz · {:.2} H/s · target {} MHz",
+                self.status.cpu_mhz.max(1),
+                self.status.hashrate_hs,
+                self.target_mhz
+            ));
+            ui.label(
+                RichText::new("Wait ~10s after reboot for H/s to settle, then Record sample.")
+                    .color(C_MUTED)
+                    .small(),
+            );
+        });
+        ui.add_space(10.0);
+        Self::card(ui, "FINE TUNE", |ui| {
+            let mut auto = self.auto_apply_balanced;
+            if ui
+                .checkbox(
+                    &mut auto,
+                    "Auto-apply preferred MHz on Connect (once per session)",
                 )
-                .fill(Color32::from_rgb(170, 188, 210))
-                .min_size(Vec2::new(200.0, 40.0)),
-            )
-            .clicked()
-        {
-            self.auto_apply_balanced = false;
-            self.apply_clock();
+                .changed()
+            {
+                self.auto_apply_balanced = auto;
+                self.auto_oc_pending = auto;
+            }
+            let mut focus = self.hash_focus;
+            if ui
+                .checkbox(
+                    &mut focus,
+                    "Hash-focus — slower LCD redraws (more CPU for scrypt)",
+                )
+                .changed()
+            {
+                self.hash_focus = focus;
+                if self.connected_ui {
+                    self.apply_hash_focus();
+                }
+            }
+            ui.add_space(6.0);
+            ui.horizontal_wrapped(|ui| {
+                if bubble_button(ui, "Apply clock & reboot", true).clicked() {
+                    self.apply_clock();
+                }
+                if bubble_button(ui, "Record H/s sample", false).clicked() {
+                    self.record_oc_sample();
+                }
+                if bubble_button(ui, "Clear samples", false).clicked() {
+                    self.oc_samples_hs = [None, None, None];
+                    self.last_ok = "Cleared H/s notebook.".into();
+                }
+            });
+        });
+        ui.add_space(10.0);
+        let best = self
+            .oc_samples_hs
+            .iter()
+            .enumerate()
+            .filter_map(|(i, s)| s.map(|h| (i, h)))
+            .max_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
+        if let Some((i, h)) = best {
+            let mhz = [80, 160, 240][i];
+            ui.label(
+                RichText::new(format!("Best sampled so far: {mhz} MHz @ {h:.2} H/s"))
+                    .color(C_LIME),
+            );
+            if ui.link("Set that as preferred target").clicked() {
+                self.target_mhz = mhz as u8;
+            }
         }
     }
 
