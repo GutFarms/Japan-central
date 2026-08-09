@@ -22,7 +22,6 @@ static float g_hashrate = 0;
 static uint32_t g_lastPaint = 0;
 static bool g_wifiStarted = false;
 static bool g_jobLoaded = false;
-static String g_jobIdSeen;
 
 static void applyCpu(uint8_t mhz) {
   mhz = g_cfg.normalizeCpu(mhz);

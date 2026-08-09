@@ -36,23 +36,10 @@ bool CompanionLink::poll(AppConfig& cfg, const MinerSnapshot& snap, ApplyFn onAp
 void CompanionLink::handleLine(const String& line, AppConfig& cfg, const MinerSnapshot& snap,
                                ApplyFn onApply) {
   String t = line;
-  int idx = t.indexOf("cmp");
-  if (idx < 0) {
-    // case-insensitive scan
-    String lower = t;
-    lower.toLowerCase();
-    idx = lower.indexOf("cmp");
-    if (idx >= 0) {
-      // keep original casing of args from t
-    } else {
-      return;
-    }
-  }
-  // Prefer token start: "cmp" followed by end or whitespace
+  int idx = -1;
   {
     String lower = t;
     lower.toLowerCase();
-    idx = -1;
     for (int i = 0; i + 3 <= (int)lower.length(); i++) {
       if (lower[i] == 'c' && lower[i + 1] == 'm' && lower[i + 2] == 'p' &&
           (i + 3 == (int)lower.length() || lower[i + 3] == ' ' || lower[i + 3] == '\t')) {
