@@ -73,7 +73,8 @@ fn apply_theme(ctx: &egui::Context) {
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Tab {
     Dashboard,
-    Settings,
+    Wifi,
+    Pool,
     Overclock,
     Discover,
 }
@@ -270,18 +271,34 @@ impl CompanionApp {
         });
     }
 
-    fn apply_settings(&mut self) {
-        let body = format!(
-            "auth={}&worker={}&stratum={}&password={}&wifi_ssid={}&wifi_password={}&reconnect=true",
+    fn apply_wifi(&mut self) {
+        let mut body = format!(
+            "auth={}&wifi_ssid={}",
+            urlenc(&self.auth_password),
+            urlenc(&self.edit_wifi_ssid),
+        );
+        if !self.edit_wifi_password.is_empty() {
+            body.push_str(&format!(
+                "&wifi_password={}",
+                urlenc(&self.edit_wifi_password)
+            ));
+        }
+        self.post("/api/config", body);
+        self.last_ok = "WiFi sent — SSID/password changes reboot the board.".into();
+    }
+
+    fn apply_pool(&mut self) {
+        let mut body = format!(
+            "auth={}&worker={}&stratum={}&reconnect=true",
             urlenc(&self.auth_password),
             urlenc(&self.edit_worker),
             urlenc(&self.edit_stratum),
-            urlenc(&self.edit_password),
-            urlenc(&self.edit_wifi_ssid),
-            urlenc(&self.edit_wifi_password),
         );
+        if !self.edit_password.is_empty() {
+            body.push_str(&format!("&password={}", urlenc(&self.edit_password)));
+        }
         self.post("/api/config", body);
-        self.last_ok = "Settings sent — WiFi changes reboot the board.".into();
+        self.last_ok = "Pool settings sent — stratum reloads without reboot.".into();
     }
 
     fn apply_clock(&mut self) {
@@ -479,7 +496,8 @@ impl App for CompanionApp {
             .show(ctx, |ui| {
                 for (tab, label) in [
                     (Tab::Dashboard, "Dashboard"),
-                    (Tab::Settings, "Settings"),
+                    (Tab::Wifi, "WiFi"),
+                    (Tab::Pool, "Pool"),
                     (Tab::Overclock, "Overclock"),
                     (Tab::Discover, "Discover"),
                 ] {
@@ -529,7 +547,8 @@ impl App for CompanionApp {
                 }
                 match self.tab {
                     Tab::Dashboard => self.ui_dashboard(ui),
-                    Tab::Settings => self.ui_settings(ui),
+                    Tab::Wifi => self.ui_wifi(ui),
+                    Tab::Pool => self.ui_pool(ui),
                     Tab::Overclock => self.ui_overclock(ui),
                     Tab::Discover => self.ui_discover(ui),
                 }
@@ -624,28 +643,83 @@ impl CompanionApp {
         painter.rect_filled(fill, 9.0, Color32::from_rgb(200, 90 + wave as u8, 30));
     }
 
-    fn ui_settings(&mut self, ui: &mut egui::Ui) {
+    fn ui_wifi(&mut self, ui: &mut egui::Ui) {
         ui.label(
-            RichText::new("Board settings")
+            RichText::new("WiFi")
                 .size(22.0)
                 .color(Color32::from_rgb(255, 160, 70)),
         );
-        ui.label("Works over USB or LAN. Auth is the pool password.");
+        ui.label("Station credentials only. Changing SSID or password soft-resets the board.");
         ui.add_space(10.0);
-        egui::Grid::new("settings_grid")
+        Self::card(ui, "LINK STATUS", |ui| {
+            ui.label(format!(
+                "{} · IP {:?}",
+                self.status.wifi, self.status.ip
+            ));
+        });
+        ui.add_space(12.0);
+        egui::Grid::new("wifi_grid")
             .num_columns(2)
             .spacing([16.0, 10.0])
             .show(ui, |ui| {
-                ui.label("WiFi SSID");
+                ui.label("SSID");
                 ui.add(egui::TextEdit::singleline(&mut self.edit_wifi_ssid).desired_width(360.0));
                 ui.end_row();
-                ui.label("WiFi password");
+                ui.label("Password");
                 ui.add(
                     egui::TextEdit::singleline(&mut self.edit_wifi_password)
                         .desired_width(360.0)
-                        .password(true),
+                        .password(true)
+                        .hint_text("leave blank to keep current"),
                 );
                 ui.end_row();
+            });
+        ui.add_space(14.0);
+        ui.horizontal(|ui| {
+            if ui
+                .add(
+                    egui::Button::new(RichText::new("Save WiFi").strong())
+                        .fill(Color32::from_rgb(196, 92, 28))
+                        .min_size(Vec2::new(140.0, 36.0)),
+                )
+                .clicked()
+            {
+                self.apply_wifi();
+            }
+            if ui.button("Reload from board").clicked() {
+                self.refresh_board();
+            }
+        });
+    }
+
+    fn ui_pool(&mut self, ui: &mut egui::Ui) {
+        ui.label(
+            RichText::new("Pool")
+                .size(22.0)
+                .color(Color32::from_rgb(255, 160, 70)),
+        );
+        ui.label("Stratum endpoint and worker. Auth for writes is the current pool password.");
+        ui.add_space(10.0);
+        Self::card(ui, "POOL STATUS", |ui| {
+            let c = if self.status.connected {
+                Color32::from_rgb(90, 220, 130)
+            } else {
+                Color32::from_rgb(220, 120, 90)
+            };
+            ui.label(RichText::new(&self.status.pool).color(c).size(18.0).strong());
+            ui.label(format!(
+                "acc {} · rej {} · drop {} · diff {}",
+                self.status.accepted,
+                self.status.rejected,
+                self.status.dropped,
+                self.status.difficulty
+            ));
+        });
+        ui.add_space(12.0);
+        egui::Grid::new("pool_grid")
+            .num_columns(2)
+            .spacing([16.0, 10.0])
+            .show(ui, |ui| {
                 ui.label("Stratum");
                 ui.add(egui::TextEdit::singleline(&mut self.edit_stratum).desired_width(360.0));
                 ui.end_row();
@@ -656,7 +730,8 @@ impl CompanionApp {
                 ui.add(
                     egui::TextEdit::singleline(&mut self.edit_password)
                         .desired_width(360.0)
-                        .password(true),
+                        .password(true)
+                        .hint_text("leave blank to keep current"),
                 );
                 ui.end_row();
             });
@@ -664,13 +739,13 @@ impl CompanionApp {
         ui.horizontal(|ui| {
             if ui
                 .add(
-                    egui::Button::new(RichText::new("Save to board").strong())
+                    egui::Button::new(RichText::new("Save pool").strong())
                         .fill(Color32::from_rgb(196, 92, 28))
-                        .min_size(Vec2::new(160.0, 36.0)),
+                        .min_size(Vec2::new(140.0, 36.0)),
                 )
                 .clicked()
             {
-                self.apply_settings();
+                self.apply_pool();
             }
             if ui.button("Reload from board").clicked() {
                 self.refresh_board();
