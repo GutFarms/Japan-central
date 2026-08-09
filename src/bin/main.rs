@@ -59,6 +59,10 @@ const DEMO_ZERO_NIBBLES: u8 = 4;
 const SAVED_CONFIRM_SECS: u64 = 8;
 const MAX_PASSWORD_ATTEMPTS: u8 = 3;
 const BOOT_LONG_PRESS_MS: u64 = 700;
+/// NMMiner-style: dim/sleep the LCD after idle so mining isn’t starved by SPI.
+const SCREEN_SLEEP_SECS: u64 = 60;
+/// GUI redraw interval while awake (stats/web still update more often).
+const GUI_REFRESH_MS: u64 = 2000;
 
 type Serial<'d> = Uart<'d, Blocking>;
 
@@ -224,6 +228,9 @@ async fn main(spawner: Spawner) -> ! {
     let mut saw_stratum = false;
     // Non-blocking full-screen banner (ONLINE / CONNECTED); mining continues.
     let mut banner_until: Option<Instant> = None;
+    let boot_at = Instant::now();
+    let mut last_input = Instant::now();
+    let mut last_gui = Instant::now();
 
     let mut stats = miner.stats();
     let mut radio_status = radio::snapshot().await;
@@ -262,8 +269,23 @@ async fn main(spawner: Spawner) -> ! {
         }
         if !boot_down && boot_was_down {
             if let Some(start) = boot_down_since.take() {
+                last_input = Instant::now();
+                let was_asleep = !display.is_awake();
+                if was_asleep {
+                    let _ = display.wake_screen();
+                    display.invalidate();
+                }
                 let long = start.elapsed() >= Duration::from_millis(BOOT_LONG_PRESS_MS);
-                if long {
+                // NMMiner: short press wakes only; when already awake, advance UI.
+                if was_asleep && !long {
+                    radio_status = radio::snapshot().await;
+                    if stratum_enabled {
+                        stratum_status = stratum::snapshot().await;
+                    }
+                    let _ =
+                        display.draw_gui(&gui, &stats, &pool, &radio_status, &stratum_status, true);
+                    last_gui = Instant::now();
+                } else if long {
                     gui.on_action_press();
                     if gui.take_change_request() {
                         if let Some(updated) = password_gated_change(
@@ -297,21 +319,43 @@ async fn main(spawner: Spawner) -> ! {
                         }
                         gui.screen = esp32_s3_scrypt_miner::gui::GuiScreen::Mining;
                     }
+                    display.invalidate();
+                    radio_status = radio::snapshot().await;
+                    if stratum_enabled {
+                        stratum_status = stratum::snapshot().await;
+                    }
+                    let _ =
+                        display.draw_gui(&gui, &stats, &pool, &radio_status, &stratum_status, true);
+                    last_gui = Instant::now();
                 } else {
                     gui.on_boot_short_press();
+                    display.invalidate();
+                    radio_status = radio::snapshot().await;
+                    if stratum_enabled {
+                        stratum_status = stratum::snapshot().await;
+                    }
+                    let _ =
+                        display.draw_gui(&gui, &stats, &pool, &radio_status, &stratum_status, true);
+                    last_gui = Instant::now();
                 }
-                display.invalidate();
-                radio_status = radio::snapshot().await;
-                if stratum_enabled {
-                    stratum_status = stratum::snapshot().await;
-                }
-                let _ = display.draw_gui(&gui, &stats, &pool, &radio_status, &stratum_status, true);
             }
         }
         boot_was_down = boot_down;
 
         // Touch: tab strip, menu rows, config "change" band.
         if let Some(p) = touch.poll_tap(&mut touch_delay) {
+            last_input = Instant::now();
+            if !display.is_awake() {
+                let _ = display.wake_screen();
+                display.invalidate();
+                radio_status = radio::snapshot().await;
+                if stratum_enabled {
+                    stratum_status = stratum::snapshot().await;
+                }
+                let _ = display.draw_gui(&gui, &stats, &pool, &radio_status, &stratum_status, true);
+                last_gui = Instant::now();
+                continue;
+            }
             let on_menu = gui.screen == esp32_s3_scrypt_miner::gui::GuiScreen::Menu;
             match hit_gui(p, on_menu) {
                 Some(GuiHit::Tab(i)) => {
@@ -479,6 +523,8 @@ async fn main(spawner: Spawner) -> ! {
                     saw_ip = true;
                     serial_write(&mut usb, "IP address: ");
                     serial_writeln(&mut usb, radio_status.ip_string().as_str());
+                    let _ = display.wake_screen();
+                    last_input = Instant::now();
                     let _ = display.draw_online(pool.wifi_ssid.as_str(), ip);
                     banner_until = Some(Instant::now() + Duration::from_secs(3));
                     gui.screen = GuiScreen::Mining;
@@ -498,6 +544,8 @@ async fn main(spawner: Spawner) -> ! {
                     ),
                 );
                 serial_writeln(&mut usb, msg.as_str());
+                let _ = display.wake_screen();
+                last_input = Instant::now();
                 let _ = display.draw_pool_connected(pool.stratum.as_str(), hashrate_x100);
                 banner_until = Some(Instant::now() + Duration::from_secs(3));
                 gui.screen = GuiScreen::Mining;
@@ -521,12 +569,24 @@ async fn main(spawner: Spawner) -> ! {
             let banner_active = banner_until
                 .map(|t| Instant::now() < t)
                 .unwrap_or(false);
-            if !banner_active {
+            if banner_active {
+                // keep screen on during banners
+            } else {
                 banner_until = None;
-                if let Err(e) =
-                    display.draw_gui(&gui, &stats, &pool, &radio_status, &stratum_status, true)
+                if last_input.elapsed() >= Duration::from_secs(SCREEN_SLEEP_SECS) {
+                    if display.is_awake() {
+                        let _ = display.sleep_screen();
+                        info!("display sleep (mining)");
+                    }
+                } else if display.is_awake()
+                    && last_gui.elapsed() >= Duration::from_millis(GUI_REFRESH_MS)
                 {
-                    info!("display error: {e}");
+                    if let Err(e) =
+                        display.draw_gui(&gui, &stats, &pool, &radio_status, &stratum_status, true)
+                    {
+                        info!("display error: {e}");
+                    }
+                    last_gui = Instant::now();
                 }
             }
 
@@ -537,6 +597,7 @@ async fn main(spawner: Spawner) -> ! {
                 ws.nonce = stats.nonce;
                 let _ = ws.address.push_str(pool.address.as_str());
                 let _ = ws.stratum.push_str(pool.stratum.as_str());
+                let _ = ws.wifi_ssid.push_str(pool.wifi_ssid.as_str());
                 ws.wifi = radio_status.wifi;
                 ws.ip = radio_status.ip;
                 ws.pool_phase = stratum_status.phase;
@@ -544,11 +605,13 @@ async fn main(spawner: Spawner) -> ! {
                 ws.rejected = stratum_status.rejected;
                 ws.dropped = stratum_status.dropped;
                 ws.difficulty = stratum_status.difficulty;
+                ws.uptime_secs = boot_at.elapsed().as_secs();
+                ws.screen_on = display.is_awake();
                 web::publish(ws);
             }
 
             info!(
-                "H/s={}.{:02} nonce={:08x} shares={} wifi={} stratum={} acc={}/{}",
+                "H/s={}.{:02} nonce={:08x} shares={} wifi={} stratum={} acc={}/{} lcd={}",
                 hashrate_x100 / 100,
                 hashrate_x100 % 100,
                 stats.nonce,
@@ -556,7 +619,8 @@ async fn main(spawner: Spawner) -> ! {
                 radio_status.wifi.label(),
                 stratum_status.phase.label(),
                 stratum_status.accepted,
-                stratum_status.rejected
+                stratum_status.rejected,
+                if display.is_awake() { "on" } else { "off" }
             );
 
             window_start = Instant::now();

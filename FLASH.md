@@ -72,6 +72,24 @@ Install **CH340** drivers on Windows if no COM port appears. Serial monitor: **1
 3. Then **worker → password**. USB serial (115200) always works
 4. After DHCP, **ONLINE** / **CONNECTED** banners do not stop mining. Web UI: `http://<board-ip>/` · JSON `/api/status` · reconnect `/api/reconnect`
 
+## LCD power save (NMMiner-style)
+
+After **60s** without touch or BOOT activity, the backlight turns off and GUI redraws pause (mining continues).
+
+- Touch the screen or press **BOOT** briefly to wake (short BOOT while asleep does not change tabs).
+- Hold **BOOT** ~0.7s while awake to open the menu / change credentials flow.
+
+## HTTP API
+
+| Path | Purpose |
+|------|---------|
+| `/` | Status dashboard (HTML) |
+| `/api/status` | Compact JSON status |
+| `/probe` | Discovery JSON (`hr` + `ver` for LAN monitors) |
+| `/alive` | Liveness / self-IP JSON |
+| `/api/system/info` | Fuller JSON (hashrate, shares, pool, WiFi, uptime, LCD) |
+| `/api/reconnect` | Request stratum reconnect |
+
 ## Not for
 
 - ESP32-S2 / C3 / S3 modules (wrong chip image)

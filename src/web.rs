@@ -1,6 +1,8 @@
 //! Tiny HTTP status server — open `http://<board-ip>/` on the LAN.
 //!
 //! Runs only with WiFi + embassy-net. One connection at a time; read-only.
+//! Discovery endpoints (`/probe`, `/alive`, `/api/system/info`) mirror the
+//! NMMiner-style LAN monitor shape so the board is easy to find on the network.
 
 use heapless::String;
 
@@ -15,6 +17,7 @@ pub struct WebStatus {
     pub nonce: u32,
     pub address: String<96>,
     pub stratum: String<96>,
+    pub wifi_ssid: String<32>,
     pub wifi: WifiPhase,
     pub ip: Option<[u8; 4]>,
     pub pool_phase: StratumPhase,
@@ -22,6 +25,8 @@ pub struct WebStatus {
     pub rejected: u32,
     pub dropped: u32,
     pub difficulty: u32,
+    pub uptime_secs: u64,
+    pub screen_on: bool,
 }
 
 impl Default for WebStatus {
@@ -32,6 +37,7 @@ impl Default for WebStatus {
             nonce: 0,
             address: String::new(),
             stratum: String::new(),
+            wifi_ssid: String::new(),
             wifi: WifiPhase::Disabled,
             ip: None,
             pool_phase: StratumPhase::Disabled,
@@ -39,6 +45,8 @@ impl Default for WebStatus {
             rejected: 0,
             dropped: 0,
             difficulty: 1,
+            uptime_secs: 0,
+            screen_on: true,
         }
     }
 }
@@ -56,8 +64,13 @@ mod server {
     use log::info;
 
     use super::WebStatus;
+    use crate::display::{DISPLAY_HEIGHT, DISPLAY_WIDTH};
     use crate::radio::WifiPhase;
     use crate::stratum::StratumPhase;
+
+    const FW_VERSION: &str = env!("CARGO_PKG_VERSION");
+    const MODEL: &str = "SCRYPT-CYD";
+    const HOSTNAME: &str = "SCRYPT-CYD";
 
     static STATUS: Mutex<CriticalSectionRawMutex, WebStatus> = Mutex::new(WebStatus {
         hashrate_x100: 0,
@@ -65,6 +78,7 @@ mod server {
         nonce: 0,
         address: heapless::String::new(),
         stratum: heapless::String::new(),
+        wifi_ssid: heapless::String::new(),
         wifi: WifiPhase::Disabled,
         ip: None,
         pool_phase: StratumPhase::Disabled,
@@ -72,6 +86,8 @@ mod server {
         rejected: 0,
         dropped: 0,
         difficulty: 1,
+        uptime_secs: 0,
+        screen_on: true,
     });
 
     pub fn publish(s: WebStatus) {
@@ -130,6 +146,9 @@ mod server {
             let snap = STATUS.lock().await.clone();
 
             let _ = match path {
+                "/probe" => write_probe(&mut socket, &snap).await,
+                "/alive" => write_alive(&mut socket, &snap).await,
+                "/api/system/info" => write_system_info(&mut socket, &snap).await,
                 "/api" | "/api/" | "/api/status" => write_json(&mut socket, &snap).await,
                 "/api/reconnect" => {
                     crate::stratum::request_reconnect();
@@ -157,7 +176,75 @@ mod server {
         };
         let mut parts = s.split_whitespace();
         let _method = parts.next();
-        parts.next().unwrap_or("/")
+        let path = parts.next().unwrap_or("/");
+        path.split('?').next().unwrap_or("/")
+    }
+
+    async fn write_probe(socket: &mut TcpSocket<'_>, s: &WebStatus) -> Result<(), ()> {
+        // NMMiner discovery shape: `hr` + `ver` required by their monitor.
+        let hr = s.hashrate_x100 / 100;
+        let body = format!(
+            "{{\"model\":\"{MODEL}\",\"hostname\":\"{HOSTNAME}\",\"ver\":\"{FW_VERSION}\",\
+\"sw\":{sw},\"sh\":{sh},\"hr\":{hr},\"ut\":{ut},\"algo\":\"scrypt\",\"board\":\"ESP32-2432S028\"}}",
+            sw = DISPLAY_WIDTH,
+            sh = DISPLAY_HEIGHT,
+            hr = hr,
+            ut = s.uptime_secs,
+        );
+        write_json_raw(socket, &body).await
+    }
+
+    async fn write_alive(socket: &mut TcpSocket<'_>, s: &WebStatus) -> Result<(), ()> {
+        let self_ip = match s.ip {
+            Some([a, b, c, d]) => format!("\"{a}.{b}.{c}.{d}\""),
+            None => "null".into(),
+        };
+        let ips = match s.ip {
+            Some([a, b, c, d]) => format!("[\"{a}.{b}.{c}.{d}\"]"),
+            None => "[]".into(),
+        };
+        let body = format!("{{\"self\":{self_ip},\"ips\":{ips}}}");
+        write_json_raw(socket, &body).await
+    }
+
+    async fn write_system_info(socket: &mut TcpSocket<'_>, s: &WebStatus) -> Result<(), ()> {
+        let hr = format!("{}.{:02}", s.hashrate_x100 / 100, s.hashrate_x100 % 100);
+        let body = format!(
+            "{{\"identity\":{{\"hwModel\":\"{MODEL}\",\"hostName\":\"{HOSTNAME}\",\
+\"fwVersion\":\"{FW_VERSION}\",\"board\":\"ESP32-2432S028\",\"algo\":\"scrypt\"}},\
+\"miner\":{{\"hashRate\":{hr},\"sAccepted\":{acc},\"sRejected\":{rej},\"dropped\":{drop},\
+\"uptimeSeconds\":{ut},\"poolDiff\":{diff},\"shares\":{shares},\"nonce\":\"{nonce:08x}\",\
+\"screenOn\":{screen}}},\"stratum\":{{\"url\":{url},\"user\":{user},\"phase\":\"{phase}\",\
+\"connected\":{conn}}},\"wifi\":{{\"ssid\":{ssid},\"state\":\"{wifi}\",\"ip\":{ip}}}}}",
+            hr = hr,
+            acc = s.accepted,
+            rej = s.rejected,
+            drop = s.dropped,
+            ut = s.uptime_secs,
+            diff = s.difficulty,
+            shares = s.shares,
+            nonce = s.nonce,
+            screen = if s.screen_on { "true" } else { "false" },
+            url = json_str(s.stratum.as_str()),
+            user = json_str(s.address.as_str()),
+            phase = if s.pool_phase.is_connected() {
+                "CONNECTED"
+            } else {
+                s.pool_phase.label()
+            },
+            conn = if s.pool_phase.is_connected() {
+                "true"
+            } else {
+                "false"
+            },
+            ssid = json_str(s.wifi_ssid.as_str()),
+            wifi = s.wifi.label(),
+            ip = match s.ip {
+                Some([a, b, c, d]) => format!("\"{a}.{b}.{c}.{d}\""),
+                None => "null".into(),
+            },
+        );
+        write_json_raw(socket, &body).await
     }
 
     async fn write_html(socket: &mut TcpSocket<'_>, s: &WebStatus) -> Result<(), ()> {
@@ -173,6 +260,7 @@ mod server {
             s.pool_phase.label()
         };
         let phase_color = if connected { "#7dffa0" } else { "#e8f0e4" };
+        let lcd = if s.screen_on { "on" } else { "off (mining)" };
         let body = format!(
             "<!doctype html><html><head><meta charset=utf-8>\
 <meta name=viewport content=\"width=device-width,initial-scale=1\">\
@@ -192,7 +280,7 @@ main{{padding:1.2rem 1.4rem;display:grid;gap:.9rem;max-width:520px}}\
 a{{color:#7dffa0}}\
 </style></head><body>\
 <header><h1>SCRYPT</h1>\
-<div class=sub>ESP32-2432S028 · http://{ip}/</div></header>\
+<div class=sub>ESP32-2432S028 · http://{ip}/ · LCD {lcd}</div></header>\
 <main>\
 <div class=card><div class=k>Active hashrate</div><div class=\"v rate\">{rate} H/s</div></div>\
 <div class=row>\
@@ -206,15 +294,17 @@ a{{color:#7dffa0}}\
 <div class=card><div class=k>Worker</div><div class=v style=font-size:1rem>{addr}</div></div>\
 <div class=card><div class=k>Stratum</div><div class=v style=font-size:1rem>{stratum}</div></div>\
 <div class=card><div class=k>WiFi</div><div class=v>{wifi} · {ip}</div>\
-<div class=k style=margin-top:.6rem>Diff {diff} · dropped {drop} · nonce {nonce:08x}</div></div>\
+<div class=k style=margin-top:.6rem>Diff {diff} · dropped {drop} · up {ut}s · nonce {nonce:08x}</div></div>\
 <div class=card>\
 <a href=/api/status>JSON</a> · \
-<a href=/api/reconnect>Reconnect pool</a> · \
-auto-refresh 3s<br>\
-<span style=color:#8aa08c;font-size:.85rem>Pool/WiFi edits: serial <code>change</code> or device menu</span>\
+<a href=/probe>probe</a> · \
+<a href=/api/system/info>system</a> · \
+<a href=/api/reconnect>Reconnect</a><br>\
+<span style=color:#8aa08c;font-size:.85rem>LCD sleeps after 60s idle (BOOT/touch wake) — like NMMiner</span>\
 </div>\
 </main></body></html>",
             ip = ip,
+            lcd = lcd,
             rate = rate,
             shares = s.shares,
             phase = phase,
@@ -226,6 +316,7 @@ auto-refresh 3s<br>\
             wifi = s.wifi.label(),
             diff = s.difficulty,
             drop = s.dropped,
+            ut = s.uptime_secs,
             nonce = s.nonce,
         );
 
@@ -251,6 +342,15 @@ auto-refresh 3s<br>\
         write_all(socket, body.as_bytes()).await
     }
 
+    async fn write_json_raw(socket: &mut TcpSocket<'_>, body: &str) -> Result<(), ()> {
+        let header = format!(
+            "HTTP/1.0 200 OK\r\nContent-Type: application/json\r\nAccess-Control-Allow-Origin: *\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+            body.len()
+        );
+        write_all(socket, header.as_bytes()).await?;
+        write_all(socket, body.as_bytes()).await
+    }
+
     async fn write_json(socket: &mut TcpSocket<'_>, s: &WebStatus) -> Result<(), ()> {
         let ip = match s.ip {
             Some([a, b, c, d]) => format!("\"{a}.{b}.{c}.{d}\""),
@@ -264,7 +364,8 @@ auto-refresh 3s<br>\
         let body = format!(
             "{{\"hashrate_hs\":{}.{:02},\"shares\":{},\"nonce\":\"{:08x}\",\
 \"address\":{},\"stratum\":{},\"wifi\":\"{}\",\"ip\":{},\
-\"pool\":\"{}\",\"connected\":{},\"accepted\":{},\"rejected\":{},\"dropped\":{},\"difficulty\":{}}}",
+\"pool\":\"{}\",\"connected\":{},\"accepted\":{},\"rejected\":{},\"dropped\":{},\
+\"difficulty\":{},\"uptime_secs\":{},\"screen_on\":{}}}",
             s.hashrate_x100 / 100,
             s.hashrate_x100 % 100,
             s.shares,
@@ -282,14 +383,11 @@ auto-refresh 3s<br>\
             s.accepted,
             s.rejected,
             s.dropped,
-            s.difficulty
+            s.difficulty,
+            s.uptime_secs,
+            if s.screen_on { "true" } else { "false" },
         );
-        let header = format!(
-            "HTTP/1.0 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
-            body.len()
-        );
-        write_all(socket, header.as_bytes()).await?;
-        write_all(socket, body.as_bytes()).await
+        write_json_raw(socket, &body).await
     }
 
     async fn write_all(socket: &mut TcpSocket<'_>, mut data: &[u8]) -> Result<(), ()> {

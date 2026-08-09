@@ -10,11 +10,25 @@ Bare-metal Rust firmware that mines **scrypt** proof-of-work on an **ESP32-2432S
 - Starts **WiFi STA + DHCP** when an SSID is set (BLE unused — RAM kept for WiFi/stratum)
 - **Stratum TCP client** over WiFi: subscribe, authorize, receive jobs, submit shares
 - **LAN web UI** at `http://<board-ip>/` after DHCP (status dashboard + JSON)
+- **NMMiner-style** LCD sleep (60s idle) and discovery APIs (`/probe`, `/alive`, `/api/system/info`)
 - **On-device GUI**: splash, setup, mining dashboard, config tab, radio/pool tab, menu
 - Saves credentials to flash and auto-loads them on later boots
 - Host CLI (`host-miner`), **desktop GUI** (`host-gui`), and unit tests
 
 Educational / demo miner only — not profitable network mining.
+
+## Relation to NMMiner
+
+[NMMiner](https://github.com/NMminer1024/NMMiner) also targets **ESP32-2432S028**, but mines **Bitcoin SHA-256**. This firmware mines **scrypt** (Litecoin/Dogecoin-style) with `N=64` lite.
+
+| | NMMiner | This firmware |
+|--|---------|----------------|
+| Algorithm | BTC SHA-256 | Scrypt (`lite`) |
+| Config | SoftAP + phone browser | UART/PuTTY + LCD scan (WiFi required) |
+| LCD sleep | Yes (BOOT/touch wake) | Yes (60s; BOOT/touch wake) |
+| HTTP | `/probe`, `/alive`, `/api/system/info`, … | Same discovery trio + `/api/status` |
+
+SoftAP captive-portal setup is not used here: classic ESP32 RAM is tight while mining; UART + LCD setup stays the reliable path.
 
 ## On-device GUI
 
@@ -23,14 +37,15 @@ Educational / demo miner only — not profitable network mining.
 | **Touch** tab strip | Jump to MINE / CONF / RADIO / MENU |
 | **Touch** keyboard | Type credentials during setup / auth (OK / skip) |
 | **Touch** menu row | Activate option |
-| **BOOT** short press | Next tab, or move menu highlight |
+| **BOOT** short press | Wake LCD if asleep; else next tab / menu highlight |
 | **BOOT** long press (~0.7s) | Open menu / activate selected item |
+| **Touch** (any) | Wake LCD if asleep |
 | Serial `change` | Password-gated credential edit |
 | Serial `radio` / `wifi` / `stratum` | Print live radio + pool status |
 
-Tabs: **MINE** · **CONF** · **RADIO** · **MENU**.
+Tabs: **MINE** · **CONF** · **RADIO** · **MENU**. LCD sleeps after 60s idle; mining continues with the screen off.
 
-When WiFi is configured, the firmware connects to `stratum` (`host:port` or `stratum+tcp://…`), runs `mining.subscribe` / `mining.authorize`, mines `mining.notify` jobs with the pool difficulty, and submits shares with `mining.submit`. Without WiFi it falls back to local demo mining.
+When WiFi is configured, the firmware connects to `stratum` (`host:port` or `stratum+tcp://…`), runs `mining.subscribe` / `mining.authorize`, mines `mining.notify` jobs with the pool difficulty, and submits shares with `mining.submit`. WiFi is required — there is no skip path.
 
 ## Post-boot credentials (saved to flash)
 
@@ -42,7 +57,7 @@ On **first boot**, use the **touch screen** or serial monitor (115200):
 4. `worker` — worker name (wallet address OK)  
 5. `password` — pool password (often `x`)
 
-After WiFi + DHCP, **ONLINE** / pool **CONNECTED** banners appear without pausing mining. Web UI: `http://IP/` · `/api/status` · `/api/reconnect`.
+After WiFi + DHCP, **ONLINE** / pool **CONNECTED** banners appear without pausing mining. Web UI: `http://IP/` · `/api/status` · `/probe` · `/alive` · `/api/system/info` · `/api/reconnect`.
 
 ### Change credentials (password required)
 
