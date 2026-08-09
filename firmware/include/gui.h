@@ -6,6 +6,7 @@
 class MonitorGui {
  public:
   void begin(TFT_eSPI &tft, uint8_t rotation = 1);
+  void ensureSprite();
   void setRotation(TFT_eSPI &tft, uint8_t rotation);
   void invalidate();
   void drawChrome(TFT_eSPI &tft);

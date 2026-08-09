@@ -61,12 +61,20 @@ void MonitorGui::begin(TFT_eSPI &tft, uint8_t rotation) {
   tft.setRotation(rotation == 3 ? 3 : 1);
   tft.fillScreen(Theme::bg);
   tft.setTextDatum(TL_DATUM);
+  // Defer large sprite alloc until after splash — avoids boot heap spikes / resets.
   if (dialSpr_ == nullptr) {
     dialSpr_ = new TFT_eSprite(&tft);
   }
+  spriteReady_ = false;
+  chromeDrawn_ = false;
+}
+
+void MonitorGui::ensureSprite() {
+  if (spriteReady_ || dialSpr_ == nullptr) {
+    return;
+  }
   dialSpr_->setColorDepth(16);
   spriteReady_ = dialSpr_->createSprite(LARGE_W, LARGE_H);
-  chromeDrawn_ = false;
 }
 
 void MonitorGui::invalidate() {
@@ -106,20 +114,22 @@ void MonitorGui::drawChip(TFT_eSPI &tft, int x, int y, int w, int h, const char 
 }
 
 void MonitorGui::showBoot(TFT_eSPI &tft, const char *message) {
+  // Lightweight splash (no heavy AA) so boot cannot stack/heap-fault into a reboot loop.
   tft.fillScreen(Theme::bg);
-  drawDecor(tft);
+  tft.fillRect(0, 0, SCREEN_W, 56, Theme::bgDeep);
   const int cx = SCREEN_W / 2;
   const int cy = SCREEN_H / 2 - 8;
-  tft.fillSmoothCircle(cx, cy, 58, Theme::dialRingLo, Theme::bg);
-  tft.fillSmoothCircle(cx, cy, 50, Theme::bgPanel, Theme::dialRingLo);
-  tft.fillSmoothCircle(cx, cy, 42, Theme::dialFace, Theme::bgPanel);
-  tft.drawSmoothArc(cx, cy, 56, 50, 30, 330, Theme::accent, Theme::bgPanel, true);
+  tft.fillCircle(cx, cy, 56, Theme::dialRingLo);
+  tft.fillCircle(cx, cy, 48, Theme::bgPanel);
+  tft.fillCircle(cx, cy, 40, Theme::dialFace);
+  tft.drawCircle(cx, cy, 48, Theme::accent);
   tft.setTextDatum(MC_DATUM);
   tft.setTextColor(Theme::textPrimary, Theme::dialFace);
   tft.drawString("CYD", cx, cy - 6, 4);
   tft.setTextColor(Theme::accentPale, Theme::dialFace);
   tft.drawString("PC MONITOR", cx, cy + 16, 1);
-  tft.fillSmoothRoundRect(cx - 118, SCREEN_H - 40, 236, 28, 14, Theme::bgPanel, Theme::bg);
+  tft.fillRoundRect(cx - 118, SCREEN_H - 40, 236, 28, 14, Theme::bgPanel);
+  tft.drawRoundRect(cx - 118, SCREEN_H - 40, 236, 28, 14, Theme::accent);
   tft.setTextColor(Theme::accentPale, Theme::bgPanel);
   tft.drawString(message, cx, SCREEN_H - 26, 2);
   tft.setTextDatum(TL_DATUM);
@@ -374,6 +384,7 @@ void MonitorGui::drawFooter(TFT_eSPI &tft, const SystemMetrics &m, const LinkSta
 
 void MonitorGui::render(TFT_eSPI &tft, const SystemMetrics &m, const LinkStats &link, bool linked,
                         const char *statusLine) {
+  ensureSprite();
   if (!chromeDrawn_) {
     drawChrome(tft);
   }

@@ -3,8 +3,13 @@
 #include <TFT_eSPI.h>
 #include <WiFi.h>
 #include <WiFiUdp.h>
+#include <esp_system.h>
 
 #include <cstring>
+
+// CYD USB power is marginal when Wi‑Fi TX kicks in — disable brownout resets.
+#include "soc/rtc_cntl_reg.h"
+#include "soc/soc.h"
 
 #include "device_config.h"
 #include "gui.h"
@@ -26,11 +31,13 @@ char cfgBuf[160];
 uint32_t lastUiMs = 0;
 uint32_t lastWifiCheckMs = 0;
 uint32_t bootHoldUntilMs = 0;
+uint32_t wifiStartAtMs = 0;
 bool bootDone = false;
 bool wifiReady = false;
 bool wifiAttempted = false;
 
 constexpr uint32_t BOOT_HOLD_MS = 4000;
+constexpr uint32_t WIFI_DEFER_MS = 3000;  // after splash, wait before Wi‑Fi radio
 
 enum class LinkSource : uint8_t { None, Usb, Udp };
 LinkSource lastSource = LinkSource::None;
@@ -39,16 +46,47 @@ bool wifiConfigured() {
   return strcmp(WIFI_SSID, "YOUR_WIFI_SSID") != 0;
 }
 
+const char *resetReasonText(esp_reset_reason_t reason) {
+  switch (reason) {
+    case ESP_RST_POWERON:
+      return "POWERON";
+    case ESP_RST_EXT:
+      return "EXT";
+    case ESP_RST_SW:
+      return "SW";
+    case ESP_RST_PANIC:
+      return "PANIC";
+    case ESP_RST_INT_WDT:
+      return "INT_WDT";
+    case ESP_RST_TASK_WDT:
+      return "TASK_WDT";
+    case ESP_RST_WDT:
+      return "WDT";
+    case ESP_RST_DEEPSLEEP:
+      return "DEEPSLEEP";
+    case ESP_RST_BROWNOUT:
+      return "BROWNOUT";
+    case ESP_RST_SDIO:
+      return "SDIO";
+    default:
+      return "OTHER";
+  }
+}
+
 void beginWifi() {
   if (!wifiConfigured() || wifiAttempted) {
     return;
   }
-  WiFi.mode(WIFI_STA);
-  WiFi.persistent(true);
-  WiFi.setAutoReconnect(true);
-  WiFi.setSleep(false);
-  WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
   wifiAttempted = true;
+
+  Serial.println(F("WiFi: starting (low TX power)"));
+  WiFi.persistent(false);
+  WiFi.mode(WIFI_STA);
+  WiFi.setSleep(true);  // lower average current on CYD
+  WiFi.setAutoReconnect(true);
+  // Reduce peak current — primary fix for CYD reboot loops on USB power.
+  WiFi.setTxPower(WIFI_POWER_8_5dBm);
+  WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
 }
 
 void ensureWifi() {
@@ -56,23 +94,27 @@ void ensureWifi() {
     return;
   }
   if (!wifiAttempted) {
-    beginWifi();
+    if (wifiStartAtMs != 0 && static_cast<int32_t>(millis() - wifiStartAtMs) >= 0) {
+      beginWifi();
+    }
     return;
   }
   if (WiFi.status() == WL_CONNECTED) {
     if (!wifiReady) {
       wifiReady = true;
       udp.begin(METRICS_UDP_PORT);
+      Serial.printf("WiFi: connected %s\n", WiFi.localIP().toString().c_str());
     }
     return;
   }
   wifiReady = false;
   static uint32_t lastAttempt = 0;
-  if (millis() - lastAttempt < 5000) {
+  if (millis() - lastAttempt < 15000) {
     return;
   }
   lastAttempt = millis();
-  WiFi.disconnect();
+  Serial.println(F("WiFi: retry begin"));
+  WiFi.setTxPower(WIFI_POWER_8_5dBm);
   WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
 }
 
@@ -110,9 +152,8 @@ void handleHostCommand(const char *json, size_t len, bool viaUsb) {
     if (bootDone) {
       gui.setRotation(tft, deviceSettings.cfg().rotation);
     } else {
-      // Stay on the loading splash until the 4s hold completes.
       tft.setRotation(deviceSettings.cfg().rotation == 3 ? 3 : 1);
-      gui.showBoot(tft, wifiConfigured() ? "USB + WiFi ready" : "USB 115200 ready");
+      gui.showBoot(tft, "USB ready");
     }
   }
   sendCfgReply(viaUsb);
@@ -123,9 +164,14 @@ void finishBoot() {
     return;
   }
   bootDone = true;
+  gui.ensureSprite();
   gui.drawChrome(tft);
   sendCfgReply(true);
-  beginWifi();
+  // Do not start Wi‑Fi immediately after drawing — stagger the power spike.
+  wifiStartAtMs = millis() + WIFI_DEFER_MS;
+  Serial.printf("Boot done. WiFi in %lu ms. Free heap %u\n",
+                static_cast<unsigned long>(WIFI_DEFER_MS),
+                static_cast<unsigned>(ESP.getFreeHeap()));
 }
 
 void onMetricsPacket(LinkSource source) {
@@ -147,7 +193,6 @@ void pollUdp() {
   }
   packetBuf[len] = '\0';
 
-  // Config commands over UDP.
   if (strstr(packetBuf, "\"cmd\"") != nullptr) {
     handleHostCommand(packetBuf, static_cast<size_t>(len), false);
     return;
@@ -183,33 +228,36 @@ void pollSerial() {
 }  // namespace
 
 void setup() {
+  WRITE_PERI_REG(RTC_CNTL_BROWN_OUT_REG, 0);
+
   serialLink.begin(115200);
+  delay(50);
   Serial.println();
   Serial.println(F("ESP32-CYD PC/GPU Monitor"));
+  Serial.printf("Reset reason: %s\n", resetReasonText(esp_reset_reason()));
+  Serial.printf("Free heap: %u\n", static_cast<unsigned>(ESP.getFreeHeap()));
 
   deviceSettings.begin();
 
   tft.init();
-  // Backlight is owned by DeviceSettings PWM now.
   gui.begin(tft, deviceSettings.cfg().rotation);
   deviceSettings.apply(tft);
 
-  gui.showBoot(tft, wifiConfigured() ? "USB + WiFi ready" : "USB 115200 ready");
+  gui.showBoot(tft, wifiConfigured() ? "Starting…" : "USB 115200 ready");
   bootHoldUntilMs = millis() + BOOT_HOLD_MS;
   bootDone = false;
-  // Keep the loading screen up for 4s — do not draw chrome / start Wi‑Fi yet.
+  wifiStartAtMs = 0;
 }
 
 void loop() {
   const uint32_t now = millis();
 
-  // Hold splash for a full 4 seconds so it does not flash into the monitor UI.
   if (!bootDone) {
-    pollSerial();  // USB can settle, but keep splash until hold ends.
+    // Keep splash steady; avoid heavy work / Wi‑Fi during the 4s hold.
     if (static_cast<int32_t>(now - bootHoldUntilMs) >= 0) {
       finishBoot();
     } else {
-      delay(10);
+      delay(20);
       return;
     }
   }
@@ -240,6 +288,8 @@ void loop() {
     } else if (wifiReady) {
       const IPAddress ip = WiFi.localIP();
       snprintf(status, sizeof(status), "%d.%d.%d.%d", ip[0], ip[1], ip[2], ip[3]);
+    } else if (wifiAttempted) {
+      snprintf(status, sizeof(status), "WiFi…");
     } else {
       snprintf(status, sizeof(status), "Waiting");
     }
