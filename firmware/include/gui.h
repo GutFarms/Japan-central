@@ -22,14 +22,23 @@ class MonitorGui {
     float lastTemp = -999.0f;
   };
 
+  struct DialGeom {
+    int x;
+    int y;
+    int w;
+    int h;
+    bool large;
+  };
+
   void drawDecor(TFT_eSPI &tft);
   void drawHeader(TFT_eSPI &tft, const char *host, bool linked);
   void drawFooter(TFT_eSPI &tft, const SystemMetrics &m, const LinkStats &link, const char *statusLine);
   void drawDial(TFT_eSPI &tft, int index, const char *label, bool showTemp);
-  void paintDialSprite(const char *label, float pct, float tempC, bool showTemp);
-  void drawArcSpan(TFT_eSPI &spr, int cx, int cy, int r, float startDeg, float endDeg, uint16_t color,
-                   int width);
+  void paintDialSprite(int w, int h, bool large, const char *label, float pct, float tempC, bool showTemp);
+  void drawSmoothGaugeArc(TFT_eSPI &spr, int cx, int cy, int rOuter, int rInner, float startMath,
+                          float endMath, uint16_t fg, uint16_t bg);
   void drawSoftBubble(TFT_eSPI &tft, int x, int y, int w, int h, uint16_t fill);
+  DialGeom dialGeom(int index) const;
 
   TFT_eSprite *dialSpr_ = nullptr;
   bool spriteReady_ = false;
@@ -39,5 +48,6 @@ class MonitorGui {
   char lastStatus_[64] = "";
   uint16_t lastPps_ = 0xFFFF;
   float lastDisk_ = -1.0f;
-  DialState dials_[4];
+  float lastVram_ = -1.0f;
+  DialState dials_[3];  // 0=CPU large, 1=GPU, 2=RAM
 };

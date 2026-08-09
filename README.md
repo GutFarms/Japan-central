@@ -4,11 +4,11 @@ Firmware and host agent for an **ESP32 Cheap Yellow Display (CYD)** that shows l
 
 ```
 ╭────────── CYD  DESKTOP  ● LIVE ──────────╮
-│   (CPU dial)         (GPU dial)         │
-│      42% / 61C          71% / 68C       │
-│   (RAM dial)         (VRAM dial)        │
-│      58%                44%             │
-╰── Disk 62%  Net 8.5Mb  USB serial ──────╯
+│  ( large CPU dial )   (GPU small)       │
+│       42% / 61C          71% / 68C      │
+│                       (RAM small)       │
+│                          58%            │
+╰── VRAM 44%  Disk 62%  Net 8.5Mb  USB ───╯
 ```
 
 ## What's in this workspace

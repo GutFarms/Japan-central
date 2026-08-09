@@ -39,10 +39,10 @@ except Exception:  # noqa: BLE001
 
 
 def _tray_image() -> "Image.Image":
-    img = Image.new("RGBA", (64, 64), (0, 12, 40, 255))
+    img = Image.new("RGBA", (64, 64), (0, 6, 22, 255))
     draw = ImageDraw.Draw(img)
-    draw.ellipse((6, 6, 58, 58), fill=(60, 140, 255, 255))
-    draw.ellipse((20, 20, 44, 44), fill=(200, 230, 255, 255))
+    draw.ellipse((6, 6, 58, 58), fill=(28, 78, 170, 255))
+    draw.ellipse((20, 20, 44, 44), fill=(140, 180, 230, 255))
     return img
 
 
@@ -50,7 +50,7 @@ class Speedometer(tk.Canvas):
     """Speedometer with eased needle motion."""
 
     def __init__(self, master: tk.Misc, title: str, **kwargs: Any) -> None:
-        super().__init__(master, highlightthickness=0, bg="#071833", **kwargs)
+        super().__init__(master, highlightthickness=0, bg="#020B1A", **kwargs)
         self.title = title
         self.target = 0.0
         self.shown = 0.0
@@ -81,10 +81,10 @@ class Speedometer(tk.Canvas):
         cx, cy = w / 2, h / 2 + 10
         r = min(w, h) * 0.40
 
-        # Layered dark/light blue face
-        self.create_oval(cx - r - 10, cy - r - 10, cx + r + 10, cy + r + 10, fill="#0A2048", outline="#1E4F9E", width=1)
-        self.create_oval(cx - r - 4, cy - r - 4, cx + r + 4, cy + r + 4, fill="#153A7A", outline="#6EB6FF", width=2)
-        self.create_oval(cx - r, cy - r, cx + r, cy + r, fill="#071833", outline="#9FD2FF", width=2)
+        # Layered darker navy face with thicker AA-looking strokes
+        self.create_oval(cx - r - 10, cy - r - 10, cx + r + 10, cy + r + 10, fill="#031028", outline="#0C2A5C", width=1)
+        self.create_oval(cx - r - 4, cy - r - 4, cx + r + 4, cy + r + 4, fill="#0A224E", outline="#2A5CAA", width=2)
+        self.create_oval(cx - r, cy - r, cx + r, cy + r, fill="#020B1A", outline="#6A9AD0", width=2)
 
         for i in range(0, 101, 5):
             theta = math.radians(225.0 - 270.0 * (i / 100.0))
@@ -94,41 +94,40 @@ class Speedometer(tk.Canvas):
             y0 = cy - inner * math.sin(theta)
             x1 = cx + outer * math.cos(theta)
             y1 = cy - outer * math.sin(theta)
-            color = "#FF8A8A" if i >= 90 else "#FFD27A" if i >= 75 else "#9FD2FF"
-            self.create_line(x0, y0, x1, y1, fill=color, width=2 if i % 10 == 0 else 1)
+            color = "#E87878" if i >= 90 else "#E0B85A" if i >= 75 else "#7AA8D8"
+            self.create_line(x0, y0, x1, y1, fill=color, width=2 if i % 10 == 0 else 1, capstyle=tk.ROUND)
 
         prev = None
-        for i in range(0, 101, 2):
+        for i in range(0, 101, 1):
             theta = math.radians(225.0 - 270.0 * (i / 100.0))
             x = cx + (r - 16) * math.cos(theta)
             y = cy - (r - 16) * math.sin(theta)
             if prev is not None:
-                c = "#FF8A8A" if i >= 90 else "#FFD27A" if i >= 75 else "#3D8CFF"
-                self.create_line(prev[0], prev[1], x, y, fill=c, width=5, capstyle=tk.ROUND)
+                c = "#E87878" if i >= 90 else "#E0B85A" if i >= 75 else "#1E5AA8"
+                self.create_line(prev[0], prev[1], x, y, fill=c, width=6, capstyle=tk.ROUND)
             prev = (x, y)
 
-        # Value arc overlay to current shown value
         prev = None
-        steps = max(2, int(self.shown / 2))
+        steps = max(2, int(self.shown))
         for i in range(0, steps + 1):
             pct = self.shown * (i / steps) if steps else 0
             theta = math.radians(225.0 - 270.0 * (pct / 100.0))
             x = cx + (r - 16) * math.cos(theta)
             y = cy - (r - 16) * math.sin(theta)
             if prev is not None:
-                self.create_line(prev[0], prev[1], x, y, fill="#B8E0FF", width=3, capstyle=tk.ROUND)
+                self.create_line(prev[0], prev[1], x, y, fill="#8EC4F0", width=4, capstyle=tk.ROUND)
             prev = (x, y)
 
         theta = math.radians(225.0 - 270.0 * (self.shown / 100.0))
         nx = cx + (r - 24) * math.cos(theta)
         ny = cy - (r - 24) * math.sin(theta)
-        self.create_line(cx, cy, nx, ny, fill="#F2F7FF", width=3, arrow=tk.LAST)
-        self.create_oval(cx - 6, cy - 6, cx + 6, cy + 6, fill="#5CB8FF", outline="#E8F1FF")
+        self.create_line(cx, cy, nx, ny, fill="#E8F0FA", width=3, arrow=tk.LAST, capstyle=tk.ROUND)
+        self.create_oval(cx - 6, cy - 6, cx + 6, cy + 6, fill="#2A6AB8", outline="#C8DCF0")
 
-        self.create_text(cx, cy - r - 4, text=self.title, fill="#9FD2FF", font=("Segoe UI", 11, "bold"))
-        self.create_text(cx, cy + 20, text=f"{self.shown:.0f}%", fill="#F2F7FF", font=("Segoe UI", 16, "bold"))
+        self.create_text(cx, cy - r - 4, text=self.title, fill="#7AA8D8", font=("Segoe UI", 11, "bold"))
+        self.create_text(cx, cy + 20, text=f"{self.shown:.0f}%", fill="#E8F0FA", font=("Segoe UI", 16, "bold"))
         if self.sub:
-            self.create_text(cx, cy + 40, text=self.sub, fill="#8FB4E8", font=("Segoe UI", 8))
+            self.create_text(cx, cy + 40, text=self.sub, fill="#6A90B8", font=("Segoe UI", 8))
 
 
 class MonitorApp(tk.Tk):
@@ -136,9 +135,9 @@ class MonitorApp(tk.Tk):
         super().__init__()
         self.settings = load_settings()
         self.title(APP_TITLE)
-        self.geometry("900x680")
-        self.minsize(740, 540)
-        self.configure(bg="#071833")
+        self.geometry("920x640")
+        self.minsize(760, 520)
+        self.configure(bg="#020B1A")
 
         self._stop = threading.Event()
         self._worker: Optional[threading.Thread] = None
@@ -187,21 +186,21 @@ class MonitorApp(tk.Tk):
             style.theme_use("clam")
         except tk.TclError:
             pass
-        bg, card, accent, text, muted = "#071833", "#12326B", "#3D8CFF", "#F2F7FF", "#9FD2FF"
+        bg, card, accent, text, muted = "#020B1A", "#0A224E", "#1E5AA8", "#E8F0FA", "#7AA8D8"
         style.configure("TNotebook", background=bg, borderwidth=0)
         style.configure("TNotebook.Tab", background=card, foreground=text, padding=(14, 6))
         style.map("TNotebook.Tab", background=[("selected", accent)])
         style.configure("Root.TFrame", background=bg)
         style.configure("Card.TFrame", background=card)
-        style.configure("Title.TLabel", background=bg, foreground="#6EB6FF", font=("Segoe UI", 18, "bold"))
+        style.configure("Title.TLabel", background=bg, foreground="#4A82C8", font=("Segoe UI", 18, "bold"))
         style.configure("Body.TLabel", background=card, foreground=text, font=("Segoe UI", 10))
         style.configure("Muted.TLabel", background=card, foreground=muted, font=("Segoe UI", 9))
-        style.configure("Status.TLabel", background=bg, foreground="#7DFFB2", font=("Segoe UI", 11, "bold"))
+        style.configure("Status.TLabel", background=bg, foreground="#5AD89A", font=("Segoe UI", 11, "bold"))
         style.configure("Accent.TButton", background=accent, foreground="#FFFFFF", font=("Segoe UI", 10, "bold"), padding=8)
-        style.map("Accent.TButton", background=[("active", "#5CA0FF")])
+        style.map("Accent.TButton", background=[("active", "#2A6AB8")])
         style.configure("TCheckbutton", background=card, foreground=text)
-        style.configure("TEntry", fieldbackground="#071833", foreground=text)
-        style.configure("TCombobox", fieldbackground="#071833", foreground=text)
+        style.configure("TEntry", fieldbackground="#020B1A", foreground=text)
+        style.configure("TCombobox", fieldbackground="#020B1A", foreground=text)
 
     def _build_ui(self) -> None:
         root = ttk.Frame(self, style="Root.TFrame", padding=12)
@@ -221,19 +220,18 @@ class MonitorApp(tk.Tk):
 
         dials = ttk.Frame(monitor, style="Root.TFrame")
         dials.pack(fill=tk.BOTH, expand=True)
-        for r in range(2):
-            dials.rowconfigure(r, weight=1)
-        for c in range(2):
-            dials.columnconfigure(c, weight=1)
+        dials.columnconfigure(0, weight=3)
+        dials.columnconfigure(1, weight=2)
+        dials.rowconfigure(0, weight=1)
+        dials.rowconfigure(1, weight=1)
 
-        self.dial_cpu = Speedometer(dials, "CPU", width=300, height=230)
-        self.dial_gpu = Speedometer(dials, "GPU", width=300, height=230)
-        self.dial_ram = Speedometer(dials, "RAM", width=300, height=230)
-        self.dial_vram = Speedometer(dials, "VRAM", width=300, height=230)
-        self.dial_cpu.grid(row=0, column=0, sticky="nsew", padx=6, pady=6)
-        self.dial_gpu.grid(row=0, column=1, sticky="nsew", padx=6, pady=6)
-        self.dial_ram.grid(row=1, column=0, sticky="nsew", padx=6, pady=6)
-        self.dial_vram.grid(row=1, column=1, sticky="nsew", padx=6, pady=6)
+        # Match CYD: one large CPU dial (mid/top-left) + two smaller GPU/RAM dials.
+        self.dial_cpu = Speedometer(dials, "CPU", width=420, height=420)
+        self.dial_gpu = Speedometer(dials, "GPU", width=280, height=200)
+        self.dial_ram = Speedometer(dials, "RAM", width=280, height=200)
+        self.dial_cpu.grid(row=0, column=0, rowspan=2, sticky="nsew", padx=(6, 4), pady=6)
+        self.dial_gpu.grid(row=0, column=1, sticky="nsew", padx=(4, 6), pady=(6, 3))
+        self.dial_ram.grid(row=1, column=1, sticky="nsew", padx=(4, 6), pady=(3, 6))
 
         info = ttk.Frame(monitor, style="Card.TFrame", padding=10)
         info.pack(fill=tk.X, pady=(8, 0))
@@ -384,8 +382,8 @@ class MonitorApp(tk.Tk):
                 payload.get("ram", 0),
                 f"{payload.get('ram_used_gb', 0):.1f}/{payload.get('ram_total_gb', 0):.1f} GB",
             )
-            self.dial_vram.set_value(payload.get("vram", 0), f"{payload.get('vram_used_mb', 0):.0f} MB")
             self.extra_var.set(
+                f"VRAM {payload.get('vram', 0):.0f}% ({payload.get('vram_used_mb', 0):.0f} MB)   "
                 f"Disk {payload.get('disk', 0):.0f}%   Swap {payload.get('swap', 0):.0f}%   "
                 f"Net ↓ {payload.get('net_down', 0):.2f} / ↑ {payload.get('net_up', 0):.2f} Mbps   "
                 f"Up {payload.get('uptime_min', 0)} min   "

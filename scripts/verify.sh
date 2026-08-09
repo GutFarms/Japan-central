@@ -50,7 +50,7 @@ fi
 
 echo "==> Checking credential strings in app binary"
 strings release/esp32-cyd-pc-monitor.bin | grep -F "Stargate Command" >/dev/null
-strings release/esp32-cyd-pc-monitor.bin | grep -F "USB NDJSON" >/dev/null
+strings release/esp32-cyd-pc-monitor.bin | grep -F "ESP32-CYD PC/GPU Monitor" >/dev/null
 
 echo "==> Host agent smoke tests"
 HOST_PY="$ROOT/host/.venv/bin/python"
