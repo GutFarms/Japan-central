@@ -419,7 +419,7 @@ impl CompanionApp {
         let mut selected_coin_ids = DEFAULT_COIN_IDS.map(|s| s.to_string());
         let mut target_mhz = 240u8;
         let mut auto_apply_balanced = true;
-        let mut hash_focus = true;
+        let hash_focus = true;
         let mut oc_samples_hs = [None, None, None];
         let mut first_run_wizard = true;
         if let Some(storage) = storage {
