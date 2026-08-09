@@ -25,8 +25,12 @@ char packetBuf[512];
 char cfgBuf[160];
 uint32_t lastUiMs = 0;
 uint32_t lastWifiCheckMs = 0;
+uint32_t bootHoldUntilMs = 0;
+bool bootDone = false;
 bool wifiReady = false;
 bool wifiAttempted = false;
+
+constexpr uint32_t BOOT_HOLD_MS = 4000;
 
 enum class LinkSource : uint8_t { None, Usb, Udp };
 LinkSource lastSource = LinkSource::None;
@@ -103,9 +107,25 @@ void handleHostCommand(const char *json, size_t len, bool viaUsb) {
     return;
   }
   if (deviceSettings.cfg().rotation != oldRot) {
-    gui.setRotation(tft, deviceSettings.cfg().rotation);
+    if (bootDone) {
+      gui.setRotation(tft, deviceSettings.cfg().rotation);
+    } else {
+      // Stay on the loading splash until the 4s hold completes.
+      tft.setRotation(deviceSettings.cfg().rotation == 3 ? 3 : 1);
+      gui.showBoot(tft, wifiConfigured() ? "USB + WiFi ready" : "USB 115200 ready");
+    }
   }
   sendCfgReply(viaUsb);
+}
+
+void finishBoot() {
+  if (bootDone) {
+    return;
+  }
+  bootDone = true;
+  gui.drawChrome(tft);
+  sendCfgReply(true);
+  beginWifi();
 }
 
 void onMetricsPacket(LinkSource source) {
@@ -175,15 +195,24 @@ void setup() {
   deviceSettings.apply(tft);
 
   gui.showBoot(tft, wifiConfigured() ? "USB + WiFi ready" : "USB 115200 ready");
-  delay(400);
-  gui.drawChrome(tft);
-
-  sendCfgReply(true);
-  beginWifi();
+  bootHoldUntilMs = millis() + BOOT_HOLD_MS;
+  bootDone = false;
+  // Keep the loading screen up for 4s — do not draw chrome / start Wi‑Fi yet.
 }
 
 void loop() {
   const uint32_t now = millis();
+
+  // Hold splash for a full 4 seconds so it does not flash into the monitor UI.
+  if (!bootDone) {
+    pollSerial();  // USB can settle, but keep splash until hold ends.
+    if (static_cast<int32_t>(now - bootHoldUntilMs) >= 0) {
+      finishBoot();
+    } else {
+      delay(10);
+      return;
+    }
+  }
 
   pollSerial();
   pollUdp();
