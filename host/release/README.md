@@ -24,10 +24,10 @@ chmod +x CYD-Monitor
 ```
 
 ## Features
-- Speedometer dials: large CPU + smaller GPU / RAM (VRAM in status line)
+- Speedometer dials: large CPU + smaller GPU / RAM; footer chips for VRAM / disk / net
 - Extra PC stats: disk, swap, network Mbps, CPU MHz, RAM GB, uptime
 - **Settings** tab: port, baud, interval, host label, optional UDP, tray behavior
-- **Control the CYD from the app:** flip screen 180°, set brightness (saved on device)
+- **Control the CYD from the app:** Flip 180°, brightness slider (release to apply), sync from device
 - Minimize / close to **system tray** (background streaming)
 - Window is freely resizable
 - Auto USB detect + reconnect
