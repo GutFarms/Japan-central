@@ -39,12 +39,14 @@ APP_BIN="flash/esp32-2432s028-scrypt-miner.bin"
 MERGED_BIN="flash/esp32-2432s028-scrypt-miner-merged.bin"
 ZIP="dist/cyd-companion-windows.zip"
 EXE="dist/cyd-companion-windows/cyd-companion.exe"
+SETUP="dist/CYD-Companion-Setup.exe"
 
 echo "==> verifying artifacts"
 test -f "$APP_BIN"
 test -f "$MERGED_BIN"
 test -f "$ZIP"
 test -f "$EXE"
+test -f "$SETUP"
 
 python3 - <<'PY'
 from pathlib import Path

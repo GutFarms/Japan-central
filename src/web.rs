@@ -49,7 +49,7 @@ impl Default for WebStatus {
             uptime_secs: 0,
             screen_on: true,
             cpu_mhz: 240,
-            hash_focus: false,
+            hash_focus: true,
         }
     }
 }
@@ -220,7 +220,7 @@ mod server {
         uptime_secs: 0,
         screen_on: true,
         cpu_mhz: 240,
-        hash_focus: false,
+        hash_focus: true,
     });
 
     static PENDING: Mutex<CriticalSectionRawMutex, Option<CompanionUpdate>> = Mutex::new(None);

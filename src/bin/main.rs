@@ -56,15 +56,18 @@ use esp_hal::peripherals::WIFI;
 
 esp_bootloader_esp_idf::esp_app_desc!();
 
-const BATCH_SIZE: usize = 2;
+/// Hashes between USB/GUI checks. Larger = more mining, still drains RX FIFO each loop.
+const BATCH_SIZE: usize = 4;
 const DEMO_ZERO_NIBBLES: u8 = 4;
 const SAVED_CONFIRM_SECS: u64 = 8;
 const MAX_PASSWORD_ATTEMPTS: u8 = 3;
 const BOOT_LONG_PRESS_MS: u64 = 700;
-/// GUI redraw interval (LCD stays on — no sleep).
-const GUI_REFRESH_MS: u64 = 2000;
-/// Slower redraws when hash-focus mode is enabled (more CPU for scrypt).
-const GUI_REFRESH_FOCUS_MS: u64 = 8000;
+/// GUI redraw interval when not in hash-focus (LCD stays on).
+const GUI_REFRESH_MS: u64 = 5000;
+/// Hash-focus: rare full redraws — footer H/s still updates more often.
+const GUI_REFRESH_FOCUS_MS: u64 = 30_000;
+/// How often to refresh stats / radio / web publish (ms). Higher = more mining time.
+const STATUS_WINDOW_MS: u64 = 2000;
 /// NMMiner: if WiFi stays down this long, soft-reset the chip to recover the radio.
 const WIFI_DOWN_RESET_SECS: u64 = 600;
 
@@ -353,12 +356,15 @@ async fn main(spawner: Spawner) -> ! {
             miner.set_job(job.header, job.target, 0);
             active_job = Some(job.meta);
             pool_mode = true;
-            let mut m: String<96> = String::new();
-            let _ = core::fmt::Write::write_fmt(
-                &mut m,
-                format_args!("JOB {job_id} diff={diff}"),
-            );
-            serial_writeln(&mut usb, m.as_str());
+            // Skip UART chatter in hash-focus — mining CPU first.
+            if !pool.hash_focus {
+                let mut m: String<96> = String::new();
+                let _ = core::fmt::Write::write_fmt(
+                    &mut m,
+                    format_args!("JOB {job_id} diff={diff}"),
+                );
+                serial_writeln(&mut usb, m.as_str());
+            }
         }
 
         let boot_down = boot_btn.is_low();
@@ -594,12 +600,14 @@ async fn main(spawner: Spawner) -> ! {
                 last.hash[3],
                 pool_mode
             );
-            let mut msg: String<96> = String::new();
-            let _ = core::fmt::Write::write_fmt(
-                &mut msg,
-                format_args!("SHARE nonce={:08x} address={}", last.nonce, pool.address),
-            );
-            serial_writeln(&mut usb, msg.as_str());
+            if !pool.hash_focus {
+                let mut msg: String<96> = String::new();
+                let _ = core::fmt::Write::write_fmt(
+                    &mut msg,
+                    format_args!("SHARE nonce={:08x} address={}", last.nonce, pool.address),
+                );
+                serial_writeln(&mut usb, msg.as_str());
+            }
 
             if pool_mode {
                 if let Some(meta) = active_job.as_ref() {
@@ -610,7 +618,7 @@ async fn main(spawner: Spawner) -> ! {
         }
 
         let elapsed = window_start.elapsed();
-        if elapsed >= Duration::from_millis(750) {
+        if elapsed >= Duration::from_millis(STATUS_WINDOW_MS) {
             let ms = elapsed.as_millis().max(1);
             let hashrate_x100 = ((window_hashes as u128 * 100_000) / u128::from(ms)) as u32;
             last_hashrate_x100 = hashrate_x100;
@@ -640,27 +648,20 @@ async fn main(spawner: Spawner) -> ! {
                     saw_ip = true;
                     serial_write(&mut usb, "IP address: ");
                     serial_writeln(&mut usb, radio_status.ip_string().as_str());
-                    let _ = display.draw_online(pool.wifi_ssid.as_str(), ip);
-                    banner_until = Some(Instant::now() + Duration::from_secs(3));
+                    if !pool.hash_focus {
+                        let _ = display.draw_online(pool.wifi_ssid.as_str(), ip);
+                        banner_until = Some(Instant::now() + Duration::from_secs(1));
+                    }
                     gui.screen = GuiScreen::Mining;
                 }
             }
             if !saw_stratum && stratum_status.phase.is_connected() {
                 saw_stratum = true;
-                serial_writeln(&mut usb, "Stratum CONNECTED — mining continues");
-                let mut msg: String<64> = String::new();
-                let _ = core::fmt::Write::write_fmt(
-                    &mut msg,
-                    format_args!(
-                        "H/s={}.{:02}  phase={}",
-                        hashrate_x100 / 100,
-                        hashrate_x100 % 100,
-                        stratum_status.phase.label()
-                    ),
-                );
-                serial_writeln(&mut usb, msg.as_str());
-                let _ = display.draw_pool_connected(pool.stratum.as_str(), hashrate_x100);
-                banner_until = Some(Instant::now() + Duration::from_secs(3));
+                if !pool.hash_focus {
+                    serial_writeln(&mut usb, "Stratum CONNECTED — mining continues");
+                    let _ = display.draw_pool_connected(pool.stratum.as_str(), hashrate_x100);
+                    banner_until = Some(Instant::now() + Duration::from_secs(1));
+                }
                 gui.screen = GuiScreen::Mining;
             }
             if saw_stratum
@@ -698,6 +699,9 @@ async fn main(spawner: Spawner) -> ! {
                         info!("display error: {e}");
                     }
                     last_gui = Instant::now();
+                } else if pool.hash_focus {
+                    // Cheap live H/s only — avoid full LCD paint while hashing.
+                    let _ = display.draw_hashrate_footer(hashrate_x100);
                 }
             }
 
@@ -736,23 +740,27 @@ async fn main(spawner: Spawner) -> ! {
                 .await;
             }
 
-            info!(
-                "H/s={}.{:02} nonce={:08x} shares={} wifi={} stratum={} acc={}/{}",
-                hashrate_x100 / 100,
-                hashrate_x100 % 100,
-                stats.nonce,
-                stats.shares,
-                radio_status.wifi.label(),
-                stratum_status.phase.label(),
-                stratum_status.accepted,
-                stratum_status.rejected,
-            );
+            // Logger/UART are expensive — keep quiet while hash-focus mining.
+            if !pool.hash_focus {
+                info!(
+                    "H/s={}.{:02} nonce={:08x} shares={} wifi={} stratum={} acc={}/{}",
+                    hashrate_x100 / 100,
+                    hashrate_x100 % 100,
+                    stats.nonce,
+                    stats.shares,
+                    radio_status.wifi.label(),
+                    stratum_status.phase.label(),
+                    stratum_status.accepted,
+                    stratum_status.rejected,
+                );
+            }
 
             window_start = Instant::now();
             window_hashes = 0;
         }
 
-        Timer::after(Duration::from_millis(1)).await;
+        // Yield to WiFi/stratum without sleeping a full millisecond each batch.
+        Timer::after(Duration::from_millis(0)).await;
     }
 }
 

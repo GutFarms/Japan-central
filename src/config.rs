@@ -148,7 +148,8 @@ impl Default for PoolConfig {
             ble_name: BleNameString::new(),
             touch_map: 1, // ESPHome CYD default map id
             cpu_mhz: 240,
-            hash_focus: false,
+            // Default ON — LCD redraws rarely so scrypt keeps the core.
+            hash_focus: true,
         }
     }
 }
@@ -825,9 +826,12 @@ mod tests {
         assert_eq!(restored.wifi_password.as_str(), "secretwifi");
         assert_eq!(restored.ble_name.as_str(), "LTC-S3");
         assert_eq!(restored.cpu_mhz, 240);
+        assert!(restored.hash_focus);
         cfg.cpu_mhz = 160;
+        cfg.hash_focus = false;
         let restored2 = PoolConfig::from_blob(&cfg.to_blob().unwrap()).unwrap();
         assert_eq!(restored2.cpu_mhz, 160);
+        assert!(!restored2.hash_focus);
 
         let mut bad = blob;
         bad[20] ^= 0xFF;

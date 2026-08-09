@@ -291,7 +291,7 @@ struct PersistedOc {
 }
 
 fn default_oc_mhz() -> u8 {
-    160
+    240
 }
 fn default_true() -> bool {
     true
@@ -405,6 +405,8 @@ struct CompanionApp {
     wifi_open: bool,
     touch_map: u8,
     auto_reconnect: bool,
+    /// First-launch welcome wizard until the user finishes or skips.
+    first_run_wizard: bool,
 }
 
 impl CompanionApp {
@@ -415,9 +417,11 @@ impl CompanionApp {
         let _ = cmd_tx.send(NetCmd::ListPorts);
 
         let mut selected_coin_ids = DEFAULT_COIN_IDS.map(|s| s.to_string());
-        let mut target_mhz = 160u8;
+        let mut target_mhz = 240u8;
         let mut auto_apply_balanced = true;
+        let mut hash_focus = true;
         let mut oc_samples_hs = [None, None, None];
+        let mut first_run_wizard = true;
         if let Some(storage) = storage {
             if let Some(raw) = storage.get_string("market_coins") {
                 if let Ok(saved) = serde_json::from_str::<PersistedCoins>(&raw) {
@@ -432,11 +436,14 @@ impl CompanionApp {
                 if let Ok(oc) = serde_json::from_str::<PersistedOc>(&raw) {
                     target_mhz = match oc.preferred_mhz {
                         80 | 160 | 240 => oc.preferred_mhz,
-                        _ => 160,
+                        _ => 240,
                     };
                     auto_apply_balanced = oc.auto_balanced;
                     oc_samples_hs = oc.samples_hs;
                 }
+            }
+            if storage.get_string("wizard_done").as_deref() == Some("1") {
+                first_run_wizard = false;
             }
         }
 
@@ -449,7 +456,7 @@ impl CompanionApp {
             auth_password: "x".into(),
             status: StatusJson::default(),
             last_error: String::new(),
-            last_ok: "Plug USB → Connect → fill Setup → Save & reboot.".into(),
+            last_ok: "Welcome — Connect USB, then follow the Setup wizard.".into(),
             connected_ui: false,
             edit_worker: String::new(),
             edit_stratum: "stratum+tcp://ltc.viabtc.io:3333".into(),
@@ -461,8 +468,9 @@ impl CompanionApp {
             target_mhz,
             auto_apply_balanced,
             auto_oc_pending: auto_apply_balanced,
-            hash_focus: false,
+            hash_focus,
             oc_samples_hs,
+            first_run_wizard,
             discover_base: "192.168.1".into(),
             discover_log: String::new(),
             cmd_tx: cmd_tx.clone(),
@@ -654,8 +662,10 @@ impl CompanionApp {
         } else {
             self.auth_password.as_str()
         };
+        self.target_mhz = 240;
+        self.hash_focus = true;
         let body = format!(
-            "auth={}&wifi_ssid={}&wifi_password={}&worker={}&stratum={}&password={}&cpu_mhz={}&touch_map={}&reconnect={}",
+            "auth={}&wifi_ssid={}&wifi_password={}&worker={}&stratum={}&password={}&cpu_mhz={}&hash_focus=true&touch_map={}&reconnect={}",
             urlenc(auth),
             urlenc(self.edit_wifi_ssid.trim()),
             urlenc(wifi_pass),
@@ -672,8 +682,9 @@ impl CompanionApp {
             self.auth_password = self.edit_password.clone();
         }
         self.post("/api/config", body);
+        self.first_run_wizard = false;
         self.last_ok =
-            "Full setup sent — board saves to flash and reboots to join WiFi.".into();
+            "Setup sent — board reboots, joins WiFi, and mines at 240 MHz (hash-focus).".into();
         self.last_error.clear();
     }
 
@@ -795,11 +806,58 @@ impl App for CompanionApp {
         }) {
             storage.set_string("oc_prefs", raw);
         }
+        storage.set_string(
+            "wizard_done",
+            if self.first_run_wizard { "0" } else { "1" }.into(),
+        );
     }
 
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.drain_net();
         self.pulse = (self.pulse + ctx.input(|i| i.unstable_dt) * 1.4) % 6.2832;
+
+        if self.first_run_wizard {
+            egui::Window::new("Welcome to CYD Companion")
+                .collapsible(false)
+                .resizable(false)
+                .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+                .frame(
+                    Frame::none()
+                        .fill(C_PANEL)
+                        .rounding(Rounding::same(18.0))
+                        .inner_margin(18.0)
+                        .stroke(Stroke::new(1.0, C_BUBBLE)),
+                )
+                .show(ctx, |ui| {
+                    ui.label(
+                        RichText::new("Setup wizard")
+                            .size(22.0)
+                            .color(C_LIME)
+                            .strong(),
+                    );
+                    ui.add_space(8.0);
+                    ui.label(
+                        RichText::new(
+                            "1. Flash the merged .bin @ 0x0 (once)\n\
+2. Plug the CYD USB cable (CH340)\n\
+3. Pick the COM port → Connect\n\
+4. Fill WiFi + pool on Setup → Save & reboot\n\
+5. Board mines at 240 MHz with hash-focus",
+                        )
+                        .color(C_TEXT),
+                    );
+                    ui.add_space(14.0);
+                    ui.horizontal(|ui| {
+                        if bubble_button(ui, "Start setup", true).clicked() {
+                            self.tab = Tab::Setup;
+                            self.first_run_wizard = false;
+                        }
+                        if bubble_button(ui, "Skip for now", false).clicked() {
+                            self.first_run_wizard = false;
+                        }
+                    });
+                });
+        }
 
         if self.connected_ui && self.last_poll.elapsed() >= Duration::from_millis(1200) {
             let _ = self.cmd_tx.send(NetCmd::PollStatus {
@@ -903,8 +961,11 @@ impl App for CompanionApp {
                             .hint_text("pool pw"),
                     );
                     if bubble_button(ui, "Connect", true).clicked() {
+                        // Max mining profile on connect unless user already tuned.
                         self.auto_apply_balanced = true;
-                        self.target_mhz = 160;
+                        self.auto_oc_pending = true;
+                        self.target_mhz = 240;
+                        self.hash_focus = true;
                         self.connect();
                     }
                     if bubble_button(ui, "Disconnect", false).clicked() {
@@ -962,7 +1023,7 @@ impl App for CompanionApp {
                 }
                 ui.with_layout(Layout::bottom_up(Align::LEFT), |ui| {
                     ui.label(
-                        RichText::new("USB CH340 @ 115200\nSetup in the app\nOC default 160 MHz")
+                        RichText::new("USB CH340 @ 115200\nWizard setup\nMax mine 240 MHz")
                             .small()
                             .color(C_MUTED),
                     );
@@ -1032,17 +1093,39 @@ impl CompanionApp {
 
     fn ui_setup(&mut self, ui: &mut egui::Ui) {
         ui.label(
-            RichText::new("Quick setup")
+            RichText::new("Setup wizard")
                 .size(24.0)
                 .color(C_LIME)
                 .strong(),
         );
         ui.label(
             RichText::new(
-                "Configure the board entirely from this app over USB. No touch keyboard or PuTTY prompts needed.",
+                "One path: plug USB → Connect → fill WiFi + pool → Save & reboot. \
+Board mines at 240 MHz with hash-focus after setup.",
             )
             .color(C_MUTED),
         );
+        ui.add_space(10.0);
+        ui.horizontal(|ui| {
+            for (n, label, done) in [
+                ("1", "USB Connect", self.connected_ui),
+                ("2", "WiFi + Pool", !self.edit_wifi_ssid.is_empty() && !self.edit_worker.is_empty()),
+                ("3", "Save & reboot", !self.needs_setup && self.connected_ui),
+            ] {
+                let fill = if done { C_LIME } else { C_BUBBLE };
+                let text = if done {
+                    Color32::from_rgb(12, 20, 16)
+                } else {
+                    C_TEXT
+                };
+                ui.add(
+                    egui::Button::new(RichText::new(format!("{n}. {label}")).color(text).size(13.0))
+                        .fill(fill)
+                        .rounding(Rounding::same(14.0))
+                        .min_size(Vec2::new(130.0, 34.0)),
+                );
+            }
+        });
         ui.add_space(12.0);
         if self.needs_setup {
             Frame::none()
@@ -1051,12 +1134,12 @@ impl CompanionApp {
                 .inner_margin(12.0)
                 .show(ui, |ui| {
                     ui.label(
-                        RichText::new("Board is waiting for companion setup")
+                        RichText::new("Board is waiting for this wizard")
                             .color(C_LIME)
                             .strong(),
                     );
                     ui.label(
-                        RichText::new("1 Connect USB  ·  2 Fill fields  ·  3 Save & reboot")
+                        RichText::new("Use the top bar: pick COM → Connect, then Save & reboot below.")
                             .color(C_TEXT),
                     );
                 });
@@ -1690,8 +1773,9 @@ Tune by sampling live H/s at each preset, then lock your favorite.",
                     };
                     self.post("/api/reconnect", body);
                 }
-                if bubble_button(ui, "Apply 160 MHz", false).clicked() {
-                    self.target_mhz = 160;
+                if bubble_button(ui, "Apply 240 MHz max", false).clicked() {
+                    self.target_mhz = 240;
+                    self.hash_focus = true;
                     self.apply_clock();
                 }
                 if bubble_button(ui, "Reboot board", false).clicked() {

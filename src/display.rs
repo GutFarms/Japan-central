@@ -271,7 +271,7 @@ impl<'a, D: DelayNs> Display<'a, D> {
     }
 
     /// Bottom-middle active hashrate (all main GUI tabs).
-    fn draw_hashrate_footer(&mut self, hashrate_x100: u32) -> Result<(), Error> {
+    pub fn draw_hashrate_footer(&mut self, hashrate_x100: u32) -> Result<(), Error> {
         self.fill_rect(0, 226, DISPLAY_WIDTH as u32, 14, PANEL)?;
         let mut rate: String<24> = String::new();
         let _ = write!(
