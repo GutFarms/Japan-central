@@ -6,15 +6,25 @@
 void SerialLink::begin(uint32_t baud) {
   Serial.begin(baud);
   lineLen_ = 0;
+  lastLen_ = 0;
   delay(50);
 }
 
-void SerialLink::sendHelloAck() {
+void SerialLink::sendRaw(const char *line) {
+  Serial.println(line);
+}
+
+void SerialLink::sendHelloAck(const char *cfgJson) {
+  if (cfgJson && cfgJson[0]) {
+    // cfgJson already includes ok/cfg wrapper from DeviceSettings::toJson
+    Serial.println(cfgJson);
+    return;
+  }
   Serial.println(F("{\"ok\":1,\"fw\":\"cyd-monitor\",\"proto\":1}"));
 }
 
-bool SerialLink::poll(SystemMetrics &metrics) {
-  bool updated = false;
+HostMessageKind SerialLink::poll(SystemMetrics &metrics) {
+  HostMessageKind kind = HostMessageKind::None;
 
   while (Serial.available() > 0) {
     const int raw = Serial.read();
@@ -32,21 +42,31 @@ bool SerialLink::poll(SystemMetrics &metrics) {
         continue;
       }
       lineBuf_[lineLen_] = '\0';
+      lastLen_ = lineLen_;
 
       JsonDocument probe;
       if (!deserializeJson(probe, lineBuf_, lineLen_)) {
         if (probe["hello"] | 0) {
-          sendHelloAck();
+          kind = HostMessageKind::Hello;
           lineLen_ = 0;
-          continue;
+          return kind;
+        }
+        const char *cmd = probe["cmd"] | "";
+        if (cmd[0] != '\0') {
+          kind = HostMessageKind::Command;
+          lineLen_ = 0;
+          return kind;
         }
       }
 
       if (parseMetricsJson(lineBuf_, lineLen_, metrics)) {
-        updated = true;
         Serial.printf("{\"ok\":1,\"seq\":%lu}\n", static_cast<unsigned long>(metrics.seq));
+        kind = HostMessageKind::Metrics;
       }
       lineLen_ = 0;
+      if (kind != HostMessageKind::None) {
+        return kind;
+      }
       continue;
     }
 
@@ -58,5 +78,5 @@ bool SerialLink::poll(SystemMetrics &metrics) {
     lineBuf_[lineLen_++] = c;
   }
 
-  return updated;
+  return kind;
 }

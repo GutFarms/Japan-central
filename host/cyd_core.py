@@ -318,13 +318,13 @@ class SerialTransport:
         self.ser.write(payload)
         self.ser.flush()
 
-    def poll_acks(self) -> list[dict[str, Any]]:
-        """Read NDJSON ACK lines from the CYD ({"ok":1,"seq":N})."""
-        acks: list[dict[str, Any]] = []
+    def poll_messages(self) -> list[dict[str, Any]]:
+        """Read NDJSON replies from the CYD (ACK / cfg / hello)."""
+        messages: list[dict[str, Any]] = []
         try:
             waiting = self.ser.in_waiting
         except Exception:  # noqa: BLE001
-            return acks
+            return messages
         if waiting:
             chunk = self.ser.read(waiting).decode("utf-8", errors="ignore")
             self._rx_buf += chunk
@@ -338,8 +338,16 @@ class SerialTransport:
             except json.JSONDecodeError:
                 continue
             if isinstance(obj, dict) and obj.get("ok"):
-                acks.append(obj)
-        return acks
+                messages.append(obj)
+        return messages
+
+    def poll_acks(self) -> list[dict[str, Any]]:
+        return self.poll_messages()
+
+    def send_command(self, cmd: str, **fields: Any) -> None:
+        payload = {"v": 1, "cmd": cmd}
+        payload.update(fields)
+        self.send(json.dumps(payload, separators=(",", ":")).encode("utf-8"))
 
     def close(self) -> None:
         try:
@@ -368,8 +376,8 @@ class UdpTransport:
     def send(self, data: bytes) -> None:
         self.sock.sendto(data, (self.host, self.port))
 
-    def poll_acks(self) -> list[dict[str, Any]]:
-        acks: list[dict[str, Any]] = []
+    def poll_messages(self) -> list[dict[str, Any]]:
+        messages: list[dict[str, Any]] = []
         while True:
             try:
                 raw, _addr = self.sock.recvfrom(256)
@@ -382,14 +390,28 @@ class UdpTransport:
             except json.JSONDecodeError:
                 continue
             if isinstance(obj, dict) and obj.get("ok"):
-                acks.append(obj)
-        return acks
+                messages.append(obj)
+        return messages
+
+    def poll_acks(self) -> list[dict[str, Any]]:
+        return self.poll_messages()
+
+    def send_command(self, cmd: str, **fields: Any) -> None:
+        payload = {"v": 1, "cmd": cmd}
+        payload.update(fields)
+        self.send(json.dumps(payload, separators=(",", ":")).encode("utf-8"))
 
     def close(self) -> None:
         self.sock.close()
 
     def describe(self) -> str:
         return f"UDP {self.host}:{self.port}"
+
+
+def encode_device_command(cmd: str, **fields: Any) -> bytes:
+    payload = {"v": 1, "cmd": cmd}
+    payload.update(fields)
+    return json.dumps(payload, separators=(",", ":")).encode("utf-8")
 
 
 _WIRE_KEYS = (

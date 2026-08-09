@@ -1,10 +1,12 @@
 #include <Arduino.h>
+#include <ArduinoJson.h>
 #include <TFT_eSPI.h>
 #include <WiFi.h>
 #include <WiFiUdp.h>
 
 #include <cstring>
 
+#include "device_config.h"
 #include "gui.h"
 #include "metrics.h"
 #include "serial_link.h"
@@ -15,10 +17,12 @@ TFT_eSPI tft;
 MonitorGui gui;
 WiFiUDP udp;
 SerialLink serialLink;
+DeviceSettings deviceSettings;
 SystemMetrics metrics;
 LinkStats linkStats;
 
 char packetBuf[512];
+char cfgBuf[160];
 uint32_t lastUiMs = 0;
 uint32_t lastWifiCheckMs = 0;
 bool wifiReady = false;
@@ -68,6 +72,42 @@ void ensureWifi() {
   WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
 }
 
+void sendCfgReply(bool viaUsb) {
+  deviceSettings.toJson(cfgBuf, sizeof(cfgBuf));
+  if (viaUsb) {
+    serialLink.sendRaw(cfgBuf);
+  } else if (wifiReady) {
+    udp.beginPacket(udp.remoteIP(), udp.remotePort());
+    udp.write(reinterpret_cast<const uint8_t *>(cfgBuf), strlen(cfgBuf));
+    udp.endPacket();
+  }
+}
+
+void handleHostCommand(const char *json, size_t len, bool viaUsb) {
+  JsonDocument doc;
+  if (deserializeJson(doc, json, len)) {
+    return;
+  }
+  const char *cmd = doc["cmd"] | "";
+  if (cmd[0] == '\0') {
+    return;
+  }
+
+  if (strcmp(cmd, "get") == 0) {
+    sendCfgReply(viaUsb);
+    return;
+  }
+
+  const uint8_t oldRot = deviceSettings.cfg().rotation;
+  if (!deviceSettings.applyCommandJson(json, len, tft)) {
+    return;
+  }
+  if (deviceSettings.cfg().rotation != oldRot) {
+    gui.setRotation(tft, deviceSettings.cfg().rotation);
+  }
+  sendCfgReply(viaUsb);
+}
+
 void onMetricsPacket(LinkSource source) {
   lastSource = source;
   notePacketReceived(linkStats, metrics.seq, millis());
@@ -86,9 +126,22 @@ void pollUdp() {
     return;
   }
   packetBuf[len] = '\0';
+
+  // Config commands over UDP.
+  if (strstr(packetBuf, "\"cmd\"") != nullptr) {
+    handleHostCommand(packetBuf, static_cast<size_t>(len), false);
+    return;
+  }
+  if (strstr(packetBuf, "\"hello\"") != nullptr) {
+    deviceSettings.toJson(cfgBuf, sizeof(cfgBuf));
+    udp.beginPacket(udp.remoteIP(), udp.remotePort());
+    udp.write(reinterpret_cast<const uint8_t *>(cfgBuf), strlen(cfgBuf));
+    udp.endPacket();
+    return;
+  }
+
   if (parseMetricsJson(packetBuf, static_cast<size_t>(len), metrics)) {
     onMetricsPacket(LinkSource::Udp);
-    // UDP ACK back to sender when possible.
     udp.beginPacket(udp.remoteIP(), udp.remotePort());
     char ack[48];
     snprintf(ack, sizeof(ack), "{\"ok\":1,\"seq\":%lu}", static_cast<unsigned long>(metrics.seq));
@@ -98,7 +151,12 @@ void pollUdp() {
 }
 
 void pollSerial() {
-  if (serialLink.poll(metrics)) {
+  const HostMessageKind kind = serialLink.poll(metrics);
+  if (kind == HostMessageKind::Hello) {
+    sendCfgReply(true);
+  } else if (kind == HostMessageKind::Command) {
+    handleHostCommand(serialLink.lastLine(), serialLink.lastLineLen(), true);
+  } else if (kind == HostMessageKind::Metrics) {
     onMetricsPacket(LinkSource::Usb);
   }
 }
@@ -108,17 +166,19 @@ void setup() {
   serialLink.begin(115200);
   Serial.println();
   Serial.println(F("ESP32-CYD PC/GPU Monitor"));
-  serialLink.sendHelloAck();
+
+  deviceSettings.begin();
 
   tft.init();
-  pinMode(TFT_BL, OUTPUT);
-  digitalWrite(TFT_BL, HIGH);
+  // Backlight is owned by DeviceSettings PWM now.
+  gui.begin(tft, deviceSettings.cfg().rotation);
+  deviceSettings.apply(tft);
 
-  gui.begin(tft);
   gui.showBoot(tft, wifiConfigured() ? "USB + WiFi ready" : "USB 115200 ready");
   delay(400);
   gui.drawChrome(tft);
 
+  sendCfgReply(true);
   beginWifi();
 }
 
@@ -133,7 +193,6 @@ void loop() {
     ensureWifi();
   }
 
-  // Higher UI rate for smoother needle animation.
   if (now - lastUiMs >= 50) {
     lastUiMs = now;
 

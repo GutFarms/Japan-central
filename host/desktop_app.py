@@ -167,6 +167,10 @@ class MonitorApp(tk.Tk):
         self.preferred_port_var = tk.StringVar(value=str(self.settings.get("preferred_port", "") or "auto"))
         self.udp_host_var = tk.StringVar(value=str(self.settings.get("udp_host", "")))
         self.udp_port_var = tk.IntVar(value=int(self.settings.get("udp_port", 4210)))
+        self.cyd_orient_var = tk.StringVar(value="Normal")
+        self.cyd_bright_var = tk.IntVar(value=220)
+        self.cyd_cfg_var = tk.StringVar(value="CYD: (not synced)")
+        self._cmd_queue: list[tuple[str, dict[str, Any]]] = []
 
         self._build_style()
         self._build_ui()
@@ -242,6 +246,9 @@ class MonitorApp(tk.Tk):
         ttk.Button(btns, text="Minimize to tray", style="Accent.TButton", command=self._minimize_to_background).pack(
             side=tk.LEFT
         )
+        ttk.Button(btns, text="Flip CYD screen", style="Accent.TButton", command=self._flip_cyd).pack(
+            side=tk.LEFT, padx=(8, 0)
+        )
         ttk.Button(btns, text="Rescan USB", style="Accent.TButton", command=self._rescan).pack(side=tk.RIGHT)
         self._build_settings(settings)
 
@@ -268,15 +275,45 @@ class MonitorApp(tk.Tk):
         ttk.Checkbutton(parent, text="Close button hides to tray (background)", variable=self.close_tray_var).grid(
             row=8, column=0, columnspan=2, sticky="w", pady=4
         )
-        ttk.Button(parent, text="Save settings", style="Accent.TButton", command=self._save_settings).grid(
-            row=9, column=0, columnspan=2, sticky="e", pady=(16, 0)
+
+        ttk.Separator(parent, orient=tk.HORIZONTAL).grid(row=9, column=0, columnspan=2, sticky="ew", pady=12)
+        ttk.Label(parent, text="CYD display controls", style="Body.TLabel").grid(
+            row=10, column=0, columnspan=2, sticky="w"
+        )
+        ttk.Label(parent, textvariable=self.cyd_cfg_var, style="Muted.TLabel").grid(
+            row=11, column=0, columnspan=2, sticky="w", pady=(2, 8)
+        )
+
+        orient = ttk.Combobox(
+            parent,
+            textvariable=self.cyd_orient_var,
+            values=("Normal", "Flipped 180°"),
+            state="readonly",
+            width=18,
+        )
+        row("Screen orientation", orient, 12)
+        bright = ttk.Scale(parent, from_=20, to=255, orient=tk.HORIZONTAL, variable=self.cyd_bright_var)
+        row("Brightness", bright, 13)
+
+        cyd_btns = ttk.Frame(parent, style="Card.TFrame")
+        cyd_btns.grid(row=14, column=0, columnspan=2, sticky="ew", pady=(8, 0))
+        ttk.Button(cyd_btns, text="Flip screen", style="Accent.TButton", command=self._flip_cyd).pack(side=tk.LEFT)
+        ttk.Button(cyd_btns, text="Apply to CYD", style="Accent.TButton", command=self._apply_cyd_settings).pack(
+            side=tk.LEFT, padx=(8, 0)
+        )
+        ttk.Button(cyd_btns, text="Read from CYD", style="Accent.TButton", command=self._request_cyd_config).pack(
+            side=tk.LEFT, padx=(8, 0)
+        )
+
+        ttk.Button(parent, text="Save app settings", style="Accent.TButton", command=self._save_settings).grid(
+            row=15, column=0, columnspan=2, sticky="e", pady=(16, 0)
         )
         ttk.Label(
             parent,
-            text="Uses sequenced packets + ACK/RTT. Delta updates keep the USB link light; full snapshots every few frames.",
+            text="CYD changes are sent over USB (or UDP) and stored on the device. Flip rotates the display 180°.",
             style="Muted.TLabel",
             wraplength=560,
-        ).grid(row=10, column=0, columnspan=2, sticky="w", pady=(18, 0))
+        ).grid(row=16, column=0, columnspan=2, sticky="w", pady=(12, 0))
 
     def _save_settings(self) -> None:
         self.host_name = (self.host_var.get() or socket.gethostname())[:23]
@@ -293,8 +330,39 @@ class MonitorApp(tk.Tk):
             "gpu_index": int(self.settings.get("gpu_index", 0)),
         }
         save_settings(self.settings)
-        self.status_var.set("Settings saved")
+        self.status_var.set("App settings saved")
         self._rescan()
+
+    def _queue_cmd(self, cmd: str, **fields: Any) -> None:
+        with self._lock:
+            self._cmd_queue.append((cmd, fields))
+        self._set_status(f"Queued CYD command: {cmd}")
+
+    def _flip_cyd(self) -> None:
+        self._queue_cmd("flip")
+
+    def _apply_cyd_settings(self) -> None:
+        flip = self.cyd_orient_var.get().startswith("Flipped")
+        self._queue_cmd(
+            "set",
+            flip=flip,
+            rot=3 if flip else 1,
+            bright=int(self.cyd_bright_var.get()),
+        )
+
+    def _request_cyd_config(self) -> None:
+        self._queue_cmd("get")
+
+    def _apply_device_cfg(self, cfg: dict[str, Any]) -> None:
+        def apply() -> None:
+            rot = int(cfg.get("rot", 1))
+            bright = int(cfg.get("bright", 220))
+            flip = bool(cfg.get("flip", rot == 3))
+            self.cyd_orient_var.set("Flipped 180°" if flip or rot == 3 else "Normal")
+            self.cyd_bright_var.set(bright)
+            self.cyd_cfg_var.set(f"CYD: rot={rot}  bright={bright}  flip={flip}")
+
+        self.after(0, apply)
 
     def _set_status(self, text: str) -> None:
         self.after(0, lambda: self.status_var.set(text))
@@ -373,19 +441,36 @@ class MonitorApp(tk.Tk):
             self._stream = MetricsStream(full_every=8)
             self._link = LinkQuality()
             self._pending.clear()
+            self._cmd_queue.append(("get", {}))
         self._set_status("Linked — streaming")
         self._set_port(best.label)
         return True
 
-    def _handle_acks(self, acks: list[dict[str, Any]]) -> None:
+    def _handle_messages(self, messages: list[dict[str, Any]]) -> None:
         now = time.time()
-        for ack in acks:
-            seq = int(ack.get("seq") or 0)
-            self._link.acks += 1
-            self._link.last_ack_seq = seq
-            sent_at = self._pending.pop(seq, None)
-            if sent_at is not None:
-                self._link.rtt_ms = (now - sent_at) * 1000.0
+        for msg in messages:
+            if "cfg" in msg and isinstance(msg["cfg"], dict):
+                self._apply_device_cfg(msg["cfg"])
+                self._set_status("CYD settings updated")
+            seq = int(msg.get("seq") or 0)
+            if seq:
+                self._link.acks += 1
+                self._link.last_ack_seq = seq
+                sent_at = self._pending.pop(seq, None)
+                if sent_at is not None:
+                    self._link.rtt_ms = (now - sent_at) * 1000.0
+
+    def _flush_commands(self, transport: Optional[SerialTransport], udp: Optional[UdpTransport]) -> None:
+        with self._lock:
+            queued = list(self._cmd_queue)
+            self._cmd_queue.clear()
+        for cmd, fields in queued:
+            if transport is not None:
+                transport.send_command(cmd, **fields)
+                self._handle_messages(transport.poll_messages())
+            if udp is not None:
+                udp.send_command(cmd, **fields)
+                self._handle_messages(udp.poll_messages())
 
     def _run_loop(self) -> None:
         while not self._stop.is_set():
@@ -400,23 +485,25 @@ class MonitorApp(tk.Tk):
                     time.sleep(RECONNECT_S)
                     continue
             try:
+                with self._lock:
+                    transport = self._transport
+                    udp = self._udp
+                self._flush_commands(transport, udp)
+
                 payload = collect_metrics(self._gpu, self.host_name)
                 with self._lock:
                     data = self._stream.encode(payload)
                     seq = self._stream.seq
-                    transport = self._transport
-                    udp = self._udp
                     self._pending[seq] = time.time()
-                    # Bound pending map
                     if len(self._pending) > 40:
                         for old in sorted(self._pending.keys())[:-20]:
                             self._pending.pop(old, None)
                 if transport is not None:
                     transport.send(data)
-                    self._handle_acks(transport.poll_acks())
+                    self._handle_messages(transport.poll_messages())
                 if udp is not None:
                     udp.send(data)
-                    self._handle_acks(udp.poll_acks())
+                    self._handle_messages(udp.poll_messages())
                 self._link.sent += 1
                 self._set_metrics(payload)
                 self._set_status("Linked — streaming")

@@ -56,7 +56,7 @@ On boot the display is ready for **USB serial @ 115200** immediately; Wi‑Fi/UD
 
 ## Host application (auto USB)
 
-Downloadable app with **speedometer dials**, a **Settings** tab, and **tray / background** mode. It auto-detects the CYD over USB (no terminal window on Windows):
+Downloadable app with **speedometer dials**, a **Settings** tab (including **flip CYD screen** / brightness), and **tray / background** mode. It auto-detects the CYD over USB (no terminal window on Windows):
 
 | File | Platform |
 | --- | --- |

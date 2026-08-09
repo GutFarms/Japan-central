@@ -39,8 +39,8 @@ float approach(float current, float target, float alpha) {
 }
 }  // namespace
 
-void MonitorGui::begin(TFT_eSPI &tft) {
-  tft.setRotation(1);
+void MonitorGui::begin(TFT_eSPI &tft, uint8_t rotation) {
+  tft.setRotation(rotation == 3 ? 3 : 1);
   tft.fillScreen(Theme::bg);
   tft.setTextDatum(TL_DATUM);
   if (dialSpr_ == nullptr) {
@@ -49,6 +49,24 @@ void MonitorGui::begin(TFT_eSPI &tft) {
   dialSpr_->setColorDepth(16);
   spriteReady_ = dialSpr_->createSprite(DIAL_W, DIAL_H);
   chromeDrawn_ = false;
+}
+
+void MonitorGui::invalidate() {
+  chromeDrawn_ = false;
+  lastHost_[0] = '\0';
+  lastStatus_[0] = '\0';
+  lastPps_ = 0xFFFF;
+  lastDisk_ = -1.0f;
+  for (auto &d : dials_) {
+    d.lastDrawn = -999.0f;
+  }
+}
+
+void MonitorGui::setRotation(TFT_eSPI &tft, uint8_t rotation) {
+  tft.setRotation(rotation == 3 ? 3 : 1);
+  invalidate();
+  tft.fillScreen(Theme::bg);
+  drawChrome(tft);
 }
 
 void MonitorGui::drawDecor(TFT_eSPI &tft) {

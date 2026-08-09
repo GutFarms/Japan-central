@@ -55,3 +55,25 @@ Each accepted metrics line is ACKed as `{"ok":1,"seq":N}`.
 
 Host measures RTT from ACK timestamps and shows ACK ratio in the desktop app.  
 Firmware shows approximate packets/sec in the footer.
+
+## Device commands (app → CYD)
+
+NDJSON commands (USB or UDP):
+
+```json
+{"v":1,"cmd":"get"}
+{"v":1,"cmd":"flip"}
+{"v":1,"cmd":"set","flip":true,"rot":3,"bright":200}
+```
+
+| Command | Effect |
+| --- | --- |
+| `get` | Reply with current config |
+| `flip` | Toggle landscape ↔ 180° flipped landscape, persist in NVS |
+| `set` | Apply `rot` (1 or 3), `flip` (bool), and/or `bright` (10–255) |
+
+Reply:
+
+```json
+{"ok":1,"cfg":{"rot":3,"bright":200,"flip":true}}
+```

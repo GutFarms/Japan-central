@@ -5,7 +5,9 @@
 
 class MonitorGui {
  public:
-  void begin(TFT_eSPI &tft);
+  void begin(TFT_eSPI &tft, uint8_t rotation = 1);
+  void setRotation(TFT_eSPI &tft, uint8_t rotation);
+  void invalidate();
   void drawChrome(TFT_eSPI &tft);
   void render(TFT_eSPI &tft, const SystemMetrics &m, const LinkStats &link, bool linked,
               const char *statusLine);
