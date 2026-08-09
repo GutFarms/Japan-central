@@ -1,8 +1,8 @@
 #include "display_ui.hpp"
+#include <cstdio>
 
 void DisplayUi::begin() {
   cBg_ = to565(8, 12, 16);
-  cPanel_ = to565(18, 26, 36);
   cLime_ = to565(180, 240, 90);
   cText_ = to565(228, 238, 248);
   cMuted_ = to565(130, 150, 170);
@@ -12,9 +12,11 @@ void DisplayUi::begin() {
   pinMode(TFT_BL, OUTPUT);
   digitalWrite(TFT_BL, HIGH);
   tft_.fillScreen(cBg_);
+  miningDrawn_ = false;
 }
 
 void DisplayUi::showSplash() {
+  miningDrawn_ = false;
   tft_.fillScreen(cBg_);
   tft_.fillRect(0, 0, 320, 4, cLime_);
   tft_.setTextDatum(MC_DATUM);
@@ -25,6 +27,7 @@ void DisplayUi::showSplash() {
 }
 
 void DisplayUi::showWaitingCompanion() {
+  miningDrawn_ = false;
   tft_.fillScreen(cBg_);
   tft_.fillRect(0, 0, 320, 4, cLime_);
   tft_.setTextDatum(TL_DATUM);
@@ -37,38 +40,71 @@ void DisplayUi::showWaitingCompanion() {
   tft_.drawString("Setup is done in the app only", 12, 140, 2);
 }
 
-void DisplayUi::showMining(const AppConfig& cfg, const MinerSnapshot& snap) {
-  (void)cfg;
+void DisplayUi::drawMiningChrome() {
   tft_.fillScreen(cBg_);
   tft_.fillRect(0, 0, 320, 4, cLime_);
-
   tft_.setTextDatum(TL_DATUM);
   tft_.setTextColor(cLime_, cBg_);
   tft_.drawString("SCRYPT", 12, 14, 2);
-
   tft_.setTextColor(cMuted_, cBg_);
   tft_.drawString("H/s", 12, 48, 2);
-  tft_.setTextColor(cLime_, cBg_);
-  char rate[24];
-  snprintf(rate, sizeof(rate), "%.2f", snap.hashrateHs);
-  tft_.drawString(rate, 12, 72, 4);
-
-  tft_.setTextColor(cMuted_, cBg_);
   tft_.drawString("pool", 12, 130, 2);
-  tft_.setTextColor(snap.connected ? cLime_ : cText_, cBg_);
-  tft_.drawString(snap.connected ? "CONNECTED" : snap.pool, 12, 152, 2);
+  miningDrawn_ = true;
+  lastRate_ = -1;
+  lastAccepted_ = 0xFFFFFFFFu;
+  lastRejected_ = 0xFFFFFFFFu;
+  lastMhz_ = 0xFFFFFFFFu;
+  lastConnected_ = false;
+  lastPool_ = "";
+  lastWifiIp_ = "";
+}
 
-  char line[48];
-  snprintf(line, sizeof(line), "a%u  r%u  %u MHz", snap.accepted, snap.rejected, snap.cpuMhz);
-  tft_.setTextColor(cText_, cBg_);
-  tft_.drawString(line, 12, 190, 2);
+void DisplayUi::showMining(const AppConfig& cfg, const MinerSnapshot& snap, bool forceFull) {
+  (void)cfg;
+  if (!miningDrawn_ || forceFull) drawMiningChrome();
 
-  tft_.setTextColor(cMuted_, cBg_);
+  tft_.setTextDatum(TL_DATUM);
+
+  if (forceFull || snap.hashrateHs != lastRate_) {
+    tft_.fillRect(12, 72, 300, 40, cBg_);
+    tft_.setTextColor(cLime_, cBg_);
+    char rate[24];
+    snprintf(rate, sizeof(rate), "%.2f", snap.hashrateHs);
+    tft_.drawString(rate, 12, 72, 4);
+    lastRate_ = snap.hashrateHs;
+  }
+
+  if (forceFull || snap.connected != lastConnected_ || snap.pool != lastPool_) {
+    tft_.fillRect(12, 152, 300, 24, cBg_);
+    tft_.setTextColor(snap.connected ? cLime_ : cText_, cBg_);
+    tft_.drawString(snap.connected ? "CONNECTED" : snap.pool, 12, 152, 2);
+    lastConnected_ = snap.connected;
+    lastPool_ = snap.pool;
+  }
+
+  if (forceFull || snap.accepted != lastAccepted_ || snap.rejected != lastRejected_ ||
+      snap.cpuMhz != lastMhz_) {
+    tft_.fillRect(12, 190, 300, 22, cBg_);
+    char line[48];
+    snprintf(line, sizeof(line), "a%u  r%u  %u MHz", snap.accepted, snap.rejected, snap.cpuMhz);
+    tft_.setTextColor(cText_, cBg_);
+    tft_.drawString(line, 12, 190, 2);
+    lastAccepted_ = snap.accepted;
+    lastRejected_ = snap.rejected;
+    lastMhz_ = snap.cpuMhz;
+  }
+
   String wifiIp = snap.wifi + "  " + snap.ip;
-  tft_.drawString(wifiIp, 12, 218, 2);
+  if (forceFull || wifiIp != lastWifiIp_) {
+    tft_.fillRect(12, 218, 300, 20, cBg_);
+    tft_.setTextColor(cMuted_, cBg_);
+    tft_.drawString(wifiIp, 12, 218, 2);
+    lastWifiIp_ = wifiIp;
+  }
 }
 
 void DisplayUi::showMessage(const char* title, const char* detail) {
+  miningDrawn_ = false;
   tft_.fillScreen(cBg_);
   tft_.fillRect(0, 0, 320, 4, cLime_);
   tft_.setTextDatum(MC_DATUM);

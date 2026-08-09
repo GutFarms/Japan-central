@@ -14,6 +14,7 @@ enum Ids : int {
   ID_CONNECT,
   ID_DISCONNECT,
   ID_STATUS,
+  ID_LINK,
   ID_SSID,
   ID_WIFI_PASS,
   ID_STRATUM,
@@ -34,11 +35,18 @@ static BoardStatus g_status;
 static BoardConfig g_config;
 static HWND g_hwnd;
 static HFONT g_font;
+static HFONT g_fontTitle;
 static HBRUSH g_bgBrush;
 static HBRUSH g_panelBrush;
+static HBRUSH g_limeBrush;
+static bool g_fieldsSeeded = false;
+static bool g_busy = false;
+static int g_pollTick = 0;
+static std::wstring g_lastStats;
 
 static COLORREF COL_BG = RGB(8, 12, 16);
 static COLORREF COL_PANEL = RGB(18, 26, 36);
+static COLORREF COL_LIME = RGB(180, 240, 90);
 static COLORREF COL_TEXT = RGB(228, 238, 248);
 
 static std::wstring toWide(const std::string& s) {
@@ -69,64 +77,85 @@ static void setText(HWND h, int id, const std::wstring& w) {
   SetWindowTextW(GetDlgItem(h, id), w.c_str());
 }
 
-static void setStatusLine(HWND h, const std::wstring& w) {
-  setText(h, ID_STATUS, w);
-}
+static void setLink(HWND h, const std::wstring& w) { setText(h, ID_LINK, w); }
 
 static void refreshPorts(HWND h) {
   HWND cb = GetDlgItem(h, ID_PORT);
+  std::wstring cur = getText(h, ID_PORT);
   SendMessageW(cb, CB_RESETCONTENT, 0, 0);
   auto ports = listComPorts();
-  for (auto& p : ports) SendMessageW(cb, CB_ADDSTRING, 0, (LPARAM)p.c_str());
-  if (!ports.empty()) SendMessageW(cb, CB_SETCURSEL, 0, 0);
+  int sel = 0;
+  for (size_t i = 0; i < ports.size(); i++) {
+    SendMessageW(cb, CB_ADDSTRING, 0, (LPARAM)ports[i].c_str());
+    if (!cur.empty() && ports[i] == cur) sel = (int)i;
+  }
+  if (!ports.empty()) SendMessageW(cb, CB_SETCURSEL, sel, 0);
 }
 
 static void paintStats(HWND h) {
-  wchar_t buf[512];
-  swprintf(buf, 512,
-           L"H/s  %.2f\r\n"
-           L"Pool  %s\r\n"
-           L"Accepted %u   Rejected %u\r\n"
-           L"WiFi %s   IP %s\r\n"
-           L"CPU %u MHz   Focus %s\r\n"
-           L"Worker %s\r\n"
-           L"Stratum %s\r\n"
-           L"FW %s   Configured %s",
+  wchar_t buf[640];
+  swprintf(buf, 640,
+           L"Hashrate     %.2f H/s\r\n"
+           L"Pool         %s\r\n"
+           L"Shares       accepted %u   rejected %u   dropped %u\r\n"
+           L"Network      WiFi %s   IP %s\r\n"
+           L"CPU          %u MHz   hash-focus %s\r\n"
+           L"Worker       %s\r\n"
+           L"Stratum      %s\r\n"
+           L"Firmware     %s   configured %s\r\n"
+           L"Nonce        %s",
            g_status.hashrateHs, toWide(g_status.connected ? "CONNECTED" : g_status.pool).c_str(),
-           g_status.accepted, g_status.rejected, toWide(g_status.wifi).c_str(),
+           g_status.accepted, g_status.rejected, g_status.dropped, toWide(g_status.wifi).c_str(),
            toWide(g_status.ip).c_str(), g_status.cpuMhz, g_status.hashFocus ? L"on" : L"off",
            toWide(g_status.address.empty() ? g_config.worker : g_status.address).c_str(),
            toWide(g_status.stratum.empty() ? g_config.stratum : g_status.stratum).c_str(),
-           toWide(g_config.fw).c_str(), g_config.configured ? L"yes" : L"no");
-  setText(h, ID_STATUS, buf);
+           toWide(g_config.fw.empty() ? "—" : g_config.fw).c_str(),
+           g_config.configured ? L"yes" : L"no",
+           toWide(g_status.nonce.empty() ? "—" : g_status.nonce).c_str());
+  std::wstring next = buf;
+  if (next != g_lastStats) {
+    setText(h, ID_STATUS, next);
+    g_lastStats = next;
+  }
 }
 
-static void pollBoard(HWND h) {
-  if (!g_port.isOpen()) return;
-  if (auto line = usbCmd(g_port, g_rx, "cmp status", 3500)) {
+static void seedFieldsOnce(HWND h) {
+  if (g_fieldsSeeded) return;
+  if (!g_config.wifiSsid.empty()) setText(h, ID_SSID, toWide(g_config.wifiSsid));
+  if (!g_config.stratum.empty()) setText(h, ID_STRATUM, toWide(g_config.stratum));
+  if (!g_config.worker.empty()) setText(h, ID_WORKER, toWide(g_config.worker));
+  wchar_t mhz[16];
+  swprintf(mhz, 16, L"%u", g_config.cpuMhz ? g_config.cpuMhz : 240);
+  setText(h, ID_CPU, mhz);
+  SendMessageW(GetDlgItem(h, ID_HASH_FOCUS), BM_SETCHECK,
+               g_config.hashFocus ? BST_CHECKED : BST_UNCHECKED, 0);
+  g_fieldsSeeded = true;
+}
+
+static void pollStatus(HWND h) {
+  if (!g_port.isOpen() || g_busy) return;
+  if (auto line = usbCmd(g_port, g_rx, "cmp status", 3000, 1)) {
     parseCmpStatus(*line, g_status);
-  }
-  if (auto line = usbCmd(g_port, g_rx, "cmp config", 3500)) {
-    parseCmpConfig(*line, g_config);
-    if (!g_config.wifiSsid.empty() && getText(h, ID_SSID).empty())
-      setText(h, ID_SSID, toWide(g_config.wifiSsid));
-    if (!g_config.stratum.empty() && getText(h, ID_STRATUM).empty())
-      setText(h, ID_STRATUM, toWide(g_config.stratum));
-    if (!g_config.worker.empty() && getText(h, ID_WORKER).empty())
-      setText(h, ID_WORKER, toWide(g_config.worker));
-    wchar_t mhz[16];
-    swprintf(mhz, 16, L"%u", g_config.cpuMhz);
-    setText(h, ID_CPU, mhz);
-    SendMessageW(GetDlgItem(h, ID_HASH_FOCUS), BM_SETCHECK,
-                 g_config.hashFocus ? BST_CHECKED : BST_UNCHECKED, 0);
+    setLink(h, L"USB linked · live");
+  } else {
+    setLink(h, L"USB open · waiting for status…");
   }
   paintStats(h);
 }
 
-static HWND addLabel(HWND parent, const wchar_t* text, int x, int y, int w, int h) {
+static void pollConfig(HWND h) {
+  if (!g_port.isOpen() || g_busy) return;
+  if (auto line = usbCmd(g_port, g_rx, "cmp config", 3000, 1)) {
+    parseCmpConfig(*line, g_config);
+    seedFieldsOnce(h);
+  }
+  paintStats(h);
+}
+
+static HWND addLabel(HWND parent, const wchar_t* text, int x, int y, int w, int h, bool title = false) {
   HWND c = CreateWindowW(L"STATIC", text, WS_CHILD | WS_VISIBLE, x, y, w, h, parent, nullptr,
                          GetModuleHandleW(nullptr), nullptr);
-  SendMessageW(c, WM_SETFONT, (WPARAM)g_font, TRUE);
+  SendMessageW(c, WM_SETFONT, (WPARAM)(title ? g_fontTitle : g_font), TRUE);
   return c;
 }
 
@@ -147,9 +176,13 @@ static HWND addBtn(HWND parent, int id, const wchar_t* text, int x, int y, int w
 }
 
 static void createUi(HWND h) {
-  int y = 16;
-  addLabel(h, L"CYD Companion", 20, y, 300, 28);
-  y += 36;
+  int y = 14;
+  addLabel(h, L"CYD Companion", 20, y, 280, 30, true);
+  HWND link = CreateWindowW(L"STATIC", L"Disconnected", WS_CHILD | WS_VISIBLE, 320, y + 6, 270, 22, h,
+                            (HMENU)ID_LINK, GetModuleHandleW(nullptr), nullptr);
+  SendMessageW(link, WM_SETFONT, (WPARAM)g_font, TRUE);
+  y += 40;
+
   addLabel(h, L"COM port", 20, y + 4, 80, 20);
   CreateWindowW(L"COMBOBOX", L"", WS_CHILD | WS_VISIBLE | CBS_DROPDOWNLIST | WS_VSCROLL, 100, y,
                 160, 200, h, (HMENU)ID_PORT, GetModuleHandleW(nullptr), nullptr);
@@ -159,16 +192,16 @@ static void createUi(HWND h) {
   addBtn(h, ID_DISCONNECT, L"Disconnect", 480, y, 110, 28);
   y += 44;
 
-  addLabel(h, L"Live stats (board)", 20, y, 240, 20);
-  y += 24;
+  addLabel(h, L"Live board stats", 20, y, 240, 20);
+  y += 22;
   HWND st = CreateWindowW(L"EDIT", L"Connect USB to see miner stats.",
                           WS_CHILD | WS_VISIBLE | WS_BORDER | ES_MULTILINE | ES_READONLY | WS_VSCROLL,
-                          20, y, 570, 150, h, (HMENU)ID_STATUS, GetModuleHandleW(nullptr), nullptr);
+                          20, y, 570, 168, h, (HMENU)ID_STATUS, GetModuleHandleW(nullptr), nullptr);
   SendMessageW(st, WM_SETFONT, (WPARAM)g_font, TRUE);
-  y += 170;
+  y += 184;
 
-  addLabel(h, L"Control — WiFi / Pool / Clock (app is the only setup UI)", 20, y, 500, 20);
-  y += 28;
+  addLabel(h, L"Control — WiFi / pool / clock", 20, y, 400, 20);
+  y += 26;
   addLabel(h, L"WiFi SSID", 20, y + 4, 100, 20);
   addEdit(h, ID_SSID, 130, y, 200, 26);
   addLabel(h, L"WiFi pass", 350, y + 4, 80, 20);
@@ -201,7 +234,7 @@ static void createUi(HWND h) {
   refreshPorts(h);
 }
 
-static std::string buildSetBody(HWND h, bool includeWifiPass, bool includePoolPass) {
+static std::string buildSetBody(HWND h, bool includeWifiPass, bool includePoolPass, bool reboot) {
   std::ostringstream body;
   auto add = [&](const char* k, const std::wstring& v) {
     if (v.empty()) return;
@@ -219,11 +252,30 @@ static std::string buildSetBody(HWND h, bool includeWifiPass, bool includePoolPa
   body << "hash_focus=" << (focus ? "true" : "false");
   auto auth = getText(h, ID_AUTH);
   if (auth.empty()) auth = getText(h, ID_POOL_PASS);
-  if (!auth.empty()) {
-    body << "&auth=" << urlEncode(toUtf8(auth));
-  }
-  body << "&reboot=true";
+  if (!auth.empty()) body << "&auth=" << urlEncode(toUtf8(auth));
+  if (reboot) body << "&reboot=true";
   return body.str();
+}
+
+static bool validateSetup(HWND h) {
+  if (getText(h, ID_SSID).empty()) {
+    MessageBoxW(h, L"WiFi SSID is required.", L"CYD Companion", MB_ICONWARNING);
+    return false;
+  }
+  if (getText(h, ID_STRATUM).empty()) {
+    MessageBoxW(h, L"Stratum endpoint is required.", L"CYD Companion", MB_ICONWARNING);
+    return false;
+  }
+  if (getText(h, ID_WORKER).empty()) {
+    MessageBoxW(h, L"Worker / address is required.", L"CYD Companion", MB_ICONWARNING);
+    return false;
+  }
+  if (getText(h, ID_POOL_PASS).empty() && !g_config.configured) {
+    MessageBoxW(h, L"Pool password is required for first-time setup.", L"CYD Companion",
+                MB_ICONWARNING);
+    return false;
+  }
+  return true;
 }
 
 static void onSaveReboot(HWND h) {
@@ -231,20 +283,35 @@ static void onSaveReboot(HWND h) {
     MessageBoxW(h, L"Connect USB first.", L"CYD Companion", MB_ICONWARNING);
     return;
   }
-  std::string body = buildSetBody(h, true, true);
-  std::string cmd = "cmp set " + body;
-  auto r = usbCmd(g_port, g_rx, cmd, 5000);
+  if (!validateSetup(h)) return;
+  g_busy = true;
+  setLink(h, L"Saving…");
+  std::string cmd = "cmp set " + buildSetBody(h, true, true, true);
+  auto r = usbCmd(g_port, g_rx, cmd, 6000, 2);
+  g_busy = false;
   if (!r) {
-    MessageBoxW(h, L"Save failed (CMPERR / timeout). Check auth / fields.", L"CYD Companion",
+    setLink(h, L"Save failed");
+    MessageBoxW(h, L"Save failed (CMPERR / timeout). Check auth and fields.", L"CYD Companion",
                 MB_ICONERROR);
     return;
   }
-  MessageBoxW(h, L"Saved. Board is rebooting — reconnect in a few seconds.", L"CYD Companion",
+  g_port.close();
+  g_fieldsSeeded = false;
+  setLink(h, L"Saved — board rebooting. Reconnect shortly.");
+  MessageBoxW(h, L"Saved. Board is rebooting — reconnect USB in a few seconds.", L"CYD Companion",
               MB_OK);
 }
 
 static void onApplyClock(HWND h) {
-  if (!g_port.isOpen()) return;
+  if (!g_port.isOpen()) {
+    MessageBoxW(h, L"Connect USB first.", L"CYD Companion", MB_ICONWARNING);
+    return;
+  }
+  if (getText(h, ID_CPU).empty()) {
+    MessageBoxW(h, L"CPU MHz required (80 / 160 / 240).", L"CYD Companion", MB_ICONWARNING);
+    return;
+  }
+  g_busy = true;
   auto auth = getText(h, ID_AUTH);
   if (auth.empty()) auth = getText(h, ID_POOL_PASS);
   std::ostringstream body;
@@ -253,28 +320,63 @@ static void onApplyClock(HWND h) {
   body << "&hash_focus=" << (focus ? "true" : "false");
   if (!auth.empty()) body << "&auth=" << urlEncode(toUtf8(auth));
   body << "&reboot=true";
-  auto r = usbCmd(g_port, g_rx, "cmp clock " + body.str(), 5000);
-  if (!r) MessageBoxW(h, L"Clock apply failed.", L"CYD Companion", MB_ICONERROR);
-  else MessageBoxW(h, L"Clock queued — board rebooting.", L"CYD Companion", MB_OK);
+  auto r = usbCmd(g_port, g_rx, "cmp clock " + body.str(), 6000, 2);
+  g_busy = false;
+  if (!r) {
+    MessageBoxW(h, L"Clock apply failed.", L"CYD Companion", MB_ICONERROR);
+    return;
+  }
+  g_port.close();
+  setLink(h, L"Clock queued — reconnect after reboot.");
+  MessageBoxW(h, L"Clock queued — board rebooting.", L"CYD Companion", MB_OK);
 }
 
 static void onReconnect(HWND h) {
-  if (!g_port.isOpen()) return;
+  if (!g_port.isOpen()) {
+    MessageBoxW(h, L"Connect USB first.", L"CYD Companion", MB_ICONWARNING);
+    return;
+  }
+  g_busy = true;
   auto auth = getText(h, ID_AUTH);
   if (auth.empty()) auth = getText(h, ID_POOL_PASS);
   std::string cmd = "cmp set reconnect=true";
   if (!auth.empty()) cmd += "&auth=" + urlEncode(toUtf8(auth));
-  auto r = usbCmd(g_port, g_rx, cmd, 4000);
+  auto r = usbCmd(g_port, g_rx, cmd, 4000, 1);
+  g_busy = false;
   if (!r) MessageBoxW(h, L"Reconnect failed.", L"CYD Companion", MB_ICONERROR);
+  else setLink(h, L"Pool reconnect queued");
 }
 
 static LRESULT CALLBACK WndProc(HWND h, UINT msg, WPARAM wParam, LPARAM lParam) {
   switch (msg) {
     case WM_CREATE:
       createUi(h);
-      SetTimer(h, ID_TIMER, 2500, nullptr);
+      SetTimer(h, ID_TIMER, 2000, nullptr);
       return 0;
-    case WM_CTLCOLORSTATIC:
+    case WM_CTLCOLORSTATIC: {
+      HDC hdc = (HDC)wParam;
+      HWND ctl = (HWND)lParam;
+      if (ctl == GetDlgItem(h, ID_LINK)) {
+        SetTextColor(hdc, COL_LIME);
+        SetBkColor(hdc, COL_BG);
+        return (LRESULT)g_bgBrush;
+      }
+      // Title
+      wchar_t cls[32];
+      GetClassNameW(ctl, cls, 32);
+      if (wcscmp(cls, L"STATIC") == 0) {
+        wchar_t t[64];
+        GetWindowTextW(ctl, t, 64);
+        if (wcscmp(t, L"CYD Companion") == 0) {
+          SetTextColor(hdc, COL_LIME);
+          SetBkColor(hdc, COL_BG);
+          return (LRESULT)g_bgBrush;
+        }
+      }
+      SetTextColor(hdc, COL_TEXT);
+      SetBkColor(hdc, COL_BG);
+      return (LRESULT)g_bgBrush;
+    }
     case WM_CTLCOLOREDIT: {
       HDC hdc = (HDC)wParam;
       SetTextColor(hdc, COL_TEXT);
@@ -285,6 +387,9 @@ static LRESULT CALLBACK WndProc(HWND h, UINT msg, WPARAM wParam, LPARAM lParam) 
       RECT rc;
       GetClientRect(h, &rc);
       FillRect((HDC)wParam, &rc, g_bgBrush);
+      // lime top accent
+      RECT bar{0, 0, rc.right, 4};
+      FillRect((HDC)wParam, &bar, g_limeBrush);
       return 1;
     }
     case WM_COMMAND: {
@@ -297,28 +402,40 @@ static LRESULT CALLBACK WndProc(HWND h, UINT msg, WPARAM wParam, LPARAM lParam) 
           MessageBoxW(h, L"Pick a COM port.", L"CYD Companion", MB_ICONWARNING);
           break;
         }
+        g_busy = true;
         if (!g_port.open(port)) {
+          g_busy = false;
           MessageBoxW(h, L"Could not open port. Close other serial apps.", L"CYD Companion",
                       MB_ICONERROR);
           break;
         }
         g_rx.clear();
-        g_port.writeAll("\r\ncmp ping\r\n");
-        Sleep(200);
-        auto pong = usbCmd(g_port, g_rx, "cmp ping", 3500);
-        setStatusLine(h, pong ? L"Connected — polling board…" : L"Port open (waiting for board)…");
-        pollBoard(h);
+        g_fieldsSeeded = false;
+        g_lastStats.clear();
+        auto pong = usbCmd(g_port, g_rx, "cmp ping", 3500, 2);
+        setLink(h, pong ? L"USB linked · pong ok" : L"USB open · no pong yet");
+        pollConfig(h);
+        pollStatus(h);
+        g_busy = false;
       } else if (id == ID_DISCONNECT) {
         g_port.close();
         g_rx.clear();
-        setStatusLine(h, L"Disconnected.");
+        g_fieldsSeeded = false;
+        setLink(h, L"Disconnected");
+        setText(h, ID_STATUS, L"Disconnected.");
+        g_lastStats.clear();
       } else if (id == ID_SAVE_REBOOT) onSaveReboot(h);
       else if (id == ID_APPLY_CLOCK) onApplyClock(h);
       else if (id == ID_RECONNECT) onReconnect(h);
       return 0;
     }
     case WM_TIMER:
-      if (wParam == ID_TIMER && g_port.isOpen()) pollBoard(h);
+      if (wParam == ID_TIMER && g_port.isOpen() && !g_busy) {
+        g_pollTick++;
+        pollStatus(h);
+        // Config less often so typing isn't fighting the board.
+        if (g_pollTick % 8 == 0) pollConfig(h);
+      }
       return 0;
     case WM_DESTROY:
       KillTimer(h, ID_TIMER);
@@ -335,8 +452,13 @@ int WINAPI wWinMain(HINSTANCE hi, HINSTANCE, PWSTR, int show) {
 
   g_bgBrush = CreateSolidBrush(COL_BG);
   g_panelBrush = CreateSolidBrush(COL_PANEL);
-  g_font = CreateFontW(18, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE, DEFAULT_CHARSET, OUT_DEFAULT_PRECIS,
-                       CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_SWISS, L"Segoe UI");
+  g_limeBrush = CreateSolidBrush(COL_LIME);
+  g_font = CreateFontW(17, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE, DEFAULT_CHARSET,
+                       OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
+                       DEFAULT_PITCH | FF_SWISS, L"Segoe UI");
+  g_fontTitle = CreateFontW(26, 0, 0, 0, FW_SEMIBOLD, FALSE, FALSE, FALSE, DEFAULT_CHARSET,
+                            OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
+                            DEFAULT_PITCH | FF_SWISS, L"Segoe UI Semibold");
 
   WNDCLASSW wc{};
   wc.lpfnWndProc = WndProc;
@@ -346,9 +468,9 @@ int WINAPI wWinMain(HINSTANCE hi, HINSTANCE, PWSTR, int show) {
   wc.hbrBackground = g_bgBrush;
   RegisterClassW(&wc);
 
-  g_hwnd = CreateWindowW(L"CydCompanionWnd", L"CYD Companion — miner control",
+  g_hwnd = CreateWindowW(L"CydCompanionWnd", L"CYD Companion",
                          WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX, CW_USEDEFAULT,
-                         CW_USEDEFAULT, 640, 720, nullptr, nullptr, hi, nullptr);
+                         CW_USEDEFAULT, 640, 740, nullptr, nullptr, hi, nullptr);
   ShowWindow(g_hwnd, show);
   UpdateWindow(g_hwnd);
 
@@ -358,7 +480,9 @@ int WINAPI wWinMain(HINSTANCE hi, HINSTANCE, PWSTR, int show) {
     DispatchMessageW(&msg);
   }
   DeleteObject(g_font);
+  DeleteObject(g_fontTitle);
   DeleteObject(g_bgBrush);
   DeleteObject(g_panelBrush);
+  DeleteObject(g_limeBrush);
   return (int)msg.wParam;
 }

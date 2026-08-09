@@ -35,7 +35,7 @@ struct BoardConfig {
 
 std::string urlEncode(const std::string& s);
 std::optional<std::string> usbCmd(SerialPort& port, std::string& rx, const std::string& cmd,
-                                  int timeoutMs = 4000);
+                                  int timeoutMs = 4000, int retries = 2);
 bool parseCmpStatus(const std::string& line, BoardStatus& out);
 bool parseCmpConfig(const std::string& line, BoardConfig& out);
 std::string jsonStringField(const std::string& json, const char* key);

@@ -3,7 +3,8 @@
 
 void CompanionLink::begin(uint32_t baud) {
   // CYD CH340 is UART0 (Serial). Companion owns this link — no log spam.
-  Serial.setRxBufferSize(1024);
+  Serial.setRxBufferSize(2048);
+  Serial.setTxBufferSize(1024);
   Serial.begin(baud);
   Serial.setTimeout(0);
   line_.reserve(768);
@@ -64,14 +65,17 @@ void CompanionLink::handleLine(const String& line, AppConfig& cfg, const MinerSn
 
   if (verb == "ping") {
     Serial.println("CMP ok usb");
+    Serial.flush();
     return;
   }
   if (verb == "status") {
     replyStatus(cfg, snap);
+    Serial.flush();
     return;
   }
   if (verb == "config") {
     replyConfig(cfg);
+    Serial.flush();
     return;
   }
   if (verb == "set" || verb == "clock" || verb == "reboot") {
@@ -90,10 +94,12 @@ void CompanionLink::handleLine(const String& line, AppConfig& cfg, const MinerSn
       return;
     }
     Serial.println("CMPACK queued");
+    Serial.flush();
     (void)onApply(updated, reboot, reconnect);
     return;
   }
   Serial.println("CMPERR unknown (ping|status|config|set|clock|reboot)");
+  Serial.flush();
 }
 
 void CompanionLink::replyStatus(const AppConfig& cfg, const MinerSnapshot& snap) {
@@ -129,7 +135,7 @@ void CompanionLink::replyConfig(const AppConfig& cfg) {
   doc["wifi_password"] = cfg.wifiPassword.length() ? "********" : "";
   doc["cpu_mhz"] = cfg.cpuMhz;
   doc["hash_focus"] = cfg.hashFocus;
-  doc["fw"] = "0.2.0-cpp";
+  doc["fw"] = "0.2.1-cpp";
   doc["configured"] = cfg.isComplete();
   Serial.print("CMPCONFIG ");
   serializeJson(doc, Serial);

@@ -2,7 +2,6 @@
 #include <windows.h>
 #include <cctype>
 #include <cstdlib>
-#include <sstream>
 
 std::string urlEncode(const std::string& s) {
   static const char* hex = "0123456789ABCDEF";
@@ -23,57 +22,61 @@ std::string urlEncode(const std::string& s) {
 }
 
 static void drain(SerialPort& port, std::string& rx) {
-  rx += port.readAvailable();
+  for (;;) {
+    std::string chunk = port.readAvailable();
+    if (chunk.empty()) break;
+    rx += chunk;
+  }
   if (rx.size() > 16384) rx.erase(0, rx.size() - 8192);
 }
 
 static std::string findCmpLine(std::string& rx, const char* prefix) {
-  size_t start = 0;
+  size_t searchFrom = 0;
   while (true) {
-    size_t nl = rx.find('\n', start);
-    if (nl == std::string::npos) break;
-    std::string line = rx.substr(start, nl - start);
+    size_t nl = rx.find('\n', searchFrom);
+    if (nl == std::string::npos) {
+      // Drop stale complete-ish junk older than last incomplete line.
+      if (searchFrom > 0) rx.erase(0, searchFrom);
+      return {};
+    }
+    std::string line = rx.substr(searchFrom, nl - searchFrom);
     if (!line.empty() && line.back() == '\r') line.pop_back();
-    // trim
     while (!line.empty() && (line.front() == ' ' || line.front() == '\t')) line.erase(line.begin());
-    size_t idx = line.find(prefix);
-    if (idx == std::string::npos) {
-      // case-insensitive CMP
-      std::string lower = line;
-      for (char& c : lower) c = (char)std::tolower((unsigned char)c);
-      std::string p = prefix;
-      for (char& c : p) c = (char)std::tolower((unsigned char)c);
-      idx = lower.find(p);
-      if (idx != std::string::npos) {
-        rx.erase(0, nl + 1);
-        return line.substr(idx);
-      }
-    } else {
+
+    std::string lower = line;
+    for (char& c : lower) c = (char)std::tolower((unsigned char)c);
+    std::string p = prefix;
+    for (char& c : p) c = (char)std::tolower((unsigned char)c);
+    size_t idx = lower.find(p);
+    if (idx != std::string::npos) {
       rx.erase(0, nl + 1);
       return line.substr(idx);
     }
-    start = nl + 1;
+    searchFrom = nl + 1;
   }
-  // drop fully consumed lines without match
-  size_t lastNl = rx.rfind('\n');
-  if (lastNl != std::string::npos && lastNl + 1 < rx.size()) {
-    // keep incomplete trailing line
-  }
-  return {};
 }
 
-std::optional<std::string> usbCmd(SerialPort& port, std::string& rx, const std::string& cmd,
-                                  int timeoutMs) {
+static std::optional<std::string> usbCmdOnce(SerialPort& port, std::string& rx, const std::string& cmd,
+                                             int timeoutMs) {
   if (!port.isOpen()) return std::nullopt;
   drain(port, rx);
+  // Drop leftover CMP lines from previous commands so we don't mis-match.
+  while (true) {
+    auto junk = findCmpLine(rx, "CMP");
+    if (junk.empty()) break;
+  }
+
   std::string wire = "\r\n" + cmd + "\r\n";
   if (!port.writeAll(wire)) return std::nullopt;
 
   enum class Kind { Ping, Status, Config, Write };
   Kind kind = Kind::Write;
-  if (cmd.find("ping") != std::string::npos) kind = Kind::Ping;
-  else if (cmd.find("status") != std::string::npos) kind = Kind::Status;
-  else if (cmd.find("config") != std::string::npos) kind = Kind::Config;
+  if (cmd.find(" ping") != std::string::npos || cmd == "cmp ping" || cmd.rfind("cmp ping", 0) == 0)
+    kind = Kind::Ping;
+  else if (cmd.find("status") != std::string::npos)
+    kind = Kind::Status;
+  else if (cmd.find("config") != std::string::npos)
+    kind = Kind::Config;
 
   DWORD start = GetTickCount();
   while ((int)(GetTickCount() - start) < timeoutMs) {
@@ -93,7 +96,17 @@ std::optional<std::string> usbCmd(SerialPort& port, std::string& rx, const std::
       auto err = findCmpLine(rx, "CMPERR");
       if (!err.empty()) return std::nullopt;
     }
-    Sleep(40);
+    Sleep(25);
+  }
+  return std::nullopt;
+}
+
+std::optional<std::string> usbCmd(SerialPort& port, std::string& rx, const std::string& cmd,
+                                  int timeoutMs, int retries) {
+  for (int i = 0; i <= retries; i++) {
+    auto r = usbCmdOnce(port, rx, cmd, timeoutMs);
+    if (r) return r;
+    Sleep(80);
   }
   return std::nullopt;
 }
