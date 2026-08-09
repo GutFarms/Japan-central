@@ -1,6 +1,6 @@
 [package]
 name = "cursor-appliance-gui"
-version = "0.4.0"
+version = "0.4.1"
 edition = "2021"
 description = "Local egui control panel for the Cursor My Machines appliance"
 license = "MIT"

@@ -41,16 +41,20 @@ fi
 
 rm -rf "$STAGE"
 mkdir -p "$STAGE/scripts/windows" "$STAGE/data/local-queue/incoming" \
-  "$STAGE/data/local-queue/done" "$STAGE/data/local-queue/failed"
+  "$STAGE/data/local-queue/done" "$STAGE/data/local-queue/failed" \
+  "$STAGE/sandbox" "$STAGE/sandbox-workspace" "$STAGE/sandbox-home" "$STAGE/sandbox-tmp"
 
 cp "$GUI_EXE" "$STAGE/CursorAppliance.exe"
 cp "$LOCAL_EXE" "$STAGE/cursor-local-worker.exe"
 cp "$ROOT/Start-CursorAppliance.bat" "$STAGE/"
+cp "$ROOT/Start-PortableSandbox.bat" "$STAGE/"
 cp "$ROOT/.env.example" "$STAGE/"
 cp "$ROOT/VERSION" "$STAGE/"
 cp "$ROOT/WINDOWS.md" "$STAGE/"
 cp "$ROOT/README.md" "$STAGE/"
+cp "$ROOT/sandbox/README.txt" "$STAGE/sandbox/"
 cp "$ROOT/scripts/windows/"*.ps1 "$STAGE/scripts/windows/"
+cp "$ROOT/scripts/windows/"*.cmd "$STAGE/scripts/windows/" 2>/dev/null || true
 
 # Sensible Windows defaults in packaged .env.example notes stay; create starter .env
 cp "$STAGE/.env.example" "$STAGE/.env"
@@ -64,12 +68,13 @@ Quick start
 -----------
 1. Unzip this folder anywhere (e.g. Desktop\\cursor-appliance).
 2. Double-click Start-CursorAppliance.bat
+   OR for a portable sandbox: Start-PortableSandbox.bat
 3. Optional cloud worker:
      powershell -ExecutionPolicy Bypass -File .\\scripts\\windows\\Setup.ps1
      powershell -ExecutionPolicy Bypass -File .\\scripts\\windows\\Start-CloudWorker.ps1
 
-Offline / local failover uses cursor-local-worker.exe automatically.
-See WINDOWS.md for details.
+Portable sandbox keeps data/profile/temp inside this folder, and uses
+Windows Sandbox when available (see WINDOWS.md).
 EOF
 
 mkdir -p "$OUT_DIR"

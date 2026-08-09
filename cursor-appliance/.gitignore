@@ -5,3 +5,6 @@ data/
 gui/target/
 dist/
 *.zip
+sandbox-home/
+sandbox-tmp/
+sandbox-workspace/

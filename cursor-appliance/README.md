@@ -1,6 +1,6 @@
 # Cursor Appliance
 
-**Version 0.4.0** — a lightweight, dedicated **local** [My Machines](https://cursor.com/docs/cloud-agent/self-hosted-guides/my-machines) worker for this repo, with an **egui** control panel, **local failover**, and a **Windows downloadable build**.
+**Version 0.4.1** — a lightweight, dedicated **local** [My Machines](https://cursor.com/docs/cloud-agent/self-hosted-guides/my-machines) worker for this repo, with an **egui** control panel, **local failover**, and a **Windows portable sandbox** build.
 
 Cursor keeps planning/inference in the cloud. Tool calls (shell, edits, browser, local MCP) run on **this machine**. No inbound ports or VPN required.
 
@@ -12,7 +12,8 @@ Use this when you want a always-on local box (laptop, mini PC, or Raspberry Pi) 
 |---|---|
 | `gui/` | egui desktop app + `cursor-local-worker` |
 | `Start-CursorAppliance.bat` | Windows one-click launcher |
-| `scripts/windows/*.ps1` | Windows setup / cloud / local / status |
+| `Start-PortableSandbox.bat` | Windows portable / Windows Sandbox launcher |
+| `scripts/windows/*.ps1` | Windows setup / cloud / local / sandbox / status |
 | `scripts/run-gui.sh` | Linux build + launch control panel |
 | `scripts/setup.sh` | Linux Cursor Agent CLI bootstrap |
 | `scripts/start-worker.sh` | Linux My Machines cloud worker |
@@ -36,6 +37,8 @@ Full Windows notes: [WINDOWS.md](./WINDOWS.md).
 ```powershell
 .\scripts\windows\Setup.ps1
 .\Start-CursorAppliance.bat
+# or portable sandbox (Windows Sandbox when available):
+.\Start-PortableSandbox.bat
 .\scripts\windows\Status.ps1
 ```
 

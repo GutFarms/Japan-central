@@ -110,6 +110,31 @@ impl GuiSettings {
             }
         }
 
+        // Portable / sandbox launchers force contained paths via env.
+        if std::env::var("CURSOR_APPLIANCE_PORTABLE")
+            .map(|v| matches!(v.to_ascii_lowercase().as_str(), "1" | "true" | "yes" | "on"))
+            .unwrap_or(false)
+        {
+            if let Ok(dir) = std::env::var("CURSOR_APPLIANCE_WORKER_DIR") {
+                if !dir.is_empty() {
+                    settings.worker_dir = dir;
+                }
+            }
+            if let Ok(addr) = std::env::var("CURSOR_APPLIANCE_LOCAL_ADDR") {
+                if !addr.is_empty() {
+                    settings.local_management_addr = addr;
+                }
+            }
+            if let Ok(addr) = std::env::var("CURSOR_APPLIANCE_MANAGEMENT_ADDR") {
+                if !addr.is_empty() {
+                    settings.management_addr = addr;
+                }
+            }
+            if let Ok(offline) = std::env::var("CURSOR_APPLIANCE_OFFLINE") {
+                settings.offline_mode = truthy(&offline);
+            }
+        }
+
         settings
     }
 
