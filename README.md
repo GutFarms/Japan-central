@@ -4,7 +4,8 @@ Bare-metal Rust firmware that mines **scrypt** proof-of-work on an **ESP32-2432S
 
 ## What it does
 
-- Runs Litecoin-style scrypt: prefer **`N=64` (`lite`)** on this board; full `N=1024` is too RAM-heavy with WiFi
+- Mines **real Litecoin scrypt** (`N=1024`, `r=1`, `p=1`) — pool-valid hashes
+- On this board, **`lite`** uses an 8 KiB checkpointed ROMix (TMTO) so WiFi + stratum still fit in RAM
 - Reuses ROMix buffers across hashes
 - **After boot**, prompts (touch keyboard or USB serial) for **WiFi → stratum → worker → password**
 - Starts **WiFi STA + DHCP** when an SSID is set (BLE unused — RAM kept for WiFi/stratum)
@@ -15,15 +16,15 @@ Bare-metal Rust firmware that mines **scrypt** proof-of-work on an **ESP32-2432S
 - Saves credentials to flash and auto-loads them on later boots
 - Host CLI (`host-miner`), **desktop GUI** (`host-gui`), and unit tests
 
-Educational / demo miner only — not profitable network mining.
+Connects and submits real scrypt shares, but hashrate is tiny (MCU + TMTO) — not profitable.
 
 ## Relation to NMMiner
 
-[NMMiner](https://github.com/NMminer1024/NMMiner) also targets **ESP32-2432S028**, but mines **Bitcoin SHA-256**. This firmware mines **scrypt** (Litecoin/Dogecoin-style) with `N=64` lite.
+[NMMiner](https://github.com/NMminer1024/NMMiner) also targets **ESP32-2432S028**, but mines **Bitcoin SHA-256**. This firmware mines **Litecoin scrypt** (`N=1024`) with a low-memory TMTO on-device.
 
 | | NMMiner | This firmware |
 |--|---------|----------------|
-| Algorithm | BTC SHA-256 (~1 MH/s) | Scrypt (`lite`) |
+| Algorithm | BTC SHA-256 (~1 MH/s) | Scrypt N=1024 (`lite` TMTO) |
 | Stack | Arduino + LVGL (~2.7 MiB) | Embassy Rust (~0.85 MiB) |
 | Config | SoftAP WiFiManager | UART/PuTTY + LCD scan (WiFi required) |
 | LCD sleep | Screensaver prefs | No — LCD stays on |
@@ -100,7 +101,7 @@ CLI: `./scripts/flash-cyd.sh COM6` or
 `espflash write-bin -p COM6 0x0 flash/esp32-2432s028-scrypt-miner-merged.bin`
 
 Hold **BOOT** + **RESET** if connect stalls; install CH340 drivers on Windows if needed.  
-Full scrypt `N=1024` without `lite` is not recommended on this board with WiFi.
+Ship with `lite` (TMTO, 8 KiB V). Full-memory `N=1024` (128 KiB V) does not fit with WiFi on this board.
 
 ## Host demo, GUI & tests
 

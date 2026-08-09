@@ -73,7 +73,7 @@ companion = [
     "dep:image",
     "dep:serialport",
 ]
-# Lighter scrypt params (N=64) — required on classic ESP32 with WiFi
+# Low-memory Litecoin scrypt (N=1024 TMTO, 8 KiB V) — required on classic ESP32 with WiFi
 lite = []
 
 [dependencies]

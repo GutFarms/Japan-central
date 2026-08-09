@@ -67,4 +67,5 @@ Auth for writes = **pool password** (same as the board web UI).
 - `GET /api/status`, `GET /api/config`, `GET /probe`
 - `POST /api/config`, `POST /api/clock`, `POST /api/reboot`, `POST /api/reconnect`
 
-Flash matching firmware (`esp` + `lite`) so USB `cmp` commands are available.
+Flash matching firmware (`esp` + `lite`) so USB `cmp` commands are available.  
+`lite` is Litecoin **N=1024** with an 8 KiB TMTO scratchpad (pool-valid shares; low H/s).

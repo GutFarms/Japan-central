@@ -1,7 +1,11 @@
 //! Litecoin-style scrypt proof-of-work miner.
 //!
-//! Algorithm: `scrypt(header, header, N, r=1, p=1, dkLen=32)` then compare
+//! Algorithm: `scrypt(header, header, N=1024, r=1, p=1, dkLen=32)` then compare
 //! the little-endian hash against a compact target.
+//!
+//! With the `lite` feature the ROMix V array is stored sparsely (time–memory
+//! tradeoff) so classic ESP32 + WiFi can still produce **pool-valid** Litecoin
+//! hashes without a 128 KiB scratchpad.
 
 #![allow(clippy::needless_range_loop)]
 
@@ -11,20 +15,25 @@ use sha2::Sha256;
 
 type HmacSha256 = Hmac<Sha256>;
 
-/// log2(N). Litecoin uses 10 (N=1024). `lite` feature uses 6 (N=64).
-#[cfg(feature = "lite")]
-pub const SCRYPT_LOG_N: u8 = 6;
-#[cfg(not(feature = "lite"))]
+/// log2(N). Litecoin / Dogecoin use **10** (N=1024).
 pub const SCRYPT_LOG_N: u8 = 10;
-
 pub const SCRYPT_N: usize = 1 << SCRYPT_LOG_N;
 pub const SCRYPT_R: usize = 1;
 pub const SCRYPT_P: usize = 1;
 pub const HASH_LEN: usize = 32;
 pub const HEADER_LEN: usize = 80;
 
-/// Bytes for the ROMix V buffer: 128 * N * r
-pub const V_BYTES: usize = 128 * SCRYPT_N * SCRYPT_R;
+/// How many 128·r-byte blocks we keep for ROMix.
+///
+/// - full (`not lite`): all `N` blocks (128 KiB) — fastest
+/// - `lite`: 64 checkpoints (8 KiB) — stride 16, still **N=1024** hashes
+#[cfg(feature = "lite")]
+pub const V_SLOTS: usize = 64;
+#[cfg(not(feature = "lite"))]
+pub const V_SLOTS: usize = SCRYPT_N;
+
+/// Bytes for the ROMix V / checkpoint buffer: 128 * V_SLOTS * r
+pub const V_BYTES: usize = 128 * V_SLOTS * SCRYPT_R;
 /// Bytes for the XY scratch buffer: 256 * r
 pub const XY_BYTES: usize = 256 * SCRYPT_R;
 
@@ -57,7 +66,7 @@ pub struct ScryptMiner {
     shares: u64,
     best_hash: [u8; HASH_LEN],
     last_share_nonce: Option<u32>,
-    /// ROMix V buffer
+    /// ROMix V / checkpoint buffer
     v: alloc::vec::Vec<u8>,
     /// XY scratch
     xy: alloc::vec::Vec<u8>,
@@ -209,17 +218,25 @@ fn compare_hash_le(a: &[u8; HASH_LEN], b: &[u8; HASH_LEN]) -> core::cmp::Orderin
 }
 
 /// Compute Litecoin scrypt hash of an 80-byte header using caller-provided buffers.
-pub fn scrypt_hash(
-    header: &[u8; HEADER_LEN],
-    v: &mut [u8],
-    xy: &mut [u8],
-) -> [u8; HASH_LEN] {
+pub fn scrypt_hash(header: &[u8; HEADER_LEN], v: &mut [u8], xy: &mut [u8]) -> [u8; HASH_LEN] {
     let mut out = [0u8; HASH_LEN];
-    scrypt_general(header, header, SCRYPT_N, SCRYPT_R, SCRYPT_P, v, xy, &mut out);
+    scrypt_general(
+        header,
+        header,
+        SCRYPT_N,
+        SCRYPT_R,
+        SCRYPT_P,
+        v,
+        xy,
+        &mut out,
+    );
     out
 }
 
 /// General scrypt (RFC 7914) with caller-provided ROMix buffers.
+///
+/// When `v` holds fewer than `n` blocks, a checkpointed ROMix (TMTO) is used so
+/// the digest still matches full-memory scrypt for the same `n`.
 pub fn scrypt_general(
     password: &[u8],
     salt: &[u8],
@@ -232,8 +249,13 @@ pub fn scrypt_general(
 ) {
     let block_bytes = 128 * r;
     assert!(n.is_power_of_two() && n >= 2);
-    assert!(v.len() >= n * block_bytes);
     assert!(xy.len() >= 2 * block_bytes);
+    let slots = v.len() / block_bytes;
+    assert!(slots >= 2, "V buffer too small");
+    assert!(
+        slots >= n || n % slots == 0,
+        "V slots must divide N for TMTO ROMix"
+    );
 
     let mut b = alloc::vec![0u8; block_bytes * p];
     pbkdf2_sha256(password, salt, 1, &mut b);
@@ -251,13 +273,23 @@ fn pbkdf2_sha256(password: &[u8], salt: &[u8], rounds: u32, out: &mut [u8]) {
     pbkdf2::<HmacSha256>(password, salt, rounds, out).expect("HMAC-SHA256 PBKDF2");
 }
 
-/// scrypt ROMix (RFC 7914).
+/// scrypt ROMix (RFC 7914), with automatic full-memory or TMTO path.
 fn scrypt_romix(b: &mut [u8], n: usize, r: usize, v: &mut [u8], xy: &mut [u8]) {
     let block_bytes = 128 * r;
     debug_assert_eq!(b.len(), block_bytes);
-    debug_assert!(v.len() >= n * block_bytes);
     debug_assert!(xy.len() >= 2 * block_bytes);
 
+    let slots = v.len() / block_bytes;
+    if slots >= n {
+        scrypt_romix_full(b, n, r, v, xy);
+    } else {
+        let stride = n / slots;
+        scrypt_romix_tmto(b, n, r, stride, v, xy);
+    }
+}
+
+fn scrypt_romix_full(b: &mut [u8], n: usize, r: usize, v: &mut [u8], xy: &mut [u8]) {
+    let block_bytes = 128 * r;
     let (x, y) = xy.split_at_mut(block_bytes);
     x[..block_bytes].copy_from_slice(b);
 
@@ -275,6 +307,71 @@ fn scrypt_romix(b: &mut [u8], n: usize, r: usize, v: &mut [u8], xy: &mut [u8]) {
     }
 
     b.copy_from_slice(x);
+}
+
+/// Checkpointed ROMix: store every `stride`-th `V[i]`, recompute intermediates.
+///
+/// Produces the same digest as full-memory ROMix for the same `n`.
+fn scrypt_romix_tmto(
+    b: &mut [u8],
+    n: usize,
+    r: usize,
+    stride: usize,
+    v: &mut [u8],
+    xy: &mut [u8],
+) {
+    let block_bytes = 128 * r;
+    assert_eq!(r, 1, "TMTO ROMix supports r=1 (Litecoin)");
+    debug_assert!(stride >= 2 && n % stride == 0);
+    debug_assert_eq!(v.len() / block_bytes, n / stride);
+
+    let (x, y) = xy.split_at_mut(block_bytes);
+    x[..block_bytes].copy_from_slice(b);
+
+    for i in 0..n {
+        if i % stride == 0 {
+            let slot = i / stride;
+            v[slot * block_bytes..(slot + 1) * block_bytes].copy_from_slice(x);
+        }
+        scrypt_block_mix(x, y, r);
+        x.copy_from_slice(y);
+    }
+
+    // Scratch for reconstructed V[j] — stack is fine for r=1 (128 bytes).
+    let mut t = [0u8; 128];
+    let t = &mut t[..block_bytes];
+
+    for _ in 0..n {
+        let j = integerify(x, r) % n;
+        recover_v_block(t, j, n, r, stride, v, y);
+        xor_block(x, t);
+        scrypt_block_mix(x, y, r);
+        x.copy_from_slice(y);
+    }
+
+    b.copy_from_slice(x);
+}
+
+/// Reconstruct `V[j]` from the nearest stored checkpoint into `out`.
+///
+/// Uses `scratch` (one block) as BlockMix output.
+fn recover_v_block(
+    out: &mut [u8],
+    j: usize,
+    _n: usize,
+    r: usize,
+    stride: usize,
+    v: &[u8],
+    scratch: &mut [u8],
+) {
+    let block_bytes = 128 * r;
+    let base = (j / stride) * stride;
+    let slot = base / stride;
+    out.copy_from_slice(&v[slot * block_bytes..(slot + 1) * block_bytes]);
+    for _ in base..j {
+        scrypt_block_mix(out, scratch, r);
+        out.copy_from_slice(&scratch[..block_bytes]);
+    }
 }
 
 /// Integerify: interpret last 64 bits of block as LE u64.
@@ -362,6 +459,16 @@ pub fn hash_to_hex(hash: &[u8], n: usize, buf: &mut heapless::String<128>) {
 mod tests {
     use super::*;
 
+    fn hex_to_bytes<const N: usize>(hex: &str) -> [u8; N] {
+        let hex = hex.trim();
+        assert_eq!(hex.len(), N * 2);
+        let mut out = [0u8; N];
+        for i in 0..N {
+            out[i] = u8::from_str_radix(&hex[i * 2..i * 2 + 2], 16).unwrap();
+        }
+        out
+    }
+
     #[test]
     fn salsa20_8_known_vector() {
         // RFC 7914 / scrypt salsa20/8 test vector input
@@ -440,5 +547,40 @@ mod tests {
             0xcf, 0x35, 0xe2, 0x0c, 0x38, 0xd1, 0x89, 0x06,
         ];
         assert_eq!(out, expected);
+    }
+
+    #[test]
+    fn tmto_romix_matches_full_memory() {
+        // N=64 with only 8 slots (stride 8) must match a full 64-slot buffer.
+        let n = 64usize;
+        let r = 1usize;
+        let password = b"tmto-check-password!!";
+        let salt = password;
+        let mut full_v = alloc::vec![0u8; 128 * n * r];
+        let mut tmto_v = alloc::vec![0u8; 128 * (n / 8) * r];
+        let mut xy = alloc::vec![0u8; 256 * r];
+        let mut out_full = [0u8; 32];
+        let mut out_tmto = [0u8; 32];
+        scrypt_general(password, salt, n, r, 1, &mut full_v, &mut xy, &mut out_full);
+        scrypt_general(password, salt, n, r, 1, &mut tmto_v, &mut xy, &mut out_tmto);
+        assert_eq!(out_full, out_tmto);
+    }
+
+    #[test]
+    fn litecoin_block_29255_pow_hash() {
+        // Litecoin wiki block #29255 header + scrypt PoW hash (BE display).
+        let header = hex_to_bytes::<80>(
+            "01000000f615f7ce3b4fc6b8f61e8f89aedb1d0852507650533a9e3b10b9bbcc30639f279fcaa86746e1ef52d3edb3c4ad8259920d509bd073605c9bf1d59983752a6b06b817bb4ea78e011d012d59d4",
+        );
+        let expected_be = hex_to_bytes::<32>(
+            "0000000110c8357966576df46f3b802ca897deb7ad18b12f1c24ecff6386ebd9",
+        );
+        let mut expected_le = expected_be;
+        expected_le.reverse();
+
+        let mut v = alloc::vec![0u8; V_BYTES];
+        let mut xy = alloc::vec![0u8; XY_BYTES];
+        let hash = scrypt_hash(&header, &mut v, &mut xy);
+        assert_eq!(hash, expected_le, "must match Litecoin scrypt N=1024 PoW");
     }
 }
