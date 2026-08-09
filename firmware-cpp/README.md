@@ -1,7 +1,7 @@
-# ESP32-2432S028 (CYD) — C++ companion firmware
+# ESP32-2432S028 (CYD) — mining firmware (C++)
 
-Companion-first firmware for the Cheap Yellow Display. UART0 speaks only the
-`cmp` protocol used by **CYD Companion** — no classic serial field prompts.
+Mining-only firmware. LCD shows basic live stats. UART0 speaks only the `cmp`
+protocol — **CYD Companion** is the sole control / setup UI.
 
 ## Protocol
 

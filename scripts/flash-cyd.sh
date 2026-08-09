@@ -1,34 +1,26 @@
 #!/usr/bin/env bash
-# Flash ESP32-2432S028 (CYD) scrypt miner.
-# Usage: ./scripts/flash-cyd.sh [PORT]
-#   PORT examples: COM6, /dev/ttyUSB0, /dev/ttyACM0
+# Flash merged C++ firmware to ESP32-2432S028
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-cd "$ROOT"
-
 PORT="${1:-}"
-for f in "$ROOT/export-esp.sh" "$HOME/export-esp.sh" "$ROOT/export-esp.sh.example"; do
-  if [[ -f "$f" ]]; then
-    # shellcheck disable=SC1090
-    source "$f"
-    break
-  fi
-done
-
-ELF="$ROOT/target/xtensa-esp32-none-elf/release/esp32-s3-scrypt-miner"
 MERGED="$ROOT/flash/esp32-2432s028-scrypt-miner-merged.bin"
 
-if [[ ! -f "$ELF" ]]; then
-  echo "No ELF yet — building..."
+if [[ ! -f "$MERGED" ]]; then
+  echo "Building firmware first..."
   "$ROOT/scripts/build-flash-images.sh"
 fi
 
-PORT_ARGS=()
-if [[ -n "$PORT" ]]; then
-  PORT_ARGS=(-p "$PORT")
+if [[ -z "$PORT" ]]; then
+  echo "Usage: $0 <COM port or /dev/ttyUSB0>" >&2
+  exit 1
 fi
 
-echo "==> Flashing ELF to ESP32 (4MB · DIO · 40MHz)..."
-espflash flash --monitor --chip esp32 \
-  --flash-size 4mb --flash-mode dio --flash-freq 40mhz \
-  "${PORT_ARGS[@]}" "$ELF"
+if command -v espflash >/dev/null 2>&1; then
+  espflash write-bin -p "$PORT" 0x0 "$MERGED"
+elif [[ -f "$HOME/.platformio/packages/tool-esptoolpy/esptool.py" ]]; then
+  python3 "$HOME/.platformio/packages/tool-esptoolpy/esptool.py" \
+    --chip esp32 -p "$PORT" write_flash -z 0x0 "$MERGED"
+else
+  echo "ERROR: need espflash or PlatformIO esptool.py" >&2
+  exit 1
+fi
