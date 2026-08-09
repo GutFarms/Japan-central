@@ -38,6 +38,7 @@ echo "==> Windows companion"
 APP_BIN="flash/esp32-2432s028-scrypt-miner.bin"
 MERGED_BIN="flash/esp32-2432s028-scrypt-miner-merged.bin"
 ZIP="dist/cyd-companion-windows.zip"
+PORTABLE_ZIP="dist/CYD-Companion-Portable.zip"
 EXE="dist/cyd-companion-windows/cyd-companion.exe"
 SETUP="dist/CYD-Companion-Setup.exe"
 
@@ -45,6 +46,7 @@ echo "==> verifying artifacts"
 test -f "$APP_BIN"
 test -f "$MERGED_BIN"
 test -f "$ZIP"
+test -f "$PORTABLE_ZIP"
 test -f "$EXE"
 test -f "$SETUP"
 
@@ -96,16 +98,18 @@ echo "==> copying downloadable artifacts"
 mkdir -p /opt/cursor/artifacts
 cp -f "$MERGED_BIN" /opt/cursor/artifacts/
 cp -f "$ZIP" /opt/cursor/artifacts/
+cp -f "$PORTABLE_ZIP" /opt/cursor/artifacts/
 cp -f "$SETUP" /opt/cursor/artifacts/
 cp -f flash/SHA256SUMS.txt /opt/cursor/artifacts/esp32-2432s028-SHA256SUMS.txt
 
 echo
 echo "OK — verified clean build"
-ls -la "$MERGED_BIN" "$ZIP" "$SETUP" \
+ls -la "$MERGED_BIN" "$ZIP" "$PORTABLE_ZIP" "$SETUP" \
   /opt/cursor/artifacts/esp32-2432s028-scrypt-miner-merged.bin \
   /opt/cursor/artifacts/cyd-companion-windows.zip \
+  /opt/cursor/artifacts/CYD-Companion-Portable.zip \
   /opt/cursor/artifacts/CYD-Companion-Setup.exe
 echo
 echo "SHA256:"
-sha256sum "$MERGED_BIN" "$ZIP" "$SETUP"
+sha256sum "$MERGED_BIN" "$ZIP" "$PORTABLE_ZIP" "$SETUP"
 cat flash/SHA256SUMS.txt
