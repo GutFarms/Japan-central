@@ -30,3 +30,4 @@ On the feature branch (until merged):
 - Bundle: `https://github.com/GutFarms/Japan-central/raw/cursor/esp32-cyd-pc-monitor-9f0c/downloads/CYD-Monitor-bundle.zip`
 - Firmware: `https://github.com/GutFarms/Japan-central/raw/cursor/esp32-cyd-pc-monitor-9f0c/downloads/CYD-Firmware.zip`
 - Portable app: `https://github.com/GutFarms/Japan-central/raw/cursor/esp32-cyd-pc-monitor-9f0c/downloads/CYD-Monitor-portable.zip`
+Built: 2026-08-09 01:18 UTC
