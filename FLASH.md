@@ -2,6 +2,18 @@
 
 Chip: **ESP32** (WROOM-32) · Board: **ESP32-2432S028** · Image: `esp,lite`
 
+## Board flash profile
+
+| Setting | Value |
+|---------|-------|
+| Crystal | **40 MHz** |
+| Flash size | **4 MB** |
+| Flash mode | **DIO** |
+| Flash SPI clock | **40 MHz** |
+| Example chip id | `0x57CAFC` (board-specific) |
+
+Merged images are built with `--flash-mode dio --flash-freq 40mhz --flash-size 4mb` so the ESP image header matches this CYD profile.
+
 ## Save `.bin` to your PC (recommended)
 
 ```bash

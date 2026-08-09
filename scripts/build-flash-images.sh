@@ -28,13 +28,18 @@ test -f "$ELF"
 APP_BIN="flash/esp32-2432s028-scrypt-miner.bin"
 MERGED_BIN="flash/esp32-2432s028-scrypt-miner-merged.bin"
 
-echo "==> Writing app image (flash @ 0x10000)..."
-espflash save-image --chip esp32 --flash-size 4mb \
+# ESP32-2432S028 (CYD / WROOM-32): 40 MHz crystal, 4 MB flash, DIO.
+# These flags are written into the ESP image header so ROM boot uses the
+# correct SPI mode/clock regardless of the host flasher defaults.
+FLASH_ARGS=(--chip esp32 --flash-size 4mb --flash-mode dio --flash-freq 40mhz)
+
+echo "==> Writing app image (flash @ 0x10000, DIO @ 40 MHz, 4 MB)..."
+espflash save-image "${FLASH_ARGS[@]}" \
   "$ELF" "$APP_BIN"
 
 echo "==> Writing merged image (flash @ 0x0, no 4MiB pad)..."
 # --skip-padding keeps the download ~1 MiB instead of a full 4 MiB sparse image.
-espflash save-image --chip esp32 --flash-size 4mb --merge --skip-padding \
+espflash save-image "${FLASH_ARGS[@]}" --merge --skip-padding \
   "$ELF" "$MERGED_BIN"
 
 # Basic sanity: ESP app magic 0xE9 at start of app image and at 0x10000 in merged.
@@ -54,6 +59,16 @@ elif merged[0x1000] != 0xE9:
     print("ERROR: merged.bin has no bootloader at 0x1000", file=sys.stderr); ok = False
 if app[:16] != merged[0x10000:0x10010]:
     print("ERROR: merged app segment != app.bin", file=sys.stderr); ok = False
+# Image header: byte2 flash mode (2=DIO), byte3 size/freq (4MB + 40MHz → 0x20)
+mode = app[2]
+size_freq = app[3]
+if mode != 0x02:
+    print(f"ERROR: flash mode byte={mode:#04x}, expected DIO (0x02)", file=sys.stderr); ok = False
+if (size_freq & 0x0F) != 0x0:
+    print(f"ERROR: flash freq nibble={size_freq & 0x0F:#x}, expected 40MHz (0x0)", file=sys.stderr); ok = False
+if (size_freq >> 4) != 0x2:
+    print(f"ERROR: flash size nibble={size_freq >> 4:#x}, expected 4MB (0x2)", file=sys.stderr); ok = False
+print(f"Header OK: magic=0xE9 mode=DIO size/freq={size_freq:#04x} (4MB @ 40MHz)")
 sys.exit(0 if ok else 1)
 PY
 

@@ -314,11 +314,12 @@ btnFlash.addEventListener("click", async () => {
     const prepared = prepareFlashPayload(firmware, address);
     const payload = toBinaryString(prepared.data);
 
+    // ESP32-2432S028 (CYD): 4 MB flash, DIO, 40 MHz SPI flash clock.
     const flashOptions = {
       fileArray: [{ data: payload, address: prepared.address }],
-      flashSize: "keep",
-      flashMode: "keep",
-      flashFreq: "keep",
+      flashSize: "4MB",
+      flashMode: "dio",
+      flashFreq: "40m",
       eraseAll: false,
       compress: true,
       reportProgress: (_i, written, total) => {

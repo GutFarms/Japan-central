@@ -76,7 +76,8 @@ Stratum worker/endpoint/password changes **reconnect without reboot**. After cha
 | Item | Notes |
 |------|--------|
 | Board | **ESP32-2432S028** (Cheap Yellow Display) |
-| MCU | ESP32-WROOM-32 |
+| MCU | ESP32-WROOM-32 · 40 MHz crystal |
+| Flash | **4 MB · DIO · 40 MHz** SPI (baked into image header) |
 | Display | ILI9341 SPI, 320×240 landscape, backlight GPIO21 |
 | TFT SPI | SCLK=14, MOSI=13, MISO=12, CS=15, DC=2 |
 | Buttons | BOOT=GPIO0 (short/long); **touch** tabs + on-screen keyboard |

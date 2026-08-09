@@ -28,6 +28,7 @@ if [[ -n "$PORT" ]]; then
   PORT_ARGS=(-p "$PORT")
 fi
 
-echo "==> Flashing ELF to ESP32..."
-espflash flash --monitor --chip esp32 --flash-size 4mb \
+echo "==> Flashing ELF to ESP32 (4MB · DIO · 40MHz)..."
+espflash flash --monitor --chip esp32 \
+  --flash-size 4mb --flash-mode dio --flash-freq 40mhz \
   "${PORT_ARGS[@]}" "$ELF"
