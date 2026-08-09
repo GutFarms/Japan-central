@@ -86,6 +86,7 @@ enum Transport {
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
+#[allow(dead_code)] // JSON fields retained for forward-compatible deserialization
 struct StatusJson {
     #[serde(default)]
     hashrate_hs: f64,
@@ -120,6 +121,7 @@ struct StatusJson {
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
+#[allow(dead_code)] // JSON fields retained for forward-compatible deserialization
 struct ConfigJson {
     #[serde(default)]
     worker: String,

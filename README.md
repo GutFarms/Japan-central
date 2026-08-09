@@ -106,6 +106,9 @@ Ship with `lite` (TMTO, 8 KiB V). Full-memory `N=1024` (128 KiB V) does not fit 
 ## Host demo, GUI & tests
 
 ```bash
+# Clean rebuild + tests + firmware .bin + Windows companion zip
+./scripts/verify-project.sh
+
 cargo test --no-default-features
 cargo run --no-default-features --features host --bin host-miner --release
 cargo run --no-default-features --features host-gui --bin host-gui --release
