@@ -150,7 +150,6 @@ async fn main(spawner: Spawner) -> ! {
         peripherals.GPIO0,
         InputConfig::default().with_pull(Pull::Up),
     );
-    let force_change = boot_btn.is_low();
 
     // CYD ILI9341 HSPI pins.
     let dp = DisplayPeripherals {
@@ -198,6 +197,13 @@ async fn main(spawner: Spawner) -> ! {
 
     let _ = display.draw_splash();
     Timer::after(Duration::from_millis(200)).await;
+
+    // Require a sustained BOOT hold so reset glitches don't trap the board in
+    // classic serial setup (which ate companion `cmp status` as field text).
+    let force_change = boot_hold_ms(&boot_btn, 1_500).await;
+    if force_change {
+        serial_writeln(&mut usb, "BOOT held 1.5s — on-device setup mode.");
+    }
 
     let mut wifi_token: Option<WIFI<'static>> = Some(peripherals.WIFI);
     let (mut pool, from_flash) = resolve_pool_config(
@@ -939,8 +945,16 @@ async fn resolve_pool_config<D: embedded_hal::delay::DelayNs>(
                     usb,
                     "BOOT held — on-device first-time setup (touch or serial).",
                 );
-                let mut cfg =
-                    collect_pool_config(usb, display, touch, touch_delay, wifi_token, boot).await;
+                let mut cfg = collect_pool_config(
+                    usb,
+                    display,
+                    touch,
+                    touch_delay,
+                    store,
+                    wifi_token,
+                    boot,
+                )
+                .await;
                 cfg.touch_map = touch.map.id();
                 match store.save(&cfg) {
                     Ok(()) => {
@@ -1008,7 +1022,8 @@ async fn password_gated_change<D: embedded_hal::delay::DelayNs>(
             Ok(()) => {
                 serial_writeln(usb, "  ok — enter new values");
                 let mut cfg =
-                    collect_pool_config(usb, display, touch, touch_delay, wifi_token, boot).await;
+                    collect_pool_config(usb, display, touch, touch_delay, store, wifi_token, boot)
+                        .await;
                 cfg.touch_map = touch.map.id();
                 match store.save(&cfg) {
                     Ok(()) => {
@@ -1106,6 +1121,135 @@ fn strip_cmp_prefix(cmd: &str) -> Option<&str> {
     } else {
         None
     }
+}
+
+/// True if BOOT stays low for `ms` continuously (intentional hold).
+async fn boot_hold_ms(boot: &Input<'_>, ms: u64) -> bool {
+    if !boot.is_low() {
+        return false;
+    }
+    let start = Instant::now();
+    while boot.is_low() {
+        if start.elapsed() >= Duration::from_millis(ms) {
+            return true;
+        }
+        Timer::after(Duration::from_millis(20)).await;
+    }
+    false
+}
+
+/// Result of handling a `cmp …` line while classic setup UI is on screen.
+enum SetupCmp {
+    /// Not a companion command.
+    NotCmp,
+    /// Answered ping/status/config (or partial set) — keep prompting.
+    Continue,
+    /// Companion finished setup; use this config and leave classic setup.
+    Finished(PoolConfig),
+}
+
+fn find_cmp_start(s: &str) -> Option<usize> {
+    let b = s.as_bytes();
+    let mut i = 0;
+    while i + 3 <= b.len() {
+        if b[i].eq_ignore_ascii_case(&b'c')
+            && b[i + 1].eq_ignore_ascii_case(&b'm')
+            && b[i + 2].eq_ignore_ascii_case(&b'p')
+            && (i + 3 == b.len() || b[i + 3].is_ascii_whitespace())
+        {
+            return Some(i);
+        }
+        i += 1;
+    }
+    None
+}
+
+async fn handle_cmp_during_setup(
+    usb: &mut Serial<'_>,
+    store: &mut ConfigStore<'_>,
+    cfg: &mut PoolConfig,
+    touch: &mut Touch,
+    line: &str,
+) -> SetupCmp {
+    // Classic setup may prepend a default stratum value before USB bytes arrive.
+    let line = match find_cmp_start(line) {
+        Some(i) => &line[i..],
+        None => return SetupCmp::NotCmp,
+    };
+    let Some(rest) = strip_cmp_prefix(line) else {
+        return SetupCmp::NotCmp;
+    };
+    let mut parts = rest.splitn(2, char::is_whitespace);
+    let verb = parts.next().unwrap_or("ping");
+    let args = parts.next().unwrap_or("").trim();
+
+    if eq_ignore_ascii_case(verb, "ping") {
+        serial_writeln(usb, "CMP ok usb");
+        return SetupCmp::Continue;
+    }
+    if eq_ignore_ascii_case(verb, "status") {
+        let mut out: String<384> = String::new();
+        let _ = core::fmt::Write::write_fmt(
+            &mut out,
+            format_args!(
+                "CMPSTATUS {{\"hashrate_hs\":0.00,\"shares\":0,\"accepted\":0,\"rejected\":0,\
+\"dropped\":0,\"pool\":\"setup\",\"connected\":false,\"wifi\":\"off\",\"ip\":\"---\",\
+\"address\":\"{}\",\"stratum\":\"{}\",\"difficulty\":0,\"uptime_secs\":0,\"cpu_mhz\":{},\
+\"hash_focus\":{},\"nonce\":\"00000000\"}}",
+                cfg.address.as_str(),
+                cfg.stratum.as_str(),
+                cfg.cpu_mhz,
+                if cfg.hash_focus { "true" } else { "false" },
+            ),
+        );
+        serial_writeln(usb, out.as_str());
+        return SetupCmp::Continue;
+    }
+    if eq_ignore_ascii_case(verb, "config") {
+        let mut out: String<384> = String::new();
+        let _ = core::fmt::Write::write_fmt(
+            &mut out,
+            format_args!(
+                "CMPCONFIG {{\"worker\":\"{}\",\"stratum\":\"{}\",\"wifi_ssid\":\"{}\",\
+\"wifi_password\":\"{}\",\"cpu_mhz\":{},\"hash_focus\":{},\"fw\":\"{}\",\"configured\":{}}}",
+                cfg.address.as_str(),
+                cfg.stratum.as_str(),
+                cfg.wifi_ssid.as_str(),
+                cfg.wifi_password_masked().as_str(),
+                cfg.cpu_mhz,
+                if cfg.hash_focus { "true" } else { "false" },
+                env!("CARGO_PKG_VERSION"),
+                if cfg.is_complete() { "true" } else { "false" },
+            ),
+        );
+        serial_writeln(usb, out.as_str());
+        return SetupCmp::Continue;
+    }
+    if eq_ignore_ascii_case(verb, "set")
+        || eq_ignore_ascii_case(verb, "clock")
+        || eq_ignore_ascii_case(verb, "reboot")
+    {
+        let mut upd = esp32_s3_scrypt_miner::web::parse_companion_body(args);
+        if eq_ignore_ascii_case(verb, "reboot") {
+            upd.reboot = true;
+        }
+        if pool_allows_setup_write(cfg, upd.auth.as_str()).is_err() {
+            serial_writeln(usb, "CMPERR bad auth");
+            return SetupCmp::Continue;
+        }
+        serial_writeln(usb, "CMPACK queued");
+        apply_companion_update(usb, store, cfg, touch, upd, false, cfg.cpu_mhz).await;
+        if cfg.is_complete() {
+            return SetupCmp::Finished(cfg.clone());
+        }
+        return SetupCmp::Continue;
+    }
+    serial_writeln(usb, "CMPERR unknown (ping|status|config|set|clock|reboot)");
+    SetupCmp::Continue
+}
+
+fn pool_allows_setup_write(cfg: &PoolConfig, auth: &str) -> Result<(), ()> {
+    cfg.authorize_or_setup(auth).map_err(|_| ())
 }
 
 async fn handle_cmp_command(
@@ -1259,6 +1403,7 @@ async fn collect_pool_config<D: embedded_hal::delay::DelayNs>(
     display: &mut Display<'_, D>,
     touch: &mut Touch,
     touch_delay: &mut Delay,
+    store: &mut ConfigStore<'_>,
     wifi_token: &mut Option<WIFI<'static>>,
     boot: &Input<'_>,
 ) -> PoolConfig {
@@ -1267,6 +1412,7 @@ async fn collect_pool_config<D: embedded_hal::delay::DelayNs>(
 
     serial_writeln(usb, "");
     serial_writeln(usb, "=== ESP32-2432S028 Scrypt Miner setup ===");
+    serial_writeln(usb, "Tip: CYD Companion `cmp set …` also works here (preferred).");
     serial_writeln(usb, "Step 1: pick a WiFi network (required).");
     serial_writeln(usb, "Serial: number from scan list, or type the SSID + Enter.");
     serial_writeln(usb, "BOOT: select highlighted network · keyboard short=next, long=press.");
@@ -1282,25 +1428,30 @@ async fn collect_pool_config<D: embedded_hal::delay::DelayNs>(
 
         if field == SetupField::WifiSsid {
             loop {
-                let WifiPick::Network { ssid, open } =
-                    pick_wifi_ssid(usb, display, touch, touch_delay, wifi_token, boot).await;
-                match cfg.set(SetupField::WifiSsid, ssid.as_str()) {
-                    Ok(()) => {
-                        serial_write(usb, "  ok (wifi_ssid=");
-                        serial_write(usb, ssid.as_str());
-                        serial_writeln(usb, ")");
-                        skip_wifi_password = open;
-                        if open {
-                            let _ = cfg.set(SetupField::WifiPassword, "");
-                            serial_writeln(usb, "  open network — no password");
+                match pick_wifi_ssid(usb, display, touch, touch_delay, store, &mut cfg, wifi_token, boot)
+                    .await
+                {
+                    WifiPick::Network { ssid, open } => {
+                        match cfg.set(SetupField::WifiSsid, ssid.as_str()) {
+                            Ok(()) => {
+                                serial_write(usb, "  ok (wifi_ssid=");
+                                serial_write(usb, ssid.as_str());
+                                serial_writeln(usb, ")");
+                                skip_wifi_password = open;
+                                if open {
+                                    let _ = cfg.set(SetupField::WifiPassword, "");
+                                    serial_writeln(usb, "  open network — no password");
+                                }
+                                break;
+                            }
+                            Err(e) => {
+                                serial_write(usb, "  error: ");
+                                serial_writeln(usb, config_error_msg(e));
+                                serial_writeln(usb, " — WiFi is required, try again");
+                            }
                         }
-                        break;
                     }
-                    Err(e) => {
-                        serial_write(usb, "  error: ");
-                        serial_writeln(usb, config_error_msg(e));
-                        serial_writeln(usb, " — WiFi is required, try again");
-                    }
+                    WifiPick::CompanionDone(done) => return done,
                 }
             }
             continue;
@@ -1316,7 +1467,7 @@ async fn collect_pool_config<D: embedded_hal::delay::DelayNs>(
             serial_write(usb, ": ");
             let _ = usb.flush();
 
-            let mut line: String<128> = String::new();
+            let mut line: String<384> = String::new();
             let initial = if field == SetupField::Stratum {
                 DEFAULT_STRATUM
             } else {
@@ -1335,6 +1486,12 @@ async fn collect_pool_config<D: embedded_hal::delay::DelayNs>(
                 initial,
             )
             .await;
+
+            match handle_cmp_during_setup(usb, store, &mut cfg, touch, line.as_str()).await {
+                SetupCmp::NotCmp => {}
+                SetupCmp::Continue => continue,
+                SetupCmp::Finished(done) => return done,
+            }
 
             let (target, value) =
                 if let Ok((parsed_field, value)) = PoolConfig::parse_assignment(line.as_str()) {
@@ -1369,6 +1526,7 @@ async fn collect_pool_config<D: embedded_hal::delay::DelayNs>(
 
 enum WifiPick {
     Network { ssid: String<32>, open: bool },
+    CompanionDone(PoolConfig),
 }
 
 async fn pick_wifi_ssid<D: embedded_hal::delay::DelayNs>(
@@ -1376,6 +1534,8 @@ async fn pick_wifi_ssid<D: embedded_hal::delay::DelayNs>(
     display: &mut Display<'_, D>,
     touch: &mut Touch,
     touch_delay: &mut Delay,
+    store: &mut ConfigStore<'_>,
+    cfg: &mut PoolConfig,
     _wifi_token: &mut Option<WIFI<'static>>,
     boot: &Input<'_>,
 ) -> WifiPick {
@@ -1384,7 +1544,8 @@ async fn pick_wifi_ssid<D: embedded_hal::delay::DelayNs>(
     let mut status: String<40> = String::new();
     let mut dirty = true;
     let mut byte = [0u8; 1];
-    let mut serial_buf: String<64> = String::new();
+    // Wide enough for companion `cmp set …` form bodies while scanning.
+    let mut serial_buf: String<384> = String::new();
     let mut boot_was_down = boot.is_low();
 
     // Scan steals WIFI briefly; owned token stays for radio::start.
@@ -1460,7 +1621,7 @@ async fn pick_wifi_ssid<D: embedded_hal::delay::DelayNs>(
                     dirty = true;
                 }
                 Some(WifiScanHit::TypeManual) => {
-                    let mut line: String<128> = String::new();
+                    let mut line: String<384> = String::new();
                     serial_write(usb, "wifi_ssid (type): ");
                     let _ = usb.flush();
                     read_field_touch_or_serial(
@@ -1476,6 +1637,14 @@ async fn pick_wifi_ssid<D: embedded_hal::delay::DelayNs>(
                         "",
                     )
                     .await;
+                    match handle_cmp_during_setup(usb, store, cfg, touch, line.as_str()).await {
+                        SetupCmp::NotCmp => {}
+                        SetupCmp::Continue => {
+                            dirty = true;
+                            continue;
+                        }
+                        SetupCmp::Finished(done) => return WifiPick::CompanionDone(done),
+                    }
                     let trimmed = line.as_str().trim();
                     if trimmed.is_empty()
                         || trimmed == "-"
@@ -1528,6 +1697,15 @@ async fn pick_wifi_ssid<D: embedded_hal::delay::DelayNs>(
                         if trimmed.is_empty() {
                             serial_buf.clear();
                             continue;
+                        }
+                        match handle_cmp_during_setup(usb, store, cfg, touch, trimmed).await {
+                            SetupCmp::NotCmp => {}
+                            SetupCmp::Continue => {
+                                serial_buf.clear();
+                                dirty = true;
+                                continue;
+                            }
+                            SetupCmp::Finished(done) => return WifiPick::CompanionDone(done),
                         }
                         if trimmed == "-" || eq_ignore_ascii_case(trimmed, "skip") {
                             serial_writeln(usb, "WiFi is required — enter a number or SSID.");
@@ -1594,13 +1772,13 @@ fn print_scan_list(usb: &mut Serial<'_>, networks: &[ScannedNetwork]) {
 
 /// Collect one field via on-screen keyboard and/or USB serial.
 /// BOOT short = next key, BOOT long = activate key; finger-up taps also work.
-async fn read_field_touch_or_serial<D: embedded_hal::delay::DelayNs>(
+async fn read_field_touch_or_serial<D: embedded_hal::delay::DelayNs, const N: usize>(
     usb: &mut Serial<'_>,
     display: &mut Display<'_, D>,
     touch: &mut Touch,
     touch_delay: &mut Delay,
     field: SetupField,
-    line: &mut String<128>,
+    line: &mut String<N>,
     secret: bool,
     auth: Option<(u8, u8)>,
     boot: &Input<'_>,

@@ -192,7 +192,11 @@ impl Keyboard {
     }
 
     /// Apply key. Returns `true` when the field is complete (Enter / Skip).
-    pub fn apply(&mut self, action: KeyAction, buf: &mut heapless::String<128>) -> bool {
+    pub fn apply<const N: usize>(
+        &mut self,
+        action: KeyAction,
+        buf: &mut heapless::String<N>,
+    ) -> bool {
         match action {
             KeyAction::Char(c) => {
                 let _ = buf.push(c);
