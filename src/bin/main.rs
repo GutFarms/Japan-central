@@ -56,8 +56,8 @@ use esp_hal::peripherals::WIFI;
 
 esp_bootloader_esp_idf::esp_app_desc!();
 
-/// Hashes between USB/GUI checks. Larger = more mining, still drains RX FIFO each loop.
-const BATCH_SIZE: usize = 4;
+/// Hashes between USB/GUI checks. Keep modest so companion `cmp *` stays snappy.
+const BATCH_SIZE: usize = 2;
 const DEMO_ZERO_NIBBLES: u8 = 4;
 const SAVED_CONFIRM_SECS: u64 = 8;
 const MAX_PASSWORD_ATTEMPTS: u8 = 3;
@@ -116,7 +116,8 @@ fn clear_boot_clk_retry(mhz: u8) {
 
 #[esp_rtos::main]
 async fn main(spawner: Spawner) -> ! {
-    esp_println::logger::init_logger_from_env();
+    // Keep UART0 quiet for the Windows companion — INFO spam was starving `cmp status`.
+    esp_println::logger::init_logger(log::LevelFilter::Error);
     info!("esp32-2432s028 scrypt miner starting");
 
     let (cpu_clock, running_mhz, boot_retry) = take_boot_cpu_clock();
@@ -501,114 +502,50 @@ async fn main(spawner: Spawner) -> ! {
             }
         }
 
-        // Service all queued USB companion lines before hashing (keeps USB snappy).
-        while poll_command_line(&mut usb, &mut cmd_line) {
-            let cmd = cmd_line.as_str().trim();
-            if let Some(rest) = strip_cmp_prefix(cmd) {
-                handle_cmp_command(
-                    &mut usb,
-                    &mut store,
-                    &mut pool,
-                    &mut touch,
-                    rest,
-                    &stats,
-                    last_hashrate_x100,
-                    &radio_status,
-                    &stratum_status,
-                    running_mhz,
-                    stratum_enabled,
-                )
-                .await;
-            } else if is_change_command(cmd) {
-                if let Some(updated) = password_gated_change(
-                    &mut usb,
-                    &mut display,
-                    &mut touch,
-                    &mut touch_delay,
-                    &mut store,
-                    &pool,
-                    &mut None,
-                    &boot_btn,
-                )
-                .await
-                {
-                    pool = updated;
-                    if stratum_enabled {
-                        stratum::apply_pool_config(&pool).await;
-                        serial_writeln(
-                            &mut usb,
-                            "Stratum worker/endpoint reloaded. WiFi still needs reboot.",
-                        );
-                    } else {
-                        serial_writeln(
-                            &mut usb,
-                            "Note: WiFi keeps prior session until reboot.",
-                        );
-                    }
-                    let _ = display.draw_config_summary(&pool, true);
-                    Timer::after(Duration::from_secs(2)).await;
-                }
-                gui.screen = esp32_s3_scrypt_miner::gui::GuiScreen::Mining;
-                radio_status = radio::snapshot().await;
-                if stratum_enabled {
-                    stratum_status = stratum::snapshot().await;
-                }
-                display.invalidate();
-                let _ = display.draw_gui(&gui, &stats, &pool, &radio_status, &stratum_status, true);
-            } else if is_radio_command(cmd) {
-                radio_status = radio::snapshot().await;
-                if stratum_enabled {
-                    stratum_status = stratum::snapshot().await;
-                }
-                print_radio_serial(&mut usb, &pool, &radio_status, &stratum_status);
-                gui.screen = esp32_s3_scrypt_miner::gui::GuiScreen::Radio;
-                let _ = display.draw_gui(&gui, &stats, &pool, &radio_status, &stratum_status, true);
-            } else if is_touch_command(cmd) {
-                touch.cycle_map();
-                pool.touch_map = touch.map.id();
-                match store.save(&pool) {
-                    Ok(()) => {
-                        serial_write(&mut usb, "Touch map → ");
-                        serial_write(&mut usb, touch.map.label());
-                        serial_writeln(&mut usb, " (saved)");
-                    }
-                    Err(_) => {
-                        serial_write(&mut usb, "Touch map → ");
-                        serial_write(&mut usb, touch.map.label());
-                        serial_writeln(&mut usb, " (save failed)");
-                    }
-                }
-            } else if !cmd.is_empty() {
-                serial_writeln(
-                    &mut usb,
-                    "Unknown command. Type 'cmp', 'change', 'radio', 'stratum', or 'touch'.",
-                );
-            }
-            cmd_line.clear();
-        }
+        // Service USB companion before hashing (and again after — see below).
+        service_usb_commands(
+            &mut usb,
+            &mut cmd_line,
+            &mut store,
+            &mut pool,
+            &mut touch,
+            &mut display,
+            &mut touch_delay,
+            &boot_btn,
+            &stats,
+            last_hashrate_x100,
+            &mut radio_status,
+            &mut stratum_status,
+            running_mhz,
+            stratum_enabled,
+            &mut gui,
+        )
+        .await;
 
         let (last, found_share) = miner.mine_batch(BATCH_SIZE);
         window_hashes = window_hashes.saturating_add(BATCH_SIZE as u64);
 
-        if found_share {
-            info!(
-                "share! nonce={:08x} hash={:02x}{:02x}{:02x}{:02x}... pool_mode={}",
-                last.nonce,
-                last.hash[0],
-                last.hash[1],
-                last.hash[2],
-                last.hash[3],
-                pool_mode
-            );
-            if !pool.hash_focus {
-                let mut msg: String<96> = String::new();
-                let _ = core::fmt::Write::write_fmt(
-                    &mut msg,
-                    format_args!("SHARE nonce={:08x} address={}", last.nonce, pool.address),
-                );
-                serial_writeln(&mut usb, msg.as_str());
-            }
+        // Drain companion cmds that arrived during the scrypt batch.
+        service_usb_commands(
+            &mut usb,
+            &mut cmd_line,
+            &mut store,
+            &mut pool,
+            &mut touch,
+            &mut display,
+            &mut touch_delay,
+            &boot_btn,
+            &stats,
+            last_hashrate_x100,
+            &mut radio_status,
+            &mut stratum_status,
+            running_mhz,
+            stratum_enabled,
+            &mut gui,
+        )
+        .await;
 
+        if found_share {
             if pool_mode {
                 if let Some(meta) = active_job.as_ref() {
                     let share = stratum::make_share(pool.address.as_str(), meta, last.nonce);
@@ -626,6 +563,24 @@ async fn main(spawner: Spawner) -> ! {
             stats = miner.stats();
             stats.hashrate_x100 = hashrate_x100;
             radio_status = radio::snapshot().await;
+            service_usb_commands(
+                &mut usb,
+                &mut cmd_line,
+                &mut store,
+                &mut pool,
+                &mut touch,
+                &mut display,
+                &mut touch_delay,
+                &boot_btn,
+                &stats,
+                last_hashrate_x100,
+                &mut radio_status,
+                &mut stratum_status,
+                running_mhz,
+                stratum_enabled,
+                &mut gui,
+            )
+            .await;
             if stratum_enabled {
                 stratum_status = stratum::snapshot().await;
             }
@@ -740,27 +695,112 @@ async fn main(spawner: Spawner) -> ! {
                 .await;
             }
 
-            // Logger/UART are expensive — keep quiet while hash-focus mining.
-            if !pool.hash_focus {
-                info!(
-                    "H/s={}.{:02} nonce={:08x} shares={} wifi={} stratum={} acc={}/{}",
-                    hashrate_x100 / 100,
-                    hashrate_x100 % 100,
-                    stats.nonce,
-                    stats.shares,
-                    radio_status.wifi.label(),
-                    stratum_status.phase.label(),
-                    stratum_status.accepted,
-                    stratum_status.rejected,
-                );
-            }
-
+            // Do not log H/s on UART0 — companion owns this link (CMPSTATUS).
             window_start = Instant::now();
             window_hashes = 0;
         }
 
         // Yield to WiFi/stratum without sleeping a full millisecond each batch.
         Timer::after(Duration::from_millis(0)).await;
+    }
+}
+
+/// Drain UART RX and handle companion / serial commands. Called often so `cmp status`
+/// cannot sit behind a scrypt batch or radio snapshot.
+async fn service_usb_commands<D: embedded_hal::delay::DelayNs>(
+    usb: &mut Serial<'_>,
+    cmd_line: &mut String<384>,
+    store: &mut ConfigStore<'_>,
+    pool: &mut PoolConfig,
+    touch: &mut Touch,
+    display: &mut Display<'_, D>,
+    touch_delay: &mut Delay,
+    boot_btn: &Input<'_>,
+    stats: &esp32_s3_scrypt_miner::miner::MinerStats,
+    last_hashrate_x100: u32,
+    radio_status: &mut RadioStatus,
+    stratum_status: &mut StratumStatus,
+    running_mhz: u8,
+    stratum_enabled: bool,
+    gui: &mut GuiState,
+) {
+    while poll_command_line(usb, cmd_line) {
+        let cmd = cmd_line.as_str().trim();
+        if let Some(rest) = strip_cmp_prefix(cmd) {
+            handle_cmp_command(
+                usb,
+                store,
+                pool,
+                touch,
+                rest,
+                stats,
+                last_hashrate_x100,
+                radio_status,
+                stratum_status,
+                running_mhz,
+                stratum_enabled,
+            )
+            .await;
+        } else if is_change_command(cmd) {
+            if let Some(updated) = password_gated_change(
+                usb,
+                display,
+                touch,
+                touch_delay,
+                store,
+                pool,
+                &mut None,
+                boot_btn,
+            )
+            .await
+            {
+                *pool = updated;
+                if stratum_enabled {
+                    stratum::apply_pool_config(pool).await;
+                    serial_writeln(
+                        usb,
+                        "Stratum worker/endpoint reloaded. WiFi still needs reboot.",
+                    );
+                } else {
+                    serial_writeln(usb, "Note: WiFi keeps prior session until reboot.");
+                }
+                let _ = display.draw_config_summary(pool, true);
+                Timer::after(Duration::from_secs(2)).await;
+            }
+            gui.screen = GuiScreen::Mining;
+            *radio_status = radio::snapshot().await;
+            if stratum_enabled {
+                *stratum_status = stratum::snapshot().await;
+            }
+            display.invalidate();
+            let _ = display.draw_gui(gui, stats, pool, radio_status, stratum_status, true);
+        } else if is_radio_command(cmd) {
+            *radio_status = radio::snapshot().await;
+            if stratum_enabled {
+                *stratum_status = stratum::snapshot().await;
+            }
+            print_radio_serial(usb, pool, radio_status, stratum_status);
+            gui.screen = GuiScreen::Radio;
+            let _ = display.draw_gui(gui, stats, pool, radio_status, stratum_status, true);
+        } else if is_touch_command(cmd) {
+            touch.cycle_map();
+            pool.touch_map = touch.map.id();
+            match store.save(pool) {
+                Ok(()) => {
+                    serial_write(usb, "Touch map → ");
+                    serial_write(usb, touch.map.label());
+                    serial_writeln(usb, " (saved)");
+                }
+                Err(_) => {
+                    serial_write(usb, "Touch map → ");
+                    serial_write(usb, touch.map.label());
+                    serial_writeln(usb, " (save failed)");
+                }
+            }
+        } else if !cmd.is_empty() {
+            // Stay quiet for garbage / log echo — only answer real cmp verbs above.
+        }
+        cmd_line.clear();
     }
 }
 

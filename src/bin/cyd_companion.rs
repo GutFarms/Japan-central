@@ -2123,40 +2123,56 @@ fn drain_serial(port: &mut dyn SerialPort, buf: &mut String) {
 }
 
 fn cmp_reply_line(buf: &str) -> Option<String> {
+    // Prefer line-based match, but also recover if logger noise glued onto the same line.
     for raw in buf.lines() {
         let t = raw.trim();
-        if t.starts_with("CMPSTATUS ")
-            || t.starts_with("CMPCONFIG ")
-            || t.starts_with("CMPACK")
-            || t.starts_with("CMP ok")
-            || t.starts_with("CMPERR")
-        {
-            return Some(t.to_string());
+        for prefix in ["CMPSTATUS ", "CMPCONFIG ", "CMPACK", "CMP ok", "CMPERR"] {
+            if let Some(idx) = t.find(prefix) {
+                return Some(t[idx..].to_string());
+            }
+        }
+    }
+    // Incomplete last line (no trailing newline yet).
+    if let Some(idx) = buf.rfind("CMPSTATUS ") {
+        let rest = buf[idx..].lines().next().unwrap_or("").trim();
+        if rest.starts_with("CMPSTATUS ") && rest.contains('{') && rest.contains('}') {
+            return Some(rest.to_string());
+        }
+    }
+    if let Some(idx) = buf.rfind("CMPCONFIG ") {
+        let rest = buf[idx..].lines().next().unwrap_or("").trim();
+        if rest.starts_with("CMPCONFIG ") && rest.contains('{') && rest.contains('}') {
+            return Some(rest.to_string());
         }
     }
     None
 }
 
 fn usb_cmd(port: &mut dyn SerialPort, buf: &mut String, cmd: &str) -> Result<String, String> {
-    // One retry: a scrypt batch can block UART servicing for >1s on lite ESP32.
+    // Retries: scrypt batches + LCD can delay RX service; logger noise used to hide replies.
     let mut last_err = String::new();
-    for attempt in 0..2 {
+    for attempt in 0..3 {
         drain_serial(port, buf);
         buf.clear();
-        let line = format!("{cmd}\r\n");
+        // Flush any partial line sitting in the board's cmd buffer, then send.
+        let line = format!("\r\n{cmd}\r\n");
         port.write_all(line.as_bytes())
             .map_err(|e| format!("USB write: {e}"))?;
         port.flush().map_err(|e| format!("USB flush: {e}"))?;
 
-        let deadline = Instant::now() + Duration::from_millis(3500);
+        let deadline = Instant::now() + Duration::from_millis(5000);
         while Instant::now() < deadline {
             drain_serial(port, buf);
             if let Some(reply) = cmp_reply_line(buf) {
                 return Ok(reply);
             }
-            thread::sleep(Duration::from_millis(25));
+            thread::sleep(Duration::from_millis(20));
         }
-        let preview: String = buf.chars().take(48).collect();
+        let preview: String = buf
+            .chars()
+            .filter(|c| !c.is_control() || *c == ' ')
+            .take(64)
+            .collect();
         last_err = format!(
             "USB timeout waiting for reply to `{cmd}` (got {} bytes{})",
             buf.len(),
@@ -2167,7 +2183,7 @@ fn usb_cmd(port: &mut dyn SerialPort, buf: &mut String, cmd: &str) -> Result<Str
             }
         );
         let _ = attempt;
-        thread::sleep(Duration::from_millis(80));
+        thread::sleep(Duration::from_millis(120));
     }
     Err(last_err)
 }
