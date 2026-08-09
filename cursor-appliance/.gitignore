@@ -1,0 +1,10 @@
+.env
+config/appliance.env
+data/
+*.log
+gui/target/
+dist/
+*.zip
+sandbox-home/
+sandbox-tmp/
+sandbox-workspace/

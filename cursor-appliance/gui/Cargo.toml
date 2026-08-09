@@ -1,0 +1,22 @@
+[package]
+name = "cursor-appliance-gui"
+version = "0.4.1"
+edition = "2021"
+description = "Local egui control panel for the Cursor My Machines appliance"
+license = "MIT"
+publish = false
+
+[[bin]]
+name = "cursor-appliance-gui"
+path = "src/main.rs"
+
+[[bin]]
+name = "cursor-local-worker"
+path = "src/bin/local_worker.rs"
+
+[dependencies]
+chrono = "0.4.38"
+eframe = "0.29.1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+ureq = "2.12"
