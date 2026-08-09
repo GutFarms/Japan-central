@@ -38,7 +38,9 @@ use esp_hal::Blocking;
 use heapless::String;
 use log::info;
 
-use esp32_s3_scrypt_miner::config::{ConfigError, PoolConfig, SetupField, DEFAULT_STRATUM};
+use esp32_s3_scrypt_miner::config::{
+    normalize_cpu_mhz, ConfigError, PoolConfig, SetupField, DEFAULT_STRATUM,
+};
 use esp32_s3_scrypt_miner::touch::TouchMap;
 use esp32_s3_scrypt_miner::display::{Display, DisplayPeripherals};
 use esp32_s3_scrypt_miner::gui::GuiState;
@@ -66,12 +68,55 @@ const WIFI_DOWN_RESET_SECS: u64 = 600;
 
 type Serial<'d> = Uart<'d, Blocking>;
 
+/// Survives soft-reset so a saved CPU MHz can be applied on the next boot.
+#[esp_hal::ram(unstable(rtc_fast, persistent))]
+static mut BOOT_CLK_WORD: u32 = 0;
+const BOOT_CLK_MAGIC: u32 = 0xC10C_A500;
+const BOOT_CLK_RETRY: u32 = 0x0001_0000;
+
+fn stash_boot_cpu_mhz(mhz: u8) {
+    let m = u32::from(normalize_cpu_mhz(mhz));
+    unsafe {
+        BOOT_CLK_WORD = BOOT_CLK_MAGIC | m;
+    }
+}
+
+fn take_boot_cpu_clock() -> (CpuClock, u8, bool) {
+    let word = unsafe { BOOT_CLK_WORD };
+    let valid = (word & 0xFFFF_FF00) == BOOT_CLK_MAGIC;
+    let mhz = if valid {
+        normalize_cpu_mhz((word & 0xFF) as u8)
+    } else {
+        240
+    };
+    let retry = valid && (word & BOOT_CLK_RETRY) != 0;
+    let clock = match mhz {
+        80 => CpuClock::_80MHz,
+        160 => CpuClock::_160MHz,
+        _ => CpuClock::_240MHz,
+    };
+    (clock, mhz, retry)
+}
+
+fn mark_boot_clk_retry(mhz: u8) {
+    let m = u32::from(normalize_cpu_mhz(mhz));
+    unsafe {
+        BOOT_CLK_WORD = BOOT_CLK_MAGIC | BOOT_CLK_RETRY | m;
+    }
+}
+
+fn clear_boot_clk_retry(mhz: u8) {
+    stash_boot_cpu_mhz(mhz);
+}
+
 #[esp_rtos::main]
 async fn main(spawner: Spawner) -> ! {
     esp_println::logger::init_logger_from_env();
     info!("esp32-2432s028 scrypt miner starting");
 
-    let config = esp_hal::Config::default().with_cpu_clock(CpuClock::max());
+    let (cpu_clock, running_mhz, boot_retry) = take_boot_cpu_clock();
+    info!("cpu clock target {running_mhz} MHz (retry={boot_retry})");
+    let config = esp_hal::Config::default().with_cpu_clock(cpu_clock);
     let peripherals = esp_hal::init(config);
 
     // Classic ESP32: WiFi STA alone wants ~47–57 KiB. Use bootloader-reclaimed
@@ -161,6 +206,31 @@ async fn main(spawner: Spawner) -> ! {
     )
     .await;
     pool.touch_map = touch.map.id();
+    pool.cpu_mhz = normalize_cpu_mhz(pool.cpu_mhz);
+    // Apply saved CPU profile across soft-reset (companion overclock / underclock).
+    if pool.cpu_mhz != running_mhz {
+        if boot_retry {
+            info!(
+                "cpu mhz flash={} running={} — keeping running after retry",
+                pool.cpu_mhz, running_mhz
+            );
+            clear_boot_clk_retry(running_mhz);
+            pool.cpu_mhz = running_mhz;
+            let _ = store.save(&pool);
+        } else {
+            serial_write(&mut usb, "Applying CPU ");
+            let mut m: String<8> = String::new();
+            let _ = core::fmt::Write::write_fmt(&mut m, format_args!("{} MHz", pool.cpu_mhz));
+            serial_write(&mut usb, m.as_str());
+            serial_writeln(&mut usb, " — soft reset…");
+            mark_boot_clk_retry(pool.cpu_mhz);
+            Timer::after(Duration::from_millis(150)).await;
+            esp_hal::system::software_reset();
+        }
+    } else {
+        clear_boot_clk_retry(pool.cpu_mhz);
+    }
+    web::set_runtime_meta(running_mhz, pool.wifi_password_masked().as_str());
 
     let _ = display.draw_config_summary(&pool, from_flash);
     serial_writeln(&mut usb, "");
@@ -605,7 +675,21 @@ async fn main(spawner: Spawner) -> ! {
                 ws.difficulty = stratum_status.difficulty;
                 ws.uptime_secs = boot_at.elapsed().as_secs();
                 ws.screen_on = true;
+                ws.cpu_mhz = running_mhz;
                 web::publish(ws);
+            }
+
+            if let Some(upd) = web::take_pending_update() {
+                apply_companion_update(
+                    &mut usb,
+                    &mut store,
+                    &mut pool,
+                    &mut touch,
+                    upd,
+                    stratum_enabled,
+                    running_mhz,
+                )
+                .await;
             }
 
             info!(
@@ -1377,6 +1461,76 @@ async fn read_field_touch_or_serial<D: embedded_hal::delay::DelayNs>(
                 }
             }
         }
+    }
+}
+
+async fn apply_companion_update(
+    usb: &mut Serial<'_>,
+    store: &mut ConfigStore<'_>,
+    pool: &mut PoolConfig,
+    touch: &mut Touch,
+    upd: esp32_s3_scrypt_miner::web::CompanionUpdate,
+    stratum_enabled: bool,
+    running_mhz: u8,
+) {
+    if pool.authorize(upd.auth.as_str()).is_err() {
+        serial_writeln(usb, "companion: bad auth — ignored");
+        return;
+    }
+    serial_writeln(usb, "companion: applying settings…");
+    let mut wifi_changed = false;
+    let mut clock_changed = false;
+
+    if let Some(s) = upd.stratum.as_ref() {
+        let _ = pool.set(SetupField::Stratum, s.as_str());
+    }
+    if let Some(w) = upd.worker.as_ref() {
+        let _ = pool.set(SetupField::Address, w.as_str());
+    }
+    if let Some(p) = upd.password.as_ref() {
+        let _ = pool.set(SetupField::Password, p.as_str());
+    }
+    if let Some(s) = upd.wifi_ssid.as_ref() {
+        if s.as_str() != pool.wifi_ssid.as_str() {
+            wifi_changed = true;
+        }
+        let _ = pool.set(SetupField::WifiSsid, s.as_str());
+    }
+    if let Some(p) = upd.wifi_password.as_ref() {
+        if p.as_str() != pool.wifi_password.as_str() {
+            wifi_changed = true;
+        }
+        let _ = pool.set(SetupField::WifiPassword, p.as_str());
+    }
+    if let Some(m) = upd.touch_map {
+        pool.touch_map = m;
+        touch.map = TouchMap::from_id(m);
+    }
+    if let Some(mhz) = upd.cpu_mhz {
+        let mhz = normalize_cpu_mhz(mhz);
+        if mhz != pool.cpu_mhz || mhz != running_mhz {
+            pool.cpu_mhz = mhz;
+            clock_changed = true;
+            stash_boot_cpu_mhz(mhz);
+        }
+    }
+
+    match store.save(pool) {
+        Ok(()) => serial_writeln(usb, "companion: saved to flash"),
+        Err(_) => serial_writeln(usb, "companion: flash save failed"),
+    }
+    web::set_runtime_meta(running_mhz, pool.wifi_password_masked().as_str());
+
+    if stratum_enabled && (upd.reconnect || upd.stratum.is_some() || upd.worker.is_some() || upd.password.is_some())
+    {
+        stratum::apply_pool_config(pool).await;
+        serial_writeln(usb, "companion: stratum reloaded");
+    }
+
+    if clock_changed || wifi_changed || upd.reboot {
+        serial_writeln(usb, "companion: rebooting to apply…");
+        Timer::after(Duration::from_millis(200)).await;
+        esp_hal::system::software_reset();
     }
 }
 

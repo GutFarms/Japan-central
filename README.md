@@ -110,4 +110,13 @@ cargo run --no-default-features --features host --bin host-miner --release
 cargo run --no-default-features --features host-gui --bin host-gui --release
 ```
 
+## Windows companion app
+
+GPU LAN controller (settings + CPU overclock): see **[COMPANION.md](COMPANION.md)**.
+
+```bash
+./scripts/build-companion-windows.sh
+# → dist/cyd-companion-windows.zip  (cyd-companion.exe)
+```
+
 Demo difficulty is set by `DEMO_ZERO_NIBBLES` in `src/bin/main.rs` (default `4`).

@@ -1,15 +1,14 @@
-//! Tiny HTTP status server — open `http://<board-ip>/` on the LAN.
+//! Tiny HTTP status + companion control server — `http://<board-ip>/`.
 //!
-//! Runs only with WiFi + embassy-net. One connection at a time; read-only.
-//! Discovery endpoints (`/probe`, `/alive`, `/api/system/info`) mirror the
-//! NMMiner-style LAN monitor shape so the board is easy to find on the network.
+//! Discovery endpoints mirror NMMiner. Companion app uses `/api/config`,
+//! `/api/clock`, `/api/reboot`, and `/api/reconnect`.
 
 use heapless::String;
 
 use crate::radio::WifiPhase;
 use crate::stratum::StratumPhase;
 
-/// Live snapshot published by the miner loop for the web UI.
+/// Live snapshot published by the miner loop for the web UI / companion.
 #[derive(Clone, Debug)]
 pub struct WebStatus {
     pub hashrate_x100: u32,
@@ -27,6 +26,7 @@ pub struct WebStatus {
     pub difficulty: u32,
     pub uptime_secs: u64,
     pub screen_on: bool,
+    pub cpu_mhz: u8,
 }
 
 impl Default for WebStatus {
@@ -47,13 +47,30 @@ impl Default for WebStatus {
             difficulty: 1,
             uptime_secs: 0,
             screen_on: true,
+            cpu_mhz: 240,
         }
     }
+}
+
+/// Pending settings change from the Windows companion (applied on the miner loop).
+#[derive(Clone, Debug, Default)]
+pub struct CompanionUpdate {
+    pub auth: String<64>,
+    pub stratum: Option<String<96>>,
+    pub worker: Option<String<96>>,
+    pub password: Option<String<64>>,
+    pub wifi_ssid: Option<String<32>>,
+    pub wifi_password: Option<String<64>>,
+    pub cpu_mhz: Option<u8>,
+    pub touch_map: Option<u8>,
+    pub reconnect: bool,
+    pub reboot: bool,
 }
 
 #[cfg(feature = "esp")]
 mod server {
     use alloc::format;
+    use alloc::string::String as AllocString;
 
     use embassy_executor::Spawner;
     use embassy_net::tcp::TcpSocket;
@@ -63,7 +80,8 @@ mod server {
     use embassy_time::{Duration, Timer};
     use log::info;
 
-    use super::WebStatus;
+    use super::{CompanionUpdate, WebStatus};
+    use crate::config::normalize_cpu_mhz;
     use crate::display::{DISPLAY_HEIGHT, DISPLAY_WIDTH};
     use crate::radio::WifiPhase;
     use crate::stratum::StratumPhase;
@@ -88,7 +106,12 @@ mod server {
         difficulty: 1,
         uptime_secs: 0,
         screen_on: true,
+        cpu_mhz: 240,
     });
+
+    static PENDING: Mutex<CriticalSectionRawMutex, Option<CompanionUpdate>> = Mutex::new(None);
+    static WIFI_PASS_MASK: Mutex<CriticalSectionRawMutex, heapless::String<16>> =
+        Mutex::new(heapless::String::new());
 
     pub fn publish(s: WebStatus) {
         if let Ok(mut slot) = STATUS.try_lock() {
@@ -96,11 +119,25 @@ mod server {
         }
     }
 
+    pub fn set_runtime_meta(cpu_mhz: u8, wifi_pass_masked: &str) {
+        if let Ok(mut s) = STATUS.try_lock() {
+            s.cpu_mhz = cpu_mhz;
+        }
+        if let Ok(mut m) = WIFI_PASS_MASK.try_lock() {
+            m.clear();
+            let _ = m.push_str(wifi_pass_masked);
+        }
+    }
+
+    pub fn take_pending_update() -> Option<CompanionUpdate> {
+        PENDING.try_lock().ok().and_then(|mut g| g.take())
+    }
+
     pub fn start(spawner: &Spawner, stack: Stack<'static>) {
         match http_task(stack) {
             Ok(token) => {
                 spawner.spawn(token);
-                info!("web: listening on :80 (http://<dhcp-ip>/)");
+                info!("web: listening on :80 (companion APIs enabled)");
             }
             Err(_) => info!("web: task token failed"),
         }
@@ -109,10 +146,10 @@ mod server {
     #[embassy_executor::task]
     async fn http_task(stack: Stack<'static>) {
         use static_cell::StaticCell;
-        static RX_BUF: StaticCell<[u8; 512]> = StaticCell::new();
-        static TX_BUF: StaticCell<[u8; 512]> = StaticCell::new();
-        let rx_buf = RX_BUF.init([0; 512]);
-        let tx_buf = TX_BUF.init([0; 512]);
+        static RX_BUF: StaticCell<[u8; 1024]> = StaticCell::new();
+        static TX_BUF: StaticCell<[u8; 1024]> = StaticCell::new();
+        let rx_buf = RX_BUF.init([0; 1024]);
+        let tx_buf = TX_BUF.init([0; 1024]);
 
         loop {
             stack.wait_config_up().await;
@@ -126,7 +163,7 @@ mod server {
                 continue;
             }
 
-            let mut req = [0u8; 256];
+            let mut req = [0u8; 768];
             let mut got = 0usize;
             let deadline = embassy_time::Instant::now() + Duration::from_secs(3);
             while got < req.len() && embassy_time::Instant::now() < deadline {
@@ -135,28 +172,47 @@ mod server {
                     Ok(n) => {
                         got += n;
                         if req[..got].windows(4).any(|w| w == b"\r\n\r\n") {
-                            break;
+                            // For POST, try to read Content-Length body bytes too.
+                            if let Some(need) = content_length(&req[..got]) {
+                                let header_end = req[..got]
+                                    .windows(4)
+                                    .position(|w| w == b"\r\n\r\n")
+                                    .map(|i| i + 4)
+                                    .unwrap_or(got);
+                                let have_body = got.saturating_sub(header_end);
+                                if have_body >= need {
+                                    break;
+                                }
+                            } else {
+                                break;
+                            }
                         }
                     }
                     Err(_) => break,
                 }
             }
 
-            let path = parse_path(&req[..got]);
+            let (method, path, body) = parse_request(&req[..got]);
             let snap = STATUS.lock().await.clone();
 
-            let _ = match path {
-                "/probe" => write_probe(&mut socket, &snap).await,
-                "/alive" => write_alive(&mut socket, &snap).await,
-                "/api/system/info" => write_system_info(&mut socket, &snap).await,
-                "/api" | "/api/" | "/api/status" => write_json(&mut socket, &snap).await,
-                "/api/reconnect" => {
+            let _ = match (method, path) {
+                (_, "/probe") => write_probe(&mut socket, &snap).await,
+                (_, "/alive") => write_alive(&mut socket, &snap).await,
+                (_, "/api/system/info") => write_system_info(&mut socket, &snap).await,
+                (_, "/api") | (_, "/api/") | (_, "/api/status") => {
+                    write_json(&mut socket, &snap).await
+                }
+                ("GET", "/api/config") => write_config(&mut socket, &snap).await,
+                ("POST", "/api/config") | ("POST", "/api/clock") | ("POST", "/api/reboot") => {
+                    handle_companion_post(&mut socket, path, body).await
+                }
+                (_, "/api/reconnect") => {
                     crate::stratum::request_reconnect();
                     write_text(
                         &mut socket,
                         "200 OK",
-                        "text/plain",
-                        "stratum reconnect requested\n",
+                        "application/json",
+                        "{\"ok\":true,\"reconnect\":true}\n",
                     )
                     .await
                 }
@@ -169,30 +225,200 @@ mod server {
         }
     }
 
-    fn parse_path(req: &[u8]) -> &str {
-        // "GET /path HTTP/1.x"
+    async fn handle_companion_post(
+        socket: &mut TcpSocket<'_>,
+        path: &str,
+        body: &str,
+    ) -> Result<(), ()> {
+        let mut upd = parse_update_body(body);
+        if path.ends_with("reboot") {
+            upd.reboot = true;
+        }
+        if path.ends_with("clock") && upd.cpu_mhz.is_none() {
+            let _ = write_text(
+                socket,
+                "400 Bad Request",
+                "application/json",
+                "{\"ok\":false,\"error\":\"cpu_mhz required\"}\n",
+            )
+            .await;
+            return Ok(());
+        }
+        if upd.auth.is_empty() {
+            let _ = write_text(
+                socket,
+                "401 Unauthorized",
+                "application/json",
+                "{\"ok\":false,\"error\":\"auth (pool password) required\"}\n",
+            )
+            .await;
+            return Ok(());
+        }
+        if let Ok(mut slot) = PENDING.try_lock() {
+            *slot = Some(upd);
+            write_text(
+                socket,
+                "200 OK",
+                "application/json",
+                "{\"ok\":true,\"queued\":true}\n",
+            )
+            .await
+        } else {
+            write_text(
+                socket,
+                "503 Service Unavailable",
+                "application/json",
+                "{\"ok\":false,\"error\":\"busy\"}\n",
+            )
+            .await
+        }
+    }
+
+    fn content_length(req: &[u8]) -> Option<usize> {
         let Ok(s) = core::str::from_utf8(req) else {
-            return "/";
+            return None;
         };
-        let mut parts = s.split_whitespace();
-        let _method = parts.next();
-        let path = parts.next().unwrap_or("/");
-        path.split('?').next().unwrap_or("/")
+        for line in s.lines() {
+            let lower = line.to_ascii_lowercase();
+            if let Some(rest) = lower.strip_prefix("content-length:") {
+                return rest.trim().parse().ok();
+            }
+        }
+        None
+    }
+
+    fn parse_request(req: &[u8]) -> (&str, &str, &str) {
+        let Ok(s) = core::str::from_utf8(req) else {
+            return ("GET", "/", "");
+        };
+        let mut lines = s.split("\r\n");
+        let start = lines.next().unwrap_or("GET / HTTP/1.0");
+        let mut parts = start.split_whitespace();
+        let method = parts.next().unwrap_or("GET");
+        let path = parts.next().unwrap_or("/").split('?').next().unwrap_or("/");
+        let body = if let Some(idx) = s.find("\r\n\r\n") {
+            &s[idx + 4..]
+        } else {
+            ""
+        };
+        (method, path, body)
+    }
+
+    fn parse_update_body(body: &str) -> CompanionUpdate {
+        let mut upd = CompanionUpdate::default();
+        for pair in body.split('&') {
+            let mut kv = pair.splitn(2, '=');
+            let key = kv.next().unwrap_or("");
+            let raw = kv.next().unwrap_or("");
+            let val = url_decode(raw);
+            match key {
+                "auth" | "password_auth" | "current_password" => {
+                    upd.auth.clear();
+                    let _ = upd.auth.push_str(truncate(&val, 64));
+                }
+                "stratum" => {
+                    let mut s = heapless::String::new();
+                    let _ = s.push_str(truncate(&val, 96));
+                    upd.stratum = Some(s);
+                }
+                "worker" | "address" => {
+                    let mut s = heapless::String::new();
+                    let _ = s.push_str(truncate(&val, 96));
+                    upd.worker = Some(s);
+                }
+                "password" | "pool_password" => {
+                    let mut s = heapless::String::new();
+                    let _ = s.push_str(truncate(&val, 64));
+                    upd.password = Some(s);
+                }
+                "wifi_ssid" | "ssid" => {
+                    let mut s = heapless::String::new();
+                    let _ = s.push_str(truncate(&val, 32));
+                    upd.wifi_ssid = Some(s);
+                }
+                "wifi_password" | "wifi_pass" => {
+                    let mut s = heapless::String::new();
+                    let _ = s.push_str(truncate(&val, 64));
+                    upd.wifi_password = Some(s);
+                }
+                "cpu_mhz" | "clock" => {
+                    if let Ok(v) = val.parse::<u8>() {
+                        upd.cpu_mhz = Some(normalize_cpu_mhz(v));
+                        upd.reboot = true;
+                    }
+                }
+                "touch_map" => {
+                    if let Ok(v) = val.parse::<u8>() {
+                        upd.touch_map = Some(v);
+                    }
+                }
+                "reconnect" => {
+                    upd.reconnect = val == "1" || val.eq_ignore_ascii_case("true");
+                }
+                "reboot" => {
+                    upd.reboot = val == "1" || val.eq_ignore_ascii_case("true");
+                }
+                _ => {}
+            }
+        }
+        upd
+    }
+
+    fn truncate(s: &str, max: usize) -> &str {
+        if s.len() <= max {
+            s
+        } else {
+            &s[..max]
+        }
+    }
+
+    fn url_decode(input: &str) -> AllocString {
+        let mut out = AllocString::new();
+        let b = input.as_bytes();
+        let mut i = 0;
+        while i < b.len() {
+            match b[i] {
+                b'+' => {
+                    out.push(' ');
+                    i += 1;
+                }
+                b'%' if i + 2 < b.len() => {
+                    let h = |c: u8| -> Option<u8> {
+                        match c {
+                            b'0'..=b'9' => Some(c - b'0'),
+                            b'a'..=b'f' => Some(c - b'a' + 10),
+                            b'A'..=b'F' => Some(c - b'A' + 10),
+                            _ => None,
+                        }
+                    };
+                    if let (Some(hi), Some(lo)) = (h(b[i + 1]), h(b[i + 2])) {
+                        out.push((hi << 4 | lo) as char);
+                        i += 3;
+                    } else {
+                        out.push('%');
+                        i += 1;
+                    }
+                }
+                c => {
+                    out.push(c as char);
+                    i += 1;
+                }
+            }
+        }
+        out
     }
 
     async fn write_probe(socket: &mut TcpSocket<'_>, s: &WebStatus) -> Result<(), ()> {
-        // NMMiner discovery shape: `hr` + `ver` required by their monitor.
         let hr = s.hashrate_x100 / 100;
-        // Include sbd/ebd (session/all-time best diff) as 0 — NM Monitor skips
-        // hosts missing hr/ver; extra fields are ignored by most scanners.
         let body = format!(
             "{{\"model\":\"{MODEL}\",\"hostname\":\"{HOSTNAME}\",\"ver\":\"{FW_VERSION}\",\
 \"sw\":{sw},\"sh\":{sh},\"hr\":{hr},\"sbd\":0,\"ebd\":0,\"ut\":{ut},\
-\"algo\":\"scrypt\",\"board\":\"ESP32-2432S028\"}}",
+\"algo\":\"scrypt\",\"board\":\"ESP32-2432S028\",\"cpu_mhz\":{cpu}}}",
             sw = DISPLAY_WIDTH,
             sh = DISPLAY_HEIGHT,
             hr = hr,
             ut = s.uptime_secs,
+            cpu = s.cpu_mhz,
         );
         write_json_raw(socket, &body).await
     }
@@ -210,15 +436,36 @@ mod server {
         write_json_raw(socket, &body).await
     }
 
+    async fn write_config(socket: &mut TcpSocket<'_>, s: &WebStatus) -> Result<(), ()> {
+        let wifi_mask = WIFI_PASS_MASK
+            .lock()
+            .await
+            .clone();
+        let body = format!(
+            "{{\"worker\":{w},\"stratum\":{st},\"wifi_ssid\":{ss},\"wifi_password\":\"{wm}\",\
+\"cpu_mhz\":{cpu},\"touch_map\":null,\"algo\":\"scrypt\",\"board\":\"ESP32-2432S028\",\
+\"fw\":\"{FW_VERSION}\",\"screen_on\":{scr}}}",
+            w = json_str(s.address.as_str()),
+            st = json_str(s.stratum.as_str()),
+            ss = json_str(s.wifi_ssid.as_str()),
+            wm = wifi_mask.as_str(),
+            cpu = s.cpu_mhz,
+            scr = if s.screen_on { "true" } else { "false" },
+        );
+        write_json_raw(socket, &body).await
+    }
+
     async fn write_system_info(socket: &mut TcpSocket<'_>, s: &WebStatus) -> Result<(), ()> {
         let hr = format!("{}.{:02}", s.hashrate_x100 / 100, s.hashrate_x100 % 100);
         let body = format!(
             "{{\"identity\":{{\"hwModel\":\"{MODEL}\",\"hostName\":\"{HOSTNAME}\",\
-\"fwVersion\":\"{FW_VERSION}\",\"board\":\"ESP32-2432S028\",\"algo\":\"scrypt\"}},\
-\"miner\":{{\"hashRate\":{hr},\"sAccepted\":{acc},\"sRejected\":{rej},\"dropped\":{drop},\
-\"uptimeSeconds\":{ut},\"poolDiff\":{diff},\"shares\":{shares},\"nonce\":\"{nonce:08x}\",\
-\"screenOn\":{screen}}},\"stratum\":{{\"url\":{url},\"user\":{user},\"phase\":\"{phase}\",\
-\"connected\":{conn}}},\"wifi\":{{\"ssid\":{ssid},\"state\":\"{wifi}\",\"ip\":{ip}}}}}",
+\"fwVersion\":\"{FW_VERSION}\",\"board\":\"ESP32-2432S028\",\"algo\":\"scrypt\",\
+\"cpuMhz\":{cpu}}},\"miner\":{{\"hashRate\":{hr},\"sAccepted\":{acc},\"sRejected\":{rej},\
+\"dropped\":{drop},\"uptimeSeconds\":{ut},\"poolDiff\":{diff},\"shares\":{shares},\
+\"nonce\":\"{nonce:08x}\",\"screenOn\":{screen}}},\"stratum\":{{\"url\":{url},\"user\":{user},\
+\"phase\":\"{phase}\",\"connected\":{conn}}},\"wifi\":{{\"ssid\":{ssid},\"state\":\"{wifi}\",\
+\"ip\":{ip}}}}}",
+            cpu = s.cpu_mhz,
             hr = hr,
             acc = s.accepted,
             rej = s.rejected,
@@ -262,8 +509,6 @@ mod server {
         } else {
             s.pool_phase.label()
         };
-        let phase_color = if connected { "#7dffa0" } else { "#e8f0e4" };
-        let lcd = if s.screen_on { "on" } else { "off (mining)" };
         let body = format!(
             "<!doctype html><html><head><meta charset=utf-8>\
 <meta name=viewport content=\"width=device-width,initial-scale=1\">\
@@ -279,50 +524,29 @@ main{{padding:1.2rem 1.4rem;display:grid;gap:.9rem;max-width:520px}}\
 .k{{color:#8aa08c;font-size:.75rem;text-transform:uppercase;letter-spacing:.06em}}\
 .v{{font-size:1.35rem;margin-top:.2rem;font-variant-numeric:tabular-nums}}\
 .rate{{font-size:2.2rem;color:#ff8c1a}}\
-.row{{display:grid;grid-template-columns:1fr 1fr;gap:.8rem}}\
 a{{color:#7dffa0}}\
 </style></head><body>\
 <header><h1>SCRYPT</h1>\
-<div class=sub>ESP32-2432S028 · http://{ip}/ · LCD {lcd}</div></header>\
+<div class=sub>ESP32-2432S028 · {ip} · CPU {cpu} MHz</div></header>\
 <main>\
 <div class=card><div class=k>Active hashrate</div><div class=\"v rate\">{rate} H/s</div></div>\
-<div class=row>\
-<div class=card><div class=k>Pool</div><div class=v style=color:{phase_color}>{phase}</div></div>\
-<div class=card><div class=k>Shares</div><div class=v>{shares}</div></div>\
-</div>\
-<div class=row>\
-<div class=card><div class=k>Accepted</div><div class=v>{acc}</div></div>\
-<div class=card><div class=k>Rejected</div><div class=v>{rej}</div></div>\
-</div>\
+<div class=card><div class=k>Pool</div><div class=v>{phase}</div>\
+<div class=k style=margin-top:.6rem>acc {acc} / rej {rej} · {shares} shares</div></div>\
 <div class=card><div class=k>Worker</div><div class=v style=font-size:1rem>{addr}</div></div>\
-<div class=card><div class=k>Stratum</div><div class=v style=font-size:1rem>{stratum}</div></div>\
-<div class=card><div class=k>WiFi</div><div class=v>{wifi} · {ip}</div>\
-<div class=k style=margin-top:.6rem>Diff {diff} · dropped {drop} · up {ut}s · nonce {nonce:08x}</div></div>\
 <div class=card>\
-<a href=/api/status>JSON</a> · \
-<a href=/probe>probe</a> · \
-<a href=/api/system/info>system</a> · \
-<a href=/api/reconnect>Reconnect</a><br>\
-<span style=color:#8aa08c;font-size:.85rem>LCD stays on · WiFi always-on (no modem sleep)</span>\
-</div>\
-</main></body></html>",
+<a href=/api/status>JSON</a> · <a href=/api/config>config</a> · \
+<a href=/probe>probe</a><br>\
+<span style=color:#8aa08c;font-size:.85rem>Use the Windows CYD Companion for settings &amp; CPU clock</span>\
+</div></main></body></html>",
             ip = ip,
-            lcd = lcd,
+            cpu = s.cpu_mhz,
             rate = rate,
-            shares = s.shares,
             phase = phase,
-            phase_color = phase_color,
             acc = s.accepted,
             rej = s.rejected,
+            shares = s.shares,
             addr = html_escape(s.address.as_str()),
-            stratum = html_escape(s.stratum.as_str()),
-            wifi = s.wifi.label(),
-            diff = s.difficulty,
-            drop = s.dropped,
-            ut = s.uptime_secs,
-            nonce = s.nonce,
         );
-
         let header = format!(
             "HTTP/1.0 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
             body.len()
@@ -338,7 +562,7 @@ a{{color:#7dffa0}}\
         body: &str,
     ) -> Result<(), ()> {
         let header = format!(
-            "HTTP/1.0 {status}\r\nContent-Type: {ctype}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+            "HTTP/1.0 {status}\r\nContent-Type: {ctype}\r\nAccess-Control-Allow-Origin: *\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
             body.len()
         );
         write_all(socket, header.as_bytes()).await?;
@@ -346,12 +570,7 @@ a{{color:#7dffa0}}\
     }
 
     async fn write_json_raw(socket: &mut TcpSocket<'_>, body: &str) -> Result<(), ()> {
-        let header = format!(
-            "HTTP/1.0 200 OK\r\nContent-Type: application/json\r\nAccess-Control-Allow-Origin: *\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
-            body.len()
-        );
-        write_all(socket, header.as_bytes()).await?;
-        write_all(socket, body.as_bytes()).await
+        write_text(socket, "200 OK", "application/json", body).await
     }
 
     async fn write_json(socket: &mut TcpSocket<'_>, s: &WebStatus) -> Result<(), ()> {
@@ -368,7 +587,7 @@ a{{color:#7dffa0}}\
             "{{\"hashrate_hs\":{}.{:02},\"shares\":{},\"nonce\":\"{:08x}\",\
 \"address\":{},\"stratum\":{},\"wifi\":\"{}\",\"ip\":{},\
 \"pool\":\"{}\",\"connected\":{},\"accepted\":{},\"rejected\":{},\"dropped\":{},\
-\"difficulty\":{},\"uptime_secs\":{},\"screen_on\":{}}}",
+\"difficulty\":{},\"uptime_secs\":{},\"screen_on\":{},\"cpu_mhz\":{}}}",
             s.hashrate_x100 / 100,
             s.hashrate_x100 % 100,
             s.shares,
@@ -389,6 +608,7 @@ a{{color:#7dffa0}}\
             s.difficulty,
             s.uptime_secs,
             if s.screen_on { "true" } else { "false" },
+            s.cpu_mhz,
         );
         write_json_raw(socket, &body).await
     }
@@ -427,7 +647,8 @@ a{{color:#7dffa0}}\
                 '\n' => out.push_str("\\n"),
                 '\r' => out.push_str("\\r"),
                 c if c < ' ' => {
-                    let _ = core::fmt::Write::write_fmt(&mut out, format_args!("\\u{:04x}", c as u32));
+                    let _ =
+                        core::fmt::Write::write_fmt(&mut out, format_args!("\\u{:04x}", c as u32));
                 }
                 c => out.push(c),
             }
@@ -438,7 +659,15 @@ a{{color:#7dffa0}}\
 }
 
 #[cfg(feature = "esp")]
-pub use server::{publish, start};
+pub use server::{publish, set_runtime_meta, start, take_pending_update};
 
 #[cfg(not(feature = "esp"))]
 pub fn publish(_s: WebStatus) {}
+
+#[cfg(not(feature = "esp"))]
+pub fn set_runtime_meta(_cpu_mhz: u8, _wifi_pass_masked: &str) {}
+
+#[cfg(not(feature = "esp"))]
+pub fn take_pending_update() -> Option<CompanionUpdate> {
+    None
+}

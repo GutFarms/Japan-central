@@ -130,6 +130,8 @@ pub struct PoolConfig {
     pub ble_name: BleNameString,
     /// Persisted CYD touch axis-map id (see `TouchMap::id`).
     pub touch_map: u8,
+    /// CPU clock MHz applied on next boot: 80, 160, or 240 (default).
+    pub cpu_mhz: u8,
 }
 
 impl Default for PoolConfig {
@@ -142,8 +144,19 @@ impl Default for PoolConfig {
             wifi_password: WifiPasswordString::new(),
             // Empty = BLE off (saves RAM when WiFi/stratum mining).
             ble_name: BleNameString::new(),
-            touch_map: 0,
+            touch_map: 1, // ESPHome CYD default map id
+            cpu_mhz: 240,
         }
+    }
+}
+
+/// Clamp / normalize a CPU MHz preference to a supported ESP32 rate.
+pub fn normalize_cpu_mhz(mhz: u8) -> u8 {
+    match mhz {
+        0 | 240 => 240,
+        1..=100 => 80,
+        101..=180 => 160,
+        _ => 240,
     }
 }
 
@@ -385,8 +398,10 @@ impl PoolConfig {
         let mut blob = [0u8; CONFIG_BLOB_SIZE];
         blob[0..4].copy_from_slice(CONFIG_MAGIC);
         blob[4] = CONFIG_VERSION;
-        // Reserved header bytes 5..8 — touch map id (not covered by CRC body).
+        // Reserved header bytes 5..8 — not covered by CRC body.
         blob[5] = self.touch_map;
+        blob[6] = normalize_cpu_mhz(self.cpu_mhz);
+        // blob[7] reserved
 
         let mut off = 12usize;
         off = write_field(&mut blob, off, self.address.as_str(), ADDRESS_MAX)?;
@@ -462,6 +477,7 @@ impl PoolConfig {
 
         let mut cfg = Self::new();
         cfg.touch_map = blob[5];
+        cfg.cpu_mhz = normalize_cpu_mhz(blob[6]);
         let mut off = 12usize;
         let (addr, o) = read_field(blob, off, ADDRESS_MAX)?;
         off = o;
@@ -772,6 +788,10 @@ mod tests {
         assert_eq!(restored.wifi_ssid.as_str(), "HomeNet");
         assert_eq!(restored.wifi_password.as_str(), "secretwifi");
         assert_eq!(restored.ble_name.as_str(), "LTC-S3");
+        assert_eq!(restored.cpu_mhz, 240);
+        cfg.cpu_mhz = 160;
+        let restored2 = PoolConfig::from_blob(&cfg.to_blob().unwrap()).unwrap();
+        assert_eq!(restored2.cpu_mhz, 160);
 
         let mut bad = blob;
         bad[20] ^= 0xFF;

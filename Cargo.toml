@@ -25,6 +25,11 @@ name = "host-gui"
 path = "src/bin/host_gui.rs"
 required-features = ["host-gui"]
 
+[[bin]]
+name = "cyd-companion"
+path = "src/bin/cyd_companion.rs"
+required-features = ["companion"]
+
 [features]
 default = ["esp", "lite"]
 # Cross-compile firmware for ESP32-2432S028 (CYD / Cheap Yellow Display)
@@ -56,6 +61,17 @@ esp = [
 host = []
 # Desktop GUI (eframe/egui) on top of the host miner core
 host-gui = ["host", "dep:eframe", "dep:egui"]
+# Windows/Linux LAN companion — settings + overclock for the CYD board
+companion = [
+    "host",
+    "dep:eframe",
+    "dep:egui",
+    "dep:egui_extras",
+    "dep:ureq",
+    "dep:serde",
+    "dep:serde_json",
+    "dep:image",
+]
 # Lighter scrypt params (N=64) — required on classic ESP32 with WiFi
 lite = []
 
@@ -66,6 +82,11 @@ hmac = { version = "0.12", default-features = false }
 pbkdf2 = { version = "0.12", default-features = false, features = ["hmac"] }
 eframe = { version = "=0.27.2", optional = true, default-features = true }
 egui = { version = "=0.27.2", optional = true }
+egui_extras = { version = "=0.27.2", optional = true, features = ["image"] }
+ureq = { version = "2.12", optional = true, default-features = true, features = ["json"] }
+serde = { version = "1", optional = true, features = ["derive"] }
+serde_json = { version = "1", optional = true }
+image = { version = "0.25", optional = true, default-features = false, features = ["png"] }
 
 # ESP32 (CYD) firmware dependencies (enabled with `--features esp`)
 esp-hal = { version = "1.1.1", features = ["esp32", "log-04", "unstable"], optional = true }
