@@ -6,7 +6,8 @@ Wizard-style app to set up and control the ESP32-2432S028 scrypt miner.
 Downloads
 ---------
 - CYD-Companion-Setup.exe — installer (Start Menu + desktop shortcut)
-- CYD-Companion-Portable.zip — unzip and run cyd-companion.exe (no install)
+- CYD-Companion-Portable.zip — unzip and run (includes README)
+- CYD-Companion-App-Only.zip — just cyd-companion.exe
 
 First-time wizard
 -----------------
