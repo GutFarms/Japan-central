@@ -1629,16 +1629,27 @@ async fn apply_companion_update(
         let _ = pool.set(SetupField::Password, p.as_str());
     }
     if let Some(s) = upd.wifi_ssid.as_ref() {
-        if s.as_str() != pool.wifi_ssid.as_str() {
-            wifi_changed = true;
+        match pool.set(SetupField::WifiSsid, s.as_str()) {
+            Ok(()) => {
+                wifi_changed = true;
+                serial_writeln(usb, "companion: wifi SSID updated");
+            }
+            Err(_) => serial_writeln(usb, "companion: wifi SSID rejected"),
         }
-        let _ = pool.set(SetupField::WifiSsid, s.as_str());
     }
     if let Some(p) = upd.wifi_password.as_ref() {
-        if p.as_str() != pool.wifi_password.as_str() {
-            wifi_changed = true;
+        // Empty string is valid (open network). Always reboot so STA rejoins with new PSK.
+        match pool.set(SetupField::WifiPassword, p.as_str()) {
+            Ok(()) => {
+                wifi_changed = true;
+                if p.is_empty() {
+                    serial_writeln(usb, "companion: wifi password cleared (open)");
+                } else {
+                    serial_writeln(usb, "companion: wifi password updated");
+                }
+            }
+            Err(_) => serial_writeln(usb, "companion: wifi password rejected"),
         }
-        let _ = pool.set(SetupField::WifiPassword, p.as_str());
     }
     if let Some(m) = upd.touch_map {
         pool.touch_map = m;

@@ -177,6 +177,9 @@ struct CompanionApp {
     edit_password: String,
     edit_wifi_ssid: String,
     edit_wifi_password: String,
+    /// When true, Save WiFi sends `wifi_password` (blank = open network).
+    update_wifi_password: bool,
+    show_wifi_password: bool,
     target_mhz: u8,
     discover_base: String,
     discover_log: String,
@@ -209,6 +212,8 @@ impl CompanionApp {
             edit_password: "x".into(),
             edit_wifi_ssid: String::new(),
             edit_wifi_password: String::new(),
+            update_wifi_password: false,
+            show_wifi_password: false,
             target_mhz: 240,
             discover_base: "192.168.1".into(),
             discover_log: String::new(),
@@ -274,19 +279,28 @@ impl CompanionApp {
     }
 
     fn apply_wifi(&mut self) {
+        if self.edit_wifi_ssid.trim().is_empty() {
+            self.last_error = "WiFi SSID is required.".into();
+            return;
+        }
         let mut body = format!(
             "auth={}&wifi_ssid={}",
             urlenc(&self.auth_password),
-            urlenc(&self.edit_wifi_ssid),
+            urlenc(self.edit_wifi_ssid.trim()),
         );
-        if !self.edit_wifi_password.is_empty() {
+        // Explicit opt-in so a blank field never silently clears the PSK unless requested.
+        if self.update_wifi_password {
             body.push_str(&format!(
                 "&wifi_password={}",
                 urlenc(&self.edit_wifi_password)
             ));
         }
         self.post("/api/config", body);
-        self.last_ok = "WiFi sent — SSID/password changes reboot the board.".into();
+        self.last_ok = if self.update_wifi_password {
+            "WiFi SSID + password sent — board reboots to join the network.".into()
+        } else {
+            "WiFi SSID sent (password unchanged). Reboots only if SSID changed.".into()
+        };
     }
 
     fn apply_pool(&mut self) {
@@ -651,13 +665,12 @@ impl CompanionApp {
                 .size(22.0)
                 .color(Color32::from_rgb(255, 160, 70)),
         );
-        ui.label("Station credentials only. Changing SSID or password soft-resets the board.");
+        ui.label(
+            "Change SSID and/or WiFi password. Auth (top bar) is the pool password, not the WiFi PSK.",
+        );
         ui.add_space(10.0);
         Self::card(ui, "LINK STATUS", |ui| {
-            ui.label(format!(
-                "{} · IP {:?}",
-                self.status.wifi, self.status.ip
-            ));
+            ui.label(format!("{} · IP {:?}", self.status.wifi, self.status.ip));
         });
         ui.add_space(12.0);
         egui::Grid::new("wifi_grid")
@@ -667,15 +680,40 @@ impl CompanionApp {
                 ui.label("SSID");
                 ui.add(egui::TextEdit::singleline(&mut self.edit_wifi_ssid).desired_width(360.0));
                 ui.end_row();
-                ui.label("Password");
+                ui.label("WiFi password");
+                let before = self.edit_wifi_password.len();
                 ui.add(
                     egui::TextEdit::singleline(&mut self.edit_wifi_password)
                         .desired_width(360.0)
-                        .password(true)
-                        .hint_text("leave blank to keep current"),
+                        .password(!self.show_wifi_password)
+                        .hint_text("new WiFi PSK"),
                 );
+                if self.edit_wifi_password.len() != before {
+                    // Typing a password opts in to updating it on Save.
+                    self.update_wifi_password = true;
+                }
                 ui.end_row();
             });
+        ui.add_space(8.0);
+        ui.horizontal(|ui| {
+            ui.checkbox(
+                &mut self.update_wifi_password,
+                "Update WiFi password on save",
+            );
+            ui.checkbox(&mut self.show_wifi_password, "Show password");
+        });
+        if self.update_wifi_password && self.edit_wifi_password.is_empty() {
+            ui.colored_label(
+                Color32::from_rgb(220, 160, 80),
+                "Password field is empty — save will set an open (no PSK) network.",
+            );
+        } else if !self.update_wifi_password {
+            ui.label(
+                RichText::new("Password will be left unchanged on the board.")
+                    .small()
+                    .color(Color32::from_rgb(140, 140, 130)),
+            );
+        }
         ui.add_space(14.0);
         ui.horizontal(|ui| {
             if ui
@@ -690,6 +728,8 @@ impl CompanionApp {
             }
             if ui.button("Reload from board").clicked() {
                 self.refresh_board();
+                self.edit_wifi_password.clear();
+                self.update_wifi_password = false;
             }
         });
     }

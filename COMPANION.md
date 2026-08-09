@@ -23,7 +23,7 @@ Release builds on Windows use the `windows` subsystem — **no console/terminal 
 | Tab | What it does |
 |-----|----------------|
 | Dashboard | Live hashrate, pool, WiFi, CPU MHz |
-| WiFi | SSID / WiFi password only → flash (reboot on change) |
+| WiFi | SSID + optional **Update WiFi password** → flash (reboot on change) |
 | Pool | Stratum / worker / pool password → flash |
 | Overclock | CPU 80 / 160 / 240 MHz (soft-reset apply) |
 | Discover | Probe LAN `/probe` for SCRYPT-CYD boards |
