@@ -18,6 +18,8 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.outlined.Delete
+import androidx.compose.material.icons.outlined.Print
+import androidx.compose.material3.Button
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.Icon
@@ -42,12 +44,14 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import com.gutfarms.manager.data.model.ExpenseCategory
 import com.gutfarms.manager.data.model.FarmTransaction
 import com.gutfarms.manager.data.model.IncomeCategory
 import com.gutfarms.manager.data.model.ProfitSummary
 import com.gutfarms.manager.data.model.TransactionType
+import com.gutfarms.manager.print.FarmReportPrinter
 import com.gutfarms.manager.ui.components.EmptyHint
 import com.gutfarms.manager.ui.components.FormSheet
 import com.gutfarms.manager.ui.components.MetricTile
@@ -76,6 +80,7 @@ fun ProfitsScreen(
     onSave: (FarmTransaction) -> Unit,
     onDelete: (FarmTransaction) -> Unit
 ) {
+    val context = LocalContext.current
     val brand by farmName.collectAsState()
     val profit by profitSummary.collectAsState()
     val list by transactions.collectAsState()
@@ -111,6 +116,22 @@ fun ProfitsScreen(
                 contentPadding = PaddingValues(16.dp),
                 verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
+                item {
+                    Button(
+                        onClick = {
+                            FarmReportPrinter.printProfitReport(
+                                context = context,
+                                farmName = brand,
+                                profit = profit,
+                                transactions = list
+                            )
+                        },
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Icon(Icons.Outlined.Print, contentDescription = null)
+                        Text("  Print profit report")
+                    }
+                }
                 item {
                     Column(
                         modifier = Modifier

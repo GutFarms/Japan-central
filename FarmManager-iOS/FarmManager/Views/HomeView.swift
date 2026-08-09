@@ -136,6 +136,32 @@ struct HomeView: View {
                             .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
                     }
                     .padding(.horizontal, 16)
+
+                    Button {
+                        let html = FarmPrint.fullReportHTML(
+                            farmName: farmName,
+                            animals: animals,
+                            feeds: feeds,
+                            breedings: breedings,
+                            arrivals: arrivals,
+                            transactions: transactions,
+                            income: income,
+                            expenses: expenses,
+                            projectedFeed: projectedFeed,
+                            net: income - expenses,
+                            margin: margin
+                        )
+                        FarmPrint.present(html: html, jobName: "\(farmName) farm report")
+                    } label: {
+                        Label("Print farm report", systemImage: "printer")
+                            .font(.headline)
+                            .frame(maxWidth: .infinity)
+                            .padding()
+                            .background(FarmTheme.softTeal)
+                            .foregroundStyle(.white)
+                            .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                    }
+                    .padding(.horizontal, 16)
                     .padding(.bottom, 24)
                 }
             }

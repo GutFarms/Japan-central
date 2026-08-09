@@ -4,6 +4,7 @@ Native SwiftUI companion to the Android `FarmManager` app.
 
 ## Features
 
+- **Print reports** — Print farm report / profit report via the system printer sheet
 - **Custom farm name** — tap the name on Home to rename
 - **Livestock** — animal groups with expanded types
 - **New animal arrivals** — acquire/birth date, registration status, optional name

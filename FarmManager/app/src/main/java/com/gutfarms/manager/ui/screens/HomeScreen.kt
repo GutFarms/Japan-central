@@ -18,6 +18,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Button
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
@@ -32,13 +33,16 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import com.gutfarms.manager.data.model.Animal
 import com.gutfarms.manager.data.model.AnimalArrivalWithGroup
 import com.gutfarms.manager.data.model.BreedingScheduleWithAnimal
+import com.gutfarms.manager.data.model.FarmTransaction
 import com.gutfarms.manager.data.model.FeedingScheduleWithAnimal
 import com.gutfarms.manager.data.model.ProfitSummary
 import com.gutfarms.manager.data.model.RegistrationStatus
+import com.gutfarms.manager.print.FarmReportPrinter
 import com.gutfarms.manager.ui.components.MetricTile
 import com.gutfarms.manager.ui.components.ScreenHeader
 import com.gutfarms.manager.ui.components.SectionLabel
@@ -60,6 +64,7 @@ fun HomeScreen(
     schedules: StateFlow<List<FeedingScheduleWithAnimal>>,
     breedingSchedules: StateFlow<List<BreedingScheduleWithAnimal>>,
     arrivals: StateFlow<List<AnimalArrivalWithGroup>>,
+    transactions: StateFlow<List<FarmTransaction>>,
     profitSummary: StateFlow<ProfitSummary>,
     onUpdateFarmName: (String) -> Unit,
     onOpenAnimals: () -> Unit,
@@ -68,11 +73,13 @@ fun HomeScreen(
     onOpenBreeding: () -> Unit,
     onOpenProfits: () -> Unit
 ) {
+    val context = LocalContext.current
     val brand by farmName.collectAsState()
     val animalList by animals.collectAsState()
     val scheduleList by schedules.collectAsState()
     val breedingList by breedingSchedules.collectAsState()
     val arrivalList by arrivals.collectAsState()
+    val transactionList by transactions.collectAsState()
     val profit by profitSummary.collectAsState()
     var visible by remember { mutableStateOf(false) }
     var showRename by remember { mutableStateOf(false) }
@@ -284,6 +291,26 @@ fun HomeScreen(
                     QuickAction("Feed", onOpenFeeding, Modifier.weight(1f))
                     QuickAction("Breed", onOpenBreeding, Modifier.weight(1f))
                     QuickAction("Profits", onOpenProfits, Modifier.weight(1f))
+                }
+
+                Button(
+                    onClick = {
+                        FarmReportPrinter.printFullReport(
+                            context = context,
+                            farmName = brand,
+                            animals = animalList,
+                            feeds = scheduleList,
+                            breedings = breedingList,
+                            arrivals = arrivalList,
+                            transactions = transactionList,
+                            profit = profit
+                        )
+                    },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(top = 4.dp)
+                ) {
+                    Text("Print farm report")
                 }
                 Spacer(Modifier.height(12.dp))
             }

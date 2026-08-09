@@ -40,6 +40,7 @@ fun FarmNavHost(
                 schedules = viewModel.schedules,
                 breedingSchedules = viewModel.breedingSchedules,
                 arrivals = viewModel.arrivals,
+                transactions = viewModel.transactions,
                 profitSummary = viewModel.profitSummary,
                 onUpdateFarmName = viewModel::updateFarmName,
                 onOpenAnimals = { navController.navigate(Routes.ANIMALS) },

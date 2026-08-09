@@ -37,6 +37,28 @@ struct ProfitsView: View {
                         subtitle: "Income, expenses, and projected feed costs."
                     )
 
+                    Button {
+                        let html = FarmPrint.profitReportHTML(
+                            farmName: farmName,
+                            income: income,
+                            expenses: expenses,
+                            projectedFeed: projectedFeed,
+                            net: net,
+                            margin: margin,
+                            transactions: transactions
+                        )
+                        FarmPrint.present(html: html, jobName: "\(farmName) profit report")
+                    } label: {
+                        Label("Print profit report", systemImage: "printer")
+                            .font(.headline)
+                            .frame(maxWidth: .infinity)
+                            .padding()
+                            .background(FarmTheme.softTeal)
+                            .foregroundStyle(.white)
+                            .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                    }
+                    .padding(.horizontal, 16)
+
                     VStack(alignment: .leading, spacing: 8) {
                         Text("Net profit").font(.headline)
                         Text(net.asCurrency)
