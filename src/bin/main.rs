@@ -165,13 +165,16 @@ async fn main(spawner: Spawner) -> ! {
     let _ = display.draw_config_summary(&pool, from_flash);
     serial_writeln(&mut usb, "");
     if from_flash {
-        serial_writeln(&mut usb, "Loaded saved credentials from flash.");
+        serial_writeln(&mut usb, "Credentials in flash (will auto-load on reboot).");
         serial_writeln(
             &mut usb,
             "GUI: tap tabs/keyboard · BOOT short=tabs, long=menu · serial: change",
         );
     } else {
-        serial_writeln(&mut usb, "Credentials saved to flash for next boot.");
+        serial_writeln(
+            &mut usb,
+            "WARNING: credentials NOT in flash — will re-prompt next boot.",
+        );
     }
     print_config_serial(&mut usb, &pool);
 
@@ -758,10 +761,16 @@ async fn resolve_pool_config<D: embedded_hal::delay::DelayNs>(
                 collect_pool_config(usb, display, touch, touch_delay, wifi_token, boot).await;
             cfg.touch_map = touch.map.id();
             match store.save(&cfg) {
-                Ok(()) => serial_writeln(usb, "Credentials saved to flash."),
-                Err(_) => serial_writeln(usb, "WARNING: flash save failed."),
+                Ok(()) => {
+                    serial_writeln(usb, "Credentials saved to flash.");
+                    // Persisted successfully — treat as from_flash so reboot loads them.
+                    (cfg, true)
+                }
+                Err(_) => {
+                    serial_writeln(usb, "WARNING: flash save failed.");
+                    (cfg, false)
+                }
             }
-            (cfg, false)
         }
     }
 }
