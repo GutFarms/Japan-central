@@ -76,7 +76,9 @@ Install **CH340** drivers on Windows if no COM port appears. Serial monitor: **1
 
 - LCD **stays on** (no sleep / backlight-off timer).
 - WiFi STA stays **always on** (modem power-save disabled; auto-reconnect on drop).
-- Hold **BOOT** ~0.7s for menu / change credentials. On an empty WiFi scan, short **BOOT** cycles the touch axis map.
+- If DHCP/IP is missing for **>10 minutes**, the board soft-resets (NMMiner-style radio recovery).
+- Hold **BOOT** ~0.7s for menu / change credentials.
+- Touch: default ESPHome CYD map. PuTTY `touch` cycles the axis map (saved). On an empty WiFi scan, short **BOOT** also cycles the map.
 
 ## HTTP API
 

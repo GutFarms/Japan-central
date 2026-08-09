@@ -183,9 +183,12 @@ mod server {
     async fn write_probe(socket: &mut TcpSocket<'_>, s: &WebStatus) -> Result<(), ()> {
         // NMMiner discovery shape: `hr` + `ver` required by their monitor.
         let hr = s.hashrate_x100 / 100;
+        // Include sbd/ebd (session/all-time best diff) as 0 — NM Monitor skips
+        // hosts missing hr/ver; extra fields are ignored by most scanners.
         let body = format!(
             "{{\"model\":\"{MODEL}\",\"hostname\":\"{HOSTNAME}\",\"ver\":\"{FW_VERSION}\",\
-\"sw\":{sw},\"sh\":{sh},\"hr\":{hr},\"ut\":{ut},\"algo\":\"scrypt\",\"board\":\"ESP32-2432S028\"}}",
+\"sw\":{sw},\"sh\":{sh},\"hr\":{hr},\"sbd\":0,\"ebd\":0,\"ut\":{ut},\
+\"algo\":\"scrypt\",\"board\":\"ESP32-2432S028\"}}",
             sw = DISPLAY_WIDTH,
             sh = DISPLAY_HEIGHT,
             hr = hr,

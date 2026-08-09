@@ -3,8 +3,9 @@
 //! Dedicated **VSPI / SPI3** bus (separate from TFT HSPI):
 //! CLK=25, MOSI=32, MISO=39, CS=33, IRQ=36
 //!
-//! 1 MHz Mode 0 + ESPHome-style 24-bit ADC framing. Taps fire on **release**
-//! (more reliable on resistive glass). Axis map is cycleable via BOOT.
+//! Tuned toward ESPHome / common CYD profiles (same pins NMMiner must use on
+//! this board). Taps fire on **press** (NMMiner/LVGL-style). Axis map is
+//! cycleable via BOOT (empty scan) or serial `touch`.
 
 use embedded_hal::delay::DelayNs;
 use esp_hal::gpio::{Input, InputConfig, Level, Output, OutputConfig, Pull};
@@ -15,11 +16,11 @@ use esp_hal::Blocking;
 
 use crate::keyboard::TouchPoint;
 
-/// Common CYD landscape (display Rotation::Deg90) calibration.
-const RAW_X_MIN: i32 = 280;
-const RAW_X_MAX: i32 = 3860;
-const RAW_Y_MIN: i32 = 340;
-const RAW_Y_MAX: i32 = 3860;
+/// ESPHome / CYD landscape calibration (display Rotation::Deg90).
+const RAW_X_MIN: i32 = 367;
+const RAW_X_MAX: i32 = 3355;
+const RAW_Y_MIN: i32 = 296;
+const RAW_Y_MAX: i32 = 3642;
 
 const SCREEN_W: i32 = 320;
 const SCREEN_H: i32 = 240;
@@ -43,27 +44,27 @@ pub struct TouchMap {
 }
 
 impl TouchMap {
-    /// ESPHome yellowtft1 (invert X, no swap).
+    /// ESPHome yellowtft1 / common CYD landscape (invert X, no swap).
     pub const CYD_DEG90: Self = Self {
         swap_xy: false,
         invert_x: true,
         invert_y: false,
     };
 
-    /// Common on some 2432S028 panels (swap + invert both).
+    /// Some GUITION / Sunton 2432S028 panels (swap + invert both).
     pub const CYD_DEG90_SWAP: Self = Self {
         swap_xy: true,
         invert_x: true,
         invert_y: true,
     };
 
-    /// Default: swapped axes — matches many GUITION / Sunton boards.
-    pub const DEFAULT: Self = Self::CYD_DEG90_SWAP;
+    /// Default matches ESPHome CYD landscape (most 2432S028 ILI9341 boards).
+    pub const DEFAULT: Self = Self::CYD_DEG90;
 
     pub fn next(self) -> Self {
         match (self.swap_xy, self.invert_x, self.invert_y) {
-            (true, true, true) => Self::CYD_DEG90,
-            (false, true, false) => Self {
+            (false, true, false) => Self::CYD_DEG90_SWAP,
+            (true, true, true) => Self {
                 swap_xy: false,
                 invert_x: false,
                 invert_y: true,
@@ -73,23 +74,23 @@ impl TouchMap {
                 invert_x: false,
                 invert_y: false,
             },
-            _ => Self::CYD_DEG90_SWAP,
+            _ => Self::CYD_DEG90,
         }
     }
 
     pub fn id(self) -> u8 {
         match (self.swap_xy, self.invert_x, self.invert_y) {
-            (true, true, true) => 0,
             (false, true, false) => 1,
+            (true, true, true) => 0,
             (false, false, true) => 2,
             (true, false, false) => 3,
-            _ => 0,
+            _ => 1,
         }
     }
 
     pub fn from_id(id: u8) -> Self {
         match id {
-            1 => Self::CYD_DEG90,
+            0 => Self::CYD_DEG90_SWAP,
             2 => Self {
                 swap_xy: false,
                 invert_x: false,
@@ -100,14 +101,14 @@ impl TouchMap {
                 invert_x: false,
                 invert_y: false,
             },
-            _ => Self::CYD_DEG90_SWAP,
+            _ => Self::CYD_DEG90,
         }
     }
 
     pub fn label(self) -> &'static str {
         match (self.swap_xy, self.invert_x, self.invert_y) {
+            (false, true, false) => "map B ix (ESPHome)",
             (true, true, true) => "map A swap",
-            (false, true, false) => "map B ix",
             (false, false, true) => "map C iy",
             (true, false, false) => "map D sw",
             _ => "map ?",
@@ -137,11 +138,11 @@ pub struct TouchPins {
 
 impl Touch {
     pub fn new(p: TouchPins) -> Self {
-        // 1 MHz Mode 0 — ESPHome / LovyanGFX CYD profiles.
+        // 2 MHz Mode 0 — common CYD XPT2046 rate (ESPHome often 1–2.5 MHz).
         let spi = Spi::new(
             p.spi,
             SpiConfig::default()
-                .with_frequency(Rate::from_mhz(1))
+                .with_frequency(Rate::from_mhz(2))
                 .with_mode(SpiMode::_0),
         )
         .expect("touch SPI3")
@@ -173,18 +174,18 @@ impl Touch {
         self.map = self.map.next();
     }
 
-    /// Poll once. Returns a point on **release edge** (finger up), not press.
+    /// Poll once. Returns a point on **press edge** (finger down) — NMMiner/LVGL style.
     pub fn poll_tap<D: DelayNs>(&mut self, delay: &mut D) -> Option<TouchPoint> {
         let sample = self.read_sample(delay);
         match (self.down, sample) {
             (false, Some(p)) => {
                 self.down = true;
                 self.last = Some(p);
-                None
+                Some(p)
             }
             (true, None) => {
                 self.down = false;
-                self.last
+                None
             }
             (true, Some(p)) => {
                 self.last = Some(p);
@@ -308,14 +309,22 @@ mod tests {
 
     #[test]
     fn map_cycles_from_default() {
-        assert!(TouchMap::DEFAULT.swap_xy);
+        assert!(!TouchMap::DEFAULT.swap_xy);
+        assert!(TouchMap::DEFAULT.invert_x);
+        assert_eq!(TouchMap::DEFAULT.label(), "map B ix (ESPHome)");
         let m = TouchMap::DEFAULT.next();
-        assert!(!m.swap_xy);
-        assert_eq!(TouchMap::DEFAULT.label(), "map A swap");
+        assert!(m.swap_xy);
     }
 
     #[test]
     fn best_two_avg_picks_closest_pair() {
         assert_eq!(best_two_avg(100, 102, 500), 101);
+    }
+
+    #[test]
+    fn from_id_preserves_legacy_blob_ids() {
+        assert_eq!(TouchMap::from_id(0), TouchMap::CYD_DEG90_SWAP);
+        assert_eq!(TouchMap::from_id(1), TouchMap::CYD_DEG90);
+        assert_eq!(TouchMap::CYD_DEG90.id(), 1);
     }
 }

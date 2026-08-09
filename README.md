@@ -23,10 +23,12 @@ Educational / demo miner only — not profitable network mining.
 
 | | NMMiner | This firmware |
 |--|---------|----------------|
-| Algorithm | BTC SHA-256 | Scrypt (`lite`) |
-| Config | SoftAP + phone browser | UART/PuTTY + LCD scan (WiFi required) |
-| LCD sleep | Yes (BOOT/touch wake) | No — LCD stays on |
-| WiFi | SoftAP + STA | STA always-on (no power save) |
+| Algorithm | BTC SHA-256 (~1 MH/s) | Scrypt (`lite`) |
+| Stack | Arduino + LVGL (~2.7 MiB) | Embassy Rust (~0.85 MiB) |
+| Config | SoftAP WiFiManager | UART/PuTTY + LCD scan (WiFi required) |
+| LCD sleep | Screensaver prefs | No — LCD stays on |
+| WiFi | STA + SoftAP; reboot if down >10 min | STA always-on, no power save; soft-reset if DHCP missing >10 min |
+| Touch | Closed `cyd2.8` / `touch_read` HAL | Open XPT2046 SPI3; ESPHome map default; serial `touch` cycles map |
 | HTTP | `/probe`, `/alive`, `/api/system/info`, … | Same discovery trio + `/api/status` |
 
 SoftAP captive-portal setup is not used here: classic ESP32 RAM is tight while mining; UART + LCD setup stays the reliable path.
@@ -43,8 +45,9 @@ SoftAP captive-portal setup is not used here: classic ESP32 RAM is tight while m
 | **Touch** | Tabs, menu rows, on-screen keyboard |
 | Serial `change` | Password-gated credential edit |
 | Serial `radio` / `wifi` / `stratum` | Print live radio + pool status |
+| Serial `touch` | Cycle XPT2046 axis map (saved to flash) |
 
-Tabs: **MINE** · **CONF** · **RADIO** · **MENU**. LCD stays on. If taps feel inverted, hold **BOOT** on an empty WiFi scan list to cycle the touch map.
+Tabs: **MINE** · **CONF** · **RADIO** · **MENU**. LCD stays on. Default touch map is ESPHome CYD (invert X). If taps feel wrong: type `touch` in PuTTY, or short **BOOT** on an empty WiFi scan.
 
 When WiFi is configured, the firmware connects to `stratum` (`host:port` or `stratum+tcp://…`), runs `mining.subscribe` / `mining.authorize`, mines `mining.notify` jobs with the pool difficulty, and submits shares with `mining.submit`. WiFi is required — there is no skip path.
 

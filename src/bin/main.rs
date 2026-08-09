@@ -61,6 +61,8 @@ const MAX_PASSWORD_ATTEMPTS: u8 = 3;
 const BOOT_LONG_PRESS_MS: u64 = 700;
 /// GUI redraw interval (LCD stays on — no sleep).
 const GUI_REFRESH_MS: u64 = 2000;
+/// NMMiner: if WiFi stays down this long, soft-reset the chip to recover the radio.
+const WIFI_DOWN_RESET_SECS: u64 = 600;
 
 type Serial<'d> = Uart<'d, Blocking>;
 
@@ -133,12 +135,15 @@ async fn main(spawner: Spawner) -> ! {
     let mut touch_delay = Delay::new();
     serial_writeln(
         &mut usb,
-        "Touch: SPI3 XPT2046 1MHz CLK25/MOSI32/MISO39/CS33/IRQ36",
+        "Touch: SPI3 XPT2046 2MHz CLK25/MOSI32/MISO39/CS33/IRQ36",
     );
 
     if let Ok(saved) = store.load() {
         touch.map = TouchMap::from_id(saved.touch_map);
     }
+    serial_write(&mut usb, "Touch map: ");
+    serial_writeln(&mut usb, touch.map.label());
+    serial_writeln(&mut usb, "Serial 'touch' cycles axis map (saved to flash).");
 
     let _ = display.draw_splash();
     Timer::after(Duration::from_millis(200)).await;
@@ -228,6 +233,8 @@ async fn main(spawner: Spawner) -> ! {
     let mut banner_until: Option<Instant> = None;
     let boot_at = Instant::now();
     let mut last_gui = Instant::now();
+    // When we last had a DHCP IP (for NMMiner-style 10 min recovery reset).
+    let mut wifi_ok_at = Instant::now();
 
     let mut stats = miner.stats();
     let mut radio_status = radio::snapshot().await;
@@ -440,10 +447,25 @@ async fn main(spawner: Spawner) -> ! {
                 print_radio_serial(&mut usb, &pool, &radio_status, &stratum_status);
                 gui.screen = esp32_s3_scrypt_miner::gui::GuiScreen::Radio;
                 let _ = display.draw_gui(&gui, &stats, &pool, &radio_status, &stratum_status, true);
+            } else if is_touch_command(cmd) {
+                touch.cycle_map();
+                pool.touch_map = touch.map.id();
+                match store.save(&pool) {
+                    Ok(()) => {
+                        serial_write(&mut usb, "Touch map → ");
+                        serial_write(&mut usb, touch.map.label());
+                        serial_writeln(&mut usb, " (saved)");
+                    }
+                    Err(_) => {
+                        serial_write(&mut usb, "Touch map → ");
+                        serial_write(&mut usb, touch.map.label());
+                        serial_writeln(&mut usb, " (save failed)");
+                    }
+                }
             } else if !cmd.is_empty() {
                 serial_writeln(
                     &mut usb,
-                    "Unknown command. Type 'change', 'radio', or 'stratum'.",
+                    "Unknown command. Type 'change', 'radio', 'stratum', or 'touch'.",
                 );
             }
             cmd_line.clear();
@@ -487,6 +509,20 @@ async fn main(spawner: Spawner) -> ! {
             radio_status = radio::snapshot().await;
             if stratum_enabled {
                 stratum_status = stratum::snapshot().await;
+            }
+            // NMMiner-style recovery: soft-reset if we never get / lose DHCP for 10 min.
+            if radio_status.ip.is_some() {
+                wifi_ok_at = Instant::now();
+            } else if stratum_enabled
+                && wifi_ok_at.elapsed() >= Duration::from_secs(WIFI_DOWN_RESET_SECS)
+            {
+                serial_writeln(
+                    &mut usb,
+                    "WiFi/DHCP down >10min — soft reset (NMMiner-style recovery)",
+                );
+                info!("WiFi/DHCP down >{WIFI_DOWN_RESET_SECS}s — software_reset");
+                Timer::after(Duration::from_millis(200)).await;
+                esp_hal::system::software_reset();
             }
             if !saw_ip {
                 if let Some(ip) = radio_status.ip {
@@ -862,6 +898,12 @@ fn is_radio_command(cmd: &str) -> bool {
         || eq_ignore_ascii_case(cmd, "wifi")
         || eq_ignore_ascii_case(cmd, "stratum")
         || eq_ignore_ascii_case(cmd, "pool")
+}
+
+fn is_touch_command(cmd: &str) -> bool {
+    eq_ignore_ascii_case(cmd, "touch")
+        || eq_ignore_ascii_case(cmd, "touchmap")
+        || eq_ignore_ascii_case(cmd, "tmap")
 }
 
 fn eq_ignore_ascii_case(a: &str, b: &str) -> bool {
