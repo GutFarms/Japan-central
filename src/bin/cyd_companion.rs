@@ -1641,16 +1641,26 @@ fn net_worker(cmd_rx: Receiver<NetCmd>, msg_tx: Sender<NetMsg>) {
                 {
                     Ok(mut port) => {
                         let _ = port.clear(serialport::ClearBuffer::All);
-                        // Wake / identify
+                        // Wake / identify — board may be mid scrypt batch, so wait for ACK.
                         let _ = port.write_all(b"\r\ncmp ping\r\n");
                         let _ = port.flush();
-                        thread::sleep(Duration::from_millis(120));
-                        drain_serial(port.as_mut(), &mut usb_rx);
+                        let ping_deadline = Instant::now() + Duration::from_millis(3500);
+                        let mut saw_ping = false;
+                        while Instant::now() < ping_deadline {
+                            drain_serial(port.as_mut(), &mut usb_rx);
+                            if usb_rx.lines().any(|l| l.trim().starts_with("CMP ok")) {
+                                saw_ping = true;
+                                break;
+                            }
+                            thread::sleep(Duration::from_millis(40));
+                        }
                         usb = Some(port);
-                        let _ = msg_tx.send(NetMsg::Action(Ok(format!(
-                            "USB open {name} @ 115200"
-                        ))));
-                        // Auto fetch
+                        let _ = msg_tx.send(NetMsg::Action(Ok(if saw_ping {
+                            format!("USB open {name} @ 115200 (pong)")
+                        } else {
+                            format!("USB open {name} @ 115200 (no pong yet)")
+                        })));
+                        // Auto fetch (retries inside usb_cmd)
                         if let Some(p) = usb.as_mut() {
                             match usb_cmd(p.as_mut(), &mut usb_rx, "cmp config") {
                                 Ok(line) => {
@@ -1866,7 +1876,7 @@ fn format_compact_usd(v: f64) -> String {
 
 fn drain_serial(port: &mut dyn SerialPort, buf: &mut String) {
     let mut tmp = [0u8; 256];
-    for _ in 0..20 {
+    for _ in 0..40 {
         match port.read(&mut tmp) {
             Ok(0) | Err(_) => break,
             Ok(n) => {
@@ -1880,34 +1890,54 @@ fn drain_serial(port: &mut dyn SerialPort, buf: &mut String) {
     }
 }
 
-fn usb_cmd(port: &mut dyn SerialPort, buf: &mut String, cmd: &str) -> Result<String, String> {
-    drain_serial(port, buf);
-    buf.clear();
-    let line = format!("{cmd}\r\n");
-    port.write_all(line.as_bytes())
-        .map_err(|e| format!("USB write: {e}"))?;
-    port.flush().map_err(|e| format!("USB flush: {e}"))?;
-
-    let deadline = Instant::now() + Duration::from_millis(900);
-    while Instant::now() < deadline {
-        drain_serial(port, buf);
-        for raw in buf.lines() {
-            let t = raw.trim();
-            if t.starts_with("CMPSTATUS ")
-                || t.starts_with("CMPCONFIG ")
-                || t.starts_with("CMPACK")
-                || t.starts_with("CMP ok")
-                || t.starts_with("CMPERR")
-            {
-                return Ok(t.to_string());
-            }
+fn cmp_reply_line(buf: &str) -> Option<String> {
+    for raw in buf.lines() {
+        let t = raw.trim();
+        if t.starts_with("CMPSTATUS ")
+            || t.starts_with("CMPCONFIG ")
+            || t.starts_with("CMPACK")
+            || t.starts_with("CMP ok")
+            || t.starts_with("CMPERR")
+        {
+            return Some(t.to_string());
         }
-        thread::sleep(Duration::from_millis(20));
     }
-    Err(format!(
-        "USB timeout waiting for reply to `{cmd}` (got {} bytes)",
-        buf.len()
-    ))
+    None
+}
+
+fn usb_cmd(port: &mut dyn SerialPort, buf: &mut String, cmd: &str) -> Result<String, String> {
+    // One retry: a scrypt batch can block UART servicing for >1s on lite ESP32.
+    let mut last_err = String::new();
+    for attempt in 0..2 {
+        drain_serial(port, buf);
+        buf.clear();
+        let line = format!("{cmd}\r\n");
+        port.write_all(line.as_bytes())
+            .map_err(|e| format!("USB write: {e}"))?;
+        port.flush().map_err(|e| format!("USB flush: {e}"))?;
+
+        let deadline = Instant::now() + Duration::from_millis(3500);
+        while Instant::now() < deadline {
+            drain_serial(port, buf);
+            if let Some(reply) = cmp_reply_line(buf) {
+                return Ok(reply);
+            }
+            thread::sleep(Duration::from_millis(25));
+        }
+        let preview: String = buf.chars().take(48).collect();
+        last_err = format!(
+            "USB timeout waiting for reply to `{cmd}` (got {} bytes{})",
+            buf.len(),
+            if preview.is_empty() {
+                String::new()
+            } else {
+                format!(", preview={preview:?}")
+            }
+        );
+        let _ = attempt;
+        thread::sleep(Duration::from_millis(80));
+    }
+    Err(last_err)
 }
 
 fn parse_cmp_status(line: &str) -> Result<StatusJson, String> {

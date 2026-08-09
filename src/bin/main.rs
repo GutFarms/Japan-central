@@ -493,7 +493,8 @@ async fn main(spawner: Spawner) -> ! {
             }
         }
 
-        if poll_command_byte(&mut usb, &mut cmd_line) {
+        // Service all queued USB companion lines before hashing (keeps USB snappy).
+        while poll_command_line(&mut usb, &mut cmd_line) {
             let cmd = cmd_line.as_str().trim();
             if let Some(rest) = strip_cmp_prefix(cmd) {
                 handle_cmp_command(
@@ -1015,19 +1016,30 @@ async fn wait_for_change_or_touch(
     false
 }
 
-fn poll_command_byte<const N: usize>(usb: &mut Serial<'_>, line: &mut String<N>) -> bool {
+/// Drain the UART RX FIFO until one full line is assembled (or the FIFO is empty).
+///
+/// Critical for the Windows companion: `mine_batch` can take hundreds of ms–seconds,
+/// so reading only one byte per loop left `cmp status` sitting in the FIFO and the
+/// host timed out after a few leftover TX bytes.
+fn poll_command_line<const N: usize>(usb: &mut Serial<'_>, line: &mut String<N>) -> bool {
     let mut byte = [0u8; 1];
-    match usb.read(&mut byte) {
-        Ok(0) | Err(_) => false,
-        Ok(_) => match byte[0] {
-            b'\n' | b'\r' => !line.is_empty(),
-            c if (32..127).contains(&c) => {
-                let _ = line.push(c as char);
-                false
-            }
-            _ => false,
-        },
+    for _ in 0..512 {
+        match usb.read(&mut byte) {
+            Ok(0) | Err(_) => return false,
+            Ok(_) => match byte[0] {
+                b'\n' | b'\r' => {
+                    if !line.is_empty() {
+                        return true;
+                    }
+                }
+                c if (32..127).contains(&c) => {
+                    let _ = line.push(c as char);
+                }
+                _ => {}
+            },
+        }
     }
+    false
 }
 
 fn strip_cmp_prefix(cmd: &str) -> Option<&str> {
@@ -1068,8 +1080,10 @@ async fn handle_cmp_command(
         } else {
             stratum.phase.label()
         };
-        // Compact JSON for the Windows companion USB path.
-        let mut line: String<384> = String::new();
+        let address = json_escape(pool.address.as_str());
+        let stratum_s = json_escape(pool.stratum.as_str());
+        // Wide buffer: worker+stratum can each be 96 chars.
+        let mut line: String<768> = String::new();
         let _ = core::fmt::Write::write_fmt(
             &mut line,
             format_args!(
@@ -1090,8 +1104,8 @@ async fn handle_cmp_command(
                 },
                 radio.wifi.label(),
                 ip.as_str(),
-                pool.address.as_str(),
-                pool.stratum.as_str(),
+                address.as_str(),
+                stratum_s.as_str(),
                 stratum.difficulty,
                 running_mhz,
                 stats.nonce,
@@ -1101,15 +1115,18 @@ async fn handle_cmp_command(
         return;
     }
     if eq_ignore_ascii_case(verb, "config") {
-        let mut line: String<384> = String::new();
+        let worker = json_escape(pool.address.as_str());
+        let stratum_s = json_escape(pool.stratum.as_str());
+        let ssid = json_escape(pool.wifi_ssid.as_str());
+        let mut line: String<768> = String::new();
         let _ = core::fmt::Write::write_fmt(
             &mut line,
             format_args!(
                 "CMPCONFIG {{\"worker\":\"{}\",\"stratum\":\"{}\",\"wifi_ssid\":\"{}\",\
 \"wifi_password\":\"{}\",\"cpu_mhz\":{},\"fw\":\"{}\",\"configured\":{}}}",
-                pool.address.as_str(),
-                pool.stratum.as_str(),
-                pool.wifi_ssid.as_str(),
+                worker.as_str(),
+                stratum_s.as_str(),
+                ssid.as_str(),
                 pool.wifi_password_masked().as_str(),
                 pool.cpu_mhz,
                 env!("CARGO_PKG_VERSION"),
@@ -1750,10 +1767,38 @@ fn config_error_msg(e: ConfigError) -> &'static str {
 
 fn serial_write(usb: &mut Serial<'_>, text: &str) {
     let _ = usb.write_all(text.as_bytes());
+    let _ = usb.flush();
 }
 
 fn serial_writeln(usb: &mut Serial<'_>, text: &str) {
     let _ = usb.write_all(text.as_bytes());
     let _ = usb.write_all(b"\r\n");
+    let _ = usb.flush();
+}
+
+/// Escape a string for embedding in a compact CMP* JSON line.
+fn json_escape(input: &str) -> String<128> {
+    let mut out: String<128> = String::new();
+    for ch in input.chars() {
+        match ch {
+            '"' => {
+                if out.push_str("\\\"").is_err() {
+                    break;
+                }
+            }
+            '\\' => {
+                if out.push_str("\\\\").is_err() {
+                    break;
+                }
+            }
+            c if c.is_ascii_control() => {}
+            c => {
+                if out.push(c).is_err() {
+                    break;
+                }
+            }
+        }
+    }
+    out
 }
 
