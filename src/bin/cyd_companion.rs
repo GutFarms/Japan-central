@@ -826,7 +826,7 @@ impl App for CompanionApp {
                         .fill(C_PANEL)
                         .rounding(Rounding::same(18.0))
                         .inner_margin(18.0)
-                        .stroke(Stroke::new(1.0, C_BUBBLE)),
+                        .stroke(Stroke::new(1.0_f32, C_BUBBLE)),
                 )
                 .show(ctx, |ui| {
                     ui.label(

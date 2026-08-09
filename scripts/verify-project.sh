@@ -96,14 +96,16 @@ echo "==> copying downloadable artifacts"
 mkdir -p /opt/cursor/artifacts
 cp -f "$MERGED_BIN" /opt/cursor/artifacts/
 cp -f "$ZIP" /opt/cursor/artifacts/
+cp -f "$SETUP" /opt/cursor/artifacts/
 cp -f flash/SHA256SUMS.txt /opt/cursor/artifacts/esp32-2432s028-SHA256SUMS.txt
 
 echo
 echo "OK — verified clean build"
-ls -la "$MERGED_BIN" "$ZIP" \
+ls -la "$MERGED_BIN" "$ZIP" "$SETUP" \
   /opt/cursor/artifacts/esp32-2432s028-scrypt-miner-merged.bin \
-  /opt/cursor/artifacts/cyd-companion-windows.zip
+  /opt/cursor/artifacts/cyd-companion-windows.zip \
+  /opt/cursor/artifacts/CYD-Companion-Setup.exe
 echo
 echo "SHA256:"
-sha256sum "$MERGED_BIN" "$ZIP"
+sha256sum "$MERGED_BIN" "$ZIP" "$SETUP"
 cat flash/SHA256SUMS.txt
