@@ -31,12 +31,14 @@ else
   echo "warning: makensis not found — skipping CYD-Companion-Setup.exe" >&2
 fi
 
-mkdir -p /opt/cursor/artifacts
+mkdir -p /opt/cursor/artifacts flash/downloads
 cp -f dist/cyd-companion-windows.zip /opt/cursor/artifacts/ 2>/dev/null || true
 cp -f "$PORTABLE_ZIP" /opt/cursor/artifacts/ 2>/dev/null || true
 cp -f "$APP_ONLY_ZIP" /opt/cursor/artifacts/ 2>/dev/null || true
+cp -f "$PORTABLE_ZIP" "$APP_ONLY_ZIP" flash/downloads/ 2>/dev/null || true
 if [[ -f "$SETUP_EXE" ]]; then
   cp -f "$SETUP_EXE" /opt/cursor/artifacts/
+  cp -f "$SETUP_EXE" flash/downloads/ 2>/dev/null || true
 fi
 ls -la dist/cyd-companion-windows.zip "$PORTABLE_ZIP" "$APP_ONLY_ZIP" dist/cyd-companion-windows/ || true
 [[ -f "$SETUP_EXE" ]] && ls -la "$SETUP_EXE"
