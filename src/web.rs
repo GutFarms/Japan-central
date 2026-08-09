@@ -448,16 +448,18 @@ mod server {
             .lock()
             .await
             .clone();
+        let configured = !s.address.is_empty() && !s.stratum.is_empty() && !s.wifi_ssid.is_empty();
         let body = format!(
             "{{\"worker\":{w},\"stratum\":{st},\"wifi_ssid\":{ss},\"wifi_password\":\"{wm}\",\
 \"cpu_mhz\":{cpu},\"touch_map\":null,\"algo\":\"scrypt\",\"board\":\"ESP32-2432S028\",\
-\"fw\":\"{FW_VERSION}\",\"screen_on\":{scr}}}",
+\"fw\":\"{FW_VERSION}\",\"screen_on\":{scr},\"configured\":{cfg}}}",
             w = json_str(s.address.as_str()),
             st = json_str(s.stratum.as_str()),
             ss = json_str(s.wifi_ssid.as_str()),
             wm = wifi_mask.as_str(),
             cpu = s.cpu_mhz,
             scr = if s.screen_on { "true" } else { "false" },
+            cfg = if configured { "true" } else { "false" },
         );
         write_json_raw(socket, &body).await
     }

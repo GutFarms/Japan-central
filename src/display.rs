@@ -290,7 +290,23 @@ impl<'a, D: DelayNs> Display<'a, D> {
         let _ = write!(line, "ESP32-CYD  N={}  touch+serial", SCRYPT_N);
         self.draw_text(&line, Point::new(48, 130), LABEL)?;
         self.draw_text("warming up…", Point::new(118, 160), MUTED)?;
-        self.draw_text("tap the glass · type on keys", Point::new(70, 220), KEY_TXT_DIM)?;
+        self.draw_text("setup via CYD Companion (USB)", Point::new(52, 220), KEY_TXT_DIM)?;
+        Ok(())
+    }
+
+    /// Shown when flash has no credentials — configure from the Windows app.
+    pub fn draw_waiting_companion(&mut self) -> Result<(), Error> {
+        self.wake_clear()?;
+        self.last_screen = None;
+        self.fill_rect(0, 0, DISPLAY_WIDTH as u32, 8, ACCENT_HOT)?;
+        self.fill_rect(0, 8, DISPLAY_WIDTH as u32, 4, ACCENT)?;
+        self.header_bar("SETUP")?;
+        self.round_panel(16, 56, 288, 140, PANEL)?;
+        self.draw_text("Waiting for companion", Point::new(56, 88), BRAND)?;
+        self.draw_text("1. Plug USB (CH340)", Point::new(40, 120), VALUE_SM)?;
+        self.draw_text("2. Open CYD Companion", Point::new(40, 144), VALUE_SM)?;
+        self.draw_text("3. Setup → Save & reboot", Point::new(40, 168), VALUE_SM)?;
+        self.footer_hint("hold BOOT at power-on for on-device setup")?;
         Ok(())
     }
 

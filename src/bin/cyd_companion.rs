@@ -45,32 +45,38 @@ fn main() -> eframe::Result<()> {
     )
 }
 
+// Palette: deep black/blue shell + bubbly blue taps + lime accents.
+const C_BG: Color32 = Color32::from_rgb(8, 12, 16);
+const C_PANEL: Color32 = Color32::from_rgb(18, 26, 36);
+const C_BUBBLE: Color32 = Color32::from_rgb(56, 84, 118);
+const C_BUBBLE_HI: Color32 = Color32::from_rgb(110, 168, 220);
+const C_LIME: Color32 = Color32::from_rgb(180, 240, 90);
+const C_LIME_DIM: Color32 = Color32::from_rgb(120, 180, 70);
+const C_TEXT: Color32 = Color32::from_rgb(228, 238, 248);
+const C_MUTED: Color32 = Color32::from_rgb(130, 150, 170);
+
 fn apply_theme(ctx: &egui::Context) {
     let mut style = (*ctx.style()).clone();
-    // Dark shell; interactive taps/fields use light grey-blue (not white / orange).
-    let tap = Color32::from_rgb(170, 188, 210);
-    let tap_hover = Color32::from_rgb(140, 170, 205);
-    let tap_active = Color32::from_rgb(96, 140, 188);
     style.visuals.dark_mode = true;
-    style.visuals.panel_fill = Color32::from_rgb(12, 14, 18);
-    style.visuals.window_fill = Color32::from_rgb(16, 20, 26);
-    style.visuals.extreme_bg_color = Color32::from_rgb(40, 50, 64);
-    style.visuals.faint_bg_color = Color32::from_rgb(32, 40, 52);
-    style.visuals.override_text_color = Some(Color32::from_rgb(220, 230, 240));
-    style.visuals.widgets.noninteractive.bg_fill = Color32::from_rgb(24, 30, 38);
-    style.visuals.widgets.noninteractive.fg_stroke = Stroke::new(1.0_f32, tap);
-    style.visuals.widgets.inactive.bg_fill = Color32::from_rgb(56, 72, 92);
-    style.visuals.widgets.inactive.fg_stroke = Stroke::new(1.0_f32, tap);
-    style.visuals.widgets.hovered.bg_fill = tap_hover;
-    style.visuals.widgets.hovered.fg_stroke = Stroke::new(1.0_f32, Color32::from_rgb(20, 28, 36));
-    style.visuals.widgets.active.bg_fill = tap_active;
-    style.visuals.widgets.active.fg_stroke = Stroke::new(1.0_f32, Color32::from_rgb(240, 248, 255));
-    style.visuals.selection.bg_fill = Color32::from_rgb(72, 112, 156);
-    style.visuals.widgets.inactive.rounding = Rounding::same(6.0);
-    style.visuals.widgets.hovered.rounding = Rounding::same(6.0);
-    style.visuals.widgets.active.rounding = Rounding::same(6.0);
-    style.spacing.item_spacing = Vec2::new(12.0, 10.0);
-    style.spacing.button_padding = Vec2::new(14.0, 8.0);
+    style.visuals.panel_fill = C_BG;
+    style.visuals.window_fill = C_PANEL;
+    style.visuals.extreme_bg_color = Color32::from_rgb(28, 40, 56);
+    style.visuals.faint_bg_color = Color32::from_rgb(24, 34, 48);
+    style.visuals.override_text_color = Some(C_TEXT);
+    style.visuals.widgets.noninteractive.bg_fill = Color32::from_rgb(22, 32, 44);
+    style.visuals.widgets.noninteractive.fg_stroke = Stroke::new(1.0_f32, C_BUBBLE_HI);
+    style.visuals.widgets.inactive.bg_fill = C_BUBBLE;
+    style.visuals.widgets.inactive.fg_stroke = Stroke::new(1.0_f32, C_TEXT);
+    style.visuals.widgets.hovered.bg_fill = C_BUBBLE_HI;
+    style.visuals.widgets.hovered.fg_stroke = Stroke::new(1.0_f32, Color32::from_rgb(12, 20, 28));
+    style.visuals.widgets.active.bg_fill = C_LIME;
+    style.visuals.widgets.active.fg_stroke = Stroke::new(1.0_f32, Color32::from_rgb(12, 20, 16));
+    style.visuals.selection.bg_fill = Color32::from_rgb(70, 140, 90);
+    style.visuals.widgets.inactive.rounding = Rounding::same(18.0);
+    style.visuals.widgets.hovered.rounding = Rounding::same(18.0);
+    style.visuals.widgets.active.rounding = Rounding::same(18.0);
+    style.spacing.item_spacing = Vec2::new(14.0, 12.0);
+    style.spacing.button_padding = Vec2::new(16.0, 10.0);
     style.text_styles.insert(
         egui::TextStyle::Heading,
         FontId::new(28.0, FontFamily::Proportional),
@@ -78,14 +84,30 @@ fn apply_theme(ctx: &egui::Context) {
     ctx.set_style(style);
 }
 
+fn bubble_button(ui: &mut egui::Ui, label: &str, lime: bool) -> egui::Response {
+    let fill = if lime { C_LIME } else { C_BUBBLE_HI };
+    let text = if lime {
+        Color32::from_rgb(16, 28, 12)
+    } else {
+        Color32::from_rgb(12, 20, 28)
+    };
+    ui.add(
+        egui::Button::new(RichText::new(label).strong().color(text).size(14.0))
+            .fill(fill)
+            .rounding(Rounding::same(22.0))
+            .min_size(Vec2::new(120.0, 36.0)),
+    )
+}
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Tab {
+    Setup,
     Dashboard,
     Markets,
     Wifi,
     Pool,
     Overclock,
-    Discover,
+    More,
 }
 
 #[derive(Clone, Copy)]
@@ -249,6 +271,8 @@ struct ConfigJson {
     cpu_mhz: u8,
     #[serde(default)]
     fw: String,
+    #[serde(default)]
+    configured: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -339,6 +363,11 @@ struct CompanionApp {
     market_quotes: Vec<CoinQuote>,
     market_error: String,
     market_updated: String,
+    /// Board has no complete flash credentials — configure via Setup tab.
+    needs_setup: bool,
+    wifi_open: bool,
+    touch_map: u8,
+    auto_reconnect: bool,
 }
 
 impl CompanionApp {
@@ -362,7 +391,7 @@ impl CompanionApp {
         }
 
         let app = Self {
-            tab: Tab::Dashboard,
+            tab: Tab::Setup,
             transport: Transport::Usb,
             board_ip: "192.168.1.50".into(),
             com_port: String::new(),
@@ -370,14 +399,14 @@ impl CompanionApp {
             auth_password: "x".into(),
             status: StatusJson::default(),
             last_error: String::new(),
-            last_ok: "Pick a USB COM port (CH340) or switch to LAN.".into(),
+            last_ok: "Plug USB → Connect → fill Setup → Save & reboot.".into(),
             connected_ui: false,
             edit_worker: String::new(),
             edit_stratum: "stratum+tcp://ltc.viabtc.io:3333".into(),
             edit_password: "x".into(),
             edit_wifi_ssid: String::new(),
             edit_wifi_password: String::new(),
-            update_wifi_password: false,
+            update_wifi_password: true,
             show_wifi_password: false,
             target_mhz: 160, // Balanced
             auto_apply_balanced: true,
@@ -393,6 +422,10 @@ impl CompanionApp {
             market_quotes: Vec::new(),
             market_error: String::new(),
             market_updated: "—".into(),
+            needs_setup: true,
+            wifi_open: false,
+            touch_map: 0,
+            auto_reconnect: true,
         };
         let _ = cmd_tx.send(NetCmd::FetchMarkets(app.selected_coin_ids.to_vec()));
         app
@@ -507,6 +540,58 @@ impl CompanionApp {
         self.last_ok = format!("CPU {} MHz sent — board soft-resets.", self.target_mhz);
     }
 
+    /// One-shot first-boot / full save: WiFi + pool + clock in a single `cmp set`.
+    fn apply_full_setup(&mut self) {
+        if self.edit_wifi_ssid.trim().is_empty() {
+            self.last_error = "WiFi SSID is required.".into();
+            return;
+        }
+        if self.edit_worker.trim().is_empty() {
+            self.last_error = "Worker name is required.".into();
+            return;
+        }
+        if self.edit_stratum.trim().is_empty() {
+            self.last_error = "Stratum URL is required.".into();
+            return;
+        }
+        if self.edit_password.trim().is_empty() {
+            self.last_error = "Pool password is required (often x).".into();
+            return;
+        }
+        let wifi_pass = if self.wifi_open {
+            ""
+        } else {
+            self.edit_wifi_password.as_str()
+        };
+        let auth = if self.needs_setup {
+            // Board accepts any auth until configured.
+            ""
+        } else {
+            self.auth_password.as_str()
+        };
+        let body = format!(
+            "auth={}&wifi_ssid={}&wifi_password={}&worker={}&stratum={}&password={}&cpu_mhz={}&touch_map={}&reconnect={}",
+            urlenc(auth),
+            urlenc(self.edit_wifi_ssid.trim()),
+            urlenc(wifi_pass),
+            urlenc(self.edit_worker.trim()),
+            urlenc(self.edit_stratum.trim()),
+            urlenc(self.edit_password.trim()),
+            self.target_mhz,
+            self.touch_map,
+            if self.auto_reconnect { "true" } else { "false" },
+        );
+        if !self.needs_setup && !self.auth_password.is_empty() {
+            // Keep auth field for subsequent edits.
+        } else if !self.edit_password.is_empty() {
+            self.auth_password = self.edit_password.clone();
+        }
+        self.post("/api/config", body);
+        self.last_ok =
+            "Full setup sent — board saves to flash and reboots to join WiFi.".into();
+        self.last_error.clear();
+    }
+
     fn drain_net(&mut self) {
         while let Ok(msg) = self.msg_rx.try_recv() {
             match msg {
@@ -522,7 +607,8 @@ impl CompanionApp {
                     self.status = s;
                     self.connected_ui = true;
                     self.last_error.clear();
-                    if self.auto_apply_balanced {
+                    // Only auto-OC after the board already has credentials.
+                    if self.auto_apply_balanced && !self.needs_setup {
                         self.target_mhz = 160;
                         if self.status.cpu_mhz != 0 && self.status.cpu_mhz != 160 {
                             self.apply_clock();
@@ -538,7 +624,9 @@ impl CompanionApp {
                 }
                 NetMsg::Config(Ok(c)) => {
                     self.edit_worker = c.worker;
-                    self.edit_stratum = c.stratum;
+                    if !c.stratum.is_empty() {
+                        self.edit_stratum = c.stratum;
+                    }
                     self.edit_wifi_ssid = c.wifi_ssid;
                     if c.cpu_mhz != 0 && !self.auto_apply_balanced {
                         self.target_mhz = c.cpu_mhz;
@@ -546,8 +634,23 @@ impl CompanionApp {
                     if !c.fw.is_empty() {
                         self.fw_label = c.fw;
                     }
+                    self.needs_setup = !c.configured;
                     self.connected_ui = true;
-                    self.last_ok = "Config loaded from board.".into();
+                    if self.needs_setup {
+                        self.tab = Tab::Setup;
+                        self.update_wifi_password = true;
+                        self.last_ok =
+                            "Board needs setup — fill the Setup tab (no on-device typing).".into();
+                    } else {
+                        self.last_ok = "Config loaded from board.".into();
+                        if self.auto_apply_balanced && c.cpu_mhz != 0 && c.cpu_mhz != 160 {
+                            self.target_mhz = 160;
+                            self.apply_clock();
+                            self.last_ok =
+                                "Config loaded · auto overclock → 160 MHz…".into();
+                            self.auto_apply_balanced = false;
+                        }
+                    }
                 }
                 NetMsg::Config(Err(e)) => self.last_error = e,
                 NetMsg::Action(Ok(s)) => {
@@ -616,53 +719,60 @@ impl App for CompanionApp {
         egui::TopBottomPanel::top("hero")
             .frame(
                 Frame::none()
-                    .fill(Color32::from_rgb(14, 18, 24))
+                    .fill(C_PANEL)
                     .inner_margin(Margin::symmetric(22.0, 16.0))
-                    .stroke(Stroke::new(1.0_f32, Color32::from_rgb(70, 96, 128))),
+                    .rounding(Rounding::ZERO)
+                    .stroke(Stroke::new(1.0_f32, C_BUBBLE)),
             )
             .show(ctx, |ui| {
                 ui.horizontal(|ui| {
                     ui.vertical(|ui| {
                         ui.label(
                             RichText::new("CYD COMPANION")
-                                .color(Color32::from_rgb(170, 198, 230))
+                                .color(C_LIME)
                                 .size(30.0)
                                 .strong(),
                         );
                         ui.label(
-                            RichText::new("ESP32-2432S028 · USB serial or LAN · OpenGL")
-                                .color(Color32::from_rgb(130, 148, 168))
+                            RichText::new("Bubbly control · USB-first setup · no on-device typing")
+                                .color(C_MUTED)
                                 .size(13.0),
                         );
                     });
                     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                        let glow = ((self.pulse.sin() * 0.5 + 0.5) * 40.0) as u8;
-                        let chip = if self.connected_ui {
+                        let chip = if self.needs_setup && self.connected_ui {
+                            ("NEEDS SETUP".into(), C_LIME)
+                        } else if self.connected_ui {
                             (
                                 format!("LIVE · {} MHz", self.status.cpu_mhz.max(1)),
-                                Color32::from_rgb(80, 180 + glow / 3, 160),
+                                C_LIME_DIM,
                             )
                         } else {
-                            ("OFFLINE".into(), Color32::from_rgb(160, 90, 90))
+                            ("OFFLINE".into(), Color32::from_rgb(200, 100, 100))
                         };
-                        ui.label(RichText::new(chip.0).color(chip.1).strong().size(15.0));
-                        ui.add_space(12.0);
+                        Frame::none()
+                            .fill(Color32::from_rgb(28, 40, 32))
+                            .rounding(Rounding::same(16.0))
+                            .inner_margin(Margin::symmetric(12.0, 6.0))
+                            .show(ui, |ui| {
+                                ui.label(RichText::new(chip.0).color(chip.1).strong().size(14.0));
+                            });
+                        ui.add_space(10.0);
                         ui.label(
                             RichText::new(format!("fw {}", self.fw_label))
-                                .color(Color32::from_rgb(120, 136, 152))
+                                .color(C_MUTED)
                                 .monospace(),
                         );
                     });
                 });
-                ui.add_space(8.0);
-                ui.horizontal(|ui| {
-                    ui.label("Link");
+                ui.add_space(10.0);
+                ui.horizontal_wrapped(|ui| {
+                    ui.label(RichText::new("Link").color(C_MUTED));
                     ui.selectable_value(&mut self.transport, Transport::Usb, "USB");
                     ui.selectable_value(&mut self.transport, Transport::Lan, "LAN");
-                    ui.separator();
                     match self.transport {
                         Transport::Usb => {
-                            ui.label("Port");
+                            ui.label(RichText::new("Port").color(C_MUTED));
                             egui::ComboBox::from_id_source("com_ports")
                                 .selected_text(if self.com_port.is_empty() {
                                     "Select COM…"
@@ -675,12 +785,12 @@ impl App for CompanionApp {
                                         ui.selectable_value(&mut self.com_port, p.clone(), p);
                                     }
                                 });
-                            if ui.button("Refresh").clicked() {
+                            if bubble_button(ui, "Refresh", false).clicked() {
                                 let _ = self.cmd_tx.send(NetCmd::ListPorts);
                             }
                         }
                         Transport::Lan => {
-                            ui.label("Board IP");
+                            ui.label(RichText::new("Board IP").color(C_MUTED));
                             ui.add(
                                 egui::TextEdit::singleline(&mut self.board_ip)
                                     .desired_width(160.0)
@@ -688,37 +798,24 @@ impl App for CompanionApp {
                             );
                         }
                     }
-                    ui.label("Auth");
+                    ui.label(RichText::new("Auth").color(C_MUTED));
                     ui.add(
                         egui::TextEdit::singleline(&mut self.auth_password)
-                            .desired_width(100.0)
-                            .password(true),
+                            .desired_width(90.0)
+                            .password(true)
+                            .hint_text("pool pw"),
                     );
-                    if ui
-                        .add(
-                            egui::Button::new(
-                                RichText::new("Connect")
-                                    .strong()
-                                    .color(Color32::from_rgb(20, 28, 36)),
-                            )
-                            .fill(Color32::from_rgb(170, 188, 210))
-                            .min_size(Vec2::new(100.0, 32.0)),
-                        )
-                        .clicked()
-                    {
+                    if bubble_button(ui, "Connect", true).clicked() {
                         self.auto_apply_balanced = true;
                         self.target_mhz = 160;
                         self.connect();
                     }
-                    if ui.button("Disconnect").clicked() {
+                    if bubble_button(ui, "Disconnect", false).clicked() {
                         let _ = self.cmd_tx.send(NetCmd::CloseUsb);
                         self.connected_ui = false;
                         self.last_ok = "Disconnected.".into();
                     }
-                    if ui.button("Reconnect pool").clicked() {
-                        self.post("/api/reconnect", String::new());
-                    }
-                    if ui.button("Reboot").clicked() {
+                    if bubble_button(ui, "Reboot", false).clicked() {
                         let body = format!("auth={}&reboot=true", urlenc(&self.auth_password));
                         self.post("/api/reboot", body);
                     }
@@ -726,46 +823,51 @@ impl App for CompanionApp {
             });
 
         egui::SidePanel::left("tabs")
-            .exact_width(168.0)
+            .exact_width(176.0)
             .frame(
                 Frame::none()
-                    .fill(Color32::from_rgb(12, 16, 22))
+                    .fill(Color32::from_rgb(10, 14, 20))
                     .inner_margin(Margin::symmetric(12.0, 16.0)),
             )
             .show(ctx, |ui| {
                 for (tab, label) in [
+                    (Tab::Setup, "Setup"),
                     (Tab::Dashboard, "Dashboard"),
                     (Tab::Markets, "Markets"),
                     (Tab::Wifi, "WiFi"),
                     (Tab::Pool, "Pool"),
                     (Tab::Overclock, "Overclock"),
-                    (Tab::Discover, "Discover"),
+                    (Tab::More, "More"),
                 ] {
                     let selected = self.tab == tab;
                     let fill = if selected {
-                        Color32::from_rgb(88, 128, 172)
+                        if tab == Tab::Setup {
+                            C_LIME
+                        } else {
+                            C_BUBBLE_HI
+                        }
                     } else {
-                        Color32::from_rgb(36, 46, 60)
+                        C_BUBBLE
                     };
                     let text = if selected {
-                        Color32::from_rgb(236, 244, 252)
+                        Color32::from_rgb(12, 20, 16)
                     } else {
-                        Color32::from_rgb(170, 188, 210)
+                        C_TEXT
                     };
-                    let btn = egui::Button::new(RichText::new(label).color(text).size(15.0))
+                    let btn = egui::Button::new(RichText::new(label).color(text).size(15.0).strong())
                         .fill(fill)
-                        .min_size(Vec2::new(140.0, 40.0))
-                        .rounding(Rounding::same(8.0));
+                        .min_size(Vec2::new(148.0, 42.0))
+                        .rounding(Rounding::same(22.0));
                     if ui.add(btn).clicked() {
                         self.tab = tab;
                     }
-                    ui.add_space(6.0);
+                    ui.add_space(8.0);
                 }
                 ui.with_layout(Layout::bottom_up(Align::LEFT), |ui| {
                     ui.label(
-                        RichText::new("USB: CH340 @ 115200\nAuth = pool password\nOC default: 160 MHz")
+                        RichText::new("USB CH340 @ 115200\nSetup in the app\nOC default 160 MHz")
                             .small()
-                            .color(Color32::from_rgb(110, 128, 148)),
+                            .color(C_MUTED),
                     );
                 });
             });
@@ -773,25 +875,38 @@ impl App for CompanionApp {
         egui::CentralPanel::default()
             .frame(
                 Frame::none()
-                    .fill(Color32::from_rgb(10, 12, 16))
+                    .fill(C_BG)
                     .inner_margin(Margin::symmetric(20.0, 16.0)),
             )
             .show(ctx, |ui| {
                 if !self.last_error.is_empty() {
-                    ui.colored_label(Color32::from_rgb(230, 110, 100), &self.last_error);
-                    ui.add_space(6.0);
+                    Frame::none()
+                        .fill(Color32::from_rgb(60, 28, 28))
+                        .rounding(Rounding::same(16.0))
+                        .inner_margin(10.0)
+                        .show(ui, |ui| {
+                            ui.colored_label(Color32::from_rgb(255, 160, 140), &self.last_error);
+                        });
+                    ui.add_space(8.0);
                 }
                 if !self.last_ok.is_empty() {
-                    ui.colored_label(Color32::from_rgb(120, 200, 160), &self.last_ok);
+                    Frame::none()
+                        .fill(Color32::from_rgb(28, 48, 28))
+                        .rounding(Rounding::same(16.0))
+                        .inner_margin(10.0)
+                        .show(ui, |ui| {
+                            ui.colored_label(C_LIME, &self.last_ok);
+                        });
                     ui.add_space(8.0);
                 }
                 match self.tab {
+                    Tab::Setup => self.ui_setup(ui),
                     Tab::Dashboard => self.ui_dashboard(ui),
                     Tab::Markets => self.ui_markets(ui),
                     Tab::Wifi => self.ui_wifi(ui),
                     Tab::Pool => self.ui_pool(ui),
                     Tab::Overclock => self.ui_overclock(ui),
-                    Tab::Discover => self.ui_discover(ui),
+                    Tab::More => self.ui_more(ui),
                 }
             });
 
@@ -802,20 +917,143 @@ impl App for CompanionApp {
 impl CompanionApp {
     fn card(ui: &mut egui::Ui, title: &str, add: impl FnOnce(&mut egui::Ui)) {
         Frame::none()
-            .fill(Color32::from_rgb(20, 26, 34))
-            .rounding(Rounding::same(12.0))
-            .stroke(Stroke::new(1.0_f32, Color32::from_rgb(64, 88, 118)))
-            .inner_margin(Margin::same(14.0))
+            .fill(C_PANEL)
+            .rounding(Rounding::same(20.0))
+            .stroke(Stroke::new(1.0_f32, C_BUBBLE))
+            .inner_margin(Margin::same(16.0))
             .show(ui, |ui| {
                 ui.label(
                     RichText::new(title)
-                        .color(Color32::from_rgb(150, 172, 198))
+                        .color(C_LIME)
                         .size(12.0)
                         .strong(),
                 );
                 ui.add_space(6.0);
                 add(ui);
             });
+    }
+
+    fn ui_setup(&mut self, ui: &mut egui::Ui) {
+        ui.label(
+            RichText::new("Quick setup")
+                .size(24.0)
+                .color(C_LIME)
+                .strong(),
+        );
+        ui.label(
+            RichText::new(
+                "Configure the board entirely from this app over USB. No touch keyboard or PuTTY prompts needed.",
+            )
+            .color(C_MUTED),
+        );
+        ui.add_space(12.0);
+        if self.needs_setup {
+            Frame::none()
+                .fill(Color32::from_rgb(32, 48, 28))
+                .rounding(Rounding::same(18.0))
+                .inner_margin(12.0)
+                .show(ui, |ui| {
+                    ui.label(
+                        RichText::new("Board is waiting for companion setup")
+                            .color(C_LIME)
+                            .strong(),
+                    );
+                    ui.label(
+                        RichText::new("1 Connect USB  ·  2 Fill fields  ·  3 Save & reboot")
+                            .color(C_TEXT),
+                    );
+                });
+            ui.add_space(10.0);
+        }
+        Self::card(ui, "WIFI", |ui| {
+            egui::Grid::new("setup_wifi")
+                .num_columns(2)
+                .spacing([14.0, 10.0])
+                .show(ui, |ui| {
+                    ui.label("SSID");
+                    ui.add(
+                        egui::TextEdit::singleline(&mut self.edit_wifi_ssid).desired_width(340.0),
+                    );
+                    ui.end_row();
+                    ui.label("Password");
+                    ui.add(
+                        egui::TextEdit::singleline(&mut self.edit_wifi_password)
+                            .desired_width(340.0)
+                            .password(!self.show_wifi_password)
+                            .interactive(!self.wifi_open),
+                    );
+                    ui.end_row();
+                });
+            ui.horizontal(|ui| {
+                ui.checkbox(&mut self.wifi_open, "Open network (no PSK)");
+                ui.checkbox(&mut self.show_wifi_password, "Show");
+            });
+        });
+        ui.add_space(10.0);
+        Self::card(ui, "POOL", |ui| {
+            egui::Grid::new("setup_pool")
+                .num_columns(2)
+                .spacing([14.0, 10.0])
+                .show(ui, |ui| {
+                    ui.label("Stratum");
+                    ui.add(egui::TextEdit::singleline(&mut self.edit_stratum).desired_width(340.0));
+                    ui.end_row();
+                    ui.label("Worker");
+                    ui.add(egui::TextEdit::singleline(&mut self.edit_worker).desired_width(340.0));
+                    ui.end_row();
+                    ui.label("Pool password");
+                    ui.add(
+                        egui::TextEdit::singleline(&mut self.edit_password)
+                            .desired_width(340.0)
+                            .password(true)
+                            .hint_text("often x"),
+                    );
+                    ui.end_row();
+                });
+        });
+        ui.add_space(10.0);
+        Self::card(ui, "OPTIONS", |ui| {
+            ui.horizontal(|ui| {
+                ui.label("CPU");
+                for mhz in [80_u8, 160, 240] {
+                    let selected = self.target_mhz == mhz;
+                    let label = match mhz {
+                        80 => "80",
+                        160 => "160 ★",
+                        _ => "240",
+                    };
+                    if ui.selectable_label(selected, label).clicked() {
+                        self.target_mhz = mhz;
+                        self.auto_apply_balanced = false;
+                    }
+                }
+                ui.separator();
+                ui.checkbox(&mut self.auto_reconnect, "Reconnect stratum");
+            });
+            ui.add_space(6.0);
+            ui.horizontal(|ui| {
+                ui.label("Touch map");
+                egui::ComboBox::from_id_source("setup_touch")
+                    .selected_text(format!("map {}", self.touch_map))
+                    .show_ui(ui, |ui| {
+                        for m in 0..8u8 {
+                            ui.selectable_value(&mut self.touch_map, m, format!("map {m}"));
+                        }
+                    });
+            });
+        });
+        ui.add_space(14.0);
+        ui.horizontal(|ui| {
+            if bubble_button(ui, "Save & reboot", true).clicked() {
+                self.apply_full_setup();
+            }
+            if bubble_button(ui, "Reload board", false).clicked() {
+                self.refresh_board();
+            }
+            if bubble_button(ui, "USB ping", false).clicked() {
+                let _ = self.cmd_tx.send(NetCmd::UsbPing);
+            }
+        });
     }
 
     fn quote_for(&self, id: &str) -> Option<&CoinQuote> {
@@ -1282,45 +1520,96 @@ impl CompanionApp {
         }
     }
 
-    fn ui_discover(&mut self, ui: &mut egui::Ui) {
+    fn ui_more(&mut self, ui: &mut egui::Ui) {
         ui.label(
-            RichText::new("Discover")
-                .size(22.0)
-                .color(Color32::from_rgb(170, 198, 230)),
+            RichText::new("More options")
+                .size(24.0)
+                .color(C_LIME)
+                .strong(),
         );
-        ui.label("LAN /probe scan, or USB ping on the open COM port.");
-        ui.add_space(8.0);
-        ui.horizontal(|ui| {
-            if ui.button("USB ping").clicked() {
-                let _ = self.cmd_tx.send(NetCmd::UsbPing);
-            }
-            ui.label("Subnet");
-            ui.add(
-                egui::TextEdit::singleline(&mut self.discover_base)
-                    .desired_width(140.0)
-                    .hint_text("192.168.1"),
-            );
-            if ui.button("Scan LAN .1–.254").clicked() {
-                self.discover_log.clear();
-                let base = self.discover_base.trim().to_string();
-                for i in 1..=254u16 {
-                    let _ = self
-                        .cmd_tx
-                        .send(NetCmd::Probe(format!("http://{base}.{i}")));
+        ui.label(
+            RichText::new("Extras, discovery, and board actions.")
+                .color(C_MUTED),
+        );
+        ui.add_space(12.0);
+        Self::card(ui, "BOARD ACTIONS", |ui| {
+            ui.horizontal_wrapped(|ui| {
+                if bubble_button(ui, "Reconnect pool", true).clicked() {
+                    let body = if self.needs_setup {
+                        "reconnect=true".into()
+                    } else {
+                        format!("auth={}&reconnect=true", urlenc(&self.auth_password))
+                    };
+                    self.post("/api/reconnect", body);
                 }
-                self.last_ok = "LAN scan queued…".into();
-            }
-            if ui.button("Probe current IP").clicked() {
-                let _ = self.cmd_tx.send(NetCmd::Probe(self.base_url()));
-            }
-        });
-        ui.add_space(8.0);
-        egui::ScrollArea::vertical().max_height(420.0).show(ui, |ui| {
-            ui.add(
-                egui::TextEdit::multiline(&mut self.discover_log)
-                    .desired_width(f32::INFINITY)
-                    .font(FontId::new(12.5, FontFamily::Monospace)),
+                if bubble_button(ui, "Apply 160 MHz", false).clicked() {
+                    self.target_mhz = 160;
+                    self.apply_clock();
+                }
+                if bubble_button(ui, "Reboot board", false).clicked() {
+                    let body = format!("auth={}&reboot=true", urlenc(&self.auth_password));
+                    self.post("/api/reboot", body);
+                }
+                if bubble_button(ui, "Open Setup", false).clicked() {
+                    self.tab = Tab::Setup;
+                }
+            });
+            ui.add_space(8.0);
+            ui.label(
+                RichText::new(format!(
+                    "Configured: {} · Transport: {} · Auth set: {}",
+                    if self.needs_setup { "no (setup mode)" } else { "yes" },
+                    match self.transport {
+                        Transport::Usb => "USB",
+                        Transport::Lan => "LAN",
+                    },
+                    !self.auth_password.is_empty(),
+                ))
+                .color(C_MUTED)
+                .small(),
             );
+        });
+        ui.add_space(12.0);
+        Self::card(ui, "LAN DISCOVER", |ui| {
+            ui.horizontal(|ui| {
+                if bubble_button(ui, "USB ping", false).clicked() {
+                    let _ = self.cmd_tx.send(NetCmd::UsbPing);
+                }
+                ui.label("Subnet");
+                ui.add(
+                    egui::TextEdit::singleline(&mut self.discover_base)
+                        .desired_width(140.0)
+                        .hint_text("192.168.1"),
+                );
+                if bubble_button(ui, "Scan LAN", true).clicked() {
+                    self.discover_log.clear();
+                    let base = self.discover_base.trim().to_string();
+                    for i in 1..=254u16 {
+                        let _ = self
+                            .cmd_tx
+                            .send(NetCmd::Probe(format!("http://{base}.{i}")));
+                    }
+                    self.last_ok = "LAN scan queued…".into();
+                }
+                if bubble_button(ui, "Probe IP", false).clicked() {
+                    let _ = self.cmd_tx.send(NetCmd::Probe(self.base_url()));
+                }
+            });
+            ui.add_space(8.0);
+            egui::ScrollArea::vertical().max_height(280.0).show(ui, |ui| {
+                ui.add(
+                    egui::TextEdit::multiline(&mut self.discover_log)
+                        .desired_width(f32::INFINITY)
+                        .font(FontId::new(12.5, FontFamily::Monospace)),
+                );
+            });
+        });
+        ui.add_space(12.0);
+        Self::card(ui, "TIPS", |ui| {
+            ui.label("• First boot: Connect USB → Setup → Save & reboot");
+            ui.label("• Auth = pool password after the board is configured");
+            ui.label("• Hold BOOT at power-on only if you want on-device setup");
+            ui.label("• Flash profile: 4MB · DIO · 40MHz");
         });
     }
 }

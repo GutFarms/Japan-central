@@ -7,7 +7,7 @@ Bare-metal Rust firmware that mines **scrypt** proof-of-work on an **ESP32-2432S
 - Mines **real Litecoin scrypt** (`N=1024`, `r=1`, `p=1`) — pool-valid hashes
 - On this board, **`lite`** uses an 8 KiB checkpointed ROMix (TMTO) so WiFi + stratum still fit in RAM
 - Reuses ROMix buffers across hashes
-- **After boot**, prompts (touch keyboard or USB serial) for **WiFi → stratum → worker → password**
+- **After boot**, waits for **CYD Companion** over USB (Setup tab) — optional BOOT-held on-device setup
 - Starts **WiFi STA + DHCP** when an SSID is set (BLE unused — RAM kept for WiFi/stratum)
 - **Stratum TCP client** over WiFi: subscribe, authorize, receive jobs, submit shares
 - **LAN web UI** at `http://<board-ip>/` after DHCP (status dashboard + JSON)

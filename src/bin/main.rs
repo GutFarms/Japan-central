@@ -232,18 +232,35 @@ async fn main(spawner: Spawner) -> ! {
     }
     web::set_runtime_meta(running_mhz, pool.wifi_password_masked().as_str());
 
-    let _ = display.draw_config_summary(&pool, from_flash);
+    if pool.is_complete() {
+        let _ = display.draw_config_summary(&pool, from_flash);
+    } else {
+        let _ = display.draw_waiting_companion();
+    }
     serial_writeln(&mut usb, "");
-    if from_flash {
+    if from_flash && pool.is_complete() {
         serial_writeln(&mut usb, "Credentials in flash (will auto-load on reboot).");
         serial_writeln(
             &mut usb,
-            "GUI: tap tabs/keyboard · BOOT short=tabs, long=menu · serial: change",
+            "GUI: tap tabs · BOOT short=tabs, long=menu · serial: change",
+        );
+    } else if !pool.is_complete() {
+        serial_writeln(
+            &mut usb,
+            "No credentials — waiting for CYD Companion over USB.",
+        );
+        serial_writeln(
+            &mut usb,
+            "App: Connect → Setup → fill WiFi + Pool → Save & reboot.",
+        );
+        serial_writeln(
+            &mut usb,
+            "Fallback: hold BOOT at power-on for on-device touch/serial setup.",
         );
     } else {
         serial_writeln(
             &mut usb,
-            "WARNING: credentials NOT in flash — will re-prompt next boot.",
+            "WARNING: credentials NOT in flash — save from companion.",
         );
     }
     print_config_serial(&mut usb, &pool);
@@ -858,20 +875,36 @@ async fn resolve_pool_config<D: embedded_hal::delay::DelayNs>(
         }
         Err(_) => {
             serial_writeln(usb, "");
-            serial_writeln(usb, "No saved credentials — first-time setup (touch or serial).");
-            let mut cfg =
-                collect_pool_config(usb, display, touch, touch_delay, wifi_token, boot).await;
-            cfg.touch_map = touch.map.id();
-            match store.save(&cfg) {
-                Ok(()) => {
-                    serial_writeln(usb, "Credentials saved to flash.");
-                    // Persisted successfully — treat as from_flash so reboot loads them.
-                    (cfg, true)
+            // Default path: configure via Windows companion over USB (no on-device typing).
+            // Hold BOOT at power-on to use classic touch/serial setup instead.
+            if force_change {
+                serial_writeln(
+                    usb,
+                    "BOOT held — on-device first-time setup (touch or serial).",
+                );
+                let mut cfg =
+                    collect_pool_config(usb, display, touch, touch_delay, wifi_token, boot).await;
+                cfg.touch_map = touch.map.id();
+                match store.save(&cfg) {
+                    Ok(()) => {
+                        serial_writeln(usb, "Credentials saved to flash.");
+                        (cfg, true)
+                    }
+                    Err(_) => {
+                        serial_writeln(usb, "WARNING: flash save failed.");
+                        (cfg, false)
+                    }
                 }
-                Err(_) => {
-                    serial_writeln(usb, "WARNING: flash save failed.");
-                    (cfg, false)
-                }
+            } else {
+                serial_writeln(usb, "No saved credentials — waiting for CYD Companion (USB).");
+                serial_writeln(
+                    usb,
+                    "Hold BOOT at power-on for on-device setup instead.",
+                );
+                let mut cfg = PoolConfig::new();
+                cfg.touch_map = touch.map.id();
+                let _ = display.draw_waiting_companion();
+                (cfg, false)
             }
         }
     }
@@ -1073,13 +1106,14 @@ async fn handle_cmp_command(
             &mut line,
             format_args!(
                 "CMPCONFIG {{\"worker\":\"{}\",\"stratum\":\"{}\",\"wifi_ssid\":\"{}\",\
-\"wifi_password\":\"{}\",\"cpu_mhz\":{},\"fw\":\"{}\"}}",
+\"wifi_password\":\"{}\",\"cpu_mhz\":{},\"fw\":\"{}\",\"configured\":{}}}",
                 pool.address.as_str(),
                 pool.stratum.as_str(),
                 pool.wifi_ssid.as_str(),
                 pool.wifi_password_masked().as_str(),
                 pool.cpu_mhz,
                 env!("CARGO_PKG_VERSION"),
+                if pool.is_complete() { "true" } else { "false" },
             ),
         );
         serial_writeln(usb, line.as_str());
@@ -1097,7 +1131,7 @@ async fn handle_cmp_command(
             serial_writeln(usb, "CMPERR cpu_mhz required");
             return;
         }
-        if pool.authorize(upd.auth.as_str()).is_err() {
+        if pool.authorize_or_setup(upd.auth.as_str()).is_err() {
             serial_writeln(usb, "CMPERR bad auth");
             return;
         }
@@ -1611,10 +1645,11 @@ async fn apply_companion_update(
     stratum_enabled: bool,
     running_mhz: u8,
 ) {
-    if pool.authorize(upd.auth.as_str()).is_err() {
+    if pool.authorize_or_setup(upd.auth.as_str()).is_err() {
         serial_writeln(usb, "companion: bad auth — ignored");
         return;
     }
+    let was_incomplete = !pool.is_complete();
     serial_writeln(usb, "companion: applying settings…");
     let mut wifi_changed = false;
     let mut clock_changed = false;
@@ -1638,7 +1673,7 @@ async fn apply_companion_update(
         }
     }
     if let Some(p) = upd.wifi_password.as_ref() {
-        // Empty string is valid (open network). Always reboot so STA rejoins with new PSK.
+        // Empty string is valid (open network).
         match pool.set(SetupField::WifiPassword, p.as_str()) {
             Ok(()) => {
                 wifi_changed = true;
@@ -1664,10 +1699,23 @@ async fn apply_companion_update(
         }
     }
 
-    match store.save(pool) {
-        Ok(()) => serial_writeln(usb, "companion: saved to flash"),
-        Err(_) => serial_writeln(usb, "companion: flash save failed"),
-    }
+    let saved = match store.save(pool) {
+        Ok(()) => {
+            serial_writeln(usb, "companion: saved to flash");
+            true
+        }
+        Err(_) => {
+            if !pool.is_complete() {
+                serial_writeln(
+                    usb,
+                    "companion: not complete yet — send WiFi + pool together",
+                );
+            } else {
+                serial_writeln(usb, "companion: flash save failed");
+            }
+            false
+        }
+    };
     web::set_runtime_meta(running_mhz, pool.wifi_password_masked().as_str());
 
     if stratum_enabled && (upd.reconnect || upd.stratum.is_some() || upd.worker.is_some() || upd.password.is_some())
@@ -1676,7 +1724,13 @@ async fn apply_companion_update(
         serial_writeln(usb, "companion: stratum reloaded");
     }
 
-    if clock_changed || wifi_changed || upd.reboot {
+    // Reboot only after a successful flash save (first setup needs WiFi bring-up).
+    let need_reboot = saved
+        && (clock_changed
+            || wifi_changed
+            || upd.reboot
+            || (was_incomplete && pool.is_complete()));
+    if need_reboot {
         serial_writeln(usb, "companion: rebooting to apply…");
         Timer::after(Duration::from_millis(200)).await;
         esp_hal::system::software_reset();

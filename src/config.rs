@@ -237,6 +237,16 @@ impl PoolConfig {
         }
     }
 
+    /// First-boot / companion setup: allow writes without a pool password until
+    /// the board has a complete saved identity. After that, require auth.
+    pub fn authorize_or_setup(&self, attempt: &str) -> Result<(), ConfigError> {
+        if !self.is_complete() {
+            Ok(())
+        } else {
+            self.authorize(attempt)
+        }
+    }
+
     pub fn get(&self, field: SetupField) -> &str {
         match field {
             SetupField::Address => self.address.as_str(),
@@ -767,6 +777,25 @@ mod tests {
         assert!(!cfg.verify_password("secre"));
         assert!(cfg.authorize("secret").is_ok());
         assert_eq!(cfg.authorize("nope"), Err(ConfigError::BadPassword));
+    }
+
+    #[test]
+    fn authorize_or_setup_allows_incomplete_board() {
+        let mut cfg = PoolConfig::new();
+        assert!(!cfg.is_complete());
+        assert!(cfg.authorize_or_setup("anything").is_ok());
+        assert!(cfg.authorize_or_setup("").is_ok());
+
+        cfg.set(SetupField::Address, "worker").unwrap();
+        cfg.set(SetupField::Password, "x").unwrap();
+        cfg.set(SetupField::Stratum, "pool:3333").unwrap();
+        cfg.set(SetupField::WifiSsid, "Home").unwrap();
+        assert!(cfg.is_complete());
+        assert!(cfg.authorize_or_setup("x").is_ok());
+        assert_eq!(
+            cfg.authorize_or_setup("wrong"),
+            Err(ConfigError::BadPassword)
+        );
     }
 
     #[test]
