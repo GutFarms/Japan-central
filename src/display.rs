@@ -7,7 +7,7 @@ use embedded_graphics::draw_target::DrawTarget;
 use embedded_graphics::geometry::{Point, Size};
 use embedded_graphics::mono_font::ascii::{FONT_10X20, FONT_6X10, FONT_6X12, FONT_8X13_BOLD};
 use embedded_graphics::mono_font::MonoTextStyle;
-use embedded_graphics::pixelcolor::{Rgb565, RgbColor};
+use embedded_graphics::pixelcolor::Rgb565;
 use embedded_graphics::prelude::Primitive;
 use embedded_graphics::primitives::{Line, PrimitiveStyle, Rectangle, RoundedRectangle};
 use embedded_graphics::text::Text;
