@@ -112,7 +112,7 @@ cargo run --no-default-features --features host-gui --bin host-gui --release
 
 ## Windows companion app
 
-GPU LAN controller (settings + CPU overclock): see **[COMPANION.md](COMPANION.md)**.
+GPU controller over **USB serial** (default) or LAN — settings + CPU overclock, no console window on release launch. See **[COMPANION.md](COMPANION.md)**.
 
 ```bash
 ./scripts/build-companion-windows.sh

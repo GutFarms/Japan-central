@@ -1,12 +1,15 @@
-//! CYD Companion — GPU desktop app to configure & overclock the ESP32-2432S028 miner.
+//! CYD Companion — GPU desktop app (LAN + USB) for the ESP32-2432S028 miner.
 //!
 //! ```text
 //! cargo run --no-default-features --features companion --bin cyd-companion --release
-//! # Windows:
 //! cargo build --no-default-features --features companion --bin cyd-companion \
 //!   --release --target x86_64-pc-windows-gnu
 //! ```
 
+// Hide the Windows console when the GUI starts.
+#![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
+
+use std::io::Write;
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -17,6 +20,7 @@ use eframe::egui::{
 };
 use eframe::{App, NativeOptions};
 use serde::Deserialize;
+use serialport::SerialPort;
 
 fn main() -> eframe::Result<()> {
     let options = NativeOptions {
@@ -24,7 +28,6 @@ fn main() -> eframe::Result<()> {
             .with_inner_size([1100.0, 720.0])
             .with_min_inner_size([880.0, 600.0])
             .with_title("CYD Companion · Scrypt Miner Control"),
-        // eframe 0.27: OpenGL/glow (GPU) with MSAA.
         multisampling: 8,
         depth_buffer: 0,
         ..Default::default()
@@ -43,7 +46,6 @@ fn main() -> eframe::Result<()> {
 fn apply_theme(ctx: &egui::Context) {
     let mut style = (*ctx.style()).clone();
     style.visuals.dark_mode = true;
-    // Forge / copper industrial — not purple, not cream brochure.
     style.visuals.panel_fill = Color32::from_rgb(12, 14, 16);
     style.visuals.window_fill = Color32::from_rgb(18, 20, 22);
     style.visuals.extreme_bg_color = Color32::from_rgb(8, 9, 10);
@@ -65,15 +67,6 @@ fn apply_theme(ctx: &egui::Context) {
         egui::TextStyle::Heading,
         FontId::new(28.0, FontFamily::Proportional),
     );
-    style
-        .text_styles
-        .insert(egui::TextStyle::Body, FontId::new(15.0, FontFamily::Proportional));
-    style
-        .text_styles
-        .insert(egui::TextStyle::Button, FontId::new(14.5, FontFamily::Proportional));
-    style
-        .text_styles
-        .insert(egui::TextStyle::Monospace, FontId::new(13.5, FontFamily::Monospace));
     ctx.set_style(style);
 }
 
@@ -83,6 +76,12 @@ enum Tab {
     Settings,
     Overclock,
     Discover,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Transport {
+    Usb,
+    Lan,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -140,35 +139,44 @@ enum NetMsg {
     Config(Result<ConfigJson, String>),
     Action(Result<String, String>),
     Probe(Result<String, String>),
+    Ports(Vec<String>),
 }
 
 enum NetCmd {
-    PollStatus(String),
-    FetchConfig(String),
-    Post { base: String, path: String, body: String },
+    ListPorts,
+    OpenUsb(String),
+    CloseUsb,
+    PollStatus { transport: Transport, base: String },
+    FetchConfig { transport: Transport, base: String },
+    Post {
+        transport: Transport,
+        base: String,
+        path: String,
+        body: String,
+    },
     Probe(String),
+    UsbPing,
 }
 
 struct CompanionApp {
     tab: Tab,
+    transport: Transport,
     board_ip: String,
+    com_port: String,
+    ports: Vec<String>,
     auth_password: String,
     status: StatusJson,
     last_error: String,
     last_ok: String,
     connected_ui: bool,
-    // settings editors
     edit_worker: String,
     edit_stratum: String,
     edit_password: String,
     edit_wifi_ssid: String,
     edit_wifi_password: String,
-    // overclock
     target_mhz: u8,
-    // discover
     discover_base: String,
     discover_log: String,
-    // net
     cmd_tx: Sender<NetCmd>,
     msg_rx: Receiver<NetMsg>,
     last_poll: Instant,
@@ -181,13 +189,17 @@ impl CompanionApp {
         let (cmd_tx, cmd_rx) = mpsc::channel::<NetCmd>();
         let (msg_tx, msg_rx) = mpsc::channel::<NetMsg>();
         thread::spawn(move || net_worker(cmd_rx, msg_tx));
+        let _ = cmd_tx.send(NetCmd::ListPorts);
         Self {
             tab: Tab::Dashboard,
+            transport: Transport::Usb,
             board_ip: "192.168.1.50".into(),
+            com_port: String::new(),
+            ports: Vec::new(),
             auth_password: "x".into(),
             status: StatusJson::default(),
             last_error: String::new(),
-            last_ok: "Enter board IP and connect.".into(),
+            last_ok: "Pick a USB COM port (CH340) or switch to LAN.".into(),
             connected_ui: false,
             edit_worker: String::new(),
             edit_stratum: "stratum+tcp://ltc.viabtc.io:3333".into(),
@@ -210,18 +222,49 @@ impl CompanionApp {
         format!("http://{ip}")
     }
 
+    fn endpoint(&self) -> String {
+        match self.transport {
+            Transport::Usb => self.com_port.clone(),
+            Transport::Lan => self.base_url(),
+        }
+    }
+
     fn connect(&mut self) {
-        self.connected_ui = true;
-        self.last_ok = format!("Polling {} …", self.base_url());
         self.last_error.clear();
-        let _ = self.cmd_tx.send(NetCmd::FetchConfig(self.base_url()));
-        let _ = self.cmd_tx.send(NetCmd::PollStatus(self.base_url()));
-        let _ = self.cmd_tx.send(NetCmd::Probe(self.base_url()));
+        match self.transport {
+            Transport::Usb => {
+                if self.com_port.is_empty() {
+                    self.last_error = "Select a COM port first.".into();
+                    return;
+                }
+                let _ = self.cmd_tx.send(NetCmd::OpenUsb(self.com_port.clone()));
+                self.last_ok = format!("Opening USB {} @ 115200…", self.com_port);
+            }
+            Transport::Lan => {
+                self.connected_ui = true;
+                self.last_ok = format!("Polling {} …", self.base_url());
+                self.refresh_board();
+            }
+        }
+    }
+
+    fn refresh_board(&mut self) {
+        let base = self.endpoint();
+        let t = self.transport;
+        let _ = self.cmd_tx.send(NetCmd::FetchConfig {
+            transport: t,
+            base: base.clone(),
+        });
+        let _ = self.cmd_tx.send(NetCmd::PollStatus {
+            transport: t,
+            base,
+        });
     }
 
     fn post(&mut self, path: &str, body: String) {
         let _ = self.cmd_tx.send(NetCmd::Post {
-            base: self.base_url(),
+            transport: self.transport,
+            base: self.endpoint(),
             path: path.into(),
             body,
         });
@@ -238,7 +281,7 @@ impl CompanionApp {
             urlenc(&self.edit_wifi_password),
         );
         self.post("/api/config", body);
-        self.last_ok = "Settings queued — board may reboot if WiFi changed.".into();
+        self.last_ok = "Settings sent — WiFi changes reboot the board.".into();
     }
 
     fn apply_clock(&mut self) {
@@ -248,15 +291,20 @@ impl CompanionApp {
             self.target_mhz
         );
         self.post("/api/clock", body);
-        self.last_ok = format!(
-            "CPU {} MHz queued — board soft-resets to apply.",
-            self.target_mhz
-        );
+        self.last_ok = format!("CPU {} MHz sent — board soft-resets.", self.target_mhz);
     }
 
     fn drain_net(&mut self) {
         while let Ok(msg) = self.msg_rx.try_recv() {
             match msg {
+                NetMsg::Ports(p) => {
+                    self.ports = p;
+                    if self.com_port.is_empty() {
+                        if let Some(first) = self.ports.first() {
+                            self.com_port = first.clone();
+                        }
+                    }
+                }
                 NetMsg::Status(Ok(s)) => {
                     self.status = s;
                     self.connected_ui = true;
@@ -273,20 +321,20 @@ impl CompanionApp {
                     self.edit_worker = c.worker;
                     self.edit_stratum = c.stratum;
                     self.edit_wifi_ssid = c.wifi_ssid;
-                    // masked password hint only — keep local edit if empty mask
-                    if self.edit_wifi_password.is_empty() && c.wifi_password.contains('*') {
-                        // leave blank so user retypes to change
-                    }
                     if c.cpu_mhz != 0 {
                         self.target_mhz = c.cpu_mhz;
                     }
                     if !c.fw.is_empty() {
                         self.fw_label = c.fw;
                     }
+                    self.connected_ui = true;
                     self.last_ok = "Config loaded from board.".into();
                 }
                 NetMsg::Config(Err(e)) => self.last_error = e,
-                NetMsg::Action(Ok(s)) => self.last_ok = s,
+                NetMsg::Action(Ok(s)) => {
+                    self.last_ok = s;
+                    self.connected_ui = true;
+                }
                 NetMsg::Action(Err(e)) => self.last_error = e,
                 NetMsg::Probe(Ok(s)) => {
                     if self.discover_log.len() > 4000 {
@@ -309,11 +357,13 @@ impl App for CompanionApp {
         self.pulse = (self.pulse + ctx.input(|i| i.unstable_dt) * 1.4) % 6.2832;
 
         if self.connected_ui && self.last_poll.elapsed() >= Duration::from_millis(1200) {
-            let _ = self.cmd_tx.send(NetCmd::PollStatus(self.base_url()));
+            let _ = self.cmd_tx.send(NetCmd::PollStatus {
+                transport: self.transport,
+                base: self.endpoint(),
+            });
             self.last_poll = Instant::now();
         }
 
-        // Atmospheric top band
         egui::TopBottomPanel::top("hero")
             .frame(
                 Frame::none()
@@ -331,7 +381,7 @@ impl App for CompanionApp {
                                 .strong(),
                         );
                         ui.label(
-                            RichText::new("ESP32-2432S028 · scrypt control · wgpu")
+                            RichText::new("ESP32-2432S028 · USB serial or LAN · OpenGL")
                                 .color(Color32::from_rgb(140, 150, 140))
                                 .size(13.0),
                         );
@@ -357,23 +407,57 @@ impl App for CompanionApp {
                 });
                 ui.add_space(8.0);
                 ui.horizontal(|ui| {
-                    ui.label("Board IP");
-                    ui.add(
-                        egui::TextEdit::singleline(&mut self.board_ip)
-                            .desired_width(180.0)
-                            .hint_text("192.168.x.x"),
-                    );
-                    ui.label("Auth (pool password)");
+                    ui.label("Link");
+                    ui.selectable_value(&mut self.transport, Transport::Usb, "USB");
+                    ui.selectable_value(&mut self.transport, Transport::Lan, "LAN");
+                    ui.separator();
+                    match self.transport {
+                        Transport::Usb => {
+                            ui.label("Port");
+                            egui::ComboBox::from_id_source("com_ports")
+                                .selected_text(if self.com_port.is_empty() {
+                                    "Select COM…"
+                                } else {
+                                    self.com_port.as_str()
+                                })
+                                .width(140.0)
+                                .show_ui(ui, |ui| {
+                                    for p in &self.ports.clone() {
+                                        ui.selectable_value(&mut self.com_port, p.clone(), p);
+                                    }
+                                });
+                            if ui.button("Refresh").clicked() {
+                                let _ = self.cmd_tx.send(NetCmd::ListPorts);
+                            }
+                        }
+                        Transport::Lan => {
+                            ui.label("Board IP");
+                            ui.add(
+                                egui::TextEdit::singleline(&mut self.board_ip)
+                                    .desired_width(160.0)
+                                    .hint_text("192.168.x.x"),
+                            );
+                        }
+                    }
+                    ui.label("Auth");
                     ui.add(
                         egui::TextEdit::singleline(&mut self.auth_password)
-                            .desired_width(120.0)
+                            .desired_width(100.0)
                             .password(true),
                     );
                     if ui
-                        .add(egui::Button::new(RichText::new("Connect").strong()).min_size(Vec2::new(100.0, 32.0)))
+                        .add(
+                            egui::Button::new(RichText::new("Connect").strong())
+                                .min_size(Vec2::new(100.0, 32.0)),
+                        )
                         .clicked()
                     {
                         self.connect();
+                    }
+                    if ui.button("Disconnect").clicked() {
+                        let _ = self.cmd_tx.send(NetCmd::CloseUsb);
+                        self.connected_ui = false;
+                        self.last_ok = "Disconnected.".into();
                     }
                     if ui.button("Reconnect pool").clicked() {
                         self.post("/api/reconnect", String::new());
@@ -421,7 +505,7 @@ impl App for CompanionApp {
                 }
                 ui.with_layout(Layout::bottom_up(Align::LEFT), |ui| {
                     ui.label(
-                        RichText::new("LAN only · auth = pool password")
+                        RichText::new("USB: CH340 @ 115200\nAuth = pool password")
                             .small()
                             .color(Color32::from_rgb(100, 100, 96)),
                     );
@@ -443,7 +527,6 @@ impl App for CompanionApp {
                     ui.colored_label(Color32::from_rgb(120, 200, 140), &self.last_ok);
                     ui.add_space(8.0);
                 }
-
                 match self.tab {
                     Tab::Dashboard => self.ui_dashboard(ui),
                     Tab::Settings => self.ui_settings(ui),
@@ -508,7 +591,10 @@ impl CompanionApp {
                         .color(Color32::from_rgb(230, 200, 140))
                         .strong(),
                 );
-                ui.label(format!("uptime {}s", self.status.uptime_secs));
+                ui.label(match self.transport {
+                    Transport::Usb => "link: USB",
+                    Transport::Lan => "link: LAN",
+                });
             });
         });
         ui.add_space(14.0);
@@ -526,21 +612,16 @@ impl CompanionApp {
                 ));
             });
         });
-
-        // Subtle animated meter bar
         ui.add_space(18.0);
-        let (rect, _) = ui.allocate_exact_size(Vec2::new(ui.available_width(), 18.0), Sense::hover());
+        let (rect, _) =
+            ui.allocate_exact_size(Vec2::new(ui.available_width(), 18.0), Sense::hover());
         let painter = ui.painter_at(rect);
         painter.rect_filled(rect, 9.0, Color32::from_rgb(28, 24, 20));
         let frac = ((rate / 25.0) as f32).clamp(0.05, 1.0);
         let mut fill = rect;
         fill.set_width(rect.width() * frac);
         let wave = (self.pulse.sin() * 0.5 + 0.5) * 20.0;
-        painter.rect_filled(
-            fill,
-            9.0,
-            Color32::from_rgb(200, 90 + wave as u8, 30),
-        );
+        painter.rect_filled(fill, 9.0, Color32::from_rgb(200, 90 + wave as u8, 30));
     }
 
     fn ui_settings(&mut self, ui: &mut egui::Ui) {
@@ -549,9 +630,8 @@ impl CompanionApp {
                 .size(22.0)
                 .color(Color32::from_rgb(255, 160, 70)),
         );
-        ui.label("Changes save to flash. WiFi edits reboot the board. Auth is the pool password.");
+        ui.label("Works over USB or LAN. Auth is the pool password.");
         ui.add_space(10.0);
-
         egui::Grid::new("settings_grid")
             .num_columns(2)
             .spacing([16.0, 10.0])
@@ -580,7 +660,6 @@ impl CompanionApp {
                 );
                 ui.end_row();
             });
-
         ui.add_space(14.0);
         ui.horizontal(|ui| {
             if ui
@@ -594,7 +673,7 @@ impl CompanionApp {
                 self.apply_settings();
             }
             if ui.button("Reload from board").clicked() {
-                let _ = self.cmd_tx.send(NetCmd::FetchConfig(self.base_url()));
+                self.refresh_board();
             }
         });
     }
@@ -605,11 +684,8 @@ impl CompanionApp {
                 .size(22.0)
                 .color(Color32::from_rgb(255, 160, 70)),
         );
-        ui.label(
-            "ESP32 profiles: 80 / 160 / 240 MHz. Applied on soft-reset. Higher clocks raise hashrate and heat; WiFi can get flaky above stock if the board is warm.",
-        );
+        ui.label("80 / 160 / 240 MHz. Applied on soft-reset (USB or LAN).");
         ui.add_space(12.0);
-
         ui.horizontal(|ui| {
             for mhz in [80_u8, 160, 240] {
                 let selected = self.target_mhz == mhz;
@@ -636,15 +712,13 @@ impl CompanionApp {
                 }
             }
         });
-
         ui.add_space(16.0);
         Self::card(ui, "ACTIVE", |ui| {
             ui.label(format!(
-                "Running now: {} MHz · Target: {} MHz",
+                "Running: {} MHz · Target: {} MHz",
                 self.status.cpu_mhz, self.target_mhz
             ));
         });
-
         ui.add_space(12.0);
         if ui
             .add(
@@ -660,27 +734,31 @@ impl CompanionApp {
 
     fn ui_discover(&mut self, ui: &mut egui::Ui) {
         ui.label(
-            RichText::new("LAN discover")
+            RichText::new("Discover")
                 .size(22.0)
                 .color(Color32::from_rgb(255, 160, 70)),
         );
-        ui.label("Probe /probe on a /24 subnet for SCRYPT-CYD boards (same shape as NM Monitor).");
+        ui.label("LAN /probe scan, or USB ping on the open COM port.");
         ui.add_space(8.0);
         ui.horizontal(|ui| {
-            ui.label("Subnet base");
+            if ui.button("USB ping").clicked() {
+                let _ = self.cmd_tx.send(NetCmd::UsbPing);
+            }
+            ui.label("Subnet");
             ui.add(
                 egui::TextEdit::singleline(&mut self.discover_base)
                     .desired_width(140.0)
                     .hint_text("192.168.1"),
             );
-            if ui.button("Scan .1–.254 (slow)").clicked() {
+            if ui.button("Scan LAN .1–.254").clicked() {
                 self.discover_log.clear();
                 let base = self.discover_base.trim().to_string();
                 for i in 1..=254u16 {
-                    let url = format!("http://{base}.{i}");
-                    let _ = self.cmd_tx.send(NetCmd::Probe(url));
+                    let _ = self
+                        .cmd_tx
+                        .send(NetCmd::Probe(format!("http://{base}.{i}")));
                 }
-                self.last_ok = "Scan queued…".into();
+                self.last_ok = "LAN scan queued…".into();
             }
             if ui.button("Probe current IP").clicked() {
                 let _ = self.cmd_tx.send(NetCmd::Probe(self.base_url()));
@@ -702,33 +780,159 @@ fn net_worker(cmd_rx: Receiver<NetCmd>, msg_tx: Sender<NetMsg>) {
         .timeout_connect(Duration::from_millis(600))
         .timeout_read(Duration::from_millis(1500))
         .build();
+    let mut usb: Option<Box<dyn SerialPort>> = None;
+    let mut usb_rx = String::new();
+
     while let Ok(cmd) = cmd_rx.recv() {
         match cmd {
-            NetCmd::PollStatus(base) => {
-                let r = agent
-                    .get(&format!("{base}/api/status"))
-                    .call()
-                    .map_err(|e| e.to_string())
-                    .and_then(|r| r.into_json::<StatusJson>().map_err(|e| e.to_string()));
-                let _ = msg_tx.send(NetMsg::Status(r));
+            NetCmd::ListPorts => {
+                let ports = serialport::available_ports()
+                    .unwrap_or_default()
+                    .into_iter()
+                    .map(|p| p.port_name)
+                    .collect();
+                let _ = msg_tx.send(NetMsg::Ports(ports));
             }
-            NetCmd::FetchConfig(base) => {
-                let r = agent
-                    .get(&format!("{base}/api/config"))
-                    .call()
-                    .map_err(|e| e.to_string())
-                    .and_then(|r| r.into_json::<ConfigJson>().map_err(|e| e.to_string()));
-                let _ = msg_tx.send(NetMsg::Config(r));
+            NetCmd::OpenUsb(name) => {
+                usb = None;
+                usb_rx.clear();
+                match serialport::new(&name, 115_200)
+                    .timeout(Duration::from_millis(80))
+                    .open()
+                {
+                    Ok(mut port) => {
+                        let _ = port.clear(serialport::ClearBuffer::All);
+                        // Wake / identify
+                        let _ = port.write_all(b"\r\ncmp ping\r\n");
+                        let _ = port.flush();
+                        thread::sleep(Duration::from_millis(120));
+                        drain_serial(port.as_mut(), &mut usb_rx);
+                        usb = Some(port);
+                        let _ = msg_tx.send(NetMsg::Action(Ok(format!(
+                            "USB open {name} @ 115200"
+                        ))));
+                        // Auto fetch
+                        if let Some(p) = usb.as_mut() {
+                            match usb_cmd(p.as_mut(), &mut usb_rx, "cmp config") {
+                                Ok(line) => {
+                                    let _ = msg_tx.send(NetMsg::Config(parse_cmp_config(&line)));
+                                }
+                                Err(e) => {
+                                    let _ = msg_tx.send(NetMsg::Config(Err(e)));
+                                }
+                            }
+                            match usb_cmd(p.as_mut(), &mut usb_rx, "cmp status") {
+                                Ok(line) => {
+                                    let _ = msg_tx.send(NetMsg::Status(parse_cmp_status(&line)));
+                                }
+                                Err(e) => {
+                                    let _ = msg_tx.send(NetMsg::Status(Err(e)));
+                                }
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        let _ = msg_tx.send(NetMsg::Action(Err(format!("USB open failed: {e}"))));
+                    }
+                }
             }
-            NetCmd::Post { base, path, body } => {
-                let r = agent
-                    .post(&format!("{base}{path}"))
-                    .set("Content-Type", "application/x-www-form-urlencoded")
-                    .send_string(&body)
-                    .map_err(|e| e.to_string())
-                    .and_then(|r| r.into_string().map_err(|e| e.to_string()));
-                let _ = msg_tx.send(NetMsg::Action(r));
+            NetCmd::CloseUsb => {
+                usb = None;
+                usb_rx.clear();
             }
+            NetCmd::UsbPing => {
+                if let Some(p) = usb.as_mut() {
+                    match usb_cmd(p.as_mut(), &mut usb_rx, "cmp ping") {
+                        Ok(line) => {
+                            let _ = msg_tx.send(NetMsg::Probe(Ok(format!("USB → {line}"))));
+                        }
+                        Err(e) => {
+                            let _ = msg_tx.send(NetMsg::Probe(Err(e)));
+                        }
+                    }
+                } else {
+                    let _ = msg_tx.send(NetMsg::Probe(Err("USB not connected".into())));
+                }
+            }
+            NetCmd::PollStatus { transport, base } => match transport {
+                Transport::Lan => {
+                    let r = agent
+                        .get(&format!("{base}/api/status"))
+                        .call()
+                        .map_err(|e| e.to_string())
+                        .and_then(|r| r.into_json::<StatusJson>().map_err(|e| e.to_string()));
+                    let _ = msg_tx.send(NetMsg::Status(r));
+                }
+                Transport::Usb => {
+                    if let Some(p) = usb.as_mut() {
+                        let r = usb_cmd(p.as_mut(), &mut usb_rx, "cmp status")
+                            .and_then(|l| parse_cmp_status(&l));
+                        let _ = msg_tx.send(NetMsg::Status(r));
+                    } else if !base.is_empty() {
+                        // reopen if we only have the name stored as base
+                        let _ = msg_tx.send(NetMsg::Status(Err("USB not open — Connect".into())));
+                    }
+                }
+            },
+            NetCmd::FetchConfig { transport, base } => match transport {
+                Transport::Lan => {
+                    let r = agent
+                        .get(&format!("{base}/api/config"))
+                        .call()
+                        .map_err(|e| e.to_string())
+                        .and_then(|r| r.into_json::<ConfigJson>().map_err(|e| e.to_string()));
+                    let _ = msg_tx.send(NetMsg::Config(r));
+                }
+                Transport::Usb => {
+                    if let Some(p) = usb.as_mut() {
+                        let r = usb_cmd(p.as_mut(), &mut usb_rx, "cmp config")
+                            .and_then(|l| parse_cmp_config(&l));
+                        let _ = msg_tx.send(NetMsg::Config(r));
+                    } else {
+                        let _ = msg_tx.send(NetMsg::Config(Err("USB not open".into())));
+                    }
+                }
+            },
+            NetCmd::Post {
+                transport,
+                base,
+                path,
+                body,
+            } => match transport {
+                Transport::Lan => {
+                    let r = agent
+                        .post(&format!("{base}{path}"))
+                        .set("Content-Type", "application/x-www-form-urlencoded")
+                        .send_string(&body)
+                        .map_err(|e| e.to_string())
+                        .and_then(|r| r.into_string().map_err(|e| e.to_string()));
+                    let _ = msg_tx.send(NetMsg::Action(r));
+                }
+                Transport::Usb => {
+                    if let Some(p) = usb.as_mut() {
+                        let verb = if path.contains("clock") {
+                            "clock"
+                        } else if path.contains("reboot") {
+                            "reboot"
+                        } else {
+                            "set"
+                        };
+                        let cmd = if path.contains("reconnect") {
+                            if body.is_empty() {
+                                "cmp set reconnect=true".to_string()
+                            } else {
+                                format!("cmp set {body}")
+                            }
+                        } else {
+                            format!("cmp {verb} {body}")
+                        };
+                        let r = usb_cmd(p.as_mut(), &mut usb_rx, &cmd);
+                        let _ = msg_tx.send(NetMsg::Action(r));
+                    } else {
+                        let _ = msg_tx.send(NetMsg::Action(Err("USB not open".into())));
+                    }
+                }
+            },
             NetCmd::Probe(base) => {
                 let r = agent
                     .get(&format!("{base}/probe"))
@@ -746,6 +950,66 @@ fn net_worker(cmd_rx: Receiver<NetCmd>, msg_tx: Sender<NetMsg>) {
             }
         }
     }
+}
+
+fn drain_serial(port: &mut dyn SerialPort, buf: &mut String) {
+    let mut tmp = [0u8; 256];
+    for _ in 0..20 {
+        match port.read(&mut tmp) {
+            Ok(0) | Err(_) => break,
+            Ok(n) => {
+                buf.push_str(&String::from_utf8_lossy(&tmp[..n]));
+                if buf.len() > 8192 {
+                    let keep = buf[buf.len() - 2048..].to_string();
+                    *buf = keep;
+                }
+            }
+        }
+    }
+}
+
+fn usb_cmd(port: &mut dyn SerialPort, buf: &mut String, cmd: &str) -> Result<String, String> {
+    drain_serial(port, buf);
+    buf.clear();
+    let line = format!("{cmd}\r\n");
+    port.write_all(line.as_bytes())
+        .map_err(|e| format!("USB write: {e}"))?;
+    port.flush().map_err(|e| format!("USB flush: {e}"))?;
+
+    let deadline = Instant::now() + Duration::from_millis(900);
+    while Instant::now() < deadline {
+        drain_serial(port, buf);
+        for raw in buf.lines() {
+            let t = raw.trim();
+            if t.starts_with("CMPSTATUS ")
+                || t.starts_with("CMPCONFIG ")
+                || t.starts_with("CMPACK")
+                || t.starts_with("CMP ok")
+                || t.starts_with("CMPERR")
+            {
+                return Ok(t.to_string());
+            }
+        }
+        thread::sleep(Duration::from_millis(20));
+    }
+    Err(format!(
+        "USB timeout waiting for reply to `{cmd}` (got {} bytes)",
+        buf.len()
+    ))
+}
+
+fn parse_cmp_status(line: &str) -> Result<StatusJson, String> {
+    let json = line
+        .strip_prefix("CMPSTATUS ")
+        .ok_or_else(|| format!("bad status line: {line}"))?;
+    serde_json::from_str(json).map_err(|e| e.to_string())
+}
+
+fn parse_cmp_config(line: &str) -> Result<ConfigJson, String> {
+    let json = line
+        .strip_prefix("CMPCONFIG ")
+        .ok_or_else(|| format!("bad config line: {line}"))?;
+    serde_json::from_str(json).map_err(|e| e.to_string())
 }
 
 fn urlenc(s: &str) -> String {

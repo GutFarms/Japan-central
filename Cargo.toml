@@ -71,6 +71,7 @@ companion = [
     "dep:serde",
     "dep:serde_json",
     "dep:image",
+    "dep:serialport",
 ]
 # Lighter scrypt params (N=64) — required on classic ESP32 with WiFi
 lite = []
@@ -87,6 +88,7 @@ ureq = { version = "2.12", optional = true, default-features = true, features = 
 serde = { version = "1", optional = true, features = ["derive"] }
 serde_json = { version = "1", optional = true }
 image = { version = "0.25", optional = true, default-features = false, features = ["png"] }
+serialport = { version = "4.6", optional = true, default-features = true }
 
 # ESP32 (CYD) firmware dependencies (enabled with `--features esp`)
 esp-hal = { version = "1.1.1", features = ["esp32", "log-04", "unstable"], optional = true }

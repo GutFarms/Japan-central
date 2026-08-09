@@ -67,10 +67,118 @@ pub struct CompanionUpdate {
     pub reboot: bool,
 }
 
+/// Parse `application/x-www-form-urlencoded` body used by LAN + USB companion.
+pub fn parse_companion_body(body: &str) -> CompanionUpdate {
+    use crate::config::normalize_cpu_mhz;
+    let mut upd = CompanionUpdate::default();
+    for pair in body.split('&') {
+        let mut kv = pair.splitn(2, '=');
+        let key = kv.next().unwrap_or("");
+        let raw = kv.next().unwrap_or("");
+        let val = url_decode_simple(raw);
+        match key {
+            "auth" | "password_auth" | "current_password" => {
+                upd.auth.clear();
+                let _ = upd.auth.push_str(trunc(&val, 64));
+            }
+            "stratum" => {
+                let mut s = String::new();
+                let _ = s.push_str(trunc(&val, 96));
+                upd.stratum = Some(s);
+            }
+            "worker" | "address" => {
+                let mut s = String::new();
+                let _ = s.push_str(trunc(&val, 96));
+                upd.worker = Some(s);
+            }
+            "password" | "pool_password" => {
+                let mut s = String::new();
+                let _ = s.push_str(trunc(&val, 64));
+                upd.password = Some(s);
+            }
+            "wifi_ssid" | "ssid" => {
+                let mut s = String::new();
+                let _ = s.push_str(trunc(&val, 32));
+                upd.wifi_ssid = Some(s);
+            }
+            "wifi_password" | "wifi_pass" => {
+                let mut s = String::new();
+                let _ = s.push_str(trunc(&val, 64));
+                upd.wifi_password = Some(s);
+            }
+            "cpu_mhz" | "clock" => {
+                if let Ok(v) = val.parse::<u8>() {
+                    upd.cpu_mhz = Some(normalize_cpu_mhz(v));
+                    upd.reboot = true;
+                }
+            }
+            "touch_map" => {
+                if let Ok(v) = val.parse::<u8>() {
+                    upd.touch_map = Some(v);
+                }
+            }
+            "reconnect" => {
+                upd.reconnect = val == "1" || val.eq_ignore_ascii_case("true");
+            }
+            "reboot" => {
+                upd.reboot = val == "1" || val.eq_ignore_ascii_case("true");
+            }
+            _ => {}
+        }
+    }
+    upd
+}
+
+fn trunc(s: &str, max: usize) -> &str {
+    if s.len() <= max {
+        s
+    } else {
+        &s[..max]
+    }
+}
+
+fn url_decode_simple(input: &str) -> heapless::String<128> {
+    let mut out: heapless::String<128> = heapless::String::new();
+    let b = input.as_bytes();
+    let mut i = 0;
+    while i < b.len() {
+        let ch = match b[i] {
+            b'+' => {
+                i += 1;
+                ' '
+            }
+            b'%' if i + 2 < b.len() => {
+                let h = |c: u8| -> Option<u8> {
+                    match c {
+                        b'0'..=b'9' => Some(c - b'0'),
+                        b'a'..=b'f' => Some(c - b'a' + 10),
+                        b'A'..=b'F' => Some(c - b'A' + 10),
+                        _ => None,
+                    }
+                };
+                if let (Some(hi), Some(lo)) = (h(b[i + 1]), h(b[i + 2])) {
+                    i += 3;
+                    (hi << 4 | lo) as char
+                } else {
+                    i += 1;
+                    '%'
+                }
+            }
+            c => {
+                i += 1;
+                c as char
+            }
+        };
+        if out.push(ch).is_err() {
+            break;
+        }
+    }
+    out
+}
+
 #[cfg(feature = "esp")]
 mod server {
     use alloc::format;
-    use alloc::string::String as AllocString;
 
     use embassy_executor::Spawner;
     use embassy_net::tcp::TcpSocket;
@@ -81,7 +189,6 @@ mod server {
     use log::info;
 
     use super::{CompanionUpdate, WebStatus};
-    use crate::config::normalize_cpu_mhz;
     use crate::display::{DISPLAY_HEIGHT, DISPLAY_WIDTH};
     use crate::radio::WifiPhase;
     use crate::stratum::StratumPhase;
@@ -305,107 +412,7 @@ mod server {
     }
 
     fn parse_update_body(body: &str) -> CompanionUpdate {
-        let mut upd = CompanionUpdate::default();
-        for pair in body.split('&') {
-            let mut kv = pair.splitn(2, '=');
-            let key = kv.next().unwrap_or("");
-            let raw = kv.next().unwrap_or("");
-            let val = url_decode(raw);
-            match key {
-                "auth" | "password_auth" | "current_password" => {
-                    upd.auth.clear();
-                    let _ = upd.auth.push_str(truncate(&val, 64));
-                }
-                "stratum" => {
-                    let mut s = heapless::String::new();
-                    let _ = s.push_str(truncate(&val, 96));
-                    upd.stratum = Some(s);
-                }
-                "worker" | "address" => {
-                    let mut s = heapless::String::new();
-                    let _ = s.push_str(truncate(&val, 96));
-                    upd.worker = Some(s);
-                }
-                "password" | "pool_password" => {
-                    let mut s = heapless::String::new();
-                    let _ = s.push_str(truncate(&val, 64));
-                    upd.password = Some(s);
-                }
-                "wifi_ssid" | "ssid" => {
-                    let mut s = heapless::String::new();
-                    let _ = s.push_str(truncate(&val, 32));
-                    upd.wifi_ssid = Some(s);
-                }
-                "wifi_password" | "wifi_pass" => {
-                    let mut s = heapless::String::new();
-                    let _ = s.push_str(truncate(&val, 64));
-                    upd.wifi_password = Some(s);
-                }
-                "cpu_mhz" | "clock" => {
-                    if let Ok(v) = val.parse::<u8>() {
-                        upd.cpu_mhz = Some(normalize_cpu_mhz(v));
-                        upd.reboot = true;
-                    }
-                }
-                "touch_map" => {
-                    if let Ok(v) = val.parse::<u8>() {
-                        upd.touch_map = Some(v);
-                    }
-                }
-                "reconnect" => {
-                    upd.reconnect = val == "1" || val.eq_ignore_ascii_case("true");
-                }
-                "reboot" => {
-                    upd.reboot = val == "1" || val.eq_ignore_ascii_case("true");
-                }
-                _ => {}
-            }
-        }
-        upd
-    }
-
-    fn truncate(s: &str, max: usize) -> &str {
-        if s.len() <= max {
-            s
-        } else {
-            &s[..max]
-        }
-    }
-
-    fn url_decode(input: &str) -> AllocString {
-        let mut out = AllocString::new();
-        let b = input.as_bytes();
-        let mut i = 0;
-        while i < b.len() {
-            match b[i] {
-                b'+' => {
-                    out.push(' ');
-                    i += 1;
-                }
-                b'%' if i + 2 < b.len() => {
-                    let h = |c: u8| -> Option<u8> {
-                        match c {
-                            b'0'..=b'9' => Some(c - b'0'),
-                            b'a'..=b'f' => Some(c - b'a' + 10),
-                            b'A'..=b'F' => Some(c - b'A' + 10),
-                            _ => None,
-                        }
-                    };
-                    if let (Some(hi), Some(lo)) = (h(b[i + 1]), h(b[i + 2])) {
-                        out.push((hi << 4 | lo) as char);
-                        i += 3;
-                    } else {
-                        out.push('%');
-                        i += 1;
-                    }
-                }
-                c => {
-                    out.push(c as char);
-                    i += 1;
-                }
-            }
-        }
-        out
+        super::parse_companion_body(body)
     }
 
     async fn write_probe(socket: &mut TcpSocket<'_>, s: &WebStatus) -> Result<(), ()> {

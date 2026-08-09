@@ -296,7 +296,9 @@ async fn main(spawner: Spawner) -> ! {
     let mut pool_mode = false;
     let mut window_start = Instant::now();
     let mut window_hashes: u64 = 0;
-    let mut cmd_line: String<32> = String::new();
+    let mut last_hashrate_x100: u32 = 0;
+    // Wide enough for USB companion `cmp set …` form bodies.
+    let mut cmd_line: String<384> = String::new();
     let mut gui = GuiState::default();
     let mut boot_was_down = boot_btn.is_low();
     let mut boot_down_since: Option<Instant> = None;
@@ -476,7 +478,22 @@ async fn main(spawner: Spawner) -> ! {
 
         if poll_command_byte(&mut usb, &mut cmd_line) {
             let cmd = cmd_line.as_str().trim();
-            if is_change_command(cmd) {
+            if let Some(rest) = strip_cmp_prefix(cmd) {
+                handle_cmp_command(
+                    &mut usb,
+                    &mut store,
+                    &mut pool,
+                    &mut touch,
+                    rest,
+                    &stats,
+                    last_hashrate_x100,
+                    &radio_status,
+                    &stratum_status,
+                    running_mhz,
+                    stratum_enabled,
+                )
+                .await;
+            } else if is_change_command(cmd) {
                 if let Some(updated) = password_gated_change(
                     &mut usb,
                     &mut display,
@@ -538,7 +555,7 @@ async fn main(spawner: Spawner) -> ! {
             } else if !cmd.is_empty() {
                 serial_writeln(
                     &mut usb,
-                    "Unknown command. Type 'change', 'radio', 'stratum', or 'touch'.",
+                    "Unknown command. Type 'cmp', 'change', 'radio', 'stratum', or 'touch'.",
                 );
             }
             cmd_line.clear();
@@ -576,6 +593,7 @@ async fn main(spawner: Spawner) -> ! {
         if elapsed >= Duration::from_millis(750) {
             let ms = elapsed.as_millis().max(1);
             let hashrate_x100 = ((window_hashes as u128 * 100_000) / u128::from(ms)) as u32;
+            last_hashrate_x100 = hashrate_x100;
 
             stats = miner.stats();
             stats.hashrate_x100 = hashrate_x100;
@@ -964,7 +982,7 @@ async fn wait_for_change_or_touch(
     false
 }
 
-fn poll_command_byte(usb: &mut Serial<'_>, line: &mut String<32>) -> bool {
+fn poll_command_byte<const N: usize>(usb: &mut Serial<'_>, line: &mut String<N>) -> bool {
     let mut byte = [0u8; 1];
     match usb.read(&mut byte) {
         Ok(0) | Err(_) => false,
@@ -977,6 +995,126 @@ fn poll_command_byte(usb: &mut Serial<'_>, line: &mut String<32>) -> bool {
             _ => false,
         },
     }
+}
+
+fn strip_cmp_prefix(cmd: &str) -> Option<&str> {
+    let t = cmd.trim();
+    if t.len() >= 3 && t.as_bytes()[..3].eq_ignore_ascii_case(b"cmp") {
+        let rest = t[3..].trim_start();
+        Some(if rest.is_empty() { "ping" } else { rest })
+    } else {
+        None
+    }
+}
+
+async fn handle_cmp_command(
+    usb: &mut Serial<'_>,
+    store: &mut ConfigStore<'_>,
+    pool: &mut PoolConfig,
+    touch: &mut Touch,
+    rest: &str,
+    stats: &esp32_s3_scrypt_miner::miner::MinerStats,
+    hashrate_x100: u32,
+    radio: &RadioStatus,
+    stratum: &StratumStatus,
+    running_mhz: u8,
+    stratum_enabled: bool,
+) {
+    let mut parts = rest.splitn(2, char::is_whitespace);
+    let verb = parts.next().unwrap_or("ping");
+    let args = parts.next().unwrap_or("").trim();
+
+    if eq_ignore_ascii_case(verb, "ping") {
+        serial_writeln(usb, "CMP ok usb");
+        return;
+    }
+    if eq_ignore_ascii_case(verb, "status") {
+        let ip = radio.ip_string();
+        let pool_lab = if stratum.phase.is_connected() {
+            "CONNECTED"
+        } else {
+            stratum.phase.label()
+        };
+        // Compact JSON for the Windows companion USB path.
+        let mut line: String<384> = String::new();
+        let _ = core::fmt::Write::write_fmt(
+            &mut line,
+            format_args!(
+                "CMPSTATUS {{\"hashrate_hs\":{}.{:02},\"shares\":{},\"accepted\":{},\"rejected\":{},\
+\"dropped\":{},\"pool\":\"{}\",\"connected\":{},\"wifi\":\"{}\",\"ip\":\"{}\",\"address\":\"{}\",\
+\"stratum\":\"{}\",\"difficulty\":{},\"uptime_secs\":0,\"cpu_mhz\":{},\"nonce\":\"{:08x}\"}}",
+                hashrate_x100 / 100,
+                hashrate_x100 % 100,
+                stats.shares,
+                stratum.accepted,
+                stratum.rejected,
+                stratum.dropped,
+                pool_lab,
+                if stratum.phase.is_connected() {
+                    "true"
+                } else {
+                    "false"
+                },
+                radio.wifi.label(),
+                ip.as_str(),
+                pool.address.as_str(),
+                pool.stratum.as_str(),
+                stratum.difficulty,
+                running_mhz,
+                stats.nonce,
+            ),
+        );
+        serial_writeln(usb, line.as_str());
+        return;
+    }
+    if eq_ignore_ascii_case(verb, "config") {
+        let mut line: String<384> = String::new();
+        let _ = core::fmt::Write::write_fmt(
+            &mut line,
+            format_args!(
+                "CMPCONFIG {{\"worker\":\"{}\",\"stratum\":\"{}\",\"wifi_ssid\":\"{}\",\
+\"wifi_password\":\"{}\",\"cpu_mhz\":{},\"fw\":\"{}\"}}",
+                pool.address.as_str(),
+                pool.stratum.as_str(),
+                pool.wifi_ssid.as_str(),
+                pool.wifi_password_masked().as_str(),
+                pool.cpu_mhz,
+                env!("CARGO_PKG_VERSION"),
+            ),
+        );
+        serial_writeln(usb, line.as_str());
+        return;
+    }
+    if eq_ignore_ascii_case(verb, "set")
+        || eq_ignore_ascii_case(verb, "clock")
+        || eq_ignore_ascii_case(verb, "reboot")
+    {
+        let mut upd = esp32_s3_scrypt_miner::web::parse_companion_body(args);
+        if eq_ignore_ascii_case(verb, "reboot") {
+            upd.reboot = true;
+        }
+        if eq_ignore_ascii_case(verb, "clock") && upd.cpu_mhz.is_none() {
+            serial_writeln(usb, "CMPERR cpu_mhz required");
+            return;
+        }
+        if pool.authorize(upd.auth.as_str()).is_err() {
+            serial_writeln(usb, "CMPERR bad auth");
+            return;
+        }
+        serial_writeln(usb, "CMPACK queued");
+        apply_companion_update(
+            usb,
+            store,
+            pool,
+            touch,
+            upd,
+            stratum_enabled,
+            running_mhz,
+        )
+        .await;
+        return;
+    }
+    serial_writeln(usb, "CMPERR unknown (ping|status|config|set|clock|reboot)");
 }
 
 fn is_change_command(cmd: &str) -> bool {
