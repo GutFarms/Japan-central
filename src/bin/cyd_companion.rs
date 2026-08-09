@@ -9,6 +9,7 @@
 // Hide the Windows console when the GUI starts.
 #![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
 
+use std::collections::HashMap;
 use std::io::Write;
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::thread;
@@ -19,17 +20,18 @@ use eframe::egui::{
     Stroke, Vec2,
 };
 use eframe::{App, NativeOptions};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serialport::SerialPort;
 
 fn main() -> eframe::Result<()> {
     let options = NativeOptions {
         viewport: egui::ViewportBuilder::default()
-            .with_inner_size([1100.0, 720.0])
-            .with_min_inner_size([880.0, 600.0])
+            .with_inner_size([1140.0, 760.0])
+            .with_min_inner_size([900.0, 620.0])
             .with_title("CYD Companion · Scrypt Miner Control"),
         multisampling: 8,
         depth_buffer: 0,
+        persist_window: true,
         ..Default::default()
     };
     eframe::run_native(
@@ -38,26 +40,32 @@ fn main() -> eframe::Result<()> {
         Box::new(|cc| {
             egui_extras::install_image_loaders(&cc.egui_ctx);
             apply_theme(&cc.egui_ctx);
-            Box::new(CompanionApp::new())
+            Box::new(CompanionApp::new(cc.storage))
         }),
     )
 }
 
 fn apply_theme(ctx: &egui::Context) {
     let mut style = (*ctx.style()).clone();
+    // Dark shell; interactive taps/fields use light grey-blue (not white / orange).
+    let tap = Color32::from_rgb(170, 188, 210);
+    let tap_hover = Color32::from_rgb(140, 170, 205);
+    let tap_active = Color32::from_rgb(96, 140, 188);
     style.visuals.dark_mode = true;
-    style.visuals.panel_fill = Color32::from_rgb(12, 14, 16);
-    style.visuals.window_fill = Color32::from_rgb(18, 20, 22);
-    style.visuals.extreme_bg_color = Color32::from_rgb(8, 9, 10);
-    style.visuals.faint_bg_color = Color32::from_rgb(28, 24, 20);
-    style.visuals.override_text_color = Some(Color32::from_rgb(236, 228, 214));
-    style.visuals.widgets.noninteractive.bg_fill = Color32::from_rgb(22, 24, 26);
-    style.visuals.widgets.inactive.bg_fill = Color32::from_rgb(36, 30, 24);
-    style.visuals.widgets.inactive.fg_stroke =
-        Stroke::new(1.0_f32, Color32::from_rgb(200, 170, 130));
-    style.visuals.widgets.hovered.bg_fill = Color32::from_rgb(70, 48, 28);
-    style.visuals.widgets.active.bg_fill = Color32::from_rgb(196, 92, 28);
-    style.visuals.selection.bg_fill = Color32::from_rgb(180, 80, 24);
+    style.visuals.panel_fill = Color32::from_rgb(12, 14, 18);
+    style.visuals.window_fill = Color32::from_rgb(16, 20, 26);
+    style.visuals.extreme_bg_color = Color32::from_rgb(40, 50, 64);
+    style.visuals.faint_bg_color = Color32::from_rgb(32, 40, 52);
+    style.visuals.override_text_color = Some(Color32::from_rgb(220, 230, 240));
+    style.visuals.widgets.noninteractive.bg_fill = Color32::from_rgb(24, 30, 38);
+    style.visuals.widgets.noninteractive.fg_stroke = Stroke::new(1.0_f32, tap);
+    style.visuals.widgets.inactive.bg_fill = Color32::from_rgb(56, 72, 92);
+    style.visuals.widgets.inactive.fg_stroke = Stroke::new(1.0_f32, tap);
+    style.visuals.widgets.hovered.bg_fill = tap_hover;
+    style.visuals.widgets.hovered.fg_stroke = Stroke::new(1.0_f32, Color32::from_rgb(20, 28, 36));
+    style.visuals.widgets.active.bg_fill = tap_active;
+    style.visuals.widgets.active.fg_stroke = Stroke::new(1.0_f32, Color32::from_rgb(240, 248, 255));
+    style.visuals.selection.bg_fill = Color32::from_rgb(72, 112, 156);
     style.visuals.widgets.inactive.rounding = Rounding::same(6.0);
     style.visuals.widgets.hovered.rounding = Rounding::same(6.0);
     style.visuals.widgets.active.rounding = Rounding::same(6.0);
@@ -73,10 +81,116 @@ fn apply_theme(ctx: &egui::Context) {
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Tab {
     Dashboard,
+    Markets,
     Wifi,
     Pool,
     Overclock,
     Discover,
+}
+
+#[derive(Clone, Copy)]
+struct CoinCatalogEntry {
+    id: &'static str,
+    symbol: &'static str,
+    name: &'static str,
+}
+
+const COIN_CATALOG: &[CoinCatalogEntry] = &[
+    CoinCatalogEntry {
+        id: "bitcoin",
+        symbol: "BTC",
+        name: "Bitcoin",
+    },
+    CoinCatalogEntry {
+        id: "ethereum",
+        symbol: "ETH",
+        name: "Ethereum",
+    },
+    CoinCatalogEntry {
+        id: "litecoin",
+        symbol: "LTC",
+        name: "Litecoin",
+    },
+    CoinCatalogEntry {
+        id: "dogecoin",
+        symbol: "DOGE",
+        name: "Dogecoin",
+    },
+    CoinCatalogEntry {
+        id: "solana",
+        symbol: "SOL",
+        name: "Solana",
+    },
+    CoinCatalogEntry {
+        id: "bitcoin-cash",
+        symbol: "BCH",
+        name: "Bitcoin Cash",
+    },
+    CoinCatalogEntry {
+        id: "binancecoin",
+        symbol: "BNB",
+        name: "BNB",
+    },
+    CoinCatalogEntry {
+        id: "ripple",
+        symbol: "XRP",
+        name: "XRP",
+    },
+    CoinCatalogEntry {
+        id: "cardano",
+        symbol: "ADA",
+        name: "Cardano",
+    },
+    CoinCatalogEntry {
+        id: "toncoin",
+        symbol: "TON",
+        name: "Toncoin",
+    },
+    CoinCatalogEntry {
+        id: "avalanche-2",
+        symbol: "AVAX",
+        name: "Avalanche",
+    },
+    CoinCatalogEntry {
+        id: "chainlink",
+        symbol: "LINK",
+        name: "Chainlink",
+    },
+    CoinCatalogEntry {
+        id: "monero",
+        symbol: "XMR",
+        name: "Monero",
+    },
+    CoinCatalogEntry {
+        id: "tron",
+        symbol: "TRX",
+        name: "TRON",
+    },
+    CoinCatalogEntry {
+        id: "polkadot",
+        symbol: "DOT",
+        name: "Polkadot",
+    },
+];
+
+const DEFAULT_COIN_IDS: [&str; 5] = [
+    "bitcoin",
+    "ethereum",
+    "litecoin",
+    "dogecoin",
+    "solana",
+];
+
+fn coin_meta(id: &str) -> CoinCatalogEntry {
+    COIN_CATALOG
+        .iter()
+        .copied()
+        .find(|c| c.id == id)
+        .unwrap_or(CoinCatalogEntry {
+            id: "bitcoin",
+            symbol: "BTC",
+            name: "Bitcoin",
+        })
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -137,12 +251,36 @@ struct ConfigJson {
     fw: String,
 }
 
+#[derive(Debug, Clone)]
+#[allow(dead_code)]
+struct CoinQuote {
+    id: String,
+    symbol: String,
+    name: String,
+    price_usd: f64,
+    change_24h: f64,
+    market_cap: f64,
+    volume_24h: f64,
+}
+
+#[derive(Debug, Deserialize)]
+struct CoinPriceRaw {
+    usd: f64,
+    #[serde(default)]
+    usd_24h_change: f64,
+    #[serde(default)]
+    usd_market_cap: f64,
+    #[serde(default)]
+    usd_24h_vol: f64,
+}
+
 enum NetMsg {
     Status(Result<StatusJson, String>),
     Config(Result<ConfigJson, String>),
     Action(Result<String, String>),
     Probe(Result<String, String>),
     Ports(Vec<String>),
+    Markets(Result<Vec<CoinQuote>, String>),
 }
 
 enum NetCmd {
@@ -159,6 +297,12 @@ enum NetCmd {
     },
     Probe(String),
     UsbPing,
+    FetchMarkets(Vec<String>),
+}
+
+#[derive(Serialize, Deserialize)]
+struct PersistedCoins {
+    ids: Vec<String>,
 }
 
 struct CompanionApp {
@@ -181,22 +325,43 @@ struct CompanionApp {
     update_wifi_password: bool,
     show_wifi_password: bool,
     target_mhz: u8,
+    /// Apply 160 MHz Balanced once after the board first reports status.
+    auto_apply_balanced: bool,
     discover_base: String,
     discover_log: String,
     cmd_tx: Sender<NetCmd>,
     msg_rx: Receiver<NetMsg>,
     last_poll: Instant,
+    last_market_poll: Instant,
     pulse: f32,
     fw_label: String,
+    selected_coin_ids: [String; 5],
+    market_quotes: Vec<CoinQuote>,
+    market_error: String,
+    market_updated: String,
 }
 
 impl CompanionApp {
-    fn new() -> Self {
+    fn new(storage: Option<&dyn eframe::Storage>) -> Self {
         let (cmd_tx, cmd_rx) = mpsc::channel::<NetCmd>();
         let (msg_tx, msg_rx) = mpsc::channel::<NetMsg>();
         thread::spawn(move || net_worker(cmd_rx, msg_tx));
         let _ = cmd_tx.send(NetCmd::ListPorts);
-        Self {
+
+        let mut selected_coin_ids = DEFAULT_COIN_IDS.map(|s| s.to_string());
+        if let Some(storage) = storage {
+            if let Some(raw) = storage.get_string("market_coins") {
+                if let Ok(saved) = serde_json::from_str::<PersistedCoins>(&raw) {
+                    for (i, id) in saved.ids.into_iter().take(5).enumerate() {
+                        if COIN_CATALOG.iter().any(|c| c.id == id) {
+                            selected_coin_ids[i] = id;
+                        }
+                    }
+                }
+            }
+        }
+
+        let app = Self {
             tab: Tab::Dashboard,
             transport: Transport::Usb,
             board_ip: "192.168.1.50".into(),
@@ -214,15 +379,30 @@ impl CompanionApp {
             edit_wifi_password: String::new(),
             update_wifi_password: false,
             show_wifi_password: false,
-            target_mhz: 240,
+            target_mhz: 160, // Balanced
+            auto_apply_balanced: true,
             discover_base: "192.168.1".into(),
             discover_log: String::new(),
-            cmd_tx,
+            cmd_tx: cmd_tx.clone(),
             msg_rx,
             last_poll: Instant::now() - Duration::from_secs(10),
+            last_market_poll: Instant::now() - Duration::from_secs(60),
             pulse: 0.0,
             fw_label: "—".into(),
-        }
+            selected_coin_ids,
+            market_quotes: Vec::new(),
+            market_error: String::new(),
+            market_updated: "—".into(),
+        };
+        let _ = cmd_tx.send(NetCmd::FetchMarkets(app.selected_coin_ids.to_vec()));
+        app
+    }
+
+    fn refresh_markets(&mut self) {
+        let _ = self
+            .cmd_tx
+            .send(NetCmd::FetchMarkets(self.selected_coin_ids.to_vec()));
+        self.last_market_poll = Instant::now();
     }
 
     fn base_url(&self) -> String {
@@ -342,8 +522,14 @@ impl CompanionApp {
                     self.status = s;
                     self.connected_ui = true;
                     self.last_error.clear();
-                    if self.target_mhz == 0 {
-                        self.target_mhz = self.status.cpu_mhz.max(80);
+                    if self.auto_apply_balanced {
+                        self.target_mhz = 160;
+                        if self.status.cpu_mhz != 0 && self.status.cpu_mhz != 160 {
+                            self.apply_clock();
+                            self.last_ok =
+                                "Auto overclock → 160 MHz Balanced (soft-reset)…".into();
+                        }
+                        self.auto_apply_balanced = false;
                     }
                 }
                 NetMsg::Status(Err(e)) => {
@@ -354,7 +540,7 @@ impl CompanionApp {
                     self.edit_worker = c.worker;
                     self.edit_stratum = c.stratum;
                     self.edit_wifi_ssid = c.wifi_ssid;
-                    if c.cpu_mhz != 0 {
+                    if c.cpu_mhz != 0 && !self.auto_apply_balanced {
                         self.target_mhz = c.cpu_mhz;
                     }
                     if !c.fw.is_empty() {
@@ -379,12 +565,38 @@ impl CompanionApp {
                 NetMsg::Probe(Err(e)) => {
                     self.discover_log.push_str(&format!("fail: {e}\n"));
                 }
+                NetMsg::Markets(Ok(quotes)) => {
+                    self.market_quotes = quotes;
+                    self.market_error.clear();
+                    self.market_updated = chrono_like_now();
+                }
+                NetMsg::Markets(Err(e)) => {
+                    self.market_error = e;
+                }
             }
         }
     }
 }
 
+fn chrono_like_now() -> String {
+    // Local wall-clock stamp without extra deps.
+    use std::time::SystemTime;
+    let secs = SystemTime::now()
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    format!("unix {secs}")
+}
+
 impl App for CompanionApp {
+    fn save(&mut self, storage: &mut dyn eframe::Storage) {
+        if let Ok(raw) = serde_json::to_string(&PersistedCoins {
+            ids: self.selected_coin_ids.to_vec(),
+        }) {
+            storage.set_string("market_coins", raw);
+        }
+    }
+
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.drain_net();
         self.pulse = (self.pulse + ctx.input(|i| i.unstable_dt) * 1.4) % 6.2832;
@@ -397,25 +609,29 @@ impl App for CompanionApp {
             self.last_poll = Instant::now();
         }
 
+        if self.last_market_poll.elapsed() >= Duration::from_secs(30) {
+            self.refresh_markets();
+        }
+
         egui::TopBottomPanel::top("hero")
             .frame(
                 Frame::none()
-                    .fill(Color32::from_rgb(16, 18, 20))
+                    .fill(Color32::from_rgb(14, 18, 24))
                     .inner_margin(Margin::symmetric(22.0, 16.0))
-                    .stroke(Stroke::new(1.0_f32, Color32::from_rgb(60, 40, 24))),
+                    .stroke(Stroke::new(1.0_f32, Color32::from_rgb(70, 96, 128))),
             )
             .show(ctx, |ui| {
                 ui.horizontal(|ui| {
                     ui.vertical(|ui| {
                         ui.label(
                             RichText::new("CYD COMPANION")
-                                .color(Color32::from_rgb(255, 140, 48))
+                                .color(Color32::from_rgb(170, 198, 230))
                                 .size(30.0)
                                 .strong(),
                         );
                         ui.label(
                             RichText::new("ESP32-2432S028 · USB serial or LAN · OpenGL")
-                                .color(Color32::from_rgb(140, 150, 140))
+                                .color(Color32::from_rgb(130, 148, 168))
                                 .size(13.0),
                         );
                     });
@@ -424,16 +640,16 @@ impl App for CompanionApp {
                         let chip = if self.connected_ui {
                             (
                                 format!("LIVE · {} MHz", self.status.cpu_mhz.max(1)),
-                                Color32::from_rgb(40 + glow / 2, 180, 90),
+                                Color32::from_rgb(80, 180 + glow / 3, 160),
                             )
                         } else {
-                            ("OFFLINE".into(), Color32::from_rgb(160, 70, 60))
+                            ("OFFLINE".into(), Color32::from_rgb(160, 90, 90))
                         };
                         ui.label(RichText::new(chip.0).color(chip.1).strong().size(15.0));
                         ui.add_space(12.0);
                         ui.label(
                             RichText::new(format!("fw {}", self.fw_label))
-                                .color(Color32::from_rgb(120, 120, 110))
+                                .color(Color32::from_rgb(120, 136, 152))
                                 .monospace(),
                         );
                     });
@@ -480,11 +696,18 @@ impl App for CompanionApp {
                     );
                     if ui
                         .add(
-                            egui::Button::new(RichText::new("Connect").strong())
-                                .min_size(Vec2::new(100.0, 32.0)),
+                            egui::Button::new(
+                                RichText::new("Connect")
+                                    .strong()
+                                    .color(Color32::from_rgb(20, 28, 36)),
+                            )
+                            .fill(Color32::from_rgb(170, 188, 210))
+                            .min_size(Vec2::new(100.0, 32.0)),
                         )
                         .clicked()
                     {
+                        self.auto_apply_balanced = true;
+                        self.target_mhz = 160;
                         self.connect();
                     }
                     if ui.button("Disconnect").clicked() {
@@ -506,12 +729,13 @@ impl App for CompanionApp {
             .exact_width(168.0)
             .frame(
                 Frame::none()
-                    .fill(Color32::from_rgb(14, 15, 16))
+                    .fill(Color32::from_rgb(12, 16, 22))
                     .inner_margin(Margin::symmetric(12.0, 16.0)),
             )
             .show(ctx, |ui| {
                 for (tab, label) in [
                     (Tab::Dashboard, "Dashboard"),
+                    (Tab::Markets, "Markets"),
                     (Tab::Wifi, "WiFi"),
                     (Tab::Pool, "Pool"),
                     (Tab::Overclock, "Overclock"),
@@ -519,14 +743,14 @@ impl App for CompanionApp {
                 ] {
                     let selected = self.tab == tab;
                     let fill = if selected {
-                        Color32::from_rgb(196, 92, 28)
+                        Color32::from_rgb(88, 128, 172)
                     } else {
-                        Color32::from_rgb(28, 30, 32)
+                        Color32::from_rgb(36, 46, 60)
                     };
                     let text = if selected {
-                        Color32::from_rgb(255, 245, 230)
+                        Color32::from_rgb(236, 244, 252)
                     } else {
-                        Color32::from_rgb(190, 180, 160)
+                        Color32::from_rgb(170, 188, 210)
                     };
                     let btn = egui::Button::new(RichText::new(label).color(text).size(15.0))
                         .fill(fill)
@@ -539,9 +763,9 @@ impl App for CompanionApp {
                 }
                 ui.with_layout(Layout::bottom_up(Align::LEFT), |ui| {
                     ui.label(
-                        RichText::new("USB: CH340 @ 115200\nAuth = pool password")
+                        RichText::new("USB: CH340 @ 115200\nAuth = pool password\nOC default: 160 MHz")
                             .small()
-                            .color(Color32::from_rgb(100, 100, 96)),
+                            .color(Color32::from_rgb(110, 128, 148)),
                     );
                 });
             });
@@ -549,20 +773,21 @@ impl App for CompanionApp {
         egui::CentralPanel::default()
             .frame(
                 Frame::none()
-                    .fill(Color32::from_rgb(10, 11, 12))
+                    .fill(Color32::from_rgb(10, 12, 16))
                     .inner_margin(Margin::symmetric(20.0, 16.0)),
             )
             .show(ctx, |ui| {
                 if !self.last_error.is_empty() {
-                    ui.colored_label(Color32::from_rgb(230, 90, 70), &self.last_error);
+                    ui.colored_label(Color32::from_rgb(230, 110, 100), &self.last_error);
                     ui.add_space(6.0);
                 }
                 if !self.last_ok.is_empty() {
-                    ui.colored_label(Color32::from_rgb(120, 200, 140), &self.last_ok);
+                    ui.colored_label(Color32::from_rgb(120, 200, 160), &self.last_ok);
                     ui.add_space(8.0);
                 }
                 match self.tab {
                     Tab::Dashboard => self.ui_dashboard(ui),
+                    Tab::Markets => self.ui_markets(ui),
                     Tab::Wifi => self.ui_wifi(ui),
                     Tab::Pool => self.ui_pool(ui),
                     Tab::Overclock => self.ui_overclock(ui),
@@ -577,20 +802,61 @@ impl App for CompanionApp {
 impl CompanionApp {
     fn card(ui: &mut egui::Ui, title: &str, add: impl FnOnce(&mut egui::Ui)) {
         Frame::none()
-            .fill(Color32::from_rgb(20, 22, 24))
+            .fill(Color32::from_rgb(20, 26, 34))
             .rounding(Rounding::same(12.0))
-            .stroke(Stroke::new(1.0_f32, Color32::from_rgb(48, 40, 32)))
+            .stroke(Stroke::new(1.0_f32, Color32::from_rgb(64, 88, 118)))
             .inner_margin(Margin::same(14.0))
             .show(ui, |ui| {
                 ui.label(
                     RichText::new(title)
-                        .color(Color32::from_rgb(160, 140, 110))
+                        .color(Color32::from_rgb(150, 172, 198))
                         .size(12.0)
                         .strong(),
                 );
                 ui.add_space(6.0);
                 add(ui);
             });
+    }
+
+    fn quote_for(&self, id: &str) -> Option<&CoinQuote> {
+        self.market_quotes.iter().find(|q| q.id == id)
+    }
+
+    fn ui_coin_strip(&self, ui: &mut egui::Ui) {
+        ui.horizontal(|ui| {
+            for id in &self.selected_coin_ids {
+                let meta = coin_meta(id);
+                Self::card(ui, meta.symbol, |ui| {
+                    if let Some(q) = self.quote_for(id) {
+                        ui.label(
+                            RichText::new(format_usd(q.price_usd))
+                                .size(18.0)
+                                .color(Color32::from_rgb(210, 225, 240))
+                                .strong(),
+                        );
+                        let ch = q.change_24h;
+                        let col = if ch >= 0.0 {
+                            Color32::from_rgb(90, 200, 140)
+                        } else {
+                            Color32::from_rgb(220, 110, 110)
+                        };
+                        ui.label(
+                            RichText::new(format!("{ch:+.2}% 24h"))
+                                .color(col)
+                                .size(12.0),
+                        );
+                    } else {
+                        ui.label(
+                            RichText::new("…")
+                                .color(Color32::from_rgb(120, 140, 160))
+                                .size(18.0),
+                        );
+                        ui.label(meta.name);
+                    }
+                });
+                ui.add_space(8.0);
+            }
+        });
     }
 
     fn ui_dashboard(&mut self, ui: &mut egui::Ui) {
@@ -600,17 +866,17 @@ impl CompanionApp {
                 ui.label(
                     RichText::new(format!("{rate:.2}"))
                         .size(42.0)
-                        .color(Color32::from_rgb(255, 140, 48))
+                        .color(Color32::from_rgb(170, 198, 230))
                         .strong(),
                 );
-                ui.label(RichText::new("H/s scrypt").color(Color32::from_rgb(140, 140, 130)));
+                ui.label(RichText::new("H/s scrypt").color(Color32::from_rgb(130, 148, 168)));
             });
             ui.add_space(12.0);
             Self::card(ui, "POOL", |ui| {
                 let c = if self.status.connected {
-                    Color32::from_rgb(90, 220, 130)
+                    Color32::from_rgb(90, 200, 150)
                 } else {
-                    Color32::from_rgb(220, 120, 90)
+                    Color32::from_rgb(220, 120, 100)
                 };
                 ui.label(RichText::new(&self.status.pool).color(c).size(22.0).strong());
                 ui.label(format!(
@@ -623,12 +889,12 @@ impl CompanionApp {
                 ui.label(
                     RichText::new(format!("{} MHz", self.status.cpu_mhz))
                         .size(28.0)
-                        .color(Color32::from_rgb(230, 200, 140))
+                        .color(Color32::from_rgb(180, 205, 230))
                         .strong(),
                 );
                 ui.label(match self.transport {
-                    Transport::Usb => "link: USB",
-                    Transport::Lan => "link: LAN",
+                    Transport::Usb => "link: USB · default OC 160",
+                    Transport::Lan => "link: LAN · default OC 160",
                 });
             });
         });
@@ -636,7 +902,11 @@ impl CompanionApp {
         ui.horizontal(|ui| {
             Self::card(ui, "WORKER", |ui| {
                 ui.label(RichText::new(&self.status.address).monospace().size(14.0));
-                ui.label(RichText::new(&self.status.stratum).small().color(Color32::GRAY));
+                ui.label(
+                    RichText::new(&self.status.stratum)
+                        .small()
+                        .color(Color32::from_rgb(120, 136, 152)),
+                );
             });
             ui.add_space(12.0);
             Self::card(ui, "WIFI", |ui| {
@@ -647,23 +917,165 @@ impl CompanionApp {
                 ));
             });
         });
-        ui.add_space(18.0);
+        ui.add_space(16.0);
+        ui.horizontal(|ui| {
+            ui.label(
+                RichText::new("MARKETS")
+                    .color(Color32::from_rgb(150, 172, 198))
+                    .size(12.0)
+                    .strong(),
+            );
+            ui.label(
+                RichText::new(format!("updated {}", self.market_updated))
+                    .small()
+                    .color(Color32::from_rgb(110, 128, 148)),
+            );
+            if ui.button("Refresh prices").clicked() {
+                self.refresh_markets();
+            }
+        });
+        if !self.market_error.is_empty() {
+            ui.colored_label(Color32::from_rgb(220, 130, 110), &self.market_error);
+        }
+        ui.add_space(6.0);
+        self.ui_coin_strip(ui);
+        ui.add_space(14.0);
         let (rect, _) =
             ui.allocate_exact_size(Vec2::new(ui.available_width(), 18.0), Sense::hover());
         let painter = ui.painter_at(rect);
-        painter.rect_filled(rect, 9.0, Color32::from_rgb(28, 24, 20));
+        painter.rect_filled(rect, 9.0, Color32::from_rgb(28, 36, 48));
         let frac = ((rate / 25.0) as f32).clamp(0.05, 1.0);
         let mut fill = rect;
         fill.set_width(rect.width() * frac);
         let wave = (self.pulse.sin() * 0.5 + 0.5) * 20.0;
-        painter.rect_filled(fill, 9.0, Color32::from_rgb(200, 90 + wave as u8, 30));
+        painter.rect_filled(
+            fill,
+            9.0,
+            Color32::from_rgb(90, 140 + wave as u8, 190),
+        );
+    }
+
+    fn ui_markets(&mut self, ui: &mut egui::Ui) {
+        ui.label(
+            RichText::new("Live markets")
+                .size(22.0)
+                .color(Color32::from_rgb(170, 198, 230)),
+        );
+        ui.label("Five coins · CoinGecko prices · change slots below · refreshes every 30s.");
+        ui.add_space(10.0);
+        if !self.market_error.is_empty() {
+            ui.colored_label(Color32::from_rgb(220, 130, 110), &self.market_error);
+            ui.add_space(6.0);
+        }
+        self.ui_coin_strip(ui);
+        ui.add_space(16.0);
+        Self::card(ui, "CHOOSE 5 COINS", |ui| {
+            for slot in 0..5 {
+                ui.horizontal(|ui| {
+                    ui.label(format!("Slot {}", slot + 1));
+                    let current = self.selected_coin_ids[slot].clone();
+                    let meta = coin_meta(&current);
+                    egui::ComboBox::from_id_source(format!("coin_slot_{slot}"))
+                        .selected_text(format!("{} · {}", meta.symbol, meta.name))
+                        .width(280.0)
+                        .show_ui(ui, |ui| {
+                            for c in COIN_CATALOG {
+                                let taken_elsewhere = self
+                                    .selected_coin_ids
+                                    .iter()
+                                    .enumerate()
+                                    .any(|(i, id)| i != slot && id == c.id);
+                                if taken_elsewhere {
+                                    continue;
+                                }
+                                if ui
+                                    .selectable_label(
+                                        current == c.id,
+                                        format!("{} · {}", c.symbol, c.name),
+                                    )
+                                    .clicked()
+                                {
+                                    self.selected_coin_ids[slot] = c.id.to_string();
+                                }
+                            }
+                        });
+                });
+                ui.add_space(4.0);
+            }
+            ui.add_space(8.0);
+            ui.horizontal(|ui| {
+                if ui
+                    .add(
+                        egui::Button::new(
+                            RichText::new("Apply selection")
+                                .strong()
+                                .color(Color32::from_rgb(20, 28, 36)),
+                        )
+                        .fill(Color32::from_rgb(170, 188, 210)),
+                    )
+                    .clicked()
+                {
+                    self.refresh_markets();
+                    self.last_ok = "Market coin selection updated.".into();
+                }
+                if ui.button("Reset defaults").clicked() {
+                    self.selected_coin_ids = DEFAULT_COIN_IDS.map(|s| s.to_string());
+                    self.refresh_markets();
+                    self.last_ok = "Markets reset to BTC ETH LTC DOGE SOL.".into();
+                }
+                if ui.button("Refresh now").clicked() {
+                    self.refresh_markets();
+                }
+            });
+        });
+        ui.add_space(12.0);
+        Self::card(ui, "DETAILS", |ui| {
+            egui::Grid::new("market_detail_grid")
+                .num_columns(5)
+                .spacing([18.0, 8.0])
+                .show(ui, |ui| {
+                    ui.label("Coin");
+                    ui.label("Price");
+                    ui.label("24h");
+                    ui.label("Mkt cap");
+                    ui.label("Vol 24h");
+                    ui.end_row();
+                    for id in &self.selected_coin_ids.clone() {
+                        let meta = coin_meta(id);
+                        ui.label(format!("{} ({})", meta.name, meta.symbol));
+                        if let Some(q) = self.quote_for(id) {
+                            ui.label(format_usd(q.price_usd));
+                            let col = if q.change_24h >= 0.0 {
+                                Color32::from_rgb(90, 200, 140)
+                            } else {
+                                Color32::from_rgb(220, 110, 110)
+                            };
+                            ui.colored_label(col, format!("{:+.2}%", q.change_24h));
+                            ui.label(format_compact_usd(q.market_cap));
+                            ui.label(format_compact_usd(q.volume_24h));
+                        } else {
+                            ui.label("—");
+                            ui.label("—");
+                            ui.label("—");
+                            ui.label("—");
+                        }
+                        ui.end_row();
+                    }
+                });
+            ui.add_space(6.0);
+            ui.label(
+                RichText::new(format!("Last update: {}", self.market_updated))
+                    .small()
+                    .color(Color32::from_rgb(110, 128, 148)),
+            );
+        });
     }
 
     fn ui_wifi(&mut self, ui: &mut egui::Ui) {
         ui.label(
             RichText::new("WiFi")
                 .size(22.0)
-                .color(Color32::from_rgb(255, 160, 70)),
+                .color(Color32::from_rgb(170, 198, 230)),
         );
         ui.label(
             "Change SSID and/or WiFi password. Auth (top bar) is the pool password, not the WiFi PSK.",
@@ -718,9 +1130,13 @@ impl CompanionApp {
         ui.horizontal(|ui| {
             if ui
                 .add(
-                    egui::Button::new(RichText::new("Save WiFi").strong())
-                        .fill(Color32::from_rgb(196, 92, 28))
-                        .min_size(Vec2::new(140.0, 36.0)),
+                    egui::Button::new(
+                        RichText::new("Save WiFi")
+                            .strong()
+                            .color(Color32::from_rgb(20, 28, 36)),
+                    )
+                    .fill(Color32::from_rgb(170, 188, 210))
+                    .min_size(Vec2::new(140.0, 36.0)),
                 )
                 .clicked()
             {
@@ -738,7 +1154,7 @@ impl CompanionApp {
         ui.label(
             RichText::new("Pool")
                 .size(22.0)
-                .color(Color32::from_rgb(255, 160, 70)),
+                .color(Color32::from_rgb(170, 198, 230)),
         );
         ui.label("Stratum endpoint and worker. Auth for writes is the current pool password.");
         ui.add_space(10.0);
@@ -781,9 +1197,13 @@ impl CompanionApp {
         ui.horizontal(|ui| {
             if ui
                 .add(
-                    egui::Button::new(RichText::new("Save pool").strong())
-                        .fill(Color32::from_rgb(196, 92, 28))
-                        .min_size(Vec2::new(140.0, 36.0)),
+                    egui::Button::new(
+                        RichText::new("Save pool")
+                            .strong()
+                            .color(Color32::from_rgb(20, 28, 36)),
+                    )
+                    .fill(Color32::from_rgb(170, 188, 210))
+                    .min_size(Vec2::new(140.0, 36.0)),
                 )
                 .clicked()
             {
@@ -799,26 +1219,33 @@ impl CompanionApp {
         ui.label(
             RichText::new("CPU clock")
                 .size(22.0)
-                .color(Color32::from_rgb(255, 160, 70)),
+                .color(Color32::from_rgb(170, 198, 230)),
         );
-        ui.label("80 / 160 / 240 MHz. Applied on soft-reset (USB or LAN).");
+        ui.label(
+            "Default: 160 MHz Balanced (auto-applied on Connect). Soft-reset applies the profile.",
+        );
         ui.add_space(12.0);
         ui.horizontal(|ui| {
             for mhz in [80_u8, 160, 240] {
                 let selected = self.target_mhz == mhz;
                 let label = match mhz {
                     80 => "80 MHz\nEfficient",
-                    160 => "160 MHz\nBalanced",
+                    160 => "160 MHz\nBalanced ★",
                     _ => "240 MHz\nMax / OC",
                 };
                 let fill = if selected {
-                    Color32::from_rgb(196, 92, 28)
+                    Color32::from_rgb(88, 128, 172)
                 } else {
-                    Color32::from_rgb(32, 28, 24)
+                    Color32::from_rgb(36, 46, 60)
+                };
+                let text = if selected {
+                    Color32::from_rgb(236, 244, 252)
+                } else {
+                    Color32::from_rgb(170, 188, 210)
                 };
                 if ui
                     .add(
-                        egui::Button::new(RichText::new(label).size(15.0))
+                        egui::Button::new(RichText::new(label).size(15.0).color(text))
                             .fill(fill)
                             .min_size(Vec2::new(140.0, 72.0))
                             .rounding(Rounding::same(10.0)),
@@ -826,6 +1253,7 @@ impl CompanionApp {
                     .clicked()
                 {
                     self.target_mhz = mhz;
+                    self.auto_apply_balanced = false;
                 }
             }
         });
@@ -839,12 +1267,17 @@ impl CompanionApp {
         ui.add_space(12.0);
         if ui
             .add(
-                egui::Button::new(RichText::new("Apply clock & reboot").strong())
-                    .fill(Color32::from_rgb(180, 60, 30))
-                    .min_size(Vec2::new(200.0, 40.0)),
+                egui::Button::new(
+                    RichText::new("Apply clock & reboot")
+                        .strong()
+                        .color(Color32::from_rgb(20, 28, 36)),
+                )
+                .fill(Color32::from_rgb(170, 188, 210))
+                .min_size(Vec2::new(200.0, 40.0)),
             )
             .clicked()
         {
+            self.auto_apply_balanced = false;
             self.apply_clock();
         }
     }
@@ -853,7 +1286,7 @@ impl CompanionApp {
         ui.label(
             RichText::new("Discover")
                 .size(22.0)
-                .color(Color32::from_rgb(255, 160, 70)),
+                .color(Color32::from_rgb(170, 198, 230)),
         );
         ui.label("LAN /probe scan, or USB ping on the open COM port.");
         ui.add_space(8.0);
@@ -1065,7 +1498,80 @@ fn net_worker(cmd_rx: Receiver<NetCmd>, msg_tx: Sender<NetMsg>) {
                     });
                 let _ = msg_tx.send(NetMsg::Probe(r));
             }
+            NetCmd::FetchMarkets(ids) => {
+                let market_agent = ureq::AgentBuilder::new()
+                    .timeout_connect(Duration::from_secs(4))
+                    .timeout_read(Duration::from_secs(8))
+                    .build();
+                let joined = ids.join(",");
+                let url = format!(
+                    "https://api.coingecko.com/api/v3/simple/price?ids={joined}\
+&vs_currencies=usd&include_24hr_change=true&include_market_cap=true&include_24hr_vol=true"
+                );
+                let r = market_agent
+                    .get(&url)
+                    .set("Accept", "application/json")
+                    .call()
+                    .map_err(|e| e.to_string())
+                    .and_then(|resp| {
+                        let map: HashMap<String, CoinPriceRaw> =
+                            resp.into_json().map_err(|e| e.to_string())?;
+                        let mut out = Vec::with_capacity(ids.len());
+                        for id in &ids {
+                            let meta = coin_meta(id);
+                            if let Some(raw) = map.get(id) {
+                                out.push(CoinQuote {
+                                    id: id.clone(),
+                                    symbol: meta.symbol.into(),
+                                    name: meta.name.into(),
+                                    price_usd: raw.usd,
+                                    change_24h: raw.usd_24h_change,
+                                    market_cap: raw.usd_market_cap,
+                                    volume_24h: raw.usd_24h_vol,
+                                });
+                            } else {
+                                out.push(CoinQuote {
+                                    id: id.clone(),
+                                    symbol: meta.symbol.into(),
+                                    name: meta.name.into(),
+                                    price_usd: 0.0,
+                                    change_24h: 0.0,
+                                    market_cap: 0.0,
+                                    volume_24h: 0.0,
+                                });
+                            }
+                        }
+                        Ok(out)
+                    });
+                let _ = msg_tx.send(NetMsg::Markets(r));
+            }
         }
+    }
+}
+
+fn format_usd(v: f64) -> String {
+    if v >= 1000.0 {
+        format!("${:.0}", v)
+    } else if v >= 1.0 {
+        format!("${:.2}", v)
+    } else if v >= 0.01 {
+        format!("${:.4}", v)
+    } else {
+        format!("${:.6}", v)
+    }
+}
+
+fn format_compact_usd(v: f64) -> String {
+    if v >= 1_000_000_000_000.0 {
+        format!("${:.2}T", v / 1_000_000_000_000.0)
+    } else if v >= 1_000_000_000.0 {
+        format!("${:.2}B", v / 1_000_000_000.0)
+    } else if v >= 1_000_000.0 {
+        format!("${:.2}M", v / 1_000_000.0)
+    } else if v > 0.0 {
+        format!("${:.0}", v)
+    } else {
+        "—".into()
     }
 }
 

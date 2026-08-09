@@ -22,10 +22,11 @@ Release builds on Windows use the `windows` subsystem — **no console/terminal 
 
 | Tab | What it does |
 |-----|----------------|
-| Dashboard | Live hashrate, pool, WiFi, CPU MHz |
+| Dashboard | Live hashrate, pool, WiFi, CPU MHz + 5-coin price strip |
+| Markets | Live CoinGecko stats; pick which 5 coins are shown |
 | WiFi | SSID + optional **Update WiFi password** → flash (reboot on change) |
 | Pool | Stratum / worker / pool password → flash |
-| Overclock | CPU 80 / 160 / 240 MHz (soft-reset apply) |
+| Overclock | Default **160 MHz Balanced** (auto on Connect); 80 / 160 / 240 |
 | Discover | Probe LAN `/probe` for SCRYPT-CYD boards |
 
 ## Connection modes
