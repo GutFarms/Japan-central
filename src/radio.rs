@@ -89,7 +89,7 @@ mod stack {
     use esp_hal::peripherals::WIFI;
     use esp_hal::rng::Rng;
     use esp_radio::wifi::{
-        AuthenticationMethod, Config, ControllerConfig, Interface, WifiController,
+        AuthenticationMethod, Config, ControllerConfig, Interface, PowerSaveMode, WifiController,
         scan::ScanConfig,
         sta::StationConfig,
     };
@@ -169,7 +169,7 @@ mod stack {
         }
 
         let wifi_interface = Interface::station();
-        let controller = match WifiController::new(
+        let mut controller = match WifiController::new(
             wifi,
             ControllerConfig::default().with_initial_config(Config::Station(station)),
         ) {
@@ -182,6 +182,10 @@ mod stack {
                 return None;
             }
         };
+        // Keep the radio fully awake — no modem sleep / DTIM power save.
+        if let Err(e) = controller.set_power_saving(PowerSaveMode::None) {
+            info!("WiFi power-save None failed: {e:?}");
+        }
 
         let net_config = embassy_net::Config::dhcpv4(Default::default());
         let rng = Rng::new();
@@ -295,23 +299,27 @@ mod stack {
 
     #[embassy_executor::task]
     async fn connection(mut controller: WifiController<'static>) {
-        info!("WiFi connection task");
+        info!("WiFi connection task (always-on, no power save)");
         loop {
+            let _ = controller.set_power_saving(PowerSaveMode::None);
             set_wifi_phase(WifiPhase::Connecting).await;
             match controller.connect_async().await {
                 Ok(info) => {
                     info!("WiFi connected: {info:?}");
+                    let _ = controller.set_power_saving(PowerSaveMode::None);
                     set_wifi_phase(WifiPhase::Connected).await;
                     let _ = controller.wait_for_disconnect_async().await;
-                    info!("WiFi disconnected");
+                    info!("WiFi disconnected — reconnecting");
                     set_wifi_phase(WifiPhase::Disconnected).await;
+                    // Brief pause then retry immediately so STA stays up.
+                    Timer::after(Duration::from_millis(500)).await;
                 }
                 Err(e) => {
-                    info!("WiFi connect failed: {e:?}");
+                    info!("WiFi connect failed: {e:?} — retry");
                     set_wifi_phase(WifiPhase::Failed).await;
+                    Timer::after(Duration::from_secs(2)).await;
                 }
             }
-            Timer::after(Duration::from_secs(5)).await;
         }
     }
 

@@ -68,12 +68,10 @@ type MipiDisplayWrapper<'a> = MipiDisplay<SpiDi<'a>, ILI9341Rgb565, NoResetPin>;
 pub struct Display<'a, D: DelayNs> {
     display: MipiDisplayWrapper<'a>,
     backlight: Output<'a>,
-    delay: D,
     last_screen: Option<GuiScreen>,
     /// Animation phase 0..255 for subtle pulse.
     pub tick: u8,
-    /// NMMiner-style: backlight/panel off to free SPI bandwidth for mining.
-    awake: bool,
+    _delay: core::marker::PhantomData<D>,
 }
 
 /// CYD TFT pins + SPI2 (HSPI).
@@ -129,13 +127,13 @@ impl<'a, D: DelayNs> Display<'a, D> {
             .init(&mut delay)
             .map_err(|_| Error::InitError)?;
 
+        let _ = delay;
         Ok(Self {
             display,
             backlight,
-            delay,
             last_screen: None,
             tick: 0,
-            awake: true,
+            _delay: core::marker::PhantomData,
         })
     }
 
@@ -143,44 +141,8 @@ impl<'a, D: DelayNs> Display<'a, D> {
         self.tick = self.tick.wrapping_add(3);
     }
 
-    pub fn is_awake(&self) -> bool {
-        self.awake
-    }
-
-    /// Turn panel + backlight off (NMMiner: screen off raises hashrate).
-    pub fn sleep_screen(&mut self) -> Result<(), Error> {
-        if !self.awake {
-            return Ok(());
-        }
-        let _ = self.display.sleep(&mut self.delay);
-        self.backlight.set_low();
-        self.awake = false;
-        self.last_screen = None;
-        Ok(())
-    }
-
-    /// Wake panel + backlight without clearing (caller redraws).
-    pub fn wake_screen(&mut self) -> Result<(), Error> {
-        if self.awake {
-            return Ok(());
-        }
-        self.backlight.set_high();
-        self.display
-            .wake(&mut self.delay)
-            .map_err(|_| Error::InitError)?;
-        self.awake = true;
-        self.last_screen = None;
-        Ok(())
-    }
-
     fn wake_clear(&mut self) -> Result<(), Error> {
         self.backlight.set_high();
-        if !self.awake {
-            self.display
-                .wake(&mut self.delay)
-                .map_err(|_| Error::InitError)?;
-            self.awake = true;
-        }
         self.display
             .clear(BG_DEEP)
             .map_err(|_| Error::DisplayInterface("clear"))?;

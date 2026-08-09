@@ -23,10 +23,10 @@ const RAW_Y_MAX: i32 = 3860;
 
 const SCREEN_W: i32 = 320;
 const SCREEN_H: i32 = 240;
-/// Soft enough for light presses; ESPHome demos use ~400.
-const Z_THRESHOLD: u16 = 180;
-/// When PENIRQ is active, accept a weaker Z.
-const Z_IRQ_THRESHOLD: u16 = 40;
+/// Soft enough for light presses on CYD resistive glass.
+const Z_THRESHOLD: u16 = 120;
+/// When PENIRQ is active (pulled up + open-drain), accept a weaker Z.
+const Z_IRQ_THRESHOLD: u16 = 30;
 
 const CMD_Z1: u8 = 0xB1;
 const CMD_Z2: u8 = 0xC1;
@@ -152,7 +152,8 @@ impl Touch {
         let mut t = Self {
             spi,
             cs: Output::new(p.cs, Level::High, OutputConfig::default()),
-            irq: Input::new(p.irq, InputConfig::default().with_pull(Pull::None)),
+            // XPT2046 PENIRQ is open-drain — needs a pull-up or the line floats.
+            irq: Input::new(p.irq, InputConfig::default().with_pull(Pull::Up)),
             last: None,
             down: false,
             map: TouchMap::DEFAULT,

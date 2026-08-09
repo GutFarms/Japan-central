@@ -72,12 +72,11 @@ Install **CH340** drivers on Windows if no COM port appears. Serial monitor: **1
 3. Then **worker → password**. USB serial (115200) always works
 4. After DHCP, **ONLINE** / **CONNECTED** banners do not stop mining. Web UI: `http://<board-ip>/` · JSON `/api/status` · reconnect `/api/reconnect`
 
-## LCD power save (NMMiner-style)
+## LCD & WiFi
 
-After **60s** without touch or BOOT activity, the backlight turns off and GUI redraws pause (mining continues).
-
-- Touch the screen or press **BOOT** briefly to wake (short BOOT while asleep does not change tabs).
-- Hold **BOOT** ~0.7s while awake to open the menu / change credentials flow.
+- LCD **stays on** (no sleep / backlight-off timer).
+- WiFi STA stays **always on** (modem power-save disabled; auto-reconnect on drop).
+- Hold **BOOT** ~0.7s for menu / change credentials. On an empty WiFi scan, short **BOOT** cycles the touch axis map.
 
 ## HTTP API
 

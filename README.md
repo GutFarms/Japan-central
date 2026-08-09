@@ -10,7 +10,7 @@ Bare-metal Rust firmware that mines **scrypt** proof-of-work on an **ESP32-2432S
 - Starts **WiFi STA + DHCP** when an SSID is set (BLE unused — RAM kept for WiFi/stratum)
 - **Stratum TCP client** over WiFi: subscribe, authorize, receive jobs, submit shares
 - **LAN web UI** at `http://<board-ip>/` after DHCP (status dashboard + JSON)
-- **NMMiner-style** LCD sleep (60s idle) and discovery APIs (`/probe`, `/alive`, `/api/system/info`)
+- Discovery APIs (`/probe`, `/alive`, `/api/system/info`); LCD stays on; WiFi always-on (no modem sleep)
 - **On-device GUI**: splash, setup, mining dashboard, config tab, radio/pool tab, menu
 - Saves credentials to flash and auto-loads them on later boots
 - Host CLI (`host-miner`), **desktop GUI** (`host-gui`), and unit tests
@@ -25,7 +25,8 @@ Educational / demo miner only — not profitable network mining.
 |--|---------|----------------|
 | Algorithm | BTC SHA-256 | Scrypt (`lite`) |
 | Config | SoftAP + phone browser | UART/PuTTY + LCD scan (WiFi required) |
-| LCD sleep | Yes (BOOT/touch wake) | Yes (60s; BOOT/touch wake) |
+| LCD sleep | Yes (BOOT/touch wake) | No — LCD stays on |
+| WiFi | SoftAP + STA | STA always-on (no power save) |
 | HTTP | `/probe`, `/alive`, `/api/system/info`, … | Same discovery trio + `/api/status` |
 
 SoftAP captive-portal setup is not used here: classic ESP32 RAM is tight while mining; UART + LCD setup stays the reliable path.
@@ -37,13 +38,13 @@ SoftAP captive-portal setup is not used here: classic ESP32 RAM is tight while m
 | **Touch** tab strip | Jump to MINE / CONF / RADIO / MENU |
 | **Touch** keyboard | Type credentials during setup / auth (OK / skip) |
 | **Touch** menu row | Activate option |
-| **BOOT** short press | Wake LCD if asleep; else next tab / menu highlight |
+| **BOOT** short press | Next tab, or move menu highlight |
 | **BOOT** long press (~0.7s) | Open menu / activate selected item |
-| **Touch** (any) | Wake LCD if asleep |
+| **Touch** | Tabs, menu rows, on-screen keyboard |
 | Serial `change` | Password-gated credential edit |
 | Serial `radio` / `wifi` / `stratum` | Print live radio + pool status |
 
-Tabs: **MINE** · **CONF** · **RADIO** · **MENU**. LCD sleeps after 60s idle; mining continues with the screen off.
+Tabs: **MINE** · **CONF** · **RADIO** · **MENU**. LCD stays on. If taps feel inverted, hold **BOOT** on an empty WiFi scan list to cycle the touch map.
 
 When WiFi is configured, the firmware connects to `stratum` (`host:port` or `stratum+tcp://…`), runs `mining.subscribe` / `mining.authorize`, mines `mining.notify` jobs with the pool difficulty, and submits shares with `mining.submit`. WiFi is required — there is no skip path.
 

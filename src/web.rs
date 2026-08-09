@@ -300,7 +300,7 @@ a{{color:#7dffa0}}\
 <a href=/probe>probe</a> · \
 <a href=/api/system/info>system</a> · \
 <a href=/api/reconnect>Reconnect</a><br>\
-<span style=color:#8aa08c;font-size:.85rem>LCD sleeps after 60s idle (BOOT/touch wake) — like NMMiner</span>\
+<span style=color:#8aa08c;font-size:.85rem>LCD stays on · WiFi always-on (no modem sleep)</span>\
 </div>\
 </main></body></html>",
             ip = ip,
