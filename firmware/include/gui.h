@@ -37,7 +37,8 @@ class MonitorGui {
   void paintDialSprite(int w, int h, bool large, const char *label, float pct, float tempC, bool showTemp);
   void drawSmoothGaugeArc(TFT_eSPI &spr, int cx, int cy, int rOuter, int rInner, float startMath,
                           float endMath, uint16_t fg, uint16_t bg);
-  void drawSoftBubble(TFT_eSPI &tft, int x, int y, int w, int h, uint16_t fill);
+  void drawChip(TFT_eSPI &tft, int x, int y, int w, int h, const char *text, uint16_t fill,
+                uint16_t fg);
   DialGeom dialGeom(int index) const;
 
   TFT_eSprite *dialSpr_ = nullptr;
@@ -45,9 +46,10 @@ class MonitorGui {
   bool chromeDrawn_ = false;
   char lastHost_[24] = "";
   bool lastLinked_ = false;
-  char lastStatus_[64] = "";
+  char lastStatus_[40] = "";
   uint16_t lastPps_ = 0xFFFF;
   float lastDisk_ = -1.0f;
   float lastVram_ = -1.0f;
+  float lastNet_ = -1.0f;
   DialState dials_[3];  // 0=CPU large, 1=GPU, 2=RAM
 };

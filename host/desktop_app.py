@@ -244,7 +244,7 @@ class MonitorApp(tk.Tk):
         ttk.Button(btns, text="Minimize to tray", style="Accent.TButton", command=self._minimize_to_background).pack(
             side=tk.LEFT
         )
-        ttk.Button(btns, text="Flip CYD screen", style="Accent.TButton", command=self._flip_cyd).pack(
+        ttk.Button(btns, text="Flip CYD 180°", style="Accent.TButton", command=self._flip_cyd).pack(
             side=tk.LEFT, padx=(8, 0)
         )
         ttk.Button(btns, text="Rescan USB", style="Accent.TButton", command=self._rescan).pack(side=tk.RIGHT)
@@ -275,7 +275,7 @@ class MonitorApp(tk.Tk):
         )
 
         ttk.Separator(parent, orient=tk.HORIZONTAL).grid(row=9, column=0, columnspan=2, sticky="ew", pady=12)
-        ttk.Label(parent, text="CYD display controls", style="Body.TLabel").grid(
+        ttk.Label(parent, text="CYD display (saved on device)", style="Body.TLabel").grid(
             row=10, column=0, columnspan=2, sticky="w"
         )
         ttk.Label(parent, textvariable=self.cyd_cfg_var, style="Muted.TLabel").grid(
@@ -290,16 +290,27 @@ class MonitorApp(tk.Tk):
             width=18,
         )
         row("Screen orientation", orient, 12)
-        bright = ttk.Scale(parent, from_=20, to=255, orient=tk.HORIZONTAL, variable=self.cyd_bright_var)
-        row("Brightness", bright, 13)
+
+        bright_row = ttk.Frame(parent, style="Card.TFrame")
+        bright = ttk.Scale(
+            bright_row, from_=20, to=255, orient=tk.HORIZONTAL, variable=self.cyd_bright_var, command=self._on_bright_slide
+        )
+        bright.pack(side=tk.LEFT, fill=tk.X, expand=True)
+        self.cyd_bright_label = ttk.Label(bright_row, text="86%", style="Muted.TLabel", width=5)
+        self.cyd_bright_label.pack(side=tk.LEFT, padx=(8, 0))
+        bright.bind("<ButtonRelease-1>", lambda _e: self._apply_cyd_settings())
+        row("Brightness", bright_row, 13)
+        self._on_bright_slide(self.cyd_bright_var.get())
 
         cyd_btns = ttk.Frame(parent, style="Card.TFrame")
         cyd_btns.grid(row=14, column=0, columnspan=2, sticky="ew", pady=(8, 0))
-        ttk.Button(cyd_btns, text="Flip screen", style="Accent.TButton", command=self._flip_cyd).pack(side=tk.LEFT)
-        ttk.Button(cyd_btns, text="Apply to CYD", style="Accent.TButton", command=self._apply_cyd_settings).pack(
+        ttk.Button(cyd_btns, text="Apply orientation + brightness", style="Accent.TButton", command=self._apply_cyd_settings).pack(
+            side=tk.LEFT
+        )
+        ttk.Button(cyd_btns, text="Flip 180° now", style="Accent.TButton", command=self._flip_cyd).pack(
             side=tk.LEFT, padx=(8, 0)
         )
-        ttk.Button(cyd_btns, text="Read from CYD", style="Accent.TButton", command=self._request_cyd_config).pack(
+        ttk.Button(cyd_btns, text="Sync from CYD", style="Accent.TButton", command=self._request_cyd_config).pack(
             side=tk.LEFT, padx=(8, 0)
         )
 
@@ -308,7 +319,7 @@ class MonitorApp(tk.Tk):
         )
         ttk.Label(
             parent,
-            text="CYD changes are sent over USB (or UDP) and stored on the device. Flip rotates the display 180°.",
+            text="Tip: release the brightness slider to push it to the CYD. Flip 180° is instant and stored in NVS.",
             style="Muted.TLabel",
             wraplength=560,
         ).grid(row=16, column=0, columnspan=2, sticky="w", pady=(12, 0))
@@ -336,20 +347,36 @@ class MonitorApp(tk.Tk):
             self._cmd_queue.append((cmd, fields))
         self._set_status(f"Queued CYD command: {cmd}")
 
+    def _on_bright_slide(self, value: Any) -> None:
+        try:
+            level = int(float(value))
+        except (TypeError, ValueError):
+            level = int(self.cyd_bright_var.get())
+        pct = max(0, min(100, int(round((level - 20) * 100 / (255 - 20)))))
+        if hasattr(self, "cyd_bright_label"):
+            self.cyd_bright_label.configure(text=f"{pct}%")
+
     def _flip_cyd(self) -> None:
+        # Optimistic UI toggle so the control matches what the screen will do.
+        flipped = self.cyd_orient_var.get().startswith("Flipped")
+        self.cyd_orient_var.set("Normal" if flipped else "Flipped 180°")
         self._queue_cmd("flip")
+        self._set_status("Flipping CYD screen 180°…")
 
     def _apply_cyd_settings(self) -> None:
         flip = self.cyd_orient_var.get().startswith("Flipped")
+        bright = int(self.cyd_bright_var.get())
         self._queue_cmd(
             "set",
             flip=flip,
             rot=3 if flip else 1,
-            bright=int(self.cyd_bright_var.get()),
+            bright=bright,
         )
+        self._set_status(f"Sending CYD display settings (bright {bright})…")
 
     def _request_cyd_config(self) -> None:
         self._queue_cmd("get")
+        self._set_status("Reading CYD display settings…")
 
     def _apply_device_cfg(self, cfg: dict[str, Any]) -> None:
         def apply() -> None:
@@ -358,7 +385,10 @@ class MonitorApp(tk.Tk):
             flip = bool(cfg.get("flip", rot == 3))
             self.cyd_orient_var.set("Flipped 180°" if flip or rot == 3 else "Normal")
             self.cyd_bright_var.set(bright)
-            self.cyd_cfg_var.set(f"CYD: rot={rot}  bright={bright}  flip={flip}")
+            self._on_bright_slide(bright)
+            orient = "Flipped 180°" if flip or rot == 3 else "Normal"
+            pct = max(0, min(100, int(round((bright - 20) * 100 / (255 - 20)))))
+            self.cyd_cfg_var.set(f"On CYD now: {orient} · brightness {pct}% ({bright}/255)")
 
         self.after(0, apply)
 
