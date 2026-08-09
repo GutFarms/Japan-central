@@ -8,7 +8,7 @@ use embedded_graphics::geometry::{Point, Size};
 use embedded_graphics::mono_font::ascii::{FONT_10X20, FONT_6X10, FONT_6X12, FONT_8X13_BOLD};
 use embedded_graphics::mono_font::MonoTextStyle;
 use embedded_graphics::pixelcolor::{Rgb565, RgbColor};
-use embedded_graphics::prelude::{Primitive, WebColors};
+use embedded_graphics::prelude::Primitive;
 use embedded_graphics::primitives::{Line, PrimitiveStyle, Rectangle, RoundedRectangle};
 use embedded_graphics::text::Text;
 use embedded_hal::delay::DelayNs;
@@ -39,26 +39,36 @@ use crate::stratum::{StratumPhase, StratumStatus};
 pub const DISPLAY_WIDTH: u16 = 320;
 pub const DISPLAY_HEIGHT: u16 = 240;
 
-const BRAND: MonoTextStyle<'_, Rgb565> = MonoTextStyle::new(&FONT_10X20, Rgb565::CSS_ORANGE);
-const LABEL: MonoTextStyle<'_, Rgb565> = MonoTextStyle::new(&FONT_6X12, Rgb565::CSS_GRAY);
-const VALUE: MonoTextStyle<'_, Rgb565> = MonoTextStyle::new(&FONT_10X20, Rgb565::WHITE);
-const VALUE_SM: MonoTextStyle<'_, Rgb565> = MonoTextStyle::new(&FONT_8X13_BOLD, Rgb565::WHITE);
-const OK: MonoTextStyle<'_, Rgb565> = MonoTextStyle::new(&FONT_10X20, Rgb565::CSS_LIME_GREEN);
-const MUTED: MonoTextStyle<'_, Rgb565> = MonoTextStyle::new(&FONT_6X12, Rgb565::CSS_DIM_GRAY);
-const KEY_TXT: MonoTextStyle<'_, Rgb565> = MonoTextStyle::new(&FONT_6X10, Rgb565::WHITE);
-const KEY_TXT_DIM: MonoTextStyle<'_, Rgb565> = MonoTextStyle::new(&FONT_6X10, Rgb565::CSS_ORANGE);
+// Match CYD Companion: deep blue-black + lime (8-bit → Rgb565 channel widths).
+const LIME: Rgb565 = Rgb565::new(22, 60, 11); // (180, 240, 90)
+const LIME_DIM: Rgb565 = Rgb565::new(15, 45, 8); // (120, 180, 70)
+const BUBBLE: Rgb565 = Rgb565::new(7, 21, 14); // (56, 84, 118)
+const BUBBLE_HI: Rgb565 = Rgb565::new(13, 42, 27); // (110, 168, 220)
+const TEXT: Rgb565 = Rgb565::new(28, 59, 31); // (228, 238, 248)
+const TEXT_MUTED: Rgb565 = Rgb565::new(16, 37, 21); // (130, 150, 170)
+const ERR_SOFT: Rgb565 = Rgb565::new(25, 20, 12); // (200, 100, 100)
 
-const ACCENT: Rgb565 = Rgb565::CSS_DARK_ORANGE;
-const ACCENT_HOT: Rgb565 = Rgb565::CSS_ORANGE;
-const PANEL: Rgb565 = Rgb565::new(3, 6, 3);
-const PANEL_HI: Rgb565 = Rgb565::new(5, 10, 5);
-const BAR_BG: Rgb565 = Rgb565::new(4, 8, 4);
-const BAR_FG: Rgb565 = Rgb565::CSS_ORANGE;
-const SELECT: Rgb565 = Rgb565::new(8, 12, 4);
-const KEY_BG: Rgb565 = Rgb565::new(6, 10, 6);
-const KEY_BG_HOT: Rgb565 = Rgb565::new(10, 14, 4);
-const KEY_OK: Rgb565 = Rgb565::new(4, 14, 4);
-const BG_DEEP: Rgb565 = Rgb565::new(1, 2, 1);
+const BRAND: MonoTextStyle<'_, Rgb565> = MonoTextStyle::new(&FONT_10X20, LIME);
+const LABEL: MonoTextStyle<'_, Rgb565> = MonoTextStyle::new(&FONT_6X12, TEXT_MUTED);
+const VALUE: MonoTextStyle<'_, Rgb565> = MonoTextStyle::new(&FONT_10X20, TEXT);
+const VALUE_SM: MonoTextStyle<'_, Rgb565> = MonoTextStyle::new(&FONT_8X13_BOLD, TEXT);
+const OK: MonoTextStyle<'_, Rgb565> = MonoTextStyle::new(&FONT_10X20, LIME);
+const MUTED: MonoTextStyle<'_, Rgb565> = MonoTextStyle::new(&FONT_6X12, TEXT_MUTED);
+const KEY_TXT: MonoTextStyle<'_, Rgb565> = MonoTextStyle::new(&FONT_6X10, TEXT);
+const KEY_TXT_DIM: MonoTextStyle<'_, Rgb565> = MonoTextStyle::new(&FONT_6X10, BUBBLE_HI);
+
+const ACCENT: Rgb565 = LIME_DIM;
+const ACCENT_HOT: Rgb565 = LIME;
+const PANEL: Rgb565 = Rgb565::new(2, 6, 4); // (18, 26, 36)
+const PANEL_HI: Rgb565 = Rgb565::new(3, 10, 7); // (28, 40, 56)
+const BAR_BG: Rgb565 = Rgb565::new(5, 14, 10); // (40, 56, 80)
+const BAR_FG: Rgb565 = LIME;
+const SELECT: Rgb565 = Rgb565::new(8, 35, 11); // (70, 140, 90)
+const KEY_BG: Rgb565 = BUBBLE;
+const KEY_BG_HOT: Rgb565 = BUBBLE_HI;
+const KEY_OK: Rgb565 = Rgb565::new(4, 12, 3); // (32, 48, 28)
+const BG_DEEP: Rgb565 = Rgb565::new(1, 3, 2); // (8, 12, 16)
+const CORNER: Size = Size::new(10, 10);
 
 type SpiBus<'a> = Spi<'a, Blocking>;
 type SpiDev<'a> = ExclusiveDevice<SpiBus<'a>, Output<'a>, Delay>;
@@ -160,7 +170,7 @@ impl<'a, D: DelayNs> Display<'a, D> {
     fn round_panel(&mut self, x: i32, y: i32, w: u32, h: u32, color: Rgb565) -> Result<(), Error> {
         RoundedRectangle::with_equal_corners(
             Rectangle::new(Point::new(x, y), Size::new(w, h)),
-            Size::new(6, 6),
+            CORNER,
         )
         .into_styled(PrimitiveStyle::with_fill(color))
         .draw(&mut self.display)
@@ -169,12 +179,12 @@ impl<'a, D: DelayNs> Display<'a, D> {
     }
 
     fn accent_stripe(&mut self) -> Result<(), Error> {
-        // Pulsing top edge
+        // Pulsing lime top edge (companion CTA energy)
         let hot = self.tick < 128;
         let c = if hot { ACCENT_HOT } else { ACCENT };
         self.fill_rect(0, 0, DISPLAY_WIDTH as u32, 3, c)?;
-        // Side rail flare
-        self.fill_rect(0, 3, 3, DISPLAY_HEIGHT as u32 - 3, ACCENT)?;
+        // Cool blue side rail
+        self.fill_rect(0, 3, 3, DISPLAY_HEIGHT as u32 - 3, BUBBLE_HI)?;
         Ok(())
     }
 
@@ -218,7 +228,7 @@ impl<'a, D: DelayNs> Display<'a, D> {
             }
             (WifiPhase::Failed, _) => {
                 let _ = label.push_str("WiFi fail");
-                MonoTextStyle::new(&FONT_6X12, Rgb565::CSS_ORANGE_RED)
+                MonoTextStyle::new(&FONT_6X12, ERR_SOFT)
             }
             (WifiPhase::Disconnected, _) => {
                 let _ = label.push_str("WiFi down");
@@ -242,10 +252,10 @@ impl<'a, D: DelayNs> Display<'a, D> {
         for (i, screen) in GuiScreen::ALL.iter().enumerate() {
             let x = 4 + i as i32 * 80;
             let selected = *screen == active;
-            let bg = if selected { ACCENT } else { BAR_BG };
+            let bg = if selected { ACCENT_HOT } else { BUBBLE };
             self.round_panel(x, 30, 72, 20, bg)?;
             let style = if selected {
-                MonoTextStyle::new(&FONT_6X12, Rgb565::BLACK)
+                MonoTextStyle::new(&FONT_6X12, BG_DEEP)
             } else {
                 MUTED
             };
@@ -280,17 +290,17 @@ impl<'a, D: DelayNs> Display<'a, D> {
     pub fn draw_splash(&mut self) -> Result<(), Error> {
         self.wake_clear()?;
         self.last_screen = None;
-        // Diagonal-ish flare bands
+        // Lime flare bands (companion CTA)
         self.fill_rect(0, 0, DISPLAY_WIDTH as u32, 8, ACCENT_HOT)?;
-        self.fill_rect(0, 8, DISPLAY_WIDTH as u32, 4, ACCENT)?;
+        self.fill_rect(0, 8, DISPLAY_WIDTH as u32, 4, BUBBLE_HI)?;
         self.fill_rect(0, 200, DISPLAY_WIDTH as u32, 40, PANEL)?;
         self.round_panel(40, 70, 240, 90, PANEL_HI)?;
         self.draw_text("SCRYPT", Point::new(110, 100), BRAND)?;
         let mut line: String<48> = String::new();
-        let _ = write!(line, "ESP32-CYD  N={}  touch+serial", SCRYPT_N);
-        self.draw_text(&line, Point::new(48, 130), LABEL)?;
+        let _ = write!(line, "ESP32-CYD  N={}  USB companion", SCRYPT_N);
+        self.draw_text(&line, Point::new(40, 130), LABEL)?;
         self.draw_text("warming up…", Point::new(118, 160), MUTED)?;
-        self.draw_text("setup via CYD Companion (USB)", Point::new(52, 220), KEY_TXT_DIM)?;
+        self.draw_text("setup via CYD Companion", Point::new(70, 220), KEY_TXT_DIM)?;
         Ok(())
     }
 
@@ -299,9 +309,9 @@ impl<'a, D: DelayNs> Display<'a, D> {
         self.wake_clear()?;
         self.last_screen = None;
         self.fill_rect(0, 0, DISPLAY_WIDTH as u32, 8, ACCENT_HOT)?;
-        self.fill_rect(0, 8, DISPLAY_WIDTH as u32, 4, ACCENT)?;
+        self.fill_rect(0, 8, DISPLAY_WIDTH as u32, 4, BUBBLE_HI)?;
         self.header_bar("SETUP")?;
-        self.round_panel(16, 56, 288, 140, PANEL)?;
+        self.round_panel(16, 56, 288, 140, PANEL_HI)?;
         self.draw_text("Waiting for companion", Point::new(56, 88), BRAND)?;
         self.draw_text("1. Plug USB (CH340)", Point::new(40, 120), VALUE_SM)?;
         self.draw_text("2. Open CYD Companion", Point::new(40, 144), VALUE_SM)?;
@@ -373,7 +383,8 @@ impl<'a, D: DelayNs> Display<'a, D> {
     pub fn draw_online(&mut self, ssid: &str, ip: [u8; 4]) -> Result<(), Error> {
         self.wake_clear()?;
         self.last_screen = None;
-        self.fill_rect(0, 0, DISPLAY_WIDTH as u32, 8, ACCENT_HOT)?;
+        self.fill_rect(0, 0, DISPLAY_WIDTH as u32, 8, LIME)?;
+        self.fill_rect(0, 8, DISPLAY_WIDTH as u32, 3, BUBBLE_HI)?;
         self.header_bar("ONLINE")?;
         self.round_panel(20, 56, 280, 140, PANEL_HI)?;
         self.draw_text("connected", Point::new(100, 80), LABEL)?;
@@ -462,8 +473,8 @@ impl<'a, D: DelayNs> Display<'a, D> {
             let ty = key.y + (key.h as i32 / 2) + 3;
             let style = match key.action {
                 crate::keyboard::KeyAction::Enter => OK,
-                crate::keyboard::KeyAction::Skip => MonoTextStyle::new(&FONT_6X10, Rgb565::BLACK),
-                _ if focused => MonoTextStyle::new(&FONT_6X10, Rgb565::BLACK),
+                crate::keyboard::KeyAction::Skip => MonoTextStyle::new(&FONT_6X10, BG_DEEP),
+                _ if focused => MonoTextStyle::new(&FONT_6X10, BG_DEEP),
                 _ => KEY_TXT,
             };
             self.draw_text(key.label, Point::new(tx, ty), style)?;
@@ -475,7 +486,7 @@ impl<'a, D: DelayNs> Display<'a, D> {
     pub fn draw_touch_cursor(&mut self, x: u16, y: u16) -> Result<(), Error> {
         let px = i32::from(x);
         let py = i32::from(y);
-        let style = PrimitiveStyle::with_stroke(Rgb565::CSS_ORANGE, 1);
+        let style = PrimitiveStyle::with_stroke(LIME, 1);
         Line::new(Point::new(px.saturating_sub(10), py), Point::new(px + 10, py))
             .into_styled(style)
             .draw(&mut self.display)
@@ -609,14 +620,14 @@ impl<'a, D: DelayNs> Display<'a, D> {
         if w > 0 {
             let fg = if connected {
                 if self.tick < 128 {
-                    KEY_OK
+                    LIME_DIM
                 } else {
-                    Rgb565::CSS_LIME_GREEN
+                    LIME
                 }
             } else if self.tick < 128 {
-                BAR_FG
+                BUBBLE_HI
             } else {
-                ACCENT_HOT
+                BAR_FG
             };
             self.fill_rect(16, 130, w.min(184), 12, fg)?;
         }
@@ -655,9 +666,9 @@ impl<'a, D: DelayNs> Display<'a, D> {
             let on = active && ((self.tick.wrapping_add(i.wrapping_mul(40))) > 120);
             let c = if on {
                 if connected {
-                    Rgb565::CSS_LIME_GREEN
+                    LIME
                 } else {
-                    ACCENT_HOT
+                    BUBBLE_HI
                 }
             } else {
                 BAR_BG
@@ -713,7 +724,7 @@ impl<'a, D: DelayNs> Display<'a, D> {
     ) -> Result<(), Error> {
         self.wake_clear()?;
         self.last_screen = None;
-        self.fill_rect(0, 0, DISPLAY_WIDTH as u32, 8, Rgb565::CSS_LIME_GREEN)?;
+        self.fill_rect(0, 0, DISPLAY_WIDTH as u32, 8, LIME)?;
         self.header_bar("POOL")?;
         self.round_panel(20, 56, 280, 140, PANEL_HI)?;
         self.draw_text("CONNECTED", Point::new(90, 88), OK)?;
