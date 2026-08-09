@@ -15,6 +15,7 @@ static DisplayUi g_ui;
 static ScryptLite g_miner;
 static StratumClient g_stratum;
 static MinerSnapshot g_snap;
+static NetFeed g_net;
 
 static uint32_t g_windowStart = 0;
 static uint64_t g_windowHashes = 0;
@@ -92,6 +93,7 @@ static void fillSnap() {
   g_snap.nonce = g_miner.nonce();
   g_snap.cpuMhz = (uint8_t)getCpuFrequencyMhz();
   g_snap.hashFocus = g_cfg.hashFocus;
+  g_snap.netTicker = g_net.ticker;
 }
 
 static bool applyConfig(AppConfig& updated, bool& reboot, bool reconnect) {
@@ -139,7 +141,11 @@ static bool applyConfig(AppConfig& updated, bool& reboot, bool reconnect) {
 
 static void serviceCompanion() {
   fillSnap();
-  g_cmp.poll(g_cfg, g_snap, applyConfig);
+  g_cmp.poll(g_cfg, g_snap, applyConfig, &g_net);
+  if (g_net.fresh) {
+    g_snap.netTicker = g_net.ticker;
+    g_net.fresh = false;
+  }
 }
 
 static void mineBurst() {
@@ -156,8 +162,8 @@ static void mineBurst() {
     if (share && g_poolMode) {
       g_stratum.submitShare(g_miner.lastShareNonce());
     }
-    // Keep CMP responsive during hashing.
-    g_cmp.poll(g_cfg, g_snap, applyConfig);
+    // Keep CMP responsive during hashing (incl. netdata pushes).
+    g_cmp.poll(g_cfg, g_snap, applyConfig, &g_net);
   }
 }
 

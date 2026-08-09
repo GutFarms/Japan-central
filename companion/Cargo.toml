@@ -1,0 +1,25 @@
+[package]
+name = "cyd-companion"
+version = "0.2.1"
+edition = "2021"
+description = "CYD Companion — GPU control app for the ESP32-2432S028 scrypt miner"
+license = "MIT OR Apache-2.0"
+
+[[bin]]
+name = "cyd-companion"
+path = "src/main.rs"
+
+[dependencies]
+eframe = { version = "=0.27.2", default-features = true, features = ["persistence"] }
+egui = { version = "=0.27.2" }
+egui_extras = { version = "=0.27.2", features = ["image"] }
+ureq = { version = "2.12", default-features = true, features = ["json"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1" }
+image = { version = "0.25", default-features = false, features = ["png"] }
+serialport = { version = "4.6", default-features = true }
+
+[profile.release]
+lto = true
+codegen-units = 1
+opt-level = 3

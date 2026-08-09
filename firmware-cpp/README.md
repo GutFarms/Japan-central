@@ -13,6 +13,7 @@ protocol — **CYD Companion** is the sole control / setup UI.
 | `cmp set …` | `CMPACK queued` / `CMPERR …` |
 | `cmp clock cpu_mhz=240` | same |
 | `cmp reboot` | same |
+| `cmp netdata source=…&text=…` | `CMPACK net` — PC-pushed market/network ticker |
 
 ## Build
 

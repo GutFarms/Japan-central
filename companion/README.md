@@ -1,19 +1,17 @@
-# CYD Companion (Windows, C++)
+# CYD Companion (egui)
 
-Native Win32 control app for the ESP32-2432S028 scrypt miner. The board only mines
-and shows a basic stats screen — **all setup and control happens here**.
+GPU desktop control app for the ESP32-2432S028 miner — restored bubbly blue/lime UI.
+
+## Roles
+
+- **Control** the board over USB (`cmp` protocol): setup, WiFi, pool, clock
+- **Bridge network data**: fetch CoinGecko (and related) on the PC, push a ticker to the board with `cmp netdata`
+
+The board does not need internet for market prices when the companion is connected.
 
 ## Build
 
 ```bash
-make -C companion
-# → dist/cyd-companion-windows/cyd-companion.exe
 ./scripts/build-companion-windows.sh
+# or: cd companion && cargo build --release --target x86_64-pc-windows-gnu
 ```
-
-## Use
-
-1. Flash C++ firmware (`./scripts/build-flash-images.sh`)
-2. Plug USB (CH340)
-3. Run `cyd-companion.exe` → pick COM → **Connect**
-4. Fill WiFi / Pool → **Save & reboot**

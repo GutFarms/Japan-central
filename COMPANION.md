@@ -1,7 +1,7 @@
 # CYD Companion (Windows)
 
-Native **C++** desktop app — the control interface for the ESP32-2432S028 miner.
-The board does not run setup UI; configure everything here over USB.
+GPU **egui** desktop app — control interface for the ESP32-2432S028 miner.
+Fetches market/network data on the PC and pushes a ticker to the board over USB.
 
 ## Download / build
 
@@ -9,35 +9,29 @@ The board does not run setup UI; configure everything here over USB.
 ./scripts/build-companion-windows.sh
 ```
 
-Outputs:
-
-- `dist/CYD-Companion-App-Only.zip` — exe only
-- `dist/CYD-Companion-Portable.zip` — exe + README
-- `dist/CYD-Companion-Setup.exe` — NSIS installer (if `makensis` available)
+Outputs: `dist/CYD-Companion-App-Only.zip`, `Portable.zip`, `Setup.exe`
 
 ## First-time setup
 
-1. Flash C++ firmware (`./scripts/build-flash-images.sh`)
-2. Plug USB — board shows **Waiting for app**
-3. Run `cyd-companion.exe` → pick COM → **Connect**
-4. Enter WiFi + stratum + worker + pool password → **Save & reboot**
+1. Flash C++ firmware  
+2. Plug USB — board shows **Waiting for app**  
+3. Run `cyd-companion.exe` → COM → **Connect**  
+4. **Setup** → WiFi + pool → **Save & reboot**
 
-## Features
+## Network data over USB
 
-- Live stats from `cmp status` (H/s, pool, accepts, WiFi, CPU)
-- WiFi / pool / CPU / hash-focus write via `cmp set`
-- Clock apply + reboot
-- Pool reconnect
+While USB is connected, the **Markets** tab refreshes CoinGecko on the PC and sends:
+
+```text
+cmp netdata source=coingecko&text=LTC+%2485.2%2B1.2%25+%C2%B7+...
+→ CMPACK net
+```
+
+The board shows that ticker on the mining screen. No board Wi‑Fi required for prices.
 
 ## USB protocol
 
 ```text
-cmp ping                 → CMP ok usb
-cmp status               → CMPSTATUS {…}
-cmp config               → CMPCONFIG {…,"configured":true|false}
-cmp set auth=…&wifi_ssid=…&wifi_password=…&worker=…&stratum=…&password=…&cpu_mhz=240
-cmp clock auth=…&cpu_mhz=240
-cmp reboot auth=…
+cmp ping / status / config / set / clock / reboot
+cmp netdata source=…&text=…     → CMPACK net
 ```
-
-Unconfigured boards accept `cmp set` without auth. After save, Auth = pool password.

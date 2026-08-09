@@ -3,15 +3,15 @@
 
 void CompanionLink::begin(uint32_t baud) {
   // CYD CH340 is UART0 (Serial). Companion owns this link — no log spam.
-  Serial.setRxBufferSize(2048);
+  Serial.setRxBufferSize(4096);
   Serial.setTxBufferSize(1024);
   Serial.begin(baud);
   Serial.setTimeout(0);
-  line_.reserve(768);
+  line_.reserve(1536);
   line_ = "";
 }
 
-bool CompanionLink::poll(AppConfig& cfg, const MinerSnapshot& snap, ApplyFn onApply) {
+bool CompanionLink::poll(AppConfig& cfg, const MinerSnapshot& snap, ApplyFn onApply, NetFeed* net) {
   bool applied = false;
   while (Serial.available() > 0) {
     char c = (char)Serial.read();
@@ -21,21 +21,23 @@ bool CompanionLink::poll(AppConfig& cfg, const MinerSnapshot& snap, ApplyFn onAp
         line_ = "";
         cmd.trim();
         if (cmd.length() == 0) continue;
-        handleLine(cmd, cfg, snap, [&](AppConfig& u, bool& reboot, bool reconnect) {
-          bool ok = onApply(u, reboot, reconnect);
-          if (ok) applied = true;
-          return ok;
-        });
+        handleLine(cmd, cfg, snap,
+                   [&](AppConfig& u, bool& reboot, bool reconnect) {
+                     bool ok = onApply(u, reboot, reconnect);
+                     if (ok) applied = true;
+                     return ok;
+                   },
+                   net);
       }
     } else if (c >= 32 && c < 127) {
-      if (line_.length() < 760) line_ += c;
+      if (line_.length() < 1500) line_ += c;
     }
   }
   return applied;
 }
 
 void CompanionLink::handleLine(const String& line, AppConfig& cfg, const MinerSnapshot& snap,
-                               ApplyFn onApply) {
+                               ApplyFn onApply, NetFeed* net) {
   String t = line;
   int idx = -1;
   {
@@ -78,6 +80,25 @@ void CompanionLink::handleLine(const String& line, AppConfig& cfg, const MinerSn
     Serial.flush();
     return;
   }
+  // PC → board network/market feed (no auth — display only).
+  if (verb == "netdata" || verb == "net" || verb == "push") {
+    if (!net) {
+      Serial.println("CMPERR net feed unavailable");
+      Serial.flush();
+      return;
+    }
+    parseNetData(args, *net);
+    if (net->ticker.length() == 0) {
+      Serial.println("CMPERR netdata text required");
+      Serial.flush();
+      return;
+    }
+    net->updatedMs = millis();
+    net->fresh = true;
+    Serial.println("CMPACK net");
+    Serial.flush();
+    return;
+  }
   if (verb == "set" || verb == "clock" || verb == "reboot") {
     AppConfig updated = cfg;
     bool reboot = false;
@@ -87,10 +108,12 @@ void CompanionLink::handleLine(const String& line, AppConfig& cfg, const MinerSn
     if (verb == "reboot") reboot = true;
     if (verb == "clock" && args.indexOf("cpu_mhz") < 0 && args.indexOf("clock") < 0) {
       Serial.println("CMPERR cpu_mhz required");
+      Serial.flush();
       return;
     }
     if (!cfg.authorizeOrSetup(authVal)) {
       Serial.println("CMPERR bad auth");
+      Serial.flush();
       return;
     }
     Serial.println("CMPACK queued");
@@ -98,7 +121,7 @@ void CompanionLink::handleLine(const String& line, AppConfig& cfg, const MinerSn
     (void)onApply(updated, reboot, reconnect);
     return;
   }
-  Serial.println("CMPERR unknown (ping|status|config|set|clock|reboot)");
+  Serial.println("CMPERR unknown (ping|status|config|set|clock|reboot|netdata)");
   Serial.flush();
 }
 
@@ -119,6 +142,7 @@ void CompanionLink::replyStatus(const AppConfig& cfg, const MinerSnapshot& snap)
   doc["uptime_secs"] = (uint32_t)(millis() / 1000);
   doc["cpu_mhz"] = snap.cpuMhz ? snap.cpuMhz : cfg.cpuMhz;
   doc["hash_focus"] = snap.hashFocus;
+  doc["net_ticker"] = snap.netTicker;
   char nonceHex[9];
   snprintf(nonceHex, sizeof(nonceHex), "%08x", snap.nonce);
   doc["nonce"] = nonceHex;
@@ -135,7 +159,7 @@ void CompanionLink::replyConfig(const AppConfig& cfg) {
   doc["wifi_password"] = cfg.wifiPassword.length() ? "********" : "";
   doc["cpu_mhz"] = cfg.cpuMhz;
   doc["hash_focus"] = cfg.hashFocus;
-  doc["fw"] = "0.2.1-cpp";
+  doc["fw"] = "0.2.2-cpp";
   doc["configured"] = cfg.isComplete();
   Serial.print("CMPCONFIG ");
   serializeJson(doc, Serial);
@@ -187,6 +211,27 @@ void CompanionLink::parseBody(const String& body, AppConfig& cfg, bool& reboot, 
       reboot = (val == "1" || val.equalsIgnoreCase("true"));
     } else if (key == "reconnect") {
       reconnect = (val == "1" || val.equalsIgnoreCase("true"));
+    }
+    if (amp < 0) break;
+    start = amp + 1;
+  }
+}
+
+void CompanionLink::parseNetData(const String& body, NetFeed& net) {
+  int start = 0;
+  while (start < (int)body.length()) {
+    int amp = body.indexOf('&', start);
+    String pair = (amp < 0) ? body.substring(start) : body.substring(start, amp);
+    int eq = pair.indexOf('=');
+    String key = (eq < 0) ? pair : pair.substring(0, eq);
+    String val = (eq < 0) ? "" : urlDecode(pair.substring(eq + 1));
+    key.toLowerCase();
+    if (key == "text" || key == "ticker" || key == "line") {
+      if (val.length() > 96) val = val.substring(0, 96);
+      net.ticker = val;
+    } else if (key == "source" || key == "src") {
+      if (val.length() > 24) val = val.substring(0, 24);
+      net.source = val;
     }
     if (amp < 0) break;
     start = amp + 1;

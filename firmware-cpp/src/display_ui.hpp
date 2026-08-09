@@ -26,6 +26,7 @@ class DisplayUi {
   bool lastConnected_ = false;
   String lastPool_;
   String lastWifiIp_;
+  String lastTicker_;
   bool miningDrawn_ = false;
 
   void drawMiningChrome();

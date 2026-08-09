@@ -8,6 +8,7 @@ CYD Companion — quick start
 5. Enter WiFi SSID/password, stratum, worker, pool password
 6. Save & reboot
 
-The board only shows mining stats. All control is in this app.
+The board only shows mining stats + a network ticker. All control is in this app.
+Markets prices are fetched on the PC and pushed to the board over USB.
 
-USB protocol: cmp ping | status | config | set | clock | reboot
+USB protocol: cmp ping | status | config | set | clock | reboot | netdata

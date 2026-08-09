@@ -6,7 +6,7 @@
 | Piece | Path |
 |-------|------|
 | Firmware | `firmware-cpp/` (PlatformIO / Arduino) |
-| Control app | `companion/` (Win32 C++, MinGW) |
+| Control app | `companion/` (egui GPU UI; USB control + network data bridge) |
 | Flash images | `flash/` |
 
 ## Board (mining only)

@@ -17,6 +17,15 @@ struct MinerSnapshot {
   uint32_t nonce = 0;
   uint8_t cpuMhz = 240;
   bool hashFocus = true;
+  String netTicker;  // USB-pushed network/market line from companion
+};
+
+// Network / market feed pushed from the PC over USB (`cmp netdata`).
+struct NetFeed {
+  String ticker;
+  String source;
+  uint32_t updatedMs = 0;
+  bool fresh = false;
 };
 
 // UART0 companion protocol only — never prompts for field text.
@@ -26,14 +35,16 @@ class CompanionLink {
 
   void begin(uint32_t baud = 115200);
   // Call often from loop(). Returns true if config was applied.
-  bool poll(AppConfig& cfg, const MinerSnapshot& snap, ApplyFn onApply);
+  bool poll(AppConfig& cfg, const MinerSnapshot& snap, ApplyFn onApply, NetFeed* net = nullptr);
 
  private:
   String line_;
-  void handleLine(const String& line, AppConfig& cfg, const MinerSnapshot& snap, ApplyFn onApply);
+  void handleLine(const String& line, AppConfig& cfg, const MinerSnapshot& snap, ApplyFn onApply,
+                  NetFeed* net);
   void replyStatus(const AppConfig& cfg, const MinerSnapshot& snap);
   void replyConfig(const AppConfig& cfg);
   static String urlDecode(const String& in);
   static void parseBody(const String& body, AppConfig& cfg, bool& reboot, bool& reconnect,
                         String& auth);
+  static void parseNetData(const String& body, NetFeed& net);
 };

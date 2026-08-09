@@ -1,16 +1,18 @@
 #!/usr/bin/env bash
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+cd "$ROOT/companion"
+
+echo "==> Building egui CYD Companion (MinGW)..."
+rustup target add x86_64-pc-windows-gnu >/dev/null
+cargo build --release --target x86_64-pc-windows-gnu
+
+mkdir -p "$ROOT/dist/cyd-companion-windows"
+cp -f target/x86_64-pc-windows-gnu/release/cyd-companion.exe "$ROOT/dist/cyd-companion-windows/"
+cp -f "$ROOT/COMPANION.md" "$ROOT/dist/cyd-companion-windows/"
+cp -f "$ROOT/packaging/README-windows.txt" "$ROOT/dist/cyd-companion-windows/README.txt"
+
 cd "$ROOT"
-
-echo "==> Building C++ CYD Companion (MinGW)..."
-make -C companion clean all
-
-mkdir -p dist/cyd-companion-windows
-cp -f companion/README.md dist/cyd-companion-windows/COMPANION.md
-cp -f packaging/README-windows.txt dist/cyd-companion-windows/README.txt
-# exe already written to dist/cyd-companion-windows/ by Makefile
-
 rm -f dist/cyd-companion-windows.zip dist/CYD-Companion-Portable.zip dist/CYD-Companion-App-Only.zip
 ( cd dist && zip -r cyd-companion-windows.zip cyd-companion-windows )
 cp -f dist/cyd-companion-windows.zip dist/CYD-Companion-Portable.zip
@@ -41,4 +43,4 @@ if [[ -f "$SETUP_EXE" ]]; then
 fi
 ls -la dist/cyd-companion-windows/cyd-companion.exe "$PORTABLE_ZIP" "$APP_ONLY_ZIP" || true
 [[ -f "$SETUP_EXE" ]] && ls -la "$SETUP_EXE"
-echo "Windows companion ready"
+echo "Windows companion ready (egui graphics + USB netdata bridge)"

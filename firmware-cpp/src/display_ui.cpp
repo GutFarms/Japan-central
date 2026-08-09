@@ -57,6 +57,7 @@ void DisplayUi::drawMiningChrome() {
   lastConnected_ = false;
   lastPool_ = "";
   lastWifiIp_ = "";
+  lastTicker_ = "";
 }
 
 void DisplayUi::showMining(const AppConfig& cfg, const MinerSnapshot& snap, bool forceFull) {
@@ -96,10 +97,22 @@ void DisplayUi::showMining(const AppConfig& cfg, const MinerSnapshot& snap, bool
 
   String wifiIp = snap.wifi + "  " + snap.ip;
   if (forceFull || wifiIp != lastWifiIp_) {
-    tft_.fillRect(12, 218, 300, 20, cBg_);
+    tft_.fillRect(12, 214, 300, 12, cBg_);
     tft_.setTextColor(cMuted_, cBg_);
-    tft_.drawString(wifiIp, 12, 218, 2);
+    tft_.drawString(wifiIp, 12, 212, 1);
     lastWifiIp_ = wifiIp;
+  }
+
+  // USB-pushed network/market ticker from companion.
+  if (forceFull || snap.netTicker != lastTicker_) {
+    tft_.fillRect(0, 226, 320, 14, cBg_);
+    tft_.fillRect(0, 226, 320, 14, to565(14, 22, 32));
+    tft_.setTextDatum(TL_DATUM);
+    tft_.setTextColor(cLime_, to565(14, 22, 32));
+    String tick = snap.netTicker.length() ? snap.netTicker : String("net: waiting for app");
+    if (tick.length() > 40) tick = tick.substring(0, 40);
+    tft_.drawString(tick, 6, 228, 1);
+    lastTicker_ = snap.netTicker;
   }
 }
 
