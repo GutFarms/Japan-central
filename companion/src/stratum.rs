@@ -515,6 +515,7 @@ fn target_from_difficulty(mut diff: f64) -> [u8; 32] {
 }
 
 pub fn encode_job_cmd(job: &WorkJob) -> String {
+    // Legacy one-shot (kept for older firmware). Prefer encode_job_parts().
     format!(
         "cmp job header={}&target={}&job={}&en2={}&ntime={}",
         hex::encode(job.header),
@@ -523,6 +524,20 @@ pub fn encode_job_cmd(job: &WorkJob) -> String {
         urlenc(&job.extranonce2_hex),
         urlenc(&job.ntime_hex)
     )
+}
+
+/// Short multi-part job commands — survives 115200 USB under hash load.
+pub fn encode_job_parts(job: &WorkJob) -> [String; 3] {
+    [
+        format!("cmp jh {}", hex::encode(job.header)),
+        format!("cmp jt {}", hex::encode(job.target)),
+        format!(
+            "cmp ja job={}&en2={}&ntime={}",
+            urlenc(&job.job_id),
+            urlenc(&job.extranonce2_hex),
+            urlenc(&job.ntime_hex)
+        ),
+    ]
 }
 
 fn urlenc(s: &str) -> String {

@@ -18,7 +18,7 @@ use eframe::egui::{
 use eframe::{App, NativeOptions};
 use serde::{Deserialize, Serialize};
 use serialport::SerialPort;
-use stratum::{encode_job_cmd, StratumClient};
+use stratum::{encode_job_parts, StratumClient};
 
 fn main() -> eframe::Result<()> {
     let options = NativeOptions {
@@ -1540,7 +1540,7 @@ fn mine_worker(cmd_rx: Receiver<NetCmd>, msg_tx: Sender<NetMsg>) {
                         continue;
                     }
                     if let Some(p) = usb.as_mut() {
-                        match usb_cmd(p.as_mut(), &mut usb_rx, &warmup_job_cmd()) {
+                        match usb_push_job(p.as_mut(), &mut usb_rx, &warmup_job()) {
                             Ok(_) => {
                                 let _ = msg_tx.send(NetMsg::Action(Ok(
                                     "Board hashing (warmup job)…".into(),
@@ -1669,8 +1669,7 @@ fn mine_worker(cmd_rx: Receiver<NetCmd>, msg_tx: Sender<NetMsg>) {
                     }
                     if let Some(job) = client.take_job() {
                         if let Some(p) = usb.as_mut() {
-                            let cmd = encode_job_cmd(&job);
-                            match usb_cmd(p.as_mut(), &mut usb_rx, &cmd) {
+                            match usb_push_job(p.as_mut(), &mut usb_rx, &job) {
                                 Ok(_) => {
                                     let _ = msg_tx.send(NetMsg::Action(Ok(format!(
                                         "USB ← job {}",
@@ -1809,15 +1808,16 @@ fn cmp_reply_line(buf: &str) -> Option<String> {
 
 fn usb_cmd(port: &mut dyn SerialPort, buf: &mut String, cmd: &str) -> Result<String, String> {
     let mut last_err = String::new();
-    let (wait_ms, retries) = if cmd.contains("bench") {
-        (60_000u64, 2usize)
-    } else if cmd.contains("job") {
-        (8_000u64, 3usize)
+    let (wait_ms, retries, chunk, gap_ms) = if cmd.contains("bench") {
+        (60_000u64, 2usize, 32usize, 3u64)
     } else if cmd.contains("status") {
-        // Status must stay snappy so stratum TX/RX is never blocked for 36s.
-        (1_800u64, 2usize)
+        (1_800u64, 2usize, 64usize, 2u64)
+    } else if cmd.contains(" jh") || cmd.contains(" jt") || cmd.contains(" ja") {
+        (3_500u64, 3usize, 32usize, 4u64)
+    } else if cmd.contains(" job ") {
+        (6_000u64, 2usize, 32usize, 4u64)
     } else {
-        (4_000u64, 3usize)
+        (3_500u64, 3usize, 64usize, 2u64)
     };
     for _ in 0..retries {
         drain_serial(port, buf);
@@ -1830,44 +1830,71 @@ fn usb_cmd(port: &mut dyn SerialPort, buf: &mut String, cmd: &str) -> Result<Str
         }
         *buf = keep;
         let line = format!("\r\n{cmd}\r\n");
-        for chunk in line.as_bytes().chunks(64) {
-            port.write_all(chunk)
+        for piece in line.as_bytes().chunks(chunk) {
+            port.write_all(piece)
                 .map_err(|e| format!("USB write: {e}"))?;
-            thread::sleep(Duration::from_millis(2));
+            let _ = port.flush();
+            thread::sleep(Duration::from_millis(gap_ms));
         }
-        port.flush().map_err(|e| format!("USB flush: {e}"))?;
         let deadline = Instant::now() + Duration::from_millis(wait_ms);
         while Instant::now() < deadline {
             drain_serial(port, buf);
             if let Some(reply) = cmp_reply_line(buf) {
+                if let Some(pos) = buf.find(&reply) {
+                    let end = pos + reply.len();
+                    let rest = format!("{}{}", &buf[..pos], &buf[end..]);
+                    *buf = rest
+                        .lines()
+                        .filter(|l| l.trim().starts_with("CMPSHARE "))
+                        .fold(String::new(), |mut acc, l| {
+                            acc.push_str(l.trim());
+                            acc.push('\n');
+                            acc
+                        });
+                }
+                if reply.starts_with("CMPERR") {
+                    return Err(reply);
+                }
                 return Ok(reply);
             }
-            thread::sleep(Duration::from_millis(15));
+            thread::sleep(Duration::from_millis(10));
         }
         last_err = format!(
             "USB timeout waiting for reply to `{}`",
-            cmd.chars().take(48).collect::<String>()
+            cmd.chars().take(56).collect::<String>()
         );
-        thread::sleep(Duration::from_millis(40));
+        thread::sleep(Duration::from_millis(30));
     }
     Err(last_err)
 }
 
-fn warmup_job_cmd() -> String {
-    use stratum::WorkJob;
+fn usb_push_job(
+    port: &mut dyn SerialPort,
+    buf: &mut String,
+    job: &stratum::WorkJob,
+) -> Result<(), String> {
+    for part in encode_job_parts(job) {
+        let reply = usb_cmd(port, buf, &part)?;
+        if !(reply.starts_with("CMPACK") || reply.starts_with("CMP ok")) {
+            return Err(format!("unexpected job reply: {reply}"));
+        }
+    }
+    Ok(())
+}
+
+fn warmup_job() -> stratum::WorkJob {
     let mut header = [0u8; 80];
     header[0] = 0x01;
     header[68] = 0x5a;
     let mut target = [0xffu8; 32];
     target[31] = 0x0f;
-    let job = WorkJob {
+    stratum::WorkJob {
         job_id: "warmup".into(),
         header,
         target,
         extranonce2_hex: "00000000".into(),
         ntime_hex: "00000000".into(),
-    };
-    encode_job_cmd(&job)
+    }
 }
 
 fn parse_cmp_status(line: &str) -> Result<StatusJson, String> {

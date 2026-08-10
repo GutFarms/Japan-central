@@ -6,10 +6,10 @@
 struct MinerSnapshot {
   float hashrateHs = 0;
   uint64_t shares = 0;
-  uint32_t accepted = 0;  // echoed from PC over USB (optional)
+  uint32_t accepted = 0;
   uint32_t rejected = 0;
   String pool = "usb";
-  bool connected = false;  // has active USB job
+  bool connected = false;
   uint32_t difficulty = 0;
   uint32_t nonce = 0;
   uint8_t cpuMhz = 240;
@@ -20,7 +20,6 @@ struct MinerSnapshot {
   bool fullV = false;
 };
 
-// Optional LCD ticker pushed from the PC (`cmp netdata`).
 struct NetFeed {
   String ticker;
   String source;
@@ -28,7 +27,6 @@ struct NetFeed {
   bool fresh = false;
 };
 
-// Work unit delivered over USB-C (`cmp job`).
 struct UsbJob {
   uint8_t header[80]{};
   uint8_t target[32]{};
@@ -60,11 +58,19 @@ class CompanionLink {
   bool poll(AppConfig& cfg, const MinerSnapshot& snap, ApplyFn onApply, NetFeed* net, JobFn onJob,
             StopFn onStop, StatsFn onStats);
 
-  // Emit a found share to the PC (non-blocking print).
   void emitShare(const PendingShare& share);
 
  private:
-  String line_;
+  static constexpr size_t kLineCap = 768;
+  char lineBuf_[kLineCap]{};
+  size_t lineLen_ = 0;
+
+  // Staged multi-part job (short USB lines — avoids one huge `cmp job …` timeout).
+  uint8_t stagedHeader_[80]{};
+  uint8_t stagedTarget_[32]{};
+  bool haveHeader_ = false;
+  bool haveTarget_ = false;
+
   void handleLine(const String& line, AppConfig& cfg, const MinerSnapshot& snap, ApplyFn onApply,
                   NetFeed* net, JobFn onJob, StopFn onStop, StatsFn onStats);
   void replyStatus(const AppConfig& cfg, const MinerSnapshot& snap);
@@ -73,5 +79,6 @@ class CompanionLink {
   static void parseBody(const String& body, AppConfig& cfg, bool& reboot);
   static void parseNetData(const String& body, NetFeed& net);
   static bool parseJob(const String& body, UsbJob& job);
+  static bool parseJobMeta(const String& body, UsbJob& job);
   static bool hexDecodeFixed(const String& hex, uint8_t* out, size_t n);
 };

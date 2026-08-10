@@ -6,23 +6,27 @@
 extern "C" float cyd_run_bench(uint32_t n);
 
 void CompanionLink::begin(uint32_t baud) {
-  Serial.setRxBufferSize(4096);
-  Serial.setTxBufferSize(1024);
+  Serial.setRxBufferSize(8192);
+  Serial.setTxBufferSize(2048);
   Serial.begin(baud);
   Serial.setTimeout(0);
-  line_.reserve(2048);
-  line_ = "";
+  lineLen_ = 0;
+  haveHeader_ = false;
+  haveTarget_ = false;
 }
 
 bool CompanionLink::poll(AppConfig& cfg, const MinerSnapshot& snap, ApplyFn onApply, NetFeed* net,
                          JobFn onJob, StopFn onStop, StatsFn onStats) {
   bool applied = false;
-  while (Serial.available() > 0) {
+  // Drain aggressively — long job traffic must not wait on mining.
+  int budget = 4096;
+  while (budget-- > 0 && Serial.available() > 0) {
     char c = (char)Serial.read();
     if (c == '\n' || c == '\r') {
-      if (line_.length() > 0) {
-        String cmd = line_;
-        line_ = "";
+      if (lineLen_ > 0) {
+        lineBuf_[lineLen_] = 0;
+        String cmd(lineBuf_);
+        lineLen_ = 0;
         cmd.trim();
         if (cmd.length() == 0) continue;
         handleLine(cmd, cfg, snap,
@@ -34,7 +38,12 @@ bool CompanionLink::poll(AppConfig& cfg, const MinerSnapshot& snap, ApplyFn onAp
                    net, onJob, onStop, onStats);
       }
     } else if (c >= 32 && c < 127) {
-      if (line_.length() < 2000) line_ += c;
+      if (lineLen_ + 1 < kLineCap) {
+        lineBuf_[lineLen_++] = c;
+      } else {
+        // Overflow — drop line so a bad frame can't wedge the parser.
+        lineLen_ = 0;
+      }
     }
   }
   return applied;
@@ -100,6 +109,64 @@ void CompanionLink::handleLine(const String& line, AppConfig& cfg, const MinerSn
     Serial.flush();
     return;
   }
+
+  // Multi-part job: short lines that survive 115200 USB under load.
+  //   cmp jh <160 hex>              — header
+  //   cmp jt <64 hex>               — target
+  //   cmp ja job=&en2=&ntime=&start= — arm
+  if (verb == "jh" || verb == "jobhdr" || verb == "header") {
+    String hex = args;
+    int eq = hex.indexOf('=');
+    if (eq >= 0) hex = hex.substring(eq + 1);
+    hex.trim();
+    if (!hexDecodeFixed(hex, stagedHeader_, 80)) {
+      Serial.println("CMPERR jh need 160 hex");
+      Serial.flush();
+      return;
+    }
+    haveHeader_ = true;
+    Serial.println("CMPACK jh");
+    Serial.flush();
+    return;
+  }
+  if (verb == "jt" || verb == "jobtgt" || verb == "target") {
+    String hex = args;
+    int eq = hex.indexOf('=');
+    if (eq >= 0) hex = hex.substring(eq + 1);
+    hex.trim();
+    if (!hexDecodeFixed(hex, stagedTarget_, 32)) {
+      Serial.println("CMPERR jt need 64 hex");
+      Serial.flush();
+      return;
+    }
+    haveTarget_ = true;
+    Serial.println("CMPACK jt");
+    Serial.flush();
+    return;
+  }
+  if (verb == "ja" || verb == "jobarm" || verb == "arm") {
+    if (!haveHeader_ || !haveTarget_) {
+      Serial.println("CMPERR ja need jh+jt first");
+      Serial.flush();
+      return;
+    }
+    UsbJob job;
+    if (!parseJobMeta(args, job)) {
+      Serial.println("CMPERR ja bad meta");
+      Serial.flush();
+      return;
+    }
+    memcpy(job.header, stagedHeader_, 80);
+    memcpy(job.target, stagedTarget_, 32);
+    job.valid = true;
+    job.fresh = true;
+    Serial.println("CMPACK ja");
+    Serial.flush();
+    if (onJob) onJob(job);
+    return;
+  }
+
+  // Legacy one-shot job (kept for older companions).
   if (verb == "job") {
     UsbJob job;
     if (!parseJob(args, job)) {
@@ -107,7 +174,6 @@ void CompanionLink::handleLine(const String& line, AppConfig& cfg, const MinerSn
       Serial.flush();
       return;
     }
-    // ACK first so the PC never times out while we arm the hasher.
     Serial.println("CMPACK job");
     Serial.flush();
     if (onJob) onJob(job);
@@ -136,7 +202,6 @@ void CompanionLink::handleLine(const String& line, AppConfig& cfg, const MinerSn
     return;
   }
   if (verb == "stats") {
-    // PC reports accept/reject counts for the LCD.
     uint32_t acc = 0, rej = 0;
     int start = 0;
     while (start < (int)args.length()) {
@@ -188,7 +253,7 @@ void CompanionLink::handleLine(const String& line, AppConfig& cfg, const MinerSn
     (void)onApply(updated, reboot);
     return;
   }
-  Serial.println("CMPERR unknown (ping|status|config|job|stop|stats|bench|clock|reboot|netdata)");
+  Serial.println("CMPERR unknown (ping|status|config|jh|jt|ja|job|stop|stats|bench|clock|reboot|netdata)");
   Serial.flush();
 }
 
@@ -222,7 +287,7 @@ void CompanionLink::replyConfig(const AppConfig& cfg) {
   JsonDocument doc;
   doc["cpu_mhz"] = cfg.cpuMhz;
   doc["hash_focus"] = cfg.hashFocus;
-  doc["fw"] = "0.6.1-sha256";
+  doc["fw"] = "0.6.2-sha256";
   doc["mode"] = "usb-sha256";
   doc["configured"] = true;
   Serial.print("CMPCONFIG ");
@@ -304,6 +369,33 @@ bool CompanionLink::hexDecodeFixed(const String& hex, uint8_t* out, size_t n) {
     if (hi < 0 || lo < 0) return false;
     out[i] = (uint8_t)((hi << 4) | lo);
   }
+  return true;
+}
+
+bool CompanionLink::parseJobMeta(const String& body, UsbJob& job) {
+  job = UsbJob{};
+  String startStr;
+  int start = 0;
+  while (start < (int)body.length()) {
+    int amp = body.indexOf('&', start);
+    String pair = (amp < 0) ? body.substring(start) : body.substring(start, amp);
+    int eq = pair.indexOf('=');
+    String key = (eq < 0) ? pair : pair.substring(0, eq);
+    String val = (eq < 0) ? "" : urlDecode(pair.substring(eq + 1));
+    key.toLowerCase();
+    if (key == "job" || key == "job_id" || key == "id") job.jobId = val;
+    else if (key == "en2" || key == "extranonce2") job.extranonce2 = val;
+    else if (key == "ntime" || key == "time") job.ntime = val;
+    else if (key == "start" || key == "nonce") startStr = val;
+    if (amp < 0) break;
+    start = amp + 1;
+  }
+  if (startStr.length()) {
+    job.startNonce = (uint32_t)strtoul(startStr.c_str(), nullptr, 16);
+  } else {
+    job.startNonce = esp_random();
+  }
+  if (job.jobId.length() == 0) job.jobId = "0";
   return true;
 }
 

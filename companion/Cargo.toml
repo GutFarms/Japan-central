@@ -1,6 +1,6 @@
 [package]
 name = "cyd-companion"
-version = "0.6.1"
+version = "0.6.2"
 edition = "2021"
 description = "CYD Companion — USB SHA-256 Bitcoin mining control (PC stratum, board hashes)"
 license = "MIT OR Apache-2.0"
