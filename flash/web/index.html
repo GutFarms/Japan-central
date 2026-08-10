@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>CYD Scrypt Miner — Drag &amp; Drop Flash</title>
+  <title>CYD SHA-256 Miner — Drag &amp; Drop Flash</title>
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600&family=Syne:wght@600;700&display=swap" rel="stylesheet" />
@@ -19,8 +19,8 @@
     </header>
 
     <div class="row downloads">
-      <a class="btn primary" id="dlMerged" href="../esp32-2432s028-scrypt-miner-merged.bin" download="esp32-2432s028-scrypt-miner-merged.bin">Save merged.bin to PC</a>
-      <a class="btn ghost" id="dlApp" href="../esp32-2432s028-scrypt-miner.bin" download="esp32-2432s028-scrypt-miner.bin">Save app.bin</a>
+      <a class="btn primary" id="dlMerged" href="../esp32-2432s028-sha256-miner-merged.bin" download="esp32-2432s028-sha256-miner-merged.bin">Save merged.bin to PC</a>
+      <a class="btn ghost" id="dlApp" href="../esp32-2432s028-sha256-miner.bin" download="esp32-2432s028-sha256-miner.bin">Save app.bin</a>
     </div>
     <p class="dl-hint">Use <strong>merged.bin</strong> (flash at <code>0x0</code>). App-only bin is for advanced reflash at <code>0x10000</code>.</p>
 
@@ -28,7 +28,7 @@
       <a class="btn primary" href="../downloads/CYD-Companion-App-Only.zip" download="CYD-Companion-App-Only.zip">Download Windows app (zip)</a>
       <a class="btn ghost" href="../downloads/CYD-Companion-Portable.zip" download="CYD-Companion-Portable.zip">Portable zip + README</a>
     </div>
-    <p class="dl-hint">Windows control app: unzip → run <code>cyd-companion.exe</code> → USB Connect → configure WiFi/pool → Save &amp; reboot. The board only shows mining stats.</p>
+    <p class="dl-hint">Windows control app: unzip → run <code>cyd-companion.exe</code> → USB Connect → BTC address → Start mining. Board hashes SHA-256 only; pool stays on the PC.</p>
 
     <section id="drop" class="drop" tabindex="0" aria-label="Firmware drop zone">
       <div class="drop-inner">

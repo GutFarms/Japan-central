@@ -8,5 +8,4 @@
 **/firmware-cpp/.pio/
 **/companion/build/
 *.rs.bk
-scrypt-miner-config.bin
 hardware/esp32-asic-controller/firmware-stub/target/

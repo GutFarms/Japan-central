@@ -4,8 +4,8 @@
  */
 import { ESPLoader, Transport } from "https://unpkg.com/esptool-js@0.5.6/bundle.js";
 
-const BUNDLED = "../esp32-2432s028-scrypt-miner-merged.bin";
-const BUNDLED_APP = "../esp32-2432s028-scrypt-miner.bin";
+const BUNDLED = "../esp32-2432s028-sha256-miner-merged.bin";
+const BUNDLED_APP = "../esp32-2432s028-sha256-miner.bin";
 
 const drop = document.getElementById("drop");
 const fileInput = document.getElementById("fileInput");
@@ -156,7 +156,7 @@ btnBundled.addEventListener("click", async () => {
   setStatus("Fetching project merged.bin…");
   try {
     const bytes = await fetchBin(BUNDLED);
-    adoptFile("esp32-2432s028-scrypt-miner-merged.bin", bytes);
+    adoptFile("esp32-2432s028-sha256-miner-merged.bin", bytes);
   } catch (err) {
     setStatus(`Could not load bundled image: ${err.message}. Use “Save merged.bin to PC”, then drag it here.`, "err");
     log(String(err));
@@ -187,11 +187,11 @@ async function downloadBin(url, filename, alsoLoad) {
 
 document.getElementById("dlMerged")?.addEventListener("click", (e) => {
   e.preventDefault();
-  downloadBin(BUNDLED, "esp32-2432s028-scrypt-miner-merged.bin", true);
+  downloadBin(BUNDLED, "esp32-2432s028-sha256-miner-merged.bin", true);
 });
 document.getElementById("dlApp")?.addEventListener("click", (e) => {
   e.preventDefault();
-  downloadBin(BUNDLED_APP, "esp32-2432s028-scrypt-miner.bin", true);
+  downloadBin(BUNDLED_APP, "esp32-2432s028-sha256-miner.bin", true);
 });
 
 function terminal() {
@@ -383,7 +383,7 @@ btnReset.addEventListener("click", async () => {
   }
   try {
     const bytes = await fetchBin(BUNDLED);
-    if (adoptFile("esp32-2432s028-scrypt-miner-merged.bin", bytes)) {
+    if (adoptFile("esp32-2432s028-sha256-miner-merged.bin", bytes)) {
       setStatus("Project merged.bin loaded — Save to PC and/or Connect & flash", "ok");
     }
   } catch (err) {
