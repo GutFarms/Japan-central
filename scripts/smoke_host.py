@@ -45,7 +45,8 @@ def main() -> int:
     assert payload["host"] == "SMOKE"
     assert 0.0 <= payload["cpu"] <= 100.0
     assert 0.0 <= payload["ram"] <= 100.0
-    assert 0.0 <= payload["disk"] <= 100.0
+    assert "disk_used_gb" in payload and "cpu_mhz_max" in payload
+    assert payload["disk_total_gb"] >= payload["disk_used_gb"] >= 0
 
     stream = MetricsStream(full_every=8)
     line = stream.encode(payload, force_full=True) + b"\n"

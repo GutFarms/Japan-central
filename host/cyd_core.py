@@ -27,8 +27,12 @@ try:
     with warnings.catch_warnings():
         warnings.simplefilter("ignore", FutureWarning)
         from pynvml import (
+            NVML_CLOCK_GRAPHICS,
+            NVML_CLOCK_MEM,
             NVML_TEMPERATURE_GPU,
+            nvmlDeviceGetClockInfo,
             nvmlDeviceGetHandleByIndex,
+            nvmlDeviceGetMaxClockInfo,
             nvmlDeviceGetMemoryInfo,
             nvmlDeviceGetName,
             nvmlDeviceGetTemperature,
@@ -40,6 +44,18 @@ try:
     _HAS_NVML = True
 except Exception:  # noqa: BLE001
     _HAS_NVML = False
+    NVML_CLOCK_GRAPHICS = 0
+    NVML_CLOCK_MEM = 1
+    NVML_TEMPERATURE_GPU = 0
+    nvmlDeviceGetClockInfo = None  # type: ignore
+    nvmlDeviceGetMaxClockInfo = None  # type: ignore
+    nvmlDeviceGetHandleByIndex = None  # type: ignore
+    nvmlDeviceGetMemoryInfo = None  # type: ignore
+    nvmlDeviceGetName = None  # type: ignore
+    nvmlDeviceGetTemperature = None  # type: ignore
+    nvmlDeviceGetUtilizationRates = None  # type: ignore
+    nvmlInit = None  # type: ignore
+    nvmlShutdown = None  # type: ignore
 
 
 # Common USB-UART chips used on ESP32-CYD boards (VID, PID).
@@ -146,22 +162,43 @@ class GpuReader:
             self.enabled = False
 
     def read(self) -> dict[str, float]:
+        empty = {
+            "gpu": 0.0,
+            "gpu_temp": 0.0,
+            "vram": 0.0,
+            "vram_used_mb": 0.0,
+            "gpu_clock_mhz": 0.0,
+            "gpu_clock_max_mhz": 0.0,
+            "gpu_mem_clock_mhz": 0.0,
+        }
         if not self.enabled or self.handle is None:
-            return {"gpu": 0.0, "gpu_temp": 0.0, "vram": 0.0, "vram_used_mb": 0.0}
+            return empty
         try:
             util = nvmlDeviceGetUtilizationRates(self.handle)
             mem = nvmlDeviceGetMemoryInfo(self.handle)
             temp = nvmlDeviceGetTemperature(self.handle, NVML_TEMPERATURE_GPU)
             vram_pct = (float(mem.used) / float(mem.total) * 100.0) if mem.total else 0.0
+            gpu_clock = 0.0
+            gpu_clock_max = 0.0
+            mem_clock = 0.0
+            try:
+                gpu_clock = float(nvmlDeviceGetClockInfo(self.handle, NVML_CLOCK_GRAPHICS))
+                mem_clock = float(nvmlDeviceGetClockInfo(self.handle, NVML_CLOCK_MEM))
+                gpu_clock_max = float(nvmlDeviceGetMaxClockInfo(self.handle, NVML_CLOCK_GRAPHICS))
+            except Exception:  # noqa: BLE001
+                pass
             return {
                 "gpu": clamp_pct(util.gpu),
                 "gpu_temp": float(temp),
                 "vram": clamp_pct(vram_pct),
                 "vram_used_mb": float(mem.used) / (1024.0 * 1024.0),
+                "gpu_clock_mhz": gpu_clock,
+                "gpu_clock_max_mhz": gpu_clock_max,
+                "gpu_mem_clock_mhz": mem_clock,
             }
         except Exception as exc:  # noqa: BLE001
             print(f"[warn] GPU read failed: {exc}", file=sys.stderr)
-            return {"gpu": 0.0, "gpu_temp": 0.0, "vram": 0.0, "vram_used_mb": 0.0}
+            return empty
 
     def close(self) -> None:
         if self.enabled:
@@ -194,31 +231,59 @@ def collect_metrics(gpu: GpuReader, host_name: str) -> dict[str, Any]:
     cpu = clamp_pct(psutil.cpu_percent(interval=None))
     vm = psutil.virtual_memory()
     swap = psutil.swap_memory()
+    disk_pct = 0.0
+    disk_used_gb = 0.0
+    disk_total_gb = 0.0
+    disk_free_gb = 0.0
     try:
-        disk = psutil.disk_usage("/").percent
+        du = psutil.disk_usage("/")
+        disk_pct = du.percent
+        disk_used_gb = du.used / (1024**3)
+        disk_total_gb = du.total / (1024**3)
+        disk_free_gb = du.free / (1024**3)
     except Exception:  # noqa: BLE001
-        disk = 0.0
+        pass
+
     freq = psutil.cpu_freq()
     cpu_mhz = float(freq.current) if freq and freq.current else 0.0
+    cpu_mhz_min = float(freq.min) if freq and freq.min else 0.0
+    cpu_mhz_max = float(freq.max) if freq and freq.max else 0.0
+    if cpu_mhz_max <= 0 and cpu_mhz > 0:
+        cpu_mhz_max = cpu_mhz
+    cpu_boost_pct = clamp_pct((cpu_mhz / cpu_mhz_max) * 100.0) if cpu_mhz_max > 0 else 0.0
+
     up_mbps, down_mbps = _net_tracker.read_mbps()
     gpu_stats = gpu.read()
     boot = psutil.boot_time()
     uptime_min = int(max(0.0, time.time() - boot) / 60.0)
+    logical = psutil.cpu_count(logical=True) or 0
+    physical = psutil.cpu_count(logical=False) or 0
 
     return {
         "v": 1,
         "cpu": round(cpu, 1),
         "cpu_temp": round(cpu_temperature_c(), 1),
         "cpu_mhz": round(cpu_mhz, 0),
+        "cpu_mhz_min": round(cpu_mhz_min, 0),
+        "cpu_mhz_max": round(cpu_mhz_max, 0),
+        "cpu_boost_pct": round(cpu_boost_pct, 1),
+        "cpu_cores": int(physical),
+        "cpu_threads": int(logical),
         "ram": round(clamp_pct(vm.percent), 1),
         "ram_used_gb": round(vm.used / (1024**3), 2),
         "ram_total_gb": round(vm.total / (1024**3), 2),
         "swap": round(clamp_pct(swap.percent), 1),
-        "disk": round(clamp_pct(disk), 1),
+        "disk": round(clamp_pct(disk_pct), 1),
+        "disk_used_gb": round(disk_used_gb, 2),
+        "disk_total_gb": round(disk_total_gb, 2),
+        "disk_free_gb": round(disk_free_gb, 2),
         "gpu": round(gpu_stats["gpu"], 1),
         "gpu_temp": round(gpu_stats["gpu_temp"], 1),
         "vram": round(gpu_stats["vram"], 1),
         "vram_used_mb": round(gpu_stats.get("vram_used_mb", 0.0), 0),
+        "gpu_clock_mhz": round(gpu_stats.get("gpu_clock_mhz", 0.0), 0),
+        "gpu_clock_max_mhz": round(gpu_stats.get("gpu_clock_max_mhz", 0.0), 0),
+        "gpu_mem_clock_mhz": round(gpu_stats.get("gpu_mem_clock_mhz", 0.0), 0),
         "net_up": round(up_mbps, 2),
         "net_down": round(down_mbps, 2),
         "uptime_min": uptime_min,
