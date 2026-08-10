@@ -16,6 +16,7 @@ import com.solstice.dispensary.data.model.Order
 import com.solstice.dispensary.data.model.OrderLine
 import com.solstice.dispensary.data.model.Product
 import com.solstice.dispensary.data.model.ProductCategory
+import com.solstice.dispensary.data.model.ThemeMode
 import com.solstice.dispensary.data.model.toProfile
 import com.solstice.dispensary.scan.NewProductFactory
 import kotlinx.coroutines.flow.Flow
@@ -67,6 +68,15 @@ class DispensaryRepository(context: Context) {
 
     fun setAgeVerified(verified: Boolean) {
         prefs.edit().putBoolean(KEY_AGE, verified).apply()
+    }
+
+    fun getThemeMode(): ThemeMode {
+        val stored = prefs.getString(KEY_THEME_MODE, ThemeMode.SYSTEM.name) ?: ThemeMode.SYSTEM.name
+        return runCatching { ThemeMode.valueOf(stored) }.getOrDefault(ThemeMode.SYSTEM)
+    }
+
+    fun setThemeMode(mode: ThemeMode) {
+        prefs.edit().putString(KEY_THEME_MODE, mode.name).apply()
     }
 
     fun currentCustomerId(): String? = prefs.getString(KEY_CUSTOMER_ID, null)
@@ -312,5 +322,6 @@ class DispensaryRepository(context: Context) {
         const val TAX_RATE = 0.08
         private const val KEY_AGE = "age_verified"
         private const val KEY_CUSTOMER_ID = "customer_id"
+        private const val KEY_THEME_MODE = "theme_mode"
     }
 }

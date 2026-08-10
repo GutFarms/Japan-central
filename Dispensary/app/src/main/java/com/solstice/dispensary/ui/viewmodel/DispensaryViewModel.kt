@@ -16,6 +16,7 @@ import com.solstice.dispensary.data.model.Order
 import com.solstice.dispensary.data.model.OrderLine
 import com.solstice.dispensary.data.model.Product
 import com.solstice.dispensary.data.model.ProductCategory
+import com.solstice.dispensary.data.model.ThemeMode
 import com.solstice.dispensary.data.repository.DispensaryRepository
 import com.solstice.dispensary.scan.LabelAiScanner
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -34,6 +35,9 @@ class DispensaryViewModel(
     private val scanner = LabelAiScanner()
 
     var ageVerified by mutableStateOf(repository.isAgeVerified())
+        private set
+
+    var themeMode by mutableStateOf(repository.getThemeMode())
         private set
 
     var currentCustomer by mutableStateOf<CustomerProfile?>(null)
@@ -117,6 +121,11 @@ class DispensaryViewModel(
     fun verifyAge() {
         repository.setAgeVerified(true)
         ageVerified = true
+    }
+
+    fun updateThemeMode(mode: ThemeMode) {
+        repository.setThemeMode(mode)
+        themeMode = mode
     }
 
     fun clearAuthError() {

@@ -1,7 +1,6 @@
 package com.solstice.dispensary.ui.screens
 
 import androidx.compose.foundation.background
-import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -30,16 +29,12 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Brush
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import com.solstice.dispensary.ui.components.BrandLogo
-import com.solstice.dispensary.ui.theme.Amber
-import com.solstice.dispensary.ui.theme.Charcoal
-import com.solstice.dispensary.ui.theme.Ivory
-import com.solstice.dispensary.ui.theme.Sage
 
 @Composable
 fun AuthScreen(
@@ -63,11 +58,16 @@ fun AuthScreen(
     var phone by remember { mutableStateOf("") }
     var dob by remember { mutableStateOf("") }
     var marketing by remember { mutableStateOf(true) }
+    val colors = MaterialTheme.colorScheme
 
     Box(
         modifier = Modifier
             .fillMaxSize()
-            .background(Brush.verticalGradient(listOf(Charcoal, Color(0xFF1A1410), Charcoal)))
+            .background(
+                Brush.verticalGradient(
+                    listOf(colors.background, colors.surfaceVariant, colors.background)
+                )
+            )
     ) {
         Column(
             modifier = Modifier
@@ -82,7 +82,7 @@ fun AuthScreen(
             Text(
                 text = if (modeCreate) "Create account" else "Welcome back",
                 style = MaterialTheme.typography.headlineMedium,
-                color = Ivory
+                color = colors.onBackground
             )
             Text(
                 text = if (modeCreate) {
@@ -91,7 +91,7 @@ fun AuthScreen(
                     "Sign in to your Native Pure customer account."
                 },
                 style = MaterialTheme.typography.bodyMedium,
-                color = Sage,
+                color = colors.onSurfaceVariant,
                 textAlign = TextAlign.Center,
                 modifier = Modifier.padding(top = 6.dp, bottom = 18.dp)
             )
@@ -128,7 +128,7 @@ fun AuthScreen(
                     Checkbox(checked = marketing, onCheckedChange = { marketing = it })
                     Text(
                         "Email me deals and menu drops",
-                        color = Ivory,
+                        color = colors.onBackground,
                         style = MaterialTheme.typography.bodyMedium
                     )
                 }
@@ -138,7 +138,7 @@ fun AuthScreen(
                 Spacer(Modifier.height(10.dp))
                 Text(
                     text = error,
-                    color = MaterialTheme.colorScheme.error,
+                    color = colors.error,
                     style = MaterialTheme.typography.bodyMedium,
                     textAlign = TextAlign.Center
                 )
@@ -157,14 +157,14 @@ fun AuthScreen(
                 modifier = Modifier.fillMaxWidth(),
                 shape = RoundedCornerShape(14.dp),
                 colors = ButtonDefaults.buttonColors(
-                    containerColor = Amber,
-                    contentColor = Charcoal
+                    containerColor = colors.secondary,
+                    contentColor = colors.onSecondary
                 )
             ) {
                 if (busy) {
                     CircularProgressIndicator(
                         modifier = Modifier.height(22.dp),
-                        color = Charcoal,
+                        color = colors.onSecondary,
                         strokeWidth = 2.dp
                     )
                 } else {
@@ -188,7 +188,7 @@ fun AuthScreen(
                     } else {
                         "New here? Create an account"
                     },
-                    color = Amber
+                    color = colors.secondary
                 )
             }
 
@@ -197,7 +197,7 @@ fun AuthScreen(
                 Text(
                     text = "Demo: demo@nativepure.example / demo1234",
                     style = MaterialTheme.typography.bodyMedium,
-                    color = Ivory.copy(alpha = 0.55f),
+                    color = colors.onSurfaceVariant,
                     textAlign = TextAlign.Center
                 )
             }
@@ -221,15 +221,6 @@ private fun AuthField(
         singleLine = true,
         label = { Text(label) },
         keyboardOptions = KeyboardOptions(keyboardType = keyboard),
-        visualTransformation = if (password) PasswordVisualTransformation() else androidx.compose.ui.text.input.VisualTransformation.None,
-        colors = androidx.compose.material3.OutlinedTextFieldDefaults.colors(
-            focusedTextColor = Ivory,
-            unfocusedTextColor = Ivory,
-            focusedBorderColor = Amber,
-            unfocusedBorderColor = Ivory.copy(alpha = 0.35f),
-            focusedLabelColor = Amber,
-            unfocusedLabelColor = Ivory.copy(alpha = 0.7f),
-            cursorColor = Amber
-        )
+        visualTransformation = if (password) PasswordVisualTransformation() else VisualTransformation.None
     )
 }

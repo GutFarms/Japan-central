@@ -1,5 +1,6 @@
 package com.solstice.dispensary.ui.screens
 
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
@@ -12,9 +13,11 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Button
 import androidx.compose.material3.Checkbox
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
@@ -29,6 +32,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import com.solstice.dispensary.data.model.CustomerProfile
+import com.solstice.dispensary.data.model.ThemeMode
 import com.solstice.dispensary.ui.components.BrandLogo
 import com.solstice.dispensary.ui.components.SectionHeader
 import java.text.SimpleDateFormat
@@ -39,9 +43,11 @@ import java.util.Locale
 fun AccountScreen(
     customer: CustomerProfile?,
     customers: List<CustomerProfile>,
+    themeMode: ThemeMode,
     message: String?,
     onClearMessage: () -> Unit,
     onSaveProfile: (String, String, String, String, Boolean) -> Unit,
+    onThemeModeChange: (ThemeMode) -> Unit,
     onLogout: () -> Unit,
     onOpenCustomers: () -> Unit
 ) {
@@ -140,6 +146,27 @@ fun AccountScreen(
                     style = MaterialTheme.typography.bodyMedium
                 )
                 TextButton(onClick = onClearMessage) { Text("Dismiss") }
+            }
+        }
+
+        item {
+            SectionHeader(
+                title = "Appearance",
+                subtitle = "Light, dark, or match your phone"
+            )
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .horizontalScroll(rememberScrollState()),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                ThemeMode.entries.forEach { mode ->
+                    FilterChip(
+                        selected = themeMode == mode,
+                        onClick = { onThemeModeChange(mode) },
+                        label = { Text(mode.label) }
+                    )
+                }
             }
         }
 

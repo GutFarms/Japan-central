@@ -29,6 +29,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
@@ -265,14 +266,16 @@ fun SectionHeader(title: String, subtitle: String? = null) {
 
 @Composable
 fun HeroBackdrop(modifier: Modifier = Modifier, content: @Composable () -> Unit) {
+    val isDark = MaterialTheme.colorScheme.background.luminance() < 0.5f
+    val gradient = if (isDark) {
+        listOf(Charcoal, Color(0xFF1A1410), Color(0xFF2A1C14))
+    } else {
+        listOf(Color(0xFF1A1410), Color(0xFF2E2316), Color(0xFF3A2A1C))
+    }
     Box(
         modifier = modifier
             .fillMaxWidth()
-            .background(
-                Brush.verticalGradient(
-                    listOf(Charcoal, Color(0xFF1A1410), Color(0xFF2A1C14))
-                )
-            )
+            .background(Brush.verticalGradient(gradient))
             .padding(20.dp)
     ) {
         content()

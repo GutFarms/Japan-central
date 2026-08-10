@@ -126,6 +126,12 @@ fun Customer.toProfile() = CustomerProfile(
     marketingOptIn = marketingOptIn
 )
 
+enum class ThemeMode(val label: String) {
+    SYSTEM("System"),
+    LIGHT("Light"),
+    DARK("Dark")
+}
+
 sealed class AuthResult {
     data class Success(val customer: CustomerProfile) : AuthResult()
     data class Error(val message: String) : AuthResult()

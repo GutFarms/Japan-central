@@ -40,11 +40,11 @@ class MainActivity : ComponentActivity() {
         enableEdgeToEdge()
         val app = application as DispensaryApplication
         setContent {
-            SolsticeTheme {
-                val viewModel: DispensaryViewModel = viewModel(
-                    factory = DispensaryViewModelFactory(app.repository)
-                )
+            val viewModel: DispensaryViewModel = viewModel(
+                factory = DispensaryViewModelFactory(app.repository)
+            )
 
+            SolsticeTheme(themeMode = viewModel.themeMode) {
                 if (!viewModel.ageVerified) {
                     AgeGateScreen(
                         onVerified = viewModel::verifyAge,

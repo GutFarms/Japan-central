@@ -137,9 +137,11 @@ fun DispensaryNavHost(
             AccountScreen(
                 customer = viewModel.currentCustomer,
                 customers = customers,
+                themeMode = viewModel.themeMode,
                 message = viewModel.accountMessage,
                 onClearMessage = viewModel::clearAccountMessage,
                 onSaveProfile = viewModel::saveProfile,
+                onThemeModeChange = viewModel::updateThemeMode,
                 onLogout = viewModel::logout,
                 onOpenCustomers = { navController.navigate(Routes.CUSTOMERS) }
             )
