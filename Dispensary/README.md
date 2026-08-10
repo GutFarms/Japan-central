@@ -17,7 +17,10 @@ Adult-use dispensary app for browsing the menu, building a pickup bag, scanning 
 - **Bag & pickup checkout** — tax estimate, pickup name, order notes (linked to signed-in customer)
 - **Orders** — local pickup history on device
 - **Inventory + AI camera scanner** — CameraX + on-device ML Kit OCR/barcode scan to match SKUs or create products and add stock; new scans start unpublished until staff publishes them
-- **Published catalog** — customers only see published products on the menu; staff/admin manage drafts in Stock
+- **Published catalog** — customers only see published products; publish requires SKU + price; drafts/AI scans stay in Stock
+- **Staff controls** — admin can list, disable/enable, and reset staff passwords
+- **Encrypted session prefs** + forced bootstrap admin password change
+- **Inventory sync JSON** — export/import between Android and Windows companion
 - **Store** — hours, address, contact, pickup guidance
 - **Windows desktop companion** — see [`../DispensaryCompanion/README.md`](../DispensaryCompanion/README.md)
 ## Stack

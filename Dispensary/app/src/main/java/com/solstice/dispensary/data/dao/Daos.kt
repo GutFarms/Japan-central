@@ -105,10 +105,10 @@ interface OrderDao {
     @Query("SELECT * FROM order_lines WHERE orderId = :orderId")
     fun observeLines(orderId: String): Flow<List<OrderLine>>
 
-    @Insert
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertOrder(order: Order)
 
-    @Insert
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertLines(lines: List<OrderLine>)
 
     @Transaction
@@ -143,6 +143,12 @@ interface CustomerDao {
 
     @Query("SELECT * FROM customers WHERE lower(username) = lower(:username) AND username != '' LIMIT 1")
     suspend fun getByUsername(username: String): Customer?
+
+    @Query("SELECT * FROM customers WHERE role = :role ORDER BY createdAt DESC")
+    fun observeByRole(role: AccountRole): Flow<List<Customer>>
+
+    @Query("SELECT * FROM customers WHERE role = :role ORDER BY createdAt DESC")
+    suspend fun getByRole(role: AccountRole): List<Customer>
 
     @Query("SELECT COUNT(*) FROM customers")
     suspend fun count(): Int

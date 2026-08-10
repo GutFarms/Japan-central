@@ -39,8 +39,10 @@ data class Product(
     val inStock: Boolean = true,
     val stockQuantity: Int = 0,
     val sku: String = "",
-    /** When false, product is draft inventory — customers cannot see it. */
-    val published: Boolean = true
+    /** When false, product is draft inventory — not shown on the customer menu. */
+    val published: Boolean = true,
+    val publishedAt: Long = 0L,
+    val publishedBy: String = ""
 )
 
 @Entity(tableName = "cart_items")
@@ -122,7 +124,8 @@ data class Customer(
     val marketingOptIn: Boolean = false,
     val role: AccountRole = AccountRole.CUSTOMER,
     val createdByAdminId: String = "",
-    val mustChangePassword: Boolean = false
+    val mustChangePassword: Boolean = false,
+    val enabled: Boolean = true
 )
 
 /** Profile without password fields. */
@@ -139,7 +142,8 @@ data class CustomerProfile(
     val marketingOptIn: Boolean,
     val role: AccountRole,
     val createdByAdminId: String = "",
-    val mustChangePassword: Boolean = false
+    val mustChangePassword: Boolean = false,
+    val enabled: Boolean = true
 ) {
     val isAdminLike: Boolean get() = role.canViewSensitiveInfo
 }
@@ -157,7 +161,8 @@ fun Customer.toProfile() = CustomerProfile(
     marketingOptIn = marketingOptIn,
     role = role,
     createdByAdminId = createdByAdminId,
-    mustChangePassword = mustChangePassword
+    mustChangePassword = mustChangePassword,
+    enabled = enabled
 )
 
 enum class AutoLockTimeout(val label: String, val millis: Long) {
@@ -184,6 +189,11 @@ enum class ThemeMode(val label: String) {
 sealed class AuthResult {
     data class Success(val customer: CustomerProfile) : AuthResult()
     data class Error(val message: String) : AuthResult()
+}
+
+sealed class OpResult {
+    data class Success(val message: String) : OpResult()
+    data class Error(val message: String) : OpResult()
 }
 
 data class CartLine(

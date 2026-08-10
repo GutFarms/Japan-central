@@ -153,12 +153,16 @@ fun DispensaryNavHost(
             }
         }
         composable(Routes.ACCOUNT) {
+            val context = androidx.compose.ui.platform.LocalContext.current
+            val staff by viewModel.staffAccounts.collectAsState()
             AccountScreen(
                 customer = viewModel.currentCustomer,
                 customers = customers,
+                staffAccounts = staff,
                 themeMode = viewModel.themeMode,
                 securitySettings = viewModel.securitySettings,
                 message = viewModel.accountMessage,
+                syncExportJson = viewModel.lastSyncExport,
                 onClearMessage = viewModel::clearAccountMessage,
                 onSaveProfile = viewModel::saveProfile,
                 onThemeModeChange = viewModel::updateThemeMode,
@@ -167,6 +171,19 @@ fun DispensaryNavHost(
                 onDisableAppLock = viewModel::disableAppLock,
                 onAutoLockChange = viewModel::setAutoLockTimeout,
                 onCreateStaff = viewModel::createStaffSubAccount,
+                onSetStaffEnabled = viewModel::setStaffEnabled,
+                onResetStaffPassword = viewModel::resetStaffPassword,
+                onExportSync = viewModel::exportSync,
+                onShareSync = { json ->
+                    val send = android.content.Intent(android.content.Intent.ACTION_SEND).apply {
+                        type = "application/json"
+                        putExtra(android.content.Intent.EXTRA_SUBJECT, "Native Pure inventory sync")
+                        putExtra(android.content.Intent.EXTRA_TEXT, json)
+                    }
+                    context.startActivity(android.content.Intent.createChooser(send, "Share sync file"))
+                },
+                onImportSync = viewModel::importSync,
+                onClearSyncExport = viewModel::clearSyncExport,
                 onLogout = viewModel::logout,
                 onOpenCustomers = { navController.navigate(Routes.CUSTOMERS) },
                 onOpenOrders = { navController.navigate(Routes.ORDERS) }

@@ -50,7 +50,7 @@ class Converters {
         InventoryIntake::class,
         Customer::class
     ],
-    version = 6,
+    version = 7,
     exportSchema = false
 )
 @TypeConverters(Converters::class)

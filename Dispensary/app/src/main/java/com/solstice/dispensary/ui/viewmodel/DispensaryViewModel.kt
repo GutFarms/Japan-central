@@ -13,6 +13,7 @@ import com.solstice.dispensary.data.model.CartSummary
 import com.solstice.dispensary.data.model.CustomerProfile
 import com.solstice.dispensary.data.model.InventoryIntake
 import com.solstice.dispensary.data.model.LabelScanResult
+import com.solstice.dispensary.data.model.OpResult
 import com.solstice.dispensary.data.model.Order
 import com.solstice.dispensary.data.model.OrderLine
 import com.solstice.dispensary.data.model.Product
@@ -113,6 +114,12 @@ class DispensaryViewModel(
 
     val customers: StateFlow<List<CustomerProfile>> = repository.customers
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+
+    val staffAccounts: StateFlow<List<CustomerProfile>> = repository.staffAccounts
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+
+    var lastSyncExport by mutableStateOf<String?>(null)
+        private set
 
     val isLoggedIn: Boolean get() = currentCustomer != null
 
@@ -396,11 +403,52 @@ class DispensaryViewModel(
 
     fun setPublished(productId: String, published: Boolean) {
         viewModelScope.launch {
-            val product = repository.setPublished(productId, published)
-            intakeMessage = when {
-                product == null -> "Could not update publish status."
-                published -> "Published ${product.name} — visible to customers."
-                else -> "Unpublished ${product.name} — hidden from customers."
+            when (val result = repository.setPublished(productId, published)) {
+                is OpResult.Success -> intakeMessage = result.message
+                is OpResult.Error -> intakeMessage = result.message
+            }
+        }
+    }
+
+    fun setStaffEnabled(staffId: String, enabled: Boolean) {
+        viewModelScope.launch {
+            when (val result = repository.setStaffEnabled(staffId, enabled)) {
+                is OpResult.Success -> accountMessage = result.message
+                is OpResult.Error -> accountMessage = result.message
+            }
+        }
+    }
+
+    fun resetStaffPassword(staffId: String, newPassword: String) {
+        viewModelScope.launch {
+            when (val result = repository.resetStaffPassword(staffId, newPassword)) {
+                is OpResult.Success -> accountMessage = result.message
+                is OpResult.Error -> accountMessage = result.message
+            }
+        }
+    }
+
+    fun exportSync() {
+        viewModelScope.launch {
+            try {
+                lastSyncExport = repository.exportSyncJson()
+                accountMessage = "Sync file ready to share."
+            } catch (t: Throwable) {
+                accountMessage = t.message ?: "Export failed."
+                lastSyncExport = null
+            }
+        }
+    }
+
+    fun clearSyncExport() {
+        lastSyncExport = null
+    }
+
+    fun importSync(json: String) {
+        viewModelScope.launch {
+            when (val result = repository.importSyncJson(json)) {
+                is OpResult.Success -> accountMessage = result.message
+                is OpResult.Error -> accountMessage = result.message
             }
         }
     }

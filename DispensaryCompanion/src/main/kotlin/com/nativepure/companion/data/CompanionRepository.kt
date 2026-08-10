@@ -37,17 +37,13 @@ class CompanionRepository {
 
     fun allProducts(): List<Product> = products.toList()
 
-    fun catalogProducts(): List<Product> {
-        val me = currentCustomer()
-        return if (me?.role?.canManageInventory == true) {
-            products.toList()
-        } else {
-            products.filter { it.published }
-        }
-    }
+    fun catalogProducts(): List<Product> = products.filter { it.published }
 
     fun featuredProducts(): List<Product> =
         catalogProducts().filter { it.featured }
+
+    fun staffAccounts(): List<CustomerProfile> =
+        customers.filter { it.role == AccountRole.STAFF }.map { it.toProfile() }
 
     fun cartSummary(): CartSummary {
         val byId = catalogProducts().associateBy { it.id }
@@ -102,6 +98,10 @@ class CompanionRepository {
         if (customer == null) {
             recordFailed(raw)
             return AuthResult.Error("No account found for that email or username.")
+        }
+
+        if (!customer.enabled) {
+            return AuthResult.Error("This account has been disabled. Contact an admin.")
         }
 
         if (!PasswordHasher.matches(password, customer.passwordSalt, customer.passwordHash)) {
@@ -293,14 +293,89 @@ class CompanionRepository {
         return true
     }
 
-    fun setPublished(productId: String, published: Boolean): Boolean {
-        val me = currentCustomer() ?: return false
-        if (!me.role.canManageInventory) return false
+    fun setPublished(productId: String, published: Boolean): OpResult {
+        val me = currentCustomer() ?: return OpResult.Error("Not signed in.")
+        if (!me.role.canManageInventory) return OpResult.Error("Only staff/admin can publish.")
         val idx = products.indexOfFirst { it.id == productId }
-        if (idx < 0) return false
-        products[idx] = products[idx].copy(published = published)
+        if (idx < 0) return OpResult.Error("Product not found.")
+        val product = products[idx]
+        if (published) {
+            when {
+                product.sku.isBlank() -> return OpResult.Error("Add a SKU before publishing.")
+                product.price <= 0.0 -> return OpResult.Error("Set a price greater than \$0 before publishing.")
+            }
+        }
+        products[idx] = product.copy(
+            published = published,
+            publishedAt = if (published) System.currentTimeMillis() else 0L,
+            publishedBy = if (published) me.email else ""
+        )
         persist()
-        return true
+        return OpResult.Success(
+            if (published) "Published ${product.name}" else "Unpublished ${product.name}"
+        )
+    }
+
+    fun setStaffEnabled(staffId: String, enabled: Boolean): OpResult {
+        val admin = currentCustomer() ?: return OpResult.Error("Not signed in.")
+        if (!admin.role.canManageStaff) return OpResult.Error("Only admin can manage staff.")
+        val idx = customers.indexOfFirst { it.id == staffId }
+        if (idx < 0) return OpResult.Error("Staff not found.")
+        val staff = customers[idx]
+        if (staff.role != AccountRole.STAFF) return OpResult.Error("Only staff accounts can be toggled.")
+        customers[idx] = staff.copy(enabled = enabled)
+        persist()
+        return OpResult.Success(if (enabled) "Enabled ${staff.email}" else "Disabled ${staff.email}")
+    }
+
+    fun resetStaffPassword(staffId: String, newPassword: String): OpResult {
+        val admin = currentCustomer() ?: return OpResult.Error("Not signed in.")
+        if (!admin.role.canManageStaff) return OpResult.Error("Only admin can reset staff passwords.")
+        PasswordPolicy.validatePassword(newPassword)?.let { return OpResult.Error(it) }
+        val idx = customers.indexOfFirst { it.id == staffId }
+        if (idx < 0) return OpResult.Error("Staff not found.")
+        val staff = customers[idx]
+        if (staff.role != AccountRole.STAFF) return OpResult.Error("Only staff passwords can be reset.")
+        val salt = PasswordHasher.newSalt()
+        customers[idx] = staff.copy(
+            passwordHash = PasswordHasher.hash(newPassword, salt),
+            passwordSalt = salt,
+            mustChangePassword = true
+        )
+        persist()
+        return OpResult.Success("Password reset for ${staff.email}")
+    }
+
+    fun exportSyncJson(): String {
+        val me = currentCustomer()
+        require(me?.role?.canManageInventory == true) { "Only staff/admin can export." }
+        return json.encodeToString(
+            SyncFile(
+                format = "nativepure-sync-v1",
+                exportedAt = System.currentTimeMillis(),
+                products = products.toList(),
+                orders = orders.toList(),
+                orderLines = orderLines.toList()
+            )
+        )
+    }
+
+    fun importSyncJson(raw: String): OpResult {
+        val me = currentCustomer() ?: return OpResult.Error("Not signed in.")
+        if (!me.role.canManageInventory) return OpResult.Error("Only staff/admin can import.")
+        return try {
+            // Accept full sync object or a products array wrapped by InventorySync from Android.
+            val parsed = json.decodeFromString<SyncFile>(raw)
+            require(parsed.format == "nativepure-sync-v1") { "Unsupported sync format." }
+            parsed.products.forEach { incoming ->
+                val idx = products.indexOfFirst { it.id == incoming.id }
+                if (idx >= 0) products[idx] = incoming else products.add(incoming)
+            }
+            persist()
+            OpResult.Success("Imported ${parsed.products.size} products.")
+        } catch (t: Throwable) {
+            OpResult.Error(t.message ?: "Import failed.")
+        }
     }
 
     fun placePickupOrder(pickupName: String, notes: String): Order? {
@@ -391,7 +466,16 @@ class CompanionRepository {
     }
 
     private fun ensureMainAdmin() {
-        if (customers.any { it.email.equals(MAIN_ADMIN_EMAIL, true) || it.username == MAIN_ADMIN_USERNAME }) {
+        val existing = customers.find {
+            it.email.equals(MAIN_ADMIN_EMAIL, true) || it.username == MAIN_ADMIN_USERNAME
+        }
+        if (existing != null) {
+            if (!existing.mustChangePassword &&
+                PasswordHasher.matches(MAIN_ADMIN_PASSWORD, existing.passwordSalt, existing.passwordHash)
+            ) {
+                replaceCustomer(existing.copy(mustChangePassword = true))
+                persist()
+            }
             return
         }
         val salt = PasswordHasher.newSalt()
@@ -404,7 +488,8 @@ class CompanionRepository {
                 passwordSalt = salt,
                 fullName = "Main Admin",
                 role = AccountRole.ADMIN,
-                notes = "Primary admin account"
+                notes = "Primary admin account — change password on first login",
+                mustChangePassword = true
             )
         )
     }

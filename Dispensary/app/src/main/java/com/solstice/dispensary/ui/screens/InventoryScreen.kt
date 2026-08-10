@@ -84,7 +84,7 @@ fun InventoryScreen(
                         if (draftCount > 0) " · $draftCount unpublished" else ""
                 )
                 Text(
-                    text = "Customers only see published products on the menu.",
+                    text = "Drafts stay in Stock until they have a SKU and price, then publish to the customer menu.",
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )

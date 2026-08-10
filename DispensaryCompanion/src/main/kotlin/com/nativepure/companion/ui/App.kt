@@ -59,9 +59,13 @@ import com.nativepure.companion.data.AuthResult
 import com.nativepure.companion.data.CompanionRepository
 import com.nativepure.companion.data.CustomerProfile
 import com.nativepure.companion.data.NavSection
+import com.nativepure.companion.data.OpResult
 import com.nativepure.companion.data.PasswordPolicy
 import com.nativepure.companion.data.Product
 import com.nativepure.companion.data.ProductCategory
+import java.awt.FileDialog
+import java.awt.Frame
+import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -609,12 +613,13 @@ private fun InventoryPane(
                         }
                         Button(onClick = {
                             val next = !product.published
-                            repository.setPublished(product.id, next)
-                            onRefresh()
-                            onMessage(
-                                if (next) "Published ${product.name}"
-                                else "Unpublished ${product.name}"
-                            )
+                            when (val result = repository.setPublished(product.id, next)) {
+                                is OpResult.Success -> {
+                                    onRefresh()
+                                    onMessage(result.message)
+                                }
+                                is OpResult.Error -> onMessage(result.message)
+                            }
                         }) {
                             Text(if (product.published) "Unpublish from menu" else "Publish to customers")
                         }
@@ -750,10 +755,59 @@ private fun AccountPane(
                     is AuthResult.Success -> {
                         staffName = ""; staffEmail = ""; staffPw = ""
                         onMessage("Staff created for ${result.customer.email}. They must change password on first login.")
+                        onRefresh()
                     }
                     is AuthResult.Error -> onMessage(result.message)
                 }
             }) { Text("Create staff account") }
+
+            repository.staffAccounts().forEach { staff ->
+                Surface(shape = RoundedCornerShape(10.dp), tonalElevation = 1.dp, modifier = Modifier.fillMaxWidth()) {
+                    Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                        Text("${staff.fullName} · ${staff.email}")
+                        Text(if (staff.enabled) "Enabled" else "Disabled")
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            OutlinedButton(onClick = {
+                                when (val result = repository.setStaffEnabled(staff.id, !staff.enabled)) {
+                                    is OpResult.Success -> { onMessage(result.message); onRefresh() }
+                                    is OpResult.Error -> onMessage(result.message)
+                                }
+                            }) { Text(if (staff.enabled) "Disable" else "Enable") }
+                        }
+                    }
+                }
+            }
+        }
+
+        if (customer.role.canManageInventory) {
+            HorizontalDivider(Modifier.padding(vertical = 8.dp))
+            Text("Desktop sync", style = MaterialTheme.typography.headlineMedium)
+            Text("Share inventory JSON with the Android app.", color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Button(onClick = {
+                try {
+                    val json = repository.exportSyncJson()
+                    val dialog = FileDialog(null as Frame?, "Export sync", FileDialog.SAVE)
+                    dialog.file = "nativepure-sync.json"
+                    dialog.isVisible = true
+                    val dir = dialog.directory ?: return@Button
+                    val name = dialog.file ?: return@Button
+                    File(dir, name).writeText(json)
+                    onMessage("Exported sync file.")
+                } catch (t: Throwable) {
+                    onMessage(t.message ?: "Export failed.")
+                }
+            }) { Text("Export sync JSON") }
+            Button(onClick = {
+                val dialog = FileDialog(null as Frame?, "Import sync", FileDialog.LOAD)
+                dialog.isVisible = true
+                val dir = dialog.directory ?: return@Button
+                val name = dialog.file ?: return@Button
+                val text = File(dir, name).readText()
+                when (val result = repository.importSyncJson(text)) {
+                    is OpResult.Success -> { onMessage(result.message); onRefresh() }
+                    is OpResult.Error -> onMessage(result.message)
+                }
+            }) { Text("Import sync JSON") }
         }
 
         Spacer(Modifier.height(8.dp))

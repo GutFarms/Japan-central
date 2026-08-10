@@ -50,7 +50,9 @@ data class Product(
     val inStock: Boolean = true,
     val stockQuantity: Int = 0,
     val sku: String = "",
-    val published: Boolean = true
+    val published: Boolean = true,
+    val publishedAt: Long = 0L,
+    val publishedBy: String = ""
 )
 
 @Serializable
@@ -69,7 +71,8 @@ data class Customer(
     val marketingOptIn: Boolean = false,
     val role: AccountRole = AccountRole.CUSTOMER,
     val createdByAdminId: String = "",
-    val mustChangePassword: Boolean = false
+    val mustChangePassword: Boolean = false,
+    val enabled: Boolean = true
 )
 
 @Serializable
@@ -124,7 +127,8 @@ data class CustomerProfile(
     val notes: String,
     val marketingOptIn: Boolean,
     val role: AccountRole,
-    val mustChangePassword: Boolean = false
+    val mustChangePassword: Boolean = false,
+    val enabled: Boolean = true
 ) {
     val isAdminLike: Boolean get() = role.canViewSensitiveInfo
 }
@@ -141,12 +145,18 @@ fun Customer.toProfile() = CustomerProfile(
     notes = notes,
     marketingOptIn = marketingOptIn,
     role = role,
-    mustChangePassword = mustChangePassword
+    mustChangePassword = mustChangePassword,
+    enabled = enabled
 )
 
 sealed class AuthResult {
     data class Success(val customer: CustomerProfile) : AuthResult()
     data class Error(val message: String) : AuthResult()
+}
+
+sealed class OpResult {
+    data class Success(val message: String) : OpResult()
+    data class Error(val message: String) : OpResult()
 }
 
 enum class NavSection(val label: String) {
@@ -159,6 +169,15 @@ enum class NavSection(val label: String) {
     STORE("Store"),
     ACCOUNT("Account")
 }
+
+@Serializable
+data class SyncFile(
+    val format: String = "nativepure-sync-v1",
+    val exportedAt: Long = 0L,
+    val products: List<Product> = emptyList(),
+    val orders: List<Order> = emptyList(),
+    val orderLines: List<OrderLine> = emptyList()
+)
 
 @Serializable
 data class PersistedStore(

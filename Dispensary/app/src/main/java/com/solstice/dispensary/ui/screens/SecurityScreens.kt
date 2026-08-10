@@ -112,7 +112,7 @@ fun ForcePasswordChangeScreen(
         Spacer(Modifier.height(16.dp))
         Text("Create a new password", style = MaterialTheme.typography.headlineMedium)
         Text(
-            text = "Your temporary password must be replaced before you can use the app.\n${PasswordPolicy.requirementsLabel}.",
+            text = "Your temporary or bootstrap password must be replaced before you can use the app.\n${PasswordPolicy.requirementsLabel}.",
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             textAlign = TextAlign.Center,

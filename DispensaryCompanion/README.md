@@ -67,6 +67,11 @@ Or a single runnable uber JAR for the current OS:
 # → build/compose/jars/NativePureCompanion-*-1.0.0.jar
 ```
 
-## Relation to the Android app
+## Sync with the Android app
 
-This companion mirrors catalog, auth roles, and store workflows for desktop use. Data is **local to the PC** (not synced with the phone APK yet). Use the phone app for camera inventory scanning.
+Staff/admin → **Account → Desktop sync**:
+
+- **Export sync JSON** — writes `nativepure-sync-v1` (products + orders snapshot)
+- **Import sync JSON** — merges products by id (stock, publish state, prices)
+
+Use the same JSON with the Android app Account → Desktop sync section.

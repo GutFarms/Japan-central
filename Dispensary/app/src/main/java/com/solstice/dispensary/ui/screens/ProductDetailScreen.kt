@@ -65,8 +65,10 @@ fun ProductDetailScreen(
     ) { padding ->
         if (product == null) {
             Text(
-                text = "Product not found.",
-                modifier = Modifier.padding(padding).padding(20.dp)
+                text = "This product isn’t available on the menu. It may be unpublished or removed.",
+                modifier = Modifier.padding(padding).padding(20.dp),
+                style = MaterialTheme.typography.bodyLarge,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
             )
             return@Scaffold
         }

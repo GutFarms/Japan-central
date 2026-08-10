@@ -51,9 +51,11 @@ import java.util.Locale
 fun AccountScreen(
     customer: CustomerProfile?,
     customers: List<CustomerProfile>,
+    staffAccounts: List<CustomerProfile>,
     themeMode: ThemeMode,
     securitySettings: SecuritySettings,
     message: String?,
+    syncExportJson: String?,
     onClearMessage: () -> Unit,
     onSaveProfile: (String, String, String, String, Boolean) -> Unit,
     onThemeModeChange: (ThemeMode) -> Unit,
@@ -62,6 +64,12 @@ fun AccountScreen(
     onDisableAppLock: (accountPassword: String) -> Unit,
     onAutoLockChange: (AutoLockTimeout) -> Unit,
     onCreateStaff: (email: String, password: String, fullName: String) -> Unit,
+    onSetStaffEnabled: (staffId: String, enabled: Boolean) -> Unit,
+    onResetStaffPassword: (staffId: String, newPassword: String) -> Unit,
+    onExportSync: () -> Unit,
+    onShareSync: (String) -> Unit,
+    onImportSync: (String) -> Unit,
+    onClearSyncExport: () -> Unit,
     onLogout: () -> Unit,
     onOpenCustomers: () -> Unit,
     onOpenOrders: () -> Unit
@@ -87,6 +95,8 @@ fun AccountScreen(
     var staffEmail by remember { mutableStateOf("") }
     var staffPassword by remember { mutableStateOf("") }
     var staffName by remember { mutableStateOf("") }
+    var staffResetPassword by remember { mutableStateOf("") }
+    var importJson by remember { mutableStateOf("") }
     var currentPassword by remember { mutableStateOf("") }
     var newPassword by remember { mutableStateOf("") }
     var confirmPassword by remember { mutableStateOf("") }
@@ -432,6 +442,99 @@ fun AccountScreen(
                 ) {
                     Text("Create staff account")
                 }
+
+                if (staffAccounts.isNotEmpty()) {
+                    Spacer(Modifier.height(16.dp))
+                    Text("Active staff", style = MaterialTheme.typography.titleLarge)
+                    Spacer(Modifier.height(8.dp))
+                    staffAccounts.forEach { staff ->
+                        Surface(
+                            shape = RoundedCornerShape(12.dp),
+                            tonalElevation = 1.dp,
+                            modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp)
+                        ) {
+                            Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                                Text(staff.fullName, style = MaterialTheme.typography.titleMedium)
+                                Text(staff.email, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                Text(
+                                    if (staff.enabled) "Enabled" else "Disabled",
+                                    color = if (staff.enabled) {
+                                        MaterialTheme.colorScheme.primary
+                                    } else {
+                                        MaterialTheme.colorScheme.error
+                                    }
+                                )
+                                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                    TextButton(onClick = {
+                                        onSetStaffEnabled(staff.id, !staff.enabled)
+                                    }) {
+                                        Text(if (staff.enabled) "Disable" else "Enable")
+                                    }
+                                }
+                                OutlinedTextField(
+                                    value = staffResetPassword,
+                                    onValueChange = { staffResetPassword = it },
+                                    label = { Text("New temp password") },
+                                    modifier = Modifier.fillMaxWidth(),
+                                    singleLine = true,
+                                    visualTransformation = PasswordVisualTransformation()
+                                )
+                                TextButton(onClick = {
+                                    onResetStaffPassword(staff.id, staffResetPassword)
+                                    staffResetPassword = ""
+                                }) {
+                                    Text("Reset password")
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        if (isAdminLike) {
+            item {
+                SectionHeader(
+                    title = "Desktop sync",
+                    subtitle = "Export/import inventory JSON for the Windows companion"
+                )
+                Button(
+                    onClick = onExportSync,
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(12.dp)
+                ) {
+                    Text("Export inventory sync file")
+                }
+                if (syncExportJson != null) {
+                    Spacer(Modifier.height(8.dp))
+                    Button(
+                        onClick = { onShareSync(syncExportJson) },
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(12.dp)
+                    ) {
+                        Text("Share sync file")
+                    }
+                    TextButton(onClick = onClearSyncExport) { Text("Clear export") }
+                }
+                Spacer(Modifier.height(8.dp))
+                OutlinedTextField(
+                    value = importJson,
+                    onValueChange = { importJson = it },
+                    label = { Text("Paste sync JSON to import") },
+                    modifier = Modifier.fillMaxWidth().height(120.dp)
+                )
+                Spacer(Modifier.height(8.dp))
+                Button(
+                    onClick = {
+                        onImportSync(importJson)
+                        importJson = ""
+                    },
+                    enabled = importJson.isNotBlank(),
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(12.dp)
+                ) {
+                    Text("Import sync JSON")
+                }
             }
         }
 
@@ -526,6 +629,13 @@ fun CustomersScreen(
                             "Marketing opt-in",
                             style = MaterialTheme.typography.labelLarge,
                             color = MaterialTheme.colorScheme.primary
+                        )
+                    }
+                    if (!customer.enabled) {
+                        Text(
+                            "Account disabled",
+                            style = MaterialTheme.typography.labelLarge,
+                            color = MaterialTheme.colorScheme.error
                         )
                     }
                 }

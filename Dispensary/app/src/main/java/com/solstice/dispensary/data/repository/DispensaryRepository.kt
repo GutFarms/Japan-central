@@ -1,6 +1,9 @@
 package com.solstice.dispensary.data.repository
 
 import android.content.Context
+import android.content.SharedPreferences
+import androidx.security.crypto.EncryptedSharedPreferences
+import androidx.security.crypto.MasterKey
 import com.solstice.dispensary.data.auth.PasswordHasher
 import com.solstice.dispensary.data.auth.PasswordPolicy
 import com.solstice.dispensary.data.db.DispensaryDatabase
@@ -15,6 +18,7 @@ import com.solstice.dispensary.data.model.Customer
 import com.solstice.dispensary.data.model.CustomerProfile
 import com.solstice.dispensary.data.model.InventoryIntake
 import com.solstice.dispensary.data.model.LabelScanResult
+import com.solstice.dispensary.data.model.OpResult
 import com.solstice.dispensary.data.model.Order
 import com.solstice.dispensary.data.model.OrderLine
 import com.solstice.dispensary.data.model.Product
@@ -22,6 +26,7 @@ import com.solstice.dispensary.data.model.ProductCategory
 import com.solstice.dispensary.data.model.SecuritySettings
 import com.solstice.dispensary.data.model.ThemeMode
 import com.solstice.dispensary.data.model.toProfile
+import com.solstice.dispensary.data.sync.InventorySync
 import com.solstice.dispensary.scan.NewProductFactory
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.Flow
@@ -35,44 +40,27 @@ import java.util.UUID
 
 @OptIn(ExperimentalCoroutinesApi::class)
 class DispensaryRepository(context: Context) {
-    private val db = DispensaryDatabase.get(context)
-    private val prefs = context.getSharedPreferences("solstice_prefs", Context.MODE_PRIVATE)
+    private val appContext = context.applicationContext
+    private val db = DispensaryDatabase.get(appContext)
+    private val prefs: SharedPreferences = createSecurePrefs(appContext)
 
     private val sessionCustomerId = MutableStateFlow(prefs.getString(KEY_CUSTOMER_ID, null))
 
     val products: Flow<List<Product>> = db.productDao().observeAll()
     val inventory: Flow<List<Product>> = db.productDao().observeInventory()
 
-    /** Storefront catalog: customers only see published products; staff/admin see everything. */
-    val catalog: Flow<List<Product>> = sessionCustomerId.flatMapLatest { id ->
-        if (id.isNullOrBlank()) {
-            db.productDao().observePublished()
-        } else {
-            val me = db.customerDao().getById(id)
-            if (me?.role?.canManageInventory == true) {
-                db.productDao().observeAll()
-            } else {
-                db.productDao().observePublished()
-            }
-        }
-    }
+    /** Customer-facing storefront: published products only (drafts live in Stock). */
+    val catalog: Flow<List<Product>> = db.productDao().observePublished()
 
-    val featured: Flow<List<Product>> = sessionCustomerId.flatMapLatest { id ->
-        if (id.isNullOrBlank()) {
-            db.productDao().observeFeaturedPublished()
-        } else {
-            val me = db.customerDao().getById(id)
-            if (me?.role?.canManageInventory == true) {
-                db.productDao().observeFeatured()
-            } else {
-                db.productDao().observeFeaturedPublished()
-            }
-        }
-    }
+    val featured: Flow<List<Product>> = db.productDao().observeFeaturedPublished()
     val cartItems: Flow<List<CartItem>> = db.cartDao().observeAll()
     val intakes: Flow<List<InventoryIntake>> = db.inventoryDao().observeAll()
     val customers: Flow<List<CustomerProfile>> = db.customerDao().observeAll()
         .map { list -> list.map { it.toProfile() } }
+
+    val staffAccounts: Flow<List<CustomerProfile>> =
+        db.customerDao().observeByRole(AccountRole.STAFF)
+            .map { list -> list.map { it.toProfile() } }
 
     /** Admins/staff see all orders; customers only see their own. */
     val visibleOrders: Flow<List<Order>> = sessionCustomerId.flatMapLatest { id ->
@@ -105,24 +93,16 @@ class DispensaryRepository(context: Context) {
     }
 
     fun productsByCategory(category: ProductCategory?): Flow<List<Product>> {
-        return sessionCustomerId.flatMapLatest { id ->
-            val staff = id?.let { db.customerDao().getById(it) }?.role?.canManageInventory == true
-            when {
-                category == null && staff -> db.productDao().observeAll()
-                category == null -> db.productDao().observePublished()
-                staff -> db.productDao().observeByCategory(category)
-                else -> db.productDao().observePublishedByCategory(category)
-            }
+        return if (category == null) {
+            db.productDao().observePublished()
+        } else {
+            db.productDao().observePublishedByCategory(category)
         }
     }
 
-    fun product(id: String): Flow<Product?> = sessionCustomerId.flatMapLatest { customerId ->
-        db.productDao().observeById(id).map { product ->
-            if (product == null) return@map null
-            if (product.published) return@map product
-            val me = customerId?.let { db.customerDao().getById(it) }
-            if (me?.role?.canManageInventory == true) product else null
-        }
+    fun product(id: String): Flow<Product?> = db.productDao().observeById(id).map { product ->
+        if (product == null) return@map null
+        if (product.published) product else null
     }
 
     fun orderLines(orderId: String): Flow<List<OrderLine>> = db.orderDao().observeLines(orderId)
@@ -260,7 +240,15 @@ class DispensaryRepository(context: Context) {
     private suspend fun ensureMainAdmin() {
         val existing = db.customerDao().getByEmail(MAIN_ADMIN_EMAIL)
             ?: db.customerDao().getByUsername(MAIN_ADMIN_USERNAME)
-        if (existing != null) return
+        if (existing != null) {
+            // Force password change if still using the bootstrap default.
+            if (!existing.mustChangePassword &&
+                PasswordHasher.matches(MAIN_ADMIN_PASSWORD, existing.passwordSalt, existing.passwordHash)
+            ) {
+                db.customerDao().update(existing.copy(mustChangePassword = true))
+            }
+            return
+        }
 
         val salt = PasswordHasher.newSalt()
         db.customerDao().insert(
@@ -272,8 +260,9 @@ class DispensaryRepository(context: Context) {
                 passwordSalt = salt,
                 fullName = "Main Admin",
                 phone = "",
-                notes = "Primary admin account",
-                role = AccountRole.ADMIN
+                notes = "Primary admin account — change password on first login",
+                role = AccountRole.ADMIN,
+                mustChangePassword = true
             )
         )
     }
@@ -409,6 +398,10 @@ class DispensaryRepository(context: Context) {
         if (customer == null) {
             recordFailedLogin(raw)
             return AuthResult.Error("No account found for that email or username.")
+        }
+
+        if (!customer.enabled) {
+            return AuthResult.Error("This account has been disabled. Contact an admin.")
         }
 
         if (!PasswordHasher.matches(password, customer.passwordSalt, customer.passwordHash)) {
@@ -561,13 +554,93 @@ class DispensaryRepository(context: Context) {
         return updated
     }
 
-    suspend fun setPublished(productId: String, published: Boolean): Product? {
+    suspend fun setPublished(productId: String, published: Boolean): OpResult {
         val me = currentCustomer()
-        if (me?.role?.canManageInventory != true) return null
-        val product = db.productDao().getById(productId) ?: return null
-        val updated = product.copy(published = published)
+            ?: return OpResult.Error("Not signed in.")
+        if (!me.role.canManageInventory) {
+            return OpResult.Error("Only staff and admin can publish products.")
+        }
+        val product = db.productDao().getById(productId)
+            ?: return OpResult.Error("Product not found.")
+
+        if (published) {
+            when {
+                product.sku.isBlank() ->
+                    return OpResult.Error("Add a SKU before publishing.")
+                product.price <= 0.0 ->
+                    return OpResult.Error("Set a price greater than \$0 before publishing.")
+                product.name.isBlank() ->
+                    return OpResult.Error("Product needs a name before publishing.")
+            }
+        }
+
+        val updated = product.copy(
+            published = published,
+            publishedAt = if (published) System.currentTimeMillis() else 0L,
+            publishedBy = if (published) me.email else ""
+        )
         db.productDao().update(updated)
-        return updated
+        return OpResult.Success(
+            if (published) {
+                "Published ${updated.name} — now on the customer menu."
+            } else {
+                "Unpublished ${updated.name} — hidden from the customer menu."
+            }
+        )
+    }
+
+    suspend fun setStaffEnabled(staffId: String, enabled: Boolean): OpResult {
+        val admin = currentCustomer() ?: return OpResult.Error("Not signed in.")
+        if (!admin.role.canManageStaff) return OpResult.Error("Only admin can manage staff.")
+        val staff = db.customerDao().getById(staffId) ?: return OpResult.Error("Staff not found.")
+        if (staff.role != AccountRole.STAFF) return OpResult.Error("Only staff accounts can be toggled.")
+        db.customerDao().update(staff.copy(enabled = enabled))
+        return OpResult.Success(
+            if (enabled) "Enabled ${staff.email}." else "Disabled ${staff.email}."
+        )
+    }
+
+    suspend fun resetStaffPassword(staffId: String, newPassword: String): OpResult {
+        val admin = currentCustomer() ?: return OpResult.Error("Not signed in.")
+        if (!admin.role.canManageStaff) return OpResult.Error("Only admin can reset staff passwords.")
+        val staff = db.customerDao().getById(staffId) ?: return OpResult.Error("Staff not found.")
+        if (staff.role != AccountRole.STAFF) return OpResult.Error("Only staff passwords can be reset here.")
+        PasswordPolicy.validatePassword(newPassword)?.let { return OpResult.Error(it) }
+        val salt = PasswordHasher.newSalt()
+        db.customerDao().update(
+            staff.copy(
+                passwordHash = PasswordHasher.hash(newPassword, salt),
+                passwordSalt = salt,
+                mustChangePassword = true
+            )
+        )
+        return OpResult.Success("Password reset for ${staff.email}. They must change it on next login.")
+    }
+
+    suspend fun exportSyncJson(): String {
+        val me = currentCustomer()
+        if (me?.role?.canManageInventory != true) {
+            error("Only staff/admin can export inventory sync.")
+        }
+        val products = db.productDao().getAll()
+        val orders = db.orderDao().observeAll().first()
+        val lines = orders.flatMap { db.orderDao().observeLines(it.id).first() }
+        return InventorySync.exportJson(products, orders, lines)
+    }
+
+    suspend fun importSyncJson(json: String): OpResult {
+        val me = currentCustomer()
+            ?: return OpResult.Error("Not signed in.")
+        if (!me.role.canManageInventory) {
+            return OpResult.Error("Only staff/admin can import sync files.")
+        }
+        return try {
+            val products = InventorySync.parseProducts(json)
+            products.forEach { db.productDao().upsert(it) }
+            OpResult.Success("Imported ${products.size} products from sync file.")
+        } catch (t: Throwable) {
+            OpResult.Error(t.message ?: "Could not import sync file.")
+        }
     }
 
     suspend fun applyScanIntake(
@@ -613,7 +686,9 @@ class DispensaryRepository(context: Context) {
         val items = db.cartDao().getAll()
         if (items.isEmpty()) return null
 
-        val catalog = products.first().associateBy { it.id }
+        val catalog = db.productDao().getAll()
+            .filter { it.published }
+            .associateBy { it.id }
         val lines = items.mapNotNull { item ->
             catalog[item.productId]?.let { product ->
                 CartLine(product, item.quantity)
@@ -662,6 +737,7 @@ class DispensaryRepository(context: Context) {
         const val MAIN_ADMIN_ID = "admin-main"
         const val MAIN_ADMIN_USERNAME = "admin"
         const val MAIN_ADMIN_EMAIL = "fidelgutierrez33@gmail.com"
+        /** Bootstrap only — must be changed on first login. */
         const val MAIN_ADMIN_PASSWORD = "12345678"
         private const val DEMO_CUSTOMER_EMAIL = "demo@nativepure.example"
         private const val KEY_AGE = "age_verified"
@@ -674,5 +750,40 @@ class DispensaryRepository(context: Context) {
         private const val KEY_LAST_BACKGROUND_AT = "last_background_at"
         private const val KEY_FAILED_LOGIN_PREFIX = "failed_login_"
         private const val KEY_LOCKOUT_UNTIL_PREFIX = "lockout_until_"
+
+        private fun createSecurePrefs(context: Context): SharedPreferences {
+            return try {
+                val masterKey = MasterKey.Builder(context)
+                    .setKeyScheme(MasterKey.KeyScheme.AES256_GCM)
+                    .build()
+                val encrypted = EncryptedSharedPreferences.create(
+                    context,
+                    "solstice_secure_prefs",
+                    masterKey,
+                    EncryptedSharedPreferences.PrefKeyEncryptionScheme.AES256_SIV,
+                    EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM
+                )
+                // One-time migrate from legacy plaintext prefs.
+                val legacy = context.getSharedPreferences("solstice_prefs", Context.MODE_PRIVATE)
+                if (legacy.all.isNotEmpty() && encrypted.all.isEmpty()) {
+                    encrypted.edit().apply {
+                        legacy.all.forEach { (key, value) ->
+                            when (value) {
+                                is String -> putString(key, value)
+                                is Boolean -> putBoolean(key, value)
+                                is Int -> putInt(key, value)
+                                is Long -> putLong(key, value)
+                                is Float -> putFloat(key, value)
+                            }
+                        }
+                        apply()
+                    }
+                    legacy.edit().clear().apply()
+                }
+                encrypted
+            } catch (_: Exception) {
+                context.getSharedPreferences("solstice_prefs", Context.MODE_PRIVATE)
+            }
+        }
     }
 }
