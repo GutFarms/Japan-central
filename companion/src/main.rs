@@ -5,13 +5,15 @@
 
 mod stratum;
 
+use std::collections::VecDeque;
 use std::io::Write;
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::thread;
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use eframe::egui::{
-    self, Color32, FontFamily, FontId, Frame, Margin, RichText, Rounding, Stroke, Vec2,
+    self, Color32, FontFamily, FontId, Frame, Margin, RichText, Rounding, ScrollArea, Stroke, TextEdit,
+    Vec2,
 };
 use eframe::{App, NativeOptions};
 use serde::{Deserialize, Serialize};
@@ -21,8 +23,8 @@ use stratum::{encode_job_cmd, StratumClient};
 fn main() -> eframe::Result<()> {
     let options = NativeOptions {
         viewport: egui::ViewportBuilder::default()
-            .with_inner_size([920.0, 640.0])
-            .with_min_inner_size([780.0, 520.0])
+            .with_inner_size([1080.0, 780.0])
+            .with_min_inner_size([900.0, 640.0])
             .with_title("CYD Companion · USB Scrypt Miner"),
         multisampling: 8,
         depth_buffer: 0,
@@ -47,6 +49,9 @@ const C_BUBBLE_HI: Color32 = Color32::from_rgb(110, 168, 220);
 const C_LIME: Color32 = Color32::from_rgb(180, 240, 90);
 const C_TEXT: Color32 = Color32::from_rgb(228, 238, 248);
 const C_MUTED: Color32 = Color32::from_rgb(130, 150, 170);
+const C_WARN: Color32 = Color32::from_rgb(255, 180, 90);
+const C_ERR: Color32 = Color32::from_rgb(255, 120, 100);
+const MAX_LOGS: usize = 500;
 
 fn apply_theme(ctx: &egui::Context) {
     let mut style = (*ctx.style()).clone();
@@ -81,8 +86,58 @@ fn bubble(ui: &mut egui::Ui, label: &str, lime: bool) -> egui::Response {
         egui::Button::new(RichText::new(label).strong().color(text).size(14.0))
             .fill(fill)
             .rounding(Rounding::same(22.0))
-            .min_size(Vec2::new(120.0, 36.0)),
+            .min_size(Vec2::new(110.0, 34.0)),
     )
+}
+
+fn stamp() -> String {
+    let secs = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+    let h = (secs / 3600) % 24;
+    let m = (secs / 60) % 60;
+    let s = secs % 60;
+    format!("{h:02}:{m:02}:{s:02}")
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Tab {
+    Mine,
+    Debug,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum LogKind {
+    Info,
+    Usb,
+    Stratum,
+    Warn,
+    Err,
+}
+
+#[derive(Clone)]
+struct LogEntry {
+    time: String,
+    kind: LogKind,
+    text: String,
+}
+
+#[derive(Clone, Default)]
+struct StratumLive {
+    endpoint: String,
+    phase: String,
+    connected: bool,
+    authorized: bool,
+    difficulty: u32,
+    jobs: u32,
+    accepted: u32,
+    rejected: u32,
+    lines_rx: u64,
+    lines_tx: u64,
+    last_job: String,
+    last_rx: String,
+    last_tx: String,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -111,6 +166,8 @@ struct StatusJson {
     fw: String,
     #[serde(default)]
     link: String,
+    #[serde(default)]
+    job: String,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -151,6 +208,12 @@ enum NetMsg {
         rejected: u32,
         phase: String,
     },
+    Stratum(StratumLive),
+    Log {
+        kind: LogKind,
+        text: String,
+    },
+    Terminal(String),
 }
 
 enum NetCmd {
@@ -166,9 +229,11 @@ enum NetCmd {
     SetClock(u8),
     PollStatus,
     Bench,
+    UsbRaw(String),
 }
 
 struct CompanionApp {
+    tab: Tab,
     com_port: String,
     ports: Vec<String>,
     usb_open: bool,
@@ -188,6 +253,12 @@ struct CompanionApp {
     msg_rx: Receiver<NetMsg>,
     last_poll: Instant,
     pulse: f32,
+    logs: VecDeque<LogEntry>,
+    log_auto_scroll: bool,
+    stratum_live: StratumLive,
+    term_input: String,
+    term_history: VecDeque<String>,
+    term_out: VecDeque<String>,
 }
 
 impl CompanionApp {
@@ -219,7 +290,8 @@ impl CompanionApp {
             }
         }
 
-        Self {
+        let mut app = Self {
+            tab: Tab::Mine,
             com_port: String::new(),
             ports: Vec::new(),
             usb_open: false,
@@ -239,6 +311,25 @@ impl CompanionApp {
             msg_rx,
             last_poll: Instant::now() - Duration::from_secs(10),
             pulse: 0.0,
+            logs: VecDeque::new(),
+            log_auto_scroll: true,
+            stratum_live: StratumLive::default(),
+            term_input: "cmp ping".into(),
+            term_history: VecDeque::new(),
+            term_out: VecDeque::new(),
+        };
+        app.push_log(LogKind::Info, "CYD Companion ready".into());
+        app
+    }
+
+    fn push_log(&mut self, kind: LogKind, text: String) {
+        self.logs.push_back(LogEntry {
+            time: stamp(),
+            kind,
+            text,
+        });
+        while self.logs.len() > MAX_LOGS {
+            self.logs.pop_front();
         }
     }
 
@@ -262,6 +353,7 @@ impl CompanionApp {
         }
         let _ = self.cmd_tx.send(NetCmd::OpenUsb(self.com_port.clone()));
         self.last_ok = format!("Opening {}…", self.com_port);
+        self.push_log(LogKind::Usb, format!("Opening {}", self.com_port));
     }
 
     fn start_mine(&mut self) {
@@ -281,12 +373,323 @@ impl CompanionApp {
         });
         self.mining = true;
         self.last_ok = "Starting pool on PC → pushing work over USB…".into();
+        self.push_log(
+            LogKind::Info,
+            format!(
+                "Start mining → {} as {}",
+                self.edit_stratum.trim(),
+                self.edit_worker.trim()
+            ),
+        );
     }
 
     fn stop_mine(&mut self) {
         let _ = self.cmd_tx.send(NetCmd::StopMine);
         self.mining = false;
         self.last_ok = "Mining stopped.".into();
+        self.push_log(LogKind::Info, "Mining stopped".into());
+    }
+
+    fn send_term(&mut self) {
+        let cmd = self.term_input.trim().to_string();
+        if cmd.is_empty() {
+            return;
+        }
+        if !self.usb_open {
+            self.push_log(LogKind::Err, "USB not open — Connect first".into());
+            return;
+        }
+        self.term_history.push_back(format!(">>> {cmd}"));
+        while self.term_history.len() > 200 {
+            self.term_history.pop_front();
+        }
+        self.push_log(LogKind::Usb, format!("TX {cmd}"));
+        let _ = self.cmd_tx.send(NetCmd::UsbRaw(cmd));
+    }
+
+    fn ui_mine(&mut self, ui: &mut egui::Ui) {
+        panel(ui, "USB-C", |ui| {
+            ui.horizontal(|ui| {
+                egui::ComboBox::from_id_source("com")
+                    .selected_text(if self.com_port.is_empty() {
+                        "Select port"
+                    } else {
+                        &self.com_port
+                    })
+                    .show_ui(ui, |ui| {
+                        for p in &self.ports {
+                            ui.selectable_value(&mut self.com_port, p.clone(), p);
+                        }
+                    });
+                if bubble(ui, "Refresh", false).clicked() {
+                    let _ = self.cmd_tx.send(NetCmd::ListPorts);
+                }
+                if bubble(ui, "Connect", true).clicked() {
+                    self.connect_usb();
+                }
+                if bubble(ui, "Disconnect", false).clicked() {
+                    let _ = self.cmd_tx.send(NetCmd::CloseUsb);
+                    self.usb_open = false;
+                    self.mining = false;
+                    self.push_log(LogKind::Usb, "Disconnect requested".into());
+                }
+            });
+        });
+
+        ui.add_space(8.0);
+        panel(ui, "Pool (on this PC)", |ui| {
+            ui.horizontal(|ui| {
+                ui.label(RichText::new("Stratum").color(C_MUTED));
+                ui.add(
+                    TextEdit::singleline(&mut self.edit_stratum)
+                        .desired_width(520.0)
+                        .hint_text("stratum+tcp://host:port"),
+                );
+            });
+            ui.horizontal(|ui| {
+                ui.label(RichText::new("Worker").color(C_MUTED));
+                ui.add(
+                    TextEdit::singleline(&mut self.edit_worker)
+                        .desired_width(360.0)
+                        .hint_text("Litecoin address"),
+                );
+                ui.label(RichText::new("Pass").color(C_MUTED));
+                ui.add(TextEdit::singleline(&mut self.edit_password).desired_width(100.0));
+            });
+            ui.horizontal(|ui| {
+                if !self.mining {
+                    if bubble(ui, "Start mining", true).clicked() {
+                        self.start_mine();
+                    }
+                } else if bubble(ui, "Stop mining", false).clicked() {
+                    self.stop_mine();
+                }
+                if bubble(ui, "Bench", false).clicked() {
+                    let _ = self.cmd_tx.send(NetCmd::Bench);
+                    self.push_log(LogKind::Usb, "Bench requested".into());
+                }
+            });
+        });
+
+        ui.add_space(8.0);
+        panel(ui, "Live board", |ui| {
+            ui.horizontal(|ui| {
+                stat(ui, "Hashrate", &format!("{:.2} H/s", self.status.hashrate_hs));
+                let khs = if self.status.hashrate_khs > 0.0 {
+                    self.status.hashrate_khs
+                } else {
+                    self.status.hashrate_hs / 1000.0
+                };
+                stat(ui, "kH/s", &format!("{khs:.4}"));
+                stat(ui, "Accepted", &self.accepted.to_string());
+                stat(ui, "Rejected", &self.rejected.to_string());
+                stat(ui, "Board shares", &self.status.shares.to_string());
+                stat(
+                    ui,
+                    "Nonce",
+                    if self.status.nonce.is_empty() {
+                        "—"
+                    } else {
+                        &self.status.nonce
+                    },
+                );
+            });
+        });
+
+        ui.add_space(8.0);
+        self.ui_stratum_panel(ui);
+
+        ui.add_space(8.0);
+        self.ui_logs_panel(ui);
+    }
+
+    fn ui_stratum_panel(&self, ui: &mut egui::Ui) {
+        let s = &self.stratum_live;
+        panel(ui, "Stratum communication (live)", |ui| {
+            ui.horizontal(|ui| {
+                let state = if s.authorized {
+                    ("AUTHORIZED", C_LIME)
+                } else if s.connected || s.phase != "off" && s.phase != "err" {
+                    ("LINKING", C_WARN)
+                } else if s.phase == "err" {
+                    ("ERROR", C_ERR)
+                } else {
+                    ("IDLE", C_MUTED)
+                };
+                ui.label(
+                    RichText::new(state.0)
+                        .color(state.1)
+                        .strong()
+                        .size(15.0),
+                );
+                ui.label(
+                    RichText::new(format!(
+                        "  {}  ·  phase {}  ·  diff {}",
+                        if s.endpoint.is_empty() {
+                            "—"
+                        } else {
+                            &s.endpoint
+                        },
+                        if s.phase.is_empty() { "off" } else { &s.phase },
+                        s.difficulty
+                    ))
+                    .color(C_MUTED),
+                );
+            });
+            ui.add_space(4.0);
+            ui.horizontal(|ui| {
+                mini_stat(ui, "TX lines", &s.lines_tx.to_string());
+                mini_stat(ui, "RX lines", &s.lines_rx.to_string());
+                mini_stat(ui, "Jobs", &s.jobs.to_string());
+                mini_stat(ui, "Accept", &s.accepted.to_string());
+                mini_stat(ui, "Reject", &s.rejected.to_string());
+                mini_stat(
+                    ui,
+                    "Job id",
+                    if s.last_job.is_empty() {
+                        "—"
+                    } else {
+                        &s.last_job
+                    },
+                );
+            });
+            ui.add_space(6.0);
+            ui.label(RichText::new("Last TX → pool").color(C_BUBBLE_HI).size(12.0));
+            ui.label(
+                RichText::new(trunc(&s.last_tx, 140))
+                    .color(C_TEXT)
+                    .monospace()
+                    .size(12.0),
+            );
+            ui.label(RichText::new("Last RX ← pool").color(C_BUBBLE_HI).size(12.0));
+            ui.label(
+                RichText::new(trunc(&s.last_rx, 140))
+                    .color(C_TEXT)
+                    .monospace()
+                    .size(12.0),
+            );
+        });
+    }
+
+    fn ui_logs_panel(&mut self, ui: &mut egui::Ui) {
+        panel(ui, "Logs", |ui| {
+            ui.horizontal(|ui| {
+                ui.checkbox(&mut self.log_auto_scroll, "Auto-scroll");
+                if bubble(ui, "Clear logs", false).clicked() {
+                    self.logs.clear();
+                }
+            });
+            Frame::none()
+                .fill(Color32::from_rgb(10, 14, 20))
+                .rounding(Rounding::same(12.0))
+                .inner_margin(Margin::same(8.0))
+                .show(ui, |ui| {
+                    ScrollArea::vertical()
+                        .id_source("logs_scroll")
+                        .stick_to_bottom(self.log_auto_scroll)
+                        .max_height(180.0)
+                        .auto_shrink([false, false])
+                        .show(ui, |ui| {
+                            for e in &self.logs {
+                                let (tag, color) = match e.kind {
+                                    LogKind::Info => ("INF", C_MUTED),
+                                    LogKind::Usb => ("USB", C_BUBBLE_HI),
+                                    LogKind::Stratum => ("STR", C_LIME),
+                                    LogKind::Warn => ("WRN", C_WARN),
+                                    LogKind::Err => ("ERR", C_ERR),
+                                };
+                                ui.horizontal(|ui| {
+                                    ui.label(
+                                        RichText::new(format!("{} [{tag}]", e.time))
+                                            .color(color)
+                                            .monospace()
+                                            .size(11.0),
+                                    );
+                                    ui.label(
+                                        RichText::new(&e.text)
+                                            .color(C_TEXT)
+                                            .monospace()
+                                            .size(11.0),
+                                    );
+                                });
+                            }
+                        });
+                });
+        });
+    }
+
+    fn ui_debug(&mut self, ui: &mut egui::Ui) {
+        panel(ui, "USB terminal → ESP board", |ui| {
+            ui.label(
+                RichText::new("Send raw `cmp …` lines over USB-C. Examples: ping, status, config, stop, bench n=4")
+                    .color(C_MUTED)
+                    .size(12.0),
+            );
+            ui.add_space(4.0);
+            ui.horizontal(|ui| {
+                let resp = ui.add(
+                    TextEdit::singleline(&mut self.term_input)
+                        .desired_width(640.0)
+                        .font(FontId::monospace(14.0))
+                        .hint_text("cmp ping"),
+                );
+                if bubble(ui, "Send", true).clicked()
+                    || (resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)))
+                {
+                    self.send_term();
+                }
+                if bubble(ui, "Ping", false).clicked() {
+                    self.term_input = "cmp ping".into();
+                    self.send_term();
+                }
+                if bubble(ui, "Status", false).clicked() {
+                    self.term_input = "cmp status".into();
+                    self.send_term();
+                }
+                if bubble(ui, "Config", false).clicked() {
+                    self.term_input = "cmp config".into();
+                    self.send_term();
+                }
+            });
+            ui.add_space(6.0);
+            Frame::none()
+                .fill(Color32::from_rgb(10, 14, 20))
+                .rounding(Rounding::same(12.0))
+                .inner_margin(Margin::same(8.0))
+                .show(ui, |ui| {
+                    ScrollArea::vertical()
+                        .id_source("term_scroll")
+                        .stick_to_bottom(true)
+                        .max_height(280.0)
+                        .auto_shrink([false, false])
+                        .show(ui, |ui| {
+                            for line in self.term_history.iter().chain(self.term_out.iter()) {
+                                let color = if line.starts_with(">>>") {
+                                    C_BUBBLE_HI
+                                } else if line.contains("CMPERR") || line.starts_with("ERR") {
+                                    C_ERR
+                                } else if line.contains("CMPACK") || line.contains("CMP ok") {
+                                    C_LIME
+                                } else {
+                                    C_TEXT
+                                };
+                                ui.label(RichText::new(line).color(color).monospace().size(12.0));
+                            }
+                        });
+                });
+            ui.add_space(6.0);
+            ui.horizontal(|ui| {
+                if bubble(ui, "Clear terminal", false).clicked() {
+                    self.term_history.clear();
+                    self.term_out.clear();
+                }
+            });
+        });
+
+        ui.add_space(8.0);
+        self.ui_stratum_panel(ui);
+        ui.add_space(8.0);
+        self.ui_logs_panel(ui);
     }
 }
 
@@ -307,37 +710,52 @@ impl App for CompanionApp {
                     }
                 }
                 NetMsg::Action(Ok(s)) => {
-                    self.last_ok = s;
-                    if self.last_ok.to_lowercase().contains("usb open") {
+                    self.last_ok = s.clone();
+                    let low = s.to_lowercase();
+                    if low.contains("usb open") {
                         self.usb_open = true;
                     }
-                    if self.last_ok.to_lowercase().contains("closed") {
+                    if low.contains("closed") {
                         self.usb_open = false;
                         self.mining = false;
                     }
+                    let kind = if low.contains("job") || low.contains("share") || low.contains("pool")
+                    {
+                        LogKind::Stratum
+                    } else if low.contains("usb") || low.contains("cmp") || low.contains("board") {
+                        LogKind::Usb
+                    } else {
+                        LogKind::Info
+                    };
+                    self.push_log(kind, s);
                 }
                 NetMsg::Action(Err(e)) => {
-                    self.last_error = e;
-                    if self.last_error.to_lowercase().contains("stratum") {
-                        self.mining = false;
-                    }
+                    self.last_error = e.clone();
+                    self.push_log(LogKind::Err, e);
                 }
                 NetMsg::Status(Ok(s)) => {
                     self.status = s;
                     self.last_error.clear();
                 }
-                NetMsg::Status(Err(e)) => self.last_error = e,
+                NetMsg::Status(Err(e)) => {
+                    self.last_error = e.clone();
+                    self.push_log(LogKind::Warn, format!("status: {e}"));
+                }
                 NetMsg::Config(Ok(c)) => {
                     self.fw_label = if c.fw.is_empty() {
-                        "0.3.0-usb".into()
+                        "—".into()
                     } else {
-                        c.fw
+                        c.fw.clone()
                     };
                     if c.cpu_mhz == 80 || c.cpu_mhz == 160 || c.cpu_mhz == 240 {
                         self.target_mhz = c.cpu_mhz;
                     }
+                    self.push_log(
+                        LogKind::Usb,
+                        format!("config fw={} mode={}", c.fw, c.mode),
+                    );
                 }
-                NetMsg::Config(Err(e)) => self.last_error = e,
+                NetMsg::Config(Err(e)) => self.push_log(LogKind::Warn, format!("config: {e}")),
                 NetMsg::MineStats {
                     accepted,
                     rejected,
@@ -347,146 +765,85 @@ impl App for CompanionApp {
                     self.rejected = rejected;
                     self.pool_phase = phase;
                 }
+                NetMsg::Stratum(live) => {
+                    self.stratum_live = live;
+                    self.accepted = self.stratum_live.accepted;
+                    self.rejected = self.stratum_live.rejected;
+                    self.pool_phase = self.stratum_live.phase.clone();
+                }
+                NetMsg::Log { kind, text } => self.push_log(kind, text),
+                NetMsg::Terminal(line) => {
+                    self.term_out.push_back(line.clone());
+                    while self.term_out.len() > 300 {
+                        self.term_out.pop_front();
+                    }
+                    self.push_log(LogKind::Usb, format!("RX {line}"));
+                }
             }
         }
 
-        if self.usb_open && self.last_poll.elapsed() > Duration::from_millis(1500) {
+        if self.usb_open && self.last_poll.elapsed() > Duration::from_millis(1200) {
             let _ = self.cmd_tx.send(NetCmd::PollStatus);
             self.last_poll = Instant::now();
         }
 
         self.pulse = (self.pulse + ctx.input(|i| i.unstable_dt) * 1.4) % std::f32::consts::TAU;
-        let glow = 0.55 + 0.45 * self.pulse.sin();
 
         egui::CentralPanel::default()
-            .frame(Frame::none().fill(C_BG).inner_margin(Margin::same(22.0)))
+            .frame(Frame::none().fill(C_BG).inner_margin(Margin::same(18.0)))
             .show(ctx, |ui| {
                 ui.horizontal(|ui| {
                     ui.heading(RichText::new("CYD Companion").color(C_LIME).strong());
                     ui.label(
-                        RichText::new(format!("  ·  fw {fw}", fw = self.fw_label)).color(C_MUTED),
+                        RichText::new(format!("  ·  fw {}", self.fw_label)).color(C_MUTED),
                     );
+                    ui.add_space(16.0);
+                    ui.selectable_value(&mut self.tab, Tab::Mine, "Mine");
+                    ui.selectable_value(&mut self.tab, Tab::Debug, "Debug / Terminal");
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         let link = if self.usb_open { "USB linked" } else { "USB idle" };
-                        let _ = glow;
                         ui.label(
                             RichText::new(link)
                                 .color(if self.usb_open { C_LIME } else { C_MUTED })
                                 .strong(),
                         );
+                        ui.label(
+                            RichText::new(format!("stratum: {}", self.pool_phase)).color(C_MUTED),
+                        );
                     });
                 });
                 ui.label(
-                    RichText::new("Board hashes over USB-C only · pool + WiFi stay on this PC")
+                    RichText::new("Board hashes over USB-C · pool traffic on this PC")
                         .color(C_MUTED)
                         .size(13.0),
                 );
-                ui.add_space(12.0);
-
-                panel(ui, "USB-C", |ui| {
-                    ui.horizontal(|ui| {
-                        egui::ComboBox::from_id_source("com")
-                            .selected_text(if self.com_port.is_empty() {
-                                "Select port"
-                            } else {
-                                &self.com_port
-                            })
-                            .show_ui(ui, |ui| {
-                                for p in &self.ports {
-                                    ui.selectable_value(&mut self.com_port, p.clone(), p);
-                                }
-                            });
-                        if bubble(ui, "Refresh", false).clicked() {
-                            let _ = self.cmd_tx.send(NetCmd::ListPorts);
-                        }
-                        if bubble(ui, "Connect", true).clicked() {
-                            self.connect_usb();
-                        }
-                        if bubble(ui, "Disconnect", false).clicked() {
-                            let _ = self.cmd_tx.send(NetCmd::CloseUsb);
-                            self.usb_open = false;
-                            self.mining = false;
-                        }
-                    });
-                });
-
                 ui.add_space(10.0);
-                panel(ui, "Pool (on this PC)", |ui| {
-                    ui.horizontal(|ui| {
-                        ui.label(RichText::new("Stratum").color(C_MUTED));
-                        ui.add(
-                            egui::TextEdit::singleline(&mut self.edit_stratum)
-                                .desired_width(520.0)
-                                .hint_text("stratum+tcp://host:port"),
-                        );
-                    });
-                    ui.horizontal(|ui| {
-                        ui.label(RichText::new("Worker").color(C_MUTED));
-                        ui.add(
-                            egui::TextEdit::singleline(&mut self.edit_worker)
-                                .desired_width(360.0)
-                                .hint_text("Litecoin address"),
-                        );
-                        ui.label(RichText::new("Pass").color(C_MUTED));
-                        ui.add(
-                            egui::TextEdit::singleline(&mut self.edit_password).desired_width(100.0),
-                        );
-                    });
-                    ui.horizontal(|ui| {
-                        if !self.mining {
-                            if bubble(ui, "Start mining", true).clicked() {
-                                self.start_mine();
-                            }
-                        } else if bubble(ui, "Stop mining", false).clicked() {
-                            self.stop_mine();
-                        }
-                        ui.label(
-                            RichText::new(format!("pool: {}", self.pool_phase)).color(C_MUTED),
-                        );
-                    });
-                });
 
-                ui.add_space(10.0);
-                panel(ui, "Live", |ui| {
-                    ui.horizontal(|ui| {
-                        stat(
-                            ui,
-                            "Hashrate",
-                            &format!("{:.2} H/s", self.status.hashrate_hs),
-                        );
-                        let khs = if self.status.hashrate_khs > 0.0 {
-                            self.status.hashrate_khs
-                        } else {
-                            self.status.hashrate_hs / 1000.0
-                        };
-                        stat(ui, "kH/s", &format!("{khs:.4}"));
-                        stat(ui, "Accepted", &self.accepted.to_string());
-                        stat(ui, "Rejected", &self.rejected.to_string());
-                        stat(ui, "Board shares", &self.status.shares.to_string());
-                    });
-                    ui.add_space(6.0);
-                    ui.horizontal(|ui| {
-                        ui.label(
-                            RichText::new("Locked 240 MHz · dual-core · full-V scrypt when RAM allows")
-                                .color(C_MUTED)
-                                .size(12.0),
-                        );
-                        if bubble(ui, "Bench max", true).clicked() {
-                            let _ = self.cmd_tx.send(NetCmd::Bench);
-                        }
-                    });
-                });
+                match self.tab {
+                    Tab::Mine => self.ui_mine(ui),
+                    Tab::Debug => self.ui_debug(ui),
+                }
 
-                ui.add_space(12.0);
+                ui.add_space(8.0);
                 if !self.last_ok.is_empty() {
-                    ui.label(RichText::new(&self.last_ok).color(C_LIME));
+                    ui.label(RichText::new(&self.last_ok).color(C_LIME).size(12.0));
                 }
                 if !self.last_error.is_empty() {
-                    ui.label(RichText::new(&self.last_error).color(Color32::from_rgb(255, 120, 100)));
+                    ui.label(RichText::new(&self.last_error).color(C_ERR).size(12.0));
                 }
             });
 
-        ctx.request_repaint_after(Duration::from_millis(50));
+        ctx.request_repaint_after(Duration::from_millis(40));
+    }
+}
+
+fn trunc(s: &str, n: usize) -> String {
+    if s.is_empty() {
+        "—".into()
+    } else if s.len() > n {
+        format!("{}…", &s[..n])
+    } else {
+        s.to_string()
     }
 }
 
@@ -494,8 +851,8 @@ fn panel(ui: &mut egui::Ui, title: &str, add: impl FnOnce(&mut egui::Ui)) {
     Frame::none()
         .fill(C_PANEL)
         .rounding(Rounding::same(18.0))
-        .stroke(Stroke::new(1.0, Color32::from_rgb(40, 60, 80)))
-        .inner_margin(Margin::same(14.0))
+        .stroke(Stroke::new(1.0_f32, Color32::from_rgb(40, 60, 80)))
+        .inner_margin(Margin::same(12.0))
         .show(ui, |ui| {
             ui.label(RichText::new(title).color(C_BUBBLE_HI).strong().size(13.0));
             ui.add_space(6.0);
@@ -507,13 +864,51 @@ fn stat(ui: &mut egui::Ui, label: &str, value: &str) {
     Frame::none()
         .fill(Color32::from_rgb(24, 34, 48))
         .rounding(Rounding::same(14.0))
-        .inner_margin(Margin::symmetric(14.0, 10.0))
+        .inner_margin(Margin::symmetric(12.0, 8.0))
         .show(ui, |ui| {
             ui.vertical(|ui| {
                 ui.label(RichText::new(label).color(C_MUTED).size(11.0));
-                ui.label(RichText::new(value).color(C_LIME).strong().size(18.0));
+                ui.label(RichText::new(value).color(C_LIME).strong().size(17.0));
             });
         });
+}
+
+fn mini_stat(ui: &mut egui::Ui, label: &str, value: &str) {
+    Frame::none()
+        .fill(Color32::from_rgb(24, 34, 48))
+        .rounding(Rounding::same(10.0))
+        .inner_margin(Margin::symmetric(10.0, 6.0))
+        .show(ui, |ui| {
+            ui.vertical(|ui| {
+                ui.label(RichText::new(label).color(C_MUTED).size(10.0));
+                ui.label(RichText::new(value).color(C_TEXT).strong().size(13.0));
+            });
+        });
+}
+
+fn log_msg(tx: &Sender<NetMsg>, kind: LogKind, text: impl Into<String>) {
+    let _ = tx.send(NetMsg::Log {
+        kind,
+        text: text.into(),
+    });
+}
+
+fn push_stratum_live(tx: &Sender<NetMsg>, client: &StratumClient) {
+    let _ = tx.send(NetMsg::Stratum(StratumLive {
+        endpoint: client.endpoint.clone(),
+        phase: client.phase.clone(),
+        connected: client.stream_connected(),
+        authorized: client.authorized(),
+        difficulty: client.difficulty(),
+        jobs: client.jobs_seen,
+        accepted: client.accepted,
+        rejected: client.rejected,
+        lines_rx: client.lines_rx,
+        lines_tx: client.lines_tx,
+        last_job: client.job_id().to_string(),
+        last_rx: client.last_rx.clone(),
+        last_tx: client.last_tx.clone(),
+    }));
 }
 
 fn mine_worker(cmd_rx: Receiver<NetCmd>, msg_tx: Sender<NetMsg>) {
@@ -522,10 +917,10 @@ fn mine_worker(cmd_rx: Receiver<NetCmd>, msg_tx: Sender<NetMsg>) {
     let mut stratum: Option<StratumClient> = None;
     let mut mining = false;
     let mut last_stats_push = Instant::now() - Duration::from_secs(10);
+    let mut last_stratum_ui = Instant::now() - Duration::from_secs(10);
 
     loop {
-        // Non-blocking command drain with short wait when idle.
-        let cmd = if mining {
+        let cmd = if mining || usb.is_some() {
             cmd_rx.try_recv().ok()
         } else {
             match cmd_rx.recv_timeout(Duration::from_millis(200)) {
@@ -552,6 +947,7 @@ fn mine_worker(cmd_rx: Receiver<NetCmd>, msg_tx: Sender<NetMsg>) {
                     if let Some(mut s) = stratum.take() {
                         s.disconnect();
                     }
+                    log_msg(&msg_tx, LogKind::Usb, format!("Opening {name} @ 115200"));
                     match serialport::new(&name, 115_200)
                         .timeout(Duration::from_millis(40))
                         .open()
@@ -586,7 +982,8 @@ fn mine_worker(cmd_rx: Receiver<NetCmd>, msg_tx: Sender<NetMsg>) {
                             }
                         }
                         Err(e) => {
-                            let _ = msg_tx.send(NetMsg::Action(Err(format!("USB open failed: {e}"))));
+                            let _ = msg_tx
+                                .send(NetMsg::Action(Err(format!("USB open failed: {e}"))));
                         }
                     }
                 }
@@ -611,8 +1008,6 @@ fn mine_worker(cmd_rx: Receiver<NetCmd>, msg_tx: Sender<NetMsg>) {
                         let _ = msg_tx.send(NetMsg::Action(Err("USB not open".into())));
                         continue;
                     }
-                    // Arm the board hasher immediately (local job) so hashing is visible
-                    // even while stratum subscribe/auth/notify is in flight.
                     if let Some(p) = usb.as_mut() {
                         match usb_cmd(p.as_mut(), &mut usb_rx, &warmup_job_cmd()) {
                             Ok(_) => {
@@ -627,9 +1022,18 @@ fn mine_worker(cmd_rx: Receiver<NetCmd>, msg_tx: Sender<NetMsg>) {
                             }
                         }
                     }
+                    log_msg(
+                        &msg_tx,
+                        LogKind::Stratum,
+                        format!("Connecting pool {endpoint}"),
+                    );
                     let mut client = StratumClient::new(worker, password);
                     match client.connect(&endpoint) {
                         Ok(()) => {
+                            for line in client.take_recent() {
+                                log_msg(&msg_tx, LogKind::Stratum, line);
+                            }
+                            push_stratum_live(&msg_tx, &client);
                             stratum = Some(client);
                             mining = true;
                             let _ = msg_tx.send(NetMsg::Action(Ok(format!(
@@ -637,7 +1041,6 @@ fn mine_worker(cmd_rx: Receiver<NetCmd>, msg_tx: Sender<NetMsg>) {
                             ))));
                         }
                         Err(e) => {
-                            // Keep warmup hashing even if pool connect fails.
                             mining = true;
                             let _ = msg_tx.send(NetMsg::Action(Err(format!(
                                 "Pool error (board still hashing locally): {e}"
@@ -649,6 +1052,9 @@ fn mine_worker(cmd_rx: Receiver<NetCmd>, msg_tx: Sender<NetMsg>) {
                     mining = false;
                     if let Some(mut s) = stratum.take() {
                         s.disconnect();
+                        for line in s.take_recent() {
+                            log_msg(&msg_tx, LogKind::Stratum, line);
+                        }
                     }
                     if let Some(p) = usb.as_mut() {
                         let _ = usb_cmd(p.as_mut(), &mut usb_rx, "cmp stop");
@@ -659,20 +1065,29 @@ fn mine_worker(cmd_rx: Receiver<NetCmd>, msg_tx: Sender<NetMsg>) {
                         rejected: 0,
                         phase: "off".into(),
                     });
+                    let _ = msg_tx.send(NetMsg::Stratum(StratumLive {
+                        phase: "off".into(),
+                        ..Default::default()
+                    }));
                 }
                 NetCmd::SetClock(mhz) => {
                     if let Some(p) = usb.as_mut() {
                         let cmd = format!("cmp clock cpu_mhz={mhz}");
                         let r = usb_cmd(p.as_mut(), &mut usb_rx, &cmd);
-                        let _ = msg_tx.send(NetMsg::Action(r.map(|_| format!("Clock {mhz} MHz queued"))));
+                        let _ = msg_tx
+                            .send(NetMsg::Action(r.map(|_| format!("Clock {mhz} MHz queued"))));
                     }
                 }
                 NetCmd::PollStatus => {
                     if let Some(p) = usb.as_mut() {
                         match usb_cmd(p.as_mut(), &mut usb_rx, "cmp status") {
                             Ok(line) => {
-                                // Also harvest any CMPSHARE that arrived with status traffic.
-                                harvest_shares(p.as_mut(), &mut usb_rx, stratum.as_mut(), &msg_tx);
+                                harvest_shares(
+                                    p.as_mut(),
+                                    &mut usb_rx,
+                                    stratum.as_mut(),
+                                    &msg_tx,
+                                );
                                 let _ = msg_tx.send(NetMsg::Status(parse_cmp_status(&line)));
                             }
                             Err(e) => {
@@ -695,58 +1110,80 @@ fn mine_worker(cmd_rx: Receiver<NetCmd>, msg_tx: Sender<NetMsg>) {
                         let _ = msg_tx.send(NetMsg::Action(Err("USB not open".into())));
                     }
                 }
-            }
-        }
-
-        if !mining {
-            continue;
-        }
-
-        // Stratum + USB work loop
-        if let Some(client) = stratum.as_mut() {
-            if let Err(e) = client.poll() {
-                // Don't stop board hashing on transient pool read errors.
-                let _ = msg_tx.send(NetMsg::Action(Err(format!("Pool: {e} (retrying)"))));
-                thread::sleep(Duration::from_millis(500));
-                continue;
-            }
-            if let Some(job) = client.take_job() {
-                if let Some(p) = usb.as_mut() {
-                    let cmd = encode_job_cmd(&job);
-                    match usb_cmd(p.as_mut(), &mut usb_rx, &cmd) {
-                        Ok(_) => {
-                            let _ = msg_tx.send(NetMsg::Action(Ok(format!(
-                                "USB ← job {}",
-                                job.job_id
-                            ))));
+                NetCmd::UsbRaw(cmd) => {
+                    if let Some(p) = usb.as_mut() {
+                        match usb_cmd(p.as_mut(), &mut usb_rx, &cmd) {
+                            Ok(line) => {
+                                let _ = msg_tx.send(NetMsg::Terminal(line));
+                            }
+                            Err(e) => {
+                                let _ = msg_tx.send(NetMsg::Terminal(format!("ERR {e}")));
+                            }
                         }
-                        Err(e) => {
-                            let _ = msg_tx.send(NetMsg::Action(Err(e)));
-                        }
+                    } else {
+                        let _ = msg_tx.send(NetMsg::Terminal("ERR USB not open".into()));
                     }
                 }
             }
-            let _ = msg_tx.send(NetMsg::MineStats {
-                accepted: client.accepted,
-                rejected: client.rejected,
-                phase: client.phase.clone(),
-            });
-            if last_stats_push.elapsed() > Duration::from_secs(3) {
-                if let Some(p) = usb.as_mut() {
-                    let cmd = format!(
-                        "cmp stats accepted={}&rejected={}",
-                        client.accepted, client.rejected
-                    );
-                    let _ = usb_cmd(p.as_mut(), &mut usb_rx, &cmd);
+        }
+
+        // Constant stratum communication updates while linked / mining.
+        if let Some(client) = stratum.as_mut() {
+            match client.poll() {
+                Ok(()) => {
+                    for line in client.take_recent() {
+                        log_msg(&msg_tx, LogKind::Stratum, line);
+                    }
+                    if let Some(job) = client.take_job() {
+                        if let Some(p) = usb.as_mut() {
+                            let cmd = encode_job_cmd(&job);
+                            match usb_cmd(p.as_mut(), &mut usb_rx, &cmd) {
+                                Ok(_) => {
+                                    let _ = msg_tx.send(NetMsg::Action(Ok(format!(
+                                        "USB ← job {}",
+                                        job.job_id
+                                    ))));
+                                }
+                                Err(e) => {
+                                    let _ = msg_tx.send(NetMsg::Action(Err(e)));
+                                }
+                            }
+                        }
+                    }
+                    if last_stats_push.elapsed() > Duration::from_secs(3) {
+                        if let Some(p) = usb.as_mut() {
+                            let cmd = format!(
+                                "cmp stats accepted={}&rejected={}",
+                                client.accepted, client.rejected
+                            );
+                            let _ = usb_cmd(p.as_mut(), &mut usb_rx, &cmd);
+                        }
+                        last_stats_push = Instant::now();
+                    }
                 }
-                last_stats_push = Instant::now();
+                Err(e) => {
+                    log_msg(&msg_tx, LogKind::Err, format!("Pool: {e}"));
+                    thread::sleep(Duration::from_millis(400));
+                }
+            }
+            if last_stratum_ui.elapsed() > Duration::from_millis(250) {
+                push_stratum_live(&msg_tx, client);
+                let _ = msg_tx.send(NetMsg::MineStats {
+                    accepted: client.accepted,
+                    rejected: client.rejected,
+                    phase: client.phase.clone(),
+                });
+                last_stratum_ui = Instant::now();
             }
         }
 
         if let Some(p) = usb.as_mut() {
             harvest_shares(p.as_mut(), &mut usb_rx, stratum.as_mut(), &msg_tx);
         }
-        thread::sleep(Duration::from_millis(15));
+
+        if mining || stratum.is_some() {
+            thread::sleep(Duration::from_millis(15));
+        }
     }
 }
 
@@ -827,7 +1264,6 @@ fn cmp_reply_line(buf: &str) -> Option<String> {
             "CMPSHARE ",
         ] {
             if let Some(idx) = t.find(prefix) {
-                // Don't treat CMPSHARE as the reply to a command.
                 if prefix == "CMPSHARE " {
                     continue;
                 }
@@ -840,7 +1276,6 @@ fn cmp_reply_line(buf: &str) -> Option<String> {
 
 fn usb_cmd(port: &mut dyn SerialPort, buf: &mut String, cmd: &str) -> Result<String, String> {
     let mut last_err = String::new();
-    // Scrypt hashes are slow (~0.5–2s). Allow long waits so status/job never false-timeout.
     let wait_ms = if cmd.contains("bench") {
         60_000
     } else if cmd.contains("job") || cmd.contains("status") {
@@ -850,7 +1285,6 @@ fn usb_cmd(port: &mut dyn SerialPort, buf: &mut String, cmd: &str) -> Result<Str
     };
     for _ in 0..3 {
         drain_serial(port, buf);
-        // Preserve pending shares.
         let mut keep = String::new();
         for line in buf.lines() {
             if line.trim().starts_with("CMPSHARE ") {
@@ -860,7 +1294,6 @@ fn usb_cmd(port: &mut dyn SerialPort, buf: &mut String, cmd: &str) -> Result<Str
         }
         *buf = keep;
         let line = format!("\r\n{cmd}\r\n");
-        // Chunk long job lines for finicky USB-UART bridges.
         for chunk in line.as_bytes().chunks(64) {
             port.write_all(chunk)
                 .map_err(|e| format!("USB write: {e}"))?;
@@ -875,23 +1308,15 @@ fn usb_cmd(port: &mut dyn SerialPort, buf: &mut String, cmd: &str) -> Result<Str
             }
             thread::sleep(Duration::from_millis(20));
         }
-        let preview: String = buf.chars().filter(|c| !c.is_control()).take(48).collect();
         last_err = format!(
-            "USB timeout waiting for reply to `{}` (got {} bytes{})",
-            cmd.chars().take(48).collect::<String>(),
-            buf.len(),
-            if preview.is_empty() {
-                String::new()
-            } else {
-                format!(", preview={preview:?}")
-            }
+            "USB timeout waiting for reply to `{}`",
+            cmd.chars().take(48).collect::<String>()
         );
         thread::sleep(Duration::from_millis(100));
     }
     Err(last_err)
 }
 
-/// Local easy job so the board starts hashing immediately while the pool connects.
 fn warmup_job_cmd() -> String {
     use stratum::WorkJob;
     let mut header = [0u8; 80];

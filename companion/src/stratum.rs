@@ -43,6 +43,14 @@ pub struct StratumClient {
     pub accepted: u32,
     pub rejected: u32,
     pub phase: String,
+    pub endpoint: String,
+    pub jobs_seen: u32,
+    pub lines_rx: u64,
+    pub lines_tx: u64,
+    pub last_rx: String,
+    pub last_tx: String,
+    /// Recent stratum lines for the UI (newest last).
+    pub recent: Vec<String>,
 }
 
 impl StratumClient {
@@ -75,11 +83,19 @@ impl StratumClient {
             accepted: 0,
             rejected: 0,
             phase: "off".into(),
+            endpoint: String::new(),
+            jobs_seen: 0,
+            lines_rx: 0,
+            lines_tx: 0,
+            last_rx: String::new(),
+            last_tx: String::new(),
+            recent: Vec::new(),
         }
     }
 
     pub fn connect(&mut self, endpoint: &str) -> Result<(), String> {
         let (host, port) = parse_endpoint(endpoint)?;
+        self.endpoint = format!("{host}:{port}");
         let addr = format!("{host}:{port}")
             .to_socket_addrs()
             .map_err(|e| format!("resolve: {e}"))?
@@ -101,6 +117,7 @@ impl StratumClient {
         self.authorized = false;
         self.pending_job = None;
         self.phase = "tcp".into();
+        self.push_recent(format!("← TCP connected {}", self.endpoint));
         self.send_subscribe()
     }
 
@@ -111,10 +128,39 @@ impl StratumClient {
         self.authorized = false;
         self.pending_job = None;
         self.phase = "off".into();
+        self.push_recent("← disconnected".into());
     }
 
     pub fn connected(&self) -> bool {
         self.stream.is_some() && self.authorized
+    }
+
+    pub fn stream_connected(&self) -> bool {
+        self.stream.is_some()
+    }
+
+    pub fn authorized(&self) -> bool {
+        self.authorized
+    }
+
+    pub fn difficulty(&self) -> u32 {
+        self.difficulty
+    }
+
+    pub fn job_id(&self) -> &str {
+        &self.job_id
+    }
+
+    fn push_recent(&mut self, line: String) {
+        self.recent.push(line);
+        if self.recent.len() > 40 {
+            let n = self.recent.len() - 40;
+            self.recent.drain(0..n);
+        }
+    }
+
+    pub fn take_recent(&mut self) -> Vec<String> {
+        std::mem::take(&mut self.recent)
     }
 
     pub fn poll(&mut self) -> Result<(), String> {
@@ -146,6 +192,14 @@ impl StratumClient {
             }
         }
         for line in lines {
+            self.lines_rx += 1;
+            self.last_rx = line.clone();
+            let preview = if line.len() > 160 {
+                format!("{}…", &line[..160])
+            } else {
+                line.clone()
+            };
+            self.push_recent(format!("← {preview}"));
             self.handle_line(&line)?;
         }
         Ok(())
@@ -206,6 +260,15 @@ impl StratumClient {
         stream
             .write_all(s.as_bytes())
             .map_err(|e| format!("stratum write: {e}"))?;
+        self.lines_tx += 1;
+        let trimmed = s.trim().to_string();
+        self.last_tx = trimmed.clone();
+        let preview = if trimmed.len() > 160 {
+            format!("{}…", &trimmed[..160])
+        } else {
+            trimmed
+        };
+        self.push_recent(format!("→ {preview}"));
         Ok(())
     }
 
@@ -239,6 +302,11 @@ impl StratumClient {
                         self.nbits_hex = arr[6].as_str().unwrap_or("").to_string();
                         self.ntime_hex = arr[7].as_str().unwrap_or("").to_string();
                         if let Some(job) = self.build_job() {
+                            self.jobs_seen += 1;
+                            self.push_recent(format!(
+                                "← mining.notify job={} diff={}",
+                                job.job_id, self.difficulty
+                            ));
                             self.pending_job = Some(job);
                             self.phase = "mine".into();
                         }
