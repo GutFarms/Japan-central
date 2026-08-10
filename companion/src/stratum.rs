@@ -232,10 +232,12 @@ impl StratumClient {
     fn send_subscribe(&mut self) -> Result<(), String> {
         self.subscribe_id = self.msg_id;
         self.msg_id += 1;
+        // Many solo pools (including public-pool.io) allowlist common miner UAs.
+        // Custom names like "cyd-companion/…" get: "Only allowed user agents may subscribe".
         let msg = json!({
             "id": self.subscribe_id,
             "method": "mining.subscribe",
-            "params": ["cyd-companion/0.6.0-sha256"]
+            "params": ["cgminer/4.12.0"]
         });
         self.phase = "sub".into();
         self.send_json(&msg)
@@ -323,7 +325,16 @@ impl StratumClient {
         if id == self.subscribe_id && !self.subscribed {
             if has_error {
                 self.phase = "err".into();
-                return Err("subscribe failed".into());
+                let detail = v
+                    .get("error")
+                    .map(|e| e.to_string())
+                    .unwrap_or_else(|| "subscribe failed".into());
+                return Err(format!("subscribe failed: {detail}"));
+            }
+            // Some pools return a rejection string in `result` with error=null.
+            if let Some(msg) = v.get("result").and_then(|r| r.as_str()) {
+                self.phase = "err".into();
+                return Err(format!("subscribe rejected: {msg}"));
             }
             if let Some(res) = v.get("result").and_then(|r| r.as_array()) {
                 if res.len() >= 3 {

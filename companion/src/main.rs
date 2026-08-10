@@ -1044,7 +1044,7 @@ impl App for CompanionApp {
             }
         }
 
-        if self.usb_open && self.last_poll.elapsed() > Duration::from_millis(1200) {
+        if self.usb_open && self.last_poll.elapsed() > Duration::from_millis(2000) {
             let _ = self.cmd_tx.send(NetCmd::PollStatus);
             self.last_poll = Instant::now();
         }
@@ -1622,7 +1622,9 @@ fn mine_worker(cmd_rx: Receiver<NetCmd>, msg_tx: Sender<NetMsg>) {
                                 let _ = msg_tx.send(NetMsg::Status(parse_cmp_status(&line)));
                             }
                             Err(e) => {
-                                let _ = msg_tx.send(NetMsg::Status(Err(e)));
+                                // Soft-fail: never stall the UI/stratum on a missed status.
+                                // Mining may briefly delay USB; next poll usually recovers.
+                                log_msg(&msg_tx, LogKind::Warn, format!("status soft-fail: {e}"));
                             }
                         }
                     }
@@ -1807,14 +1809,17 @@ fn cmp_reply_line(buf: &str) -> Option<String> {
 
 fn usb_cmd(port: &mut dyn SerialPort, buf: &mut String, cmd: &str) -> Result<String, String> {
     let mut last_err = String::new();
-    let wait_ms = if cmd.contains("bench") {
-        60_000
-    } else if cmd.contains("job") || cmd.contains("status") {
-        12_000
+    let (wait_ms, retries) = if cmd.contains("bench") {
+        (60_000u64, 2usize)
+    } else if cmd.contains("job") {
+        (8_000u64, 3usize)
+    } else if cmd.contains("status") {
+        // Status must stay snappy so stratum TX/RX is never blocked for 36s.
+        (1_800u64, 2usize)
     } else {
-        5_000
+        (4_000u64, 3usize)
     };
-    for _ in 0..3 {
+    for _ in 0..retries {
         drain_serial(port, buf);
         let mut keep = String::new();
         for line in buf.lines() {
@@ -1837,13 +1842,13 @@ fn usb_cmd(port: &mut dyn SerialPort, buf: &mut String, cmd: &str) -> Result<Str
             if let Some(reply) = cmp_reply_line(buf) {
                 return Ok(reply);
             }
-            thread::sleep(Duration::from_millis(20));
+            thread::sleep(Duration::from_millis(15));
         }
         last_err = format!(
             "USB timeout waiting for reply to `{}`",
             cmd.chars().take(48).collect::<String>()
         );
-        thread::sleep(Duration::from_millis(100));
+        thread::sleep(Duration::from_millis(40));
     }
     Err(last_err)
 }

@@ -15,8 +15,8 @@ static ConfigStore g_store;
 static AppConfig g_cfg;
 static CompanionLink g_cmp;
 static DisplayUi g_ui;
-static Sha256Miner g_minerA;  // core 1
-static Sha256Miner g_minerB;  // core 0
+static Sha256Miner g_minerA;  // core 1 dedicated
+static Sha256Miner g_minerB;  // core 0 assist (only from loop, after USB)
 static MinerSnapshot g_snap;
 static NetFeed g_net;
 static UsbJob g_job;
@@ -40,7 +40,6 @@ static uint32_t g_lastPaint = 0;
 static uint32_t g_accepted = 0;
 static uint32_t g_rejected = 0;
 static TaskHandle_t g_mineTaskA = nullptr;
-static TaskHandle_t g_mineTaskB = nullptr;
 
 static void applyCpu(uint8_t mhz) {
   mhz = g_cfg.normalizeCpu(mhz);
@@ -150,7 +149,7 @@ static void mineLane(Sha256Miner& m, uint32_t stride, size_t batch) {
   g_hashCounter.fetch_add(batch, std::memory_order_relaxed);
 }
 
-// Core 1 — dedicated hasher, minimal yields.
+// Core 1 — dedicated hasher. Core 0 is reserved for USB/LCD + light assist.
 static void mineTaskA(void*) {
   for (;;) {
     if (!g_mining || !g_jobLoaded) {
@@ -158,18 +157,7 @@ static void mineTaskA(void*) {
       continue;
     }
     mineLane(g_minerA, 2, 4096);
-    esp_task_wdt_reset();
-  }
-}
-
-// Core 0 — hasher that yields often so USB/LCD stay alive.
-static void mineTaskB(void*) {
-  for (;;) {
-    if (!g_mining || !g_jobLoaded) {
-      vTaskDelay(pdMS_TO_TICKS(2));
-      continue;
-    }
-    mineLane(g_minerB, 2, 2048);
+    // Tiny yield so IDLE/WDT stay happy; USB lives on the other core.
     taskYIELD();
     esp_task_wdt_reset();
   }
@@ -215,14 +203,12 @@ void setup() {
   g_minerA.begin();
   g_minerB.begin();
 
-  // Core 1: max priority hasher. Core 0: slightly lower so USB loop can run.
+  // Only core 1 gets a high-priority hasher. Core 0 must stay responsive for USB.
   xTaskCreatePinnedToCore(mineTaskA, "shaA", 10240, nullptr, configMAX_PRIORITIES - 1, &g_mineTaskA,
                           1);
-  xTaskCreatePinnedToCore(mineTaskB, "shaB", 10240, nullptr, configMAX_PRIORITIES - 3, &g_mineTaskB,
-                          0);
 
   delay(80);
-  g_ui.showMessage("SHA-256", "unrolled midstate · dual-core");
+  g_ui.showMessage("SHA-256", "midstate · USB-first dual-core");
   delay(300);
   g_ui.showWaitingCompanion();
 
@@ -233,7 +219,7 @@ void setup() {
 }
 
 void loop() {
-  // Core 0 loop: USB + LCD only (hashing is on dedicated tasks).
+  // Always service USB first — this was starving when a core-0 mine task outranked loop.
   serviceCompanion();
 
   if (!g_jobLoaded) {
@@ -246,6 +232,14 @@ void loop() {
     return;
   }
 
+  // Light assist hashing on core 0 AFTER USB, small batches only.
+  if (g_mining) {
+    mineLane(g_minerB, 2, 256);
+  }
+
+  // Second USB pass so status/job ACKs never wait on a full hash batch.
+  serviceCompanion();
+
   uint32_t now = millis();
   uint32_t elapsed = now - g_windowStart;
   if (elapsed >= 1000) {
@@ -256,14 +250,11 @@ void loop() {
     g_windowStart = now;
   }
 
-  // Paint less often — SPI steals cycles from core-0 hasher.
   if (now - g_lastPaint >= 2500) {
     fillSnap();
     g_ui.showMining(g_cfg, g_snap, false);
     g_lastPaint = now;
   }
-
-  delay(1);
 }
 
 extern "C" float cyd_run_bench(uint32_t n) {
