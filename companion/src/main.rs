@@ -449,13 +449,17 @@ impl App for CompanionApp {
                 ui.add_space(10.0);
                 panel(ui, "Live", |ui| {
                     ui.horizontal(|ui| {
+                        stat(
+                            ui,
+                            "Hashrate",
+                            &format!("{:.2} H/s", self.status.hashrate_hs),
+                        );
                         let khs = if self.status.hashrate_khs > 0.0 {
                             self.status.hashrate_khs
                         } else {
                             self.status.hashrate_hs / 1000.0
                         };
-                        stat(ui, "Hashrate", &format!("{khs:.4} kH/s"));
-                        stat(ui, "H/s", &format!("{:.2}", self.status.hashrate_hs));
+                        stat(ui, "kH/s", &format!("{khs:.4}"));
                         stat(ui, "Accepted", &self.accepted.to_string());
                         stat(ui, "Rejected", &self.rejected.to_string());
                         stat(ui, "Board shares", &self.status.shares.to_string());
@@ -607,18 +611,37 @@ fn mine_worker(cmd_rx: Receiver<NetCmd>, msg_tx: Sender<NetMsg>) {
                         let _ = msg_tx.send(NetMsg::Action(Err("USB not open".into())));
                         continue;
                     }
+                    // Arm the board hasher immediately (local job) so hashing is visible
+                    // even while stratum subscribe/auth/notify is in flight.
+                    if let Some(p) = usb.as_mut() {
+                        match usb_cmd(p.as_mut(), &mut usb_rx, &warmup_job_cmd()) {
+                            Ok(_) => {
+                                let _ = msg_tx.send(NetMsg::Action(Ok(
+                                    "Board hashing (warmup job)…".into(),
+                                )));
+                            }
+                            Err(e) => {
+                                let _ = msg_tx.send(NetMsg::Action(Err(format!(
+                                    "Warmup job failed: {e}"
+                                ))));
+                            }
+                        }
+                    }
                     let mut client = StratumClient::new(worker, password);
                     match client.connect(&endpoint) {
                         Ok(()) => {
                             stratum = Some(client);
                             mining = true;
                             let _ = msg_tx.send(NetMsg::Action(Ok(format!(
-                                "Pool connecting {endpoint}"
+                                "Pool connecting {endpoint} — board already hashing"
                             ))));
                         }
                         Err(e) => {
-                            let _ = msg_tx.send(NetMsg::Action(Err(e)));
-                            mining = false;
+                            // Keep warmup hashing even if pool connect fails.
+                            mining = true;
+                            let _ = msg_tx.send(NetMsg::Action(Err(format!(
+                                "Pool error (board still hashing locally): {e}"
+                            ))));
                         }
                     }
                 }
@@ -682,8 +705,9 @@ fn mine_worker(cmd_rx: Receiver<NetCmd>, msg_tx: Sender<NetMsg>) {
         // Stratum + USB work loop
         if let Some(client) = stratum.as_mut() {
             if let Err(e) = client.poll() {
-                let _ = msg_tx.send(NetMsg::Action(Err(e)));
-                mining = false;
+                // Don't stop board hashing on transient pool read errors.
+                let _ = msg_tx.send(NetMsg::Action(Err(format!("Pool: {e} (retrying)"))));
+                thread::sleep(Duration::from_millis(500));
                 continue;
             }
             if let Some(job) = client.take_job() {
@@ -816,9 +840,17 @@ fn cmp_reply_line(buf: &str) -> Option<String> {
 
 fn usb_cmd(port: &mut dyn SerialPort, buf: &mut String, cmd: &str) -> Result<String, String> {
     let mut last_err = String::new();
+    // Scrypt hashes are slow (~0.5–2s). Allow long waits so status/job never false-timeout.
+    let wait_ms = if cmd.contains("bench") {
+        60_000
+    } else if cmd.contains("job") || cmd.contains("status") {
+        12_000
+    } else {
+        5_000
+    };
     for _ in 0..3 {
         drain_serial(port, buf);
-        // Preserve pending shares; only clear non-share noise after harvest isn't available here.
+        // Preserve pending shares.
         let mut keep = String::new();
         for line in buf.lines() {
             if line.trim().starts_with("CMPSHARE ") {
@@ -828,21 +860,53 @@ fn usb_cmd(port: &mut dyn SerialPort, buf: &mut String, cmd: &str) -> Result<Str
         }
         *buf = keep;
         let line = format!("\r\n{cmd}\r\n");
-        port.write_all(line.as_bytes())
-            .map_err(|e| format!("USB write: {e}"))?;
+        // Chunk long job lines for finicky USB-UART bridges.
+        for chunk in line.as_bytes().chunks(64) {
+            port.write_all(chunk)
+                .map_err(|e| format!("USB write: {e}"))?;
+            thread::sleep(Duration::from_millis(2));
+        }
         port.flush().map_err(|e| format!("USB flush: {e}"))?;
-        let deadline = Instant::now() + Duration::from_millis(5000);
+        let deadline = Instant::now() + Duration::from_millis(wait_ms);
         while Instant::now() < deadline {
             drain_serial(port, buf);
             if let Some(reply) = cmp_reply_line(buf) {
                 return Ok(reply);
             }
-            thread::sleep(Duration::from_millis(15));
+            thread::sleep(Duration::from_millis(20));
         }
-        last_err = format!("USB timeout waiting for reply to `{cmd}`");
-        thread::sleep(Duration::from_millis(80));
+        let preview: String = buf.chars().filter(|c| !c.is_control()).take(48).collect();
+        last_err = format!(
+            "USB timeout waiting for reply to `{}` (got {} bytes{})",
+            cmd.chars().take(48).collect::<String>(),
+            buf.len(),
+            if preview.is_empty() {
+                String::new()
+            } else {
+                format!(", preview={preview:?}")
+            }
+        );
+        thread::sleep(Duration::from_millis(100));
     }
     Err(last_err)
+}
+
+/// Local easy job so the board starts hashing immediately while the pool connects.
+fn warmup_job_cmd() -> String {
+    use stratum::WorkJob;
+    let mut header = [0u8; 80];
+    header[0] = 0x01;
+    header[68] = 0x5a;
+    let mut target = [0xffu8; 32];
+    target[31] = 0x0f;
+    let job = WorkJob {
+        job_id: "warmup".into(),
+        header,
+        target,
+        extranonce2_hex: "00000000".into(),
+        ntime_hex: "00000000".into(),
+    };
+    encode_job_cmd(&job)
 }
 
 fn parse_cmp_status(line: &str) -> Result<StatusJson, String> {

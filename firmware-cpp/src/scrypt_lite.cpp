@@ -1,7 +1,6 @@
 #include "scrypt_lite.hpp"
 
 #include <mbedtls/sha256.h>
-#include <cstdlib>
 #include <cstring>
 
 namespace {
@@ -10,15 +9,14 @@ constexpr size_t WBLOCK = 32;  // 128 bytes / 4
 
 inline uint32_t rotl(uint32_t x, int n) { return (x << n) | (x >> (32 - n)); }
 
-#define QR(a, b, c, d)        \
-  do {                        \
-    b ^= rotl(a + d, 7);      \
-    c ^= rotl(b + a, 9);      \
-    d ^= rotl(c + b, 13);     \
-    a ^= rotl(d + c, 18);     \
+#define QR(a, b, c, d)    \
+  do {                    \
+    b ^= rotl(a + d, 7);  \
+    c ^= rotl(b + a, 9);  \
+    d ^= rotl(c + b, 13); \
+    a ^= rotl(d + c, 18); \
   } while (0)
 
-// Salsa20/8 on 16 LE words (in-place).
 static inline void salsa20_8_words(uint32_t x[16]) {
   uint32_t z0 = x[0], z1 = x[1], z2 = x[2], z3 = x[3];
   uint32_t z4 = x[4], z5 = x[5], z6 = x[6], z7 = x[7];
@@ -66,7 +64,6 @@ static inline void blockmix_words(const uint32_t* b, uint32_t* y) {
 }
 
 static inline size_t integerify_words(const uint32_t* b) {
-  // First 8 bytes of second 64-byte half = words [16], [17] LE.
   uint64_t v = (uint64_t)b[16] | ((uint64_t)b[17] << 32);
   return (size_t)v;
 }
@@ -99,7 +96,6 @@ static void hmac_sha256(const uint8_t* key, size_t keyLen, const uint8_t* msg, s
   mbedtls_sha256_free(&ctx);
 }
 
-// PBKDF2-HMAC-SHA256 with c=1 (Litecoin scrypt). saltLen ≤ 128.
 static void pbkdf2_sha256_c1(const uint8_t* pass, size_t passLen, const uint8_t* salt,
                              size_t saltLen, uint8_t* out, size_t outLen) {
   uint8_t be[4];
@@ -180,12 +176,15 @@ bool hash_lt_target(const uint8_t* hash, const uint8_t* target) {
 
 }  // namespace
 
-ScryptLite::ScryptLite() {
+bool ScryptLite::begin(bool preferFullV) {
   xy_.assign(2 * WBLOCK, 0);
-  // Prefer full V (128 KiB) — ~5× fewer BlockMix vs TMTO-64.
+  fullV_ = false;
+  ready_ = false;
+  v_.clear();
+  v_.shrink_to_fit();
+
   const size_t fullWords = N * WBLOCK;
-  const size_t need = fullWords * sizeof(uint32_t) + 48 * 1024;
-  if (ESP.getMaxAllocHeap() >= need) {
+  if (preferFullV && ESP.getMaxAllocHeap() > fullWords * sizeof(uint32_t) + 40 * 1024) {
     v_.resize(fullWords);
     if (v_.size() == fullWords) {
       fullV_ = true;
@@ -193,13 +192,15 @@ ScryptLite::ScryptLite() {
     }
   }
   if (!fullV_) {
-    constexpr size_t slots = 128;  // 16 KiB TMTO
+    constexpr size_t slots = 64;  // 8 KiB TMTO — reliable
     v_.assign(slots * WBLOCK, 0);
     tmtoSlots_ = slots;
   }
   memset(target_, 0xFF, HASH_LEN);
   target_[31] = 0x00;
   target_[30] = 0x0F;
+  ready_ = !v_.empty() && !xy_.empty();
+  return ready_;
 }
 
 void ScryptLite::setJob(const uint8_t header[HEADER_LEN], const uint8_t target[HASH_LEN],
@@ -236,18 +237,17 @@ bool ScryptLite::meetsTarget(const uint8_t hash[HASH_LEN]) const {
   return hash_lt_target(hash, target_);
 }
 
-bool ScryptLite::mineBatch(size_t count, uint32_t stride) {
+bool ScryptLite::mineOne(uint32_t stride) {
+  if (!ready_) return false;
   if (stride == 0) stride = 1;
+  hashNonce(nonce_, lastHash_);
+  hashes_++;
   bool found = false;
-  for (size_t i = 0; i < count; i++) {
-    hashNonce(nonce_, lastHash_);
-    hashes_++;
-    if (meetsTarget(lastHash_)) {
-      shares_++;
-      lastShareNonce_ = nonce_;
-      found = true;
-    }
-    nonce_ += stride;
+  if (meetsTarget(lastHash_)) {
+    shares_++;
+    lastShareNonce_ = nonce_;
+    found = true;
   }
+  nonce_ += stride;
   return found;
 }

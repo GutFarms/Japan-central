@@ -107,9 +107,10 @@ void CompanionLink::handleLine(const String& line, AppConfig& cfg, const MinerSn
       Serial.flush();
       return;
     }
-    if (onJob) onJob(job);
+    // ACK first so the PC never times out while we arm the hasher.
     Serial.println("CMPACK job");
     Serial.flush();
+    if (onJob) onJob(job);
     return;
   }
   if (verb == "stop") {
@@ -221,8 +222,8 @@ void CompanionLink::replyConfig(const AppConfig& cfg) {
   JsonDocument doc;
   doc["cpu_mhz"] = cfg.cpuMhz;
   doc["hash_focus"] = cfg.hashFocus;
-  doc["fw"] = "0.3.1-max";
-  doc["mode"] = "usb-hash-max";
+  doc["fw"] = "0.3.2-hash";
+  doc["mode"] = "usb-hash";
   doc["configured"] = true;
   Serial.print("CMPCONFIG ");
   serializeJson(doc, Serial);
