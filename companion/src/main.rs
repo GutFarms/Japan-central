@@ -25,7 +25,7 @@ fn main() -> eframe::Result<()> {
         viewport: egui::ViewportBuilder::default()
             .with_inner_size([1080.0, 780.0])
             .with_min_inner_size([900.0, 640.0])
-            .with_title("CYD Companion · USB Scrypt Miner"),
+            .with_title("CYD Companion · USB SHA-256 Miner"),
         multisampling: 8,
         depth_buffer: 0,
         persist_window: true,
@@ -129,7 +129,7 @@ struct StratumLive {
     phase: String,
     connected: bool,
     authorized: bool,
-    difficulty: u32,
+    difficulty: f64,
     jobs: u32,
     accepted: u32,
     rejected: u32,
@@ -268,9 +268,9 @@ impl CompanionApp {
         thread::spawn(move || mine_worker(cmd_rx, msg_tx));
         let _ = cmd_tx.send(NetCmd::ListPorts);
 
-        let mut edit_stratum = "stratum+tcp://scrypt.mysolopool.com:3341".into();
+        let mut edit_stratum = "stratum+tcp://public-pool.io:21496".into();
         let mut edit_worker = String::new();
-        let mut edit_password = "d=1".into();
+        let mut edit_password = "x".into();
         let mut target_mhz = 240u8;
         if let Some(storage) = storage {
             if let Some(raw) = storage.get_string("mine_prefs") {
@@ -306,7 +306,8 @@ impl CompanionApp {
             accepted: 0,
             rejected: 0,
             last_error: String::new(),
-            last_ok: "Connect USB-C, then Start mining. Pool runs on this PC.".into(),
+            last_ok: "Connect USB-C, enter BTC address, Start mining. SHA-256 on board · pool on PC."
+                .into(),
             cmd_tx,
             msg_rx,
             last_poll: Instant::now() - Duration::from_secs(10),
@@ -363,7 +364,7 @@ impl CompanionApp {
             return;
         }
         if self.edit_worker.trim().is_empty() {
-            self.last_error = "Enter worker / Litecoin address.".into();
+            self.last_error = "Enter worker / Bitcoin address.".into();
             return;
         }
         let _ = self.cmd_tx.send(NetCmd::StartMine {
@@ -451,7 +452,7 @@ impl CompanionApp {
                 ui.add(
                     TextEdit::singleline(&mut self.edit_worker)
                         .desired_width(360.0)
-                        .hint_text("Litecoin address"),
+                        .hint_text("Bitcoin address (bc1… / 1… / 3…)"),
                 );
                 ui.label(RichText::new("Pass").color(C_MUTED));
                 ui.add(TextEdit::singleline(&mut self.edit_password).desired_width(100.0));
@@ -474,13 +475,13 @@ impl CompanionApp {
         ui.add_space(8.0);
         panel(ui, "Live board", |ui| {
             ui.horizontal(|ui| {
-                stat(ui, "Hashrate", &format!("{:.2} H/s", self.status.hashrate_hs));
                 let khs = if self.status.hashrate_khs > 0.0 {
                     self.status.hashrate_khs
                 } else {
                     self.status.hashrate_hs / 1000.0
                 };
-                stat(ui, "kH/s", &format!("{khs:.4}"));
+                stat(ui, "Hashrate", &format!("{khs:.2} kH/s"));
+                stat(ui, "H/s", &format!("{:.0}", self.status.hashrate_hs));
                 stat(ui, "Accepted", &self.accepted.to_string());
                 stat(ui, "Rejected", &self.rejected.to_string());
                 stat(ui, "Board shares", &self.status.shares.to_string());
@@ -524,7 +525,7 @@ impl CompanionApp {
                 );
                 ui.label(
                     RichText::new(format!(
-                        "  {}  ·  phase {}  ·  diff {}",
+                        "  {}  ·  phase {}  ·  diff {:.6}",
                         if s.endpoint.is_empty() {
                             "—"
                         } else {
@@ -813,7 +814,7 @@ impl App for CompanionApp {
                     });
                 });
                 ui.label(
-                    RichText::new("Board hashes over USB-C · pool traffic on this PC")
+                    RichText::new("Bitcoin SHA-256 on the board · stratum pool on this PC")
                         .color(C_MUTED)
                         .size(13.0),
                 );

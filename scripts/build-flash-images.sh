@@ -10,8 +10,8 @@ if ! command -v pio >/dev/null 2>&1; then
   exit 1
 fi
 
-APP_BIN="flash/esp32-2432s028-scrypt-miner.bin"
-MERGED_BIN="flash/esp32-2432s028-scrypt-miner-merged.bin"
+APP_BIN="flash/esp32-2432s028-sha256-miner.bin"
+MERGED_BIN="flash/esp32-2432s028-sha256-miner-merged.bin"
 mkdir -p flash
 
 echo "==> Building C++ CYD firmware (PlatformIO)..."
@@ -20,8 +20,8 @@ pio run -d "$ROOT/firmware-cpp" -e cyd
 python3 - <<'PY'
 from pathlib import Path
 import sys
-app = Path("flash/esp32-2432s028-scrypt-miner.bin").read_bytes()
-merged = Path("flash/esp32-2432s028-scrypt-miner-merged.bin").read_bytes()
+app = Path("flash/esp32-2432s028-sha256-miner.bin").read_bytes()
+merged = Path("flash/esp32-2432s028-sha256-miner-merged.bin").read_bytes()
 ok = True
 if app[0] != 0xE9:
     print("ERROR: app.bin missing ESP magic 0xE9", file=sys.stderr); ok = False
@@ -40,7 +40,7 @@ PY
 echo "==> Writing SHA256SUMS.txt..."
 (
   cd flash
-  sha256sum esp32-2432s028-scrypt-miner.bin esp32-2432s028-scrypt-miner-merged.bin > SHA256SUMS.txt
+  sha256sum esp32-2432s028-sha256-miner.bin esp32-2432s028-sha256-miner-merged.bin > SHA256SUMS.txt
   cat SHA256SUMS.txt
 )
 

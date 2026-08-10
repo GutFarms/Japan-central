@@ -222,8 +222,8 @@ void CompanionLink::replyConfig(const AppConfig& cfg) {
   JsonDocument doc;
   doc["cpu_mhz"] = cfg.cpuMhz;
   doc["hash_focus"] = cfg.hashFocus;
-  doc["fw"] = "0.3.2-hash";
-  doc["mode"] = "usb-hash";
+  doc["fw"] = "0.4.0-sha256";
+  doc["mode"] = "usb-sha256";
   doc["configured"] = true;
   Serial.print("CMPCONFIG ");
   serializeJson(doc, Serial);

@@ -3,7 +3,7 @@
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 PORT="${1:-}"
-MERGED="$ROOT/flash/esp32-2432s028-scrypt-miner-merged.bin"
+MERGED="$ROOT/flash/esp32-2432s028-sha256-miner-merged.bin"
 
 if [[ ! -f "$MERGED" ]]; then
   echo "Building firmware first..."

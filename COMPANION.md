@@ -1,6 +1,6 @@
 # CYD Companion (Windows)
 
-USB mining control for the ESP32-2432S028. The **PC** talks to the pool; the **board** only hashes work received over USB-C (no board Wi‑Fi).
+USB mining control for the ESP32-2432S028. The **PC** talks to a Bitcoin stratum pool; the **board** only SHA-256 hashes work received over USB-C.
 
 ## Download / build
 
@@ -12,27 +12,33 @@ Outputs: `dist/CYD-Companion-App-Only.zip`, `Portable.zip`, `Setup.exe`
 
 ## Use
 
-1. Flash C++ firmware (`esp32-2432s028-scrypt-miner-merged.bin` @ **0x0**)
+1. Flash C++ firmware (`esp32-2432s028-sha256-miner-merged.bin` @ **0x0**)
 2. Plug USB-C — board shows **Waiting for USB**
-3. Run `cyd-companion.exe` → select COM → **Connect**
-4. Enter stratum / worker / password → **Start mining**
+3. Run `cyd-companion.exe` → COM → **Connect**
+4. Enter stratum / **Bitcoin address** / password → **Start mining**
 
-## Recommended pool
+## Recommended pool (ESP32-friendly)
 
 | Field | Value |
 |-------|--------|
-| Stratum | `stratum+tcp://scrypt.mysolopool.com:3341` |
-| Worker | Your **Litecoin** address |
-| Password | `d=1` |
+| Stratum | `stratum+tcp://public-pool.io:21496` |
+| Worker | Your **Bitcoin** address |
+| Password | `x` |
 
-LTC + DOGE merged mining at low share difficulty.
+Low share difficulty solo pool (NerdMiner-compatible). Finding a BTC block is a lottery.
+
+Alternates: `pool.nerdminer.io:3333`, `pool.nerdminers.org:3333`
+
+## Tabs
+
+- **Mine** — USB, pool, live hashrate (kH/s), stratum TX/RX, logs
+- **Debug / Terminal** — raw `cmp` commands to the board
 
 ## USB protocol
 
 ```text
-cmp ping / status / config / clock / reboot / stop
+cmp ping / status / config / clock / reboot / stop / bench
 cmp job header=<160hex>&target=<64hex>&job=…&en2=…&ntime=…
 cmp stats accepted=N&rejected=N
-cmp netdata source=…&text=…          (optional LCD ticker)
 board → CMPSHARE nonce=…&job=…&en2=…&ntime=…
 ```

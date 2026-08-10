@@ -1,4 +1,4 @@
-//! Minimal Litecoin-style stratum client (TCP). Builds 80-byte headers for the board.
+//! Bitcoin SHA-256 stratum client (TCP). Builds 80-byte headers for the board.
 
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
@@ -28,7 +28,7 @@ pub struct StratumClient {
     extranonce1: Vec<u8>,
     extranonce2_size: usize,
     en2_counter: u64,
-    difficulty: u32,
+    difficulty: f64,
     job_id: String,
     prevhash_hex: String,
     coinb1_hex: String,
@@ -68,7 +68,7 @@ impl StratumClient {
             extranonce1: Vec::new(),
             extranonce2_size: 4,
             en2_counter: 1,
-            difficulty: 1,
+            difficulty: 1.0,
             job_id: String::new(),
             prevhash_hex: String::new(),
             coinb1_hex: String::new(),
@@ -143,7 +143,7 @@ impl StratumClient {
         self.authorized
     }
 
-    pub fn difficulty(&self) -> u32 {
+    pub fn difficulty(&self) -> f64 {
         self.difficulty
     }
 
@@ -235,7 +235,7 @@ impl StratumClient {
         let msg = json!({
             "id": self.subscribe_id,
             "method": "mining.subscribe",
-            "params": ["cyd-companion/0.3.0"]
+            "params": ["cyd-companion/0.4.0-sha256"]
         });
         self.phase = "sub".into();
         self.send_json(&msg)
@@ -279,7 +279,8 @@ impl StratumClient {
             if method == "mining.set_difficulty" {
                 if let Some(d) = params.as_array().and_then(|a| a.first()).and_then(|x| x.as_f64())
                 {
-                    self.difficulty = if d < 1.0 { 1 } else { d as u32 };
+                    // Public-pool style solo pools use fractional difficulty (e.g. 0.001).
+                    self.difficulty = if d > 0.0 { d } else { 1e-12 };
                 }
                 return Ok(());
             }
@@ -476,26 +477,30 @@ fn swab256(hash: &mut [u8]) {
     }
 }
 
-fn target_from_difficulty(difficulty: u32) -> [u8; 32] {
-    let diff = difficulty.max(1);
-    let mut num = [0u8; 32];
-    num[2] = 0xff;
-    num[3] = 0xff;
-    let mut out_be = [0u8; 32];
-    let mut rem: u64 = 0;
-    for i in 0..32 {
-        let cur = (rem << 8) | (num[i] as u64);
-        out_be[i] = (cur / diff as u64) as u8;
-        rem = cur % diff as u64;
+/// Stratum difficulty → 32-byte LE target (supports fractional diff for ESP32 solo pools).
+fn target_from_difficulty(mut diff: f64) -> [u8; 32] {
+    if diff <= 0.0 {
+        diff = 1e-12;
     }
-    let mut out = [0u8; 32];
-    for i in 0..32 {
-        out[i] = out_be[31 - i];
+    // cgminer-style placement of 0xffff0000 / diff into LE words.
+    let mut k: i32 = 6;
+    while k > 0 && diff > 1.0 {
+        diff /= 4294967296.0;
+        k -= 1;
     }
-    if out.iter().all(|&b| b == 0) {
-        out[0] = 1;
+    let m = (4294901760.0 / diff) as u64;
+    let mut target = [0u8; 32];
+    let idx = (k as usize).saturating_mul(4);
+    if idx + 4 <= 32 {
+        target[idx..idx + 4].copy_from_slice(&(m as u32).to_le_bytes());
     }
-    out
+    if idx + 8 <= 32 {
+        target[idx + 4..idx + 8].copy_from_slice(&((m >> 32) as u32).to_le_bytes());
+    }
+    if target.iter().all(|&b| b == 0) {
+        target[0] = 1;
+    }
+    target
 }
 
 pub fn encode_job_cmd(job: &WorkJob) -> String {

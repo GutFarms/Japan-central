@@ -28,8 +28,8 @@ def after_build(source, target, env):
         esptool_py = p
         break
 
-    merged = out_dir / "esp32-2432s028-scrypt-miner-merged.bin"
-    app_out = out_dir / "esp32-2432s028-scrypt-miner.bin"
+    merged = out_dir / "esp32-2432s028-sha256-miner-merged.bin"
+    app_out = out_dir / "esp32-2432s028-sha256-miner.bin"
 
     if not app.exists():
         print("merge: app missing, skip")
@@ -68,7 +68,7 @@ def after_build(source, target, env):
     dl.mkdir(exist_ok=True)
 
     lines = []
-    for name in ("esp32-2432s028-scrypt-miner.bin", "esp32-2432s028-scrypt-miner-merged.bin"):
+    for name in ("esp32-2432s028-sha256-miner.bin", "esp32-2432s028-sha256-miner-merged.bin"):
         p = out_dir / name
         if p.exists():
             h = hashlib.sha256(p.read_bytes()).hexdigest()

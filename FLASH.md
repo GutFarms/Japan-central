@@ -2,7 +2,7 @@
 
 ## Preferred image
 
-`flash/esp32-2432s028-scrypt-miner-merged.bin` at address **0x0**
+`flash/esp32-2432s028-sha256-miner-merged.bin` at address **0x0**
 
 | Setting | Value |
 |---------|--------|
@@ -26,4 +26,4 @@
 
 Hold **BOOT** + **RESET** if the port will not enter download mode. Install CH340 drivers on Windows if needed.
 
-After flash, power on **without** holding BOOT. Configure with **CYD Companion** over USB.
+After flash, power on **without** holding BOOT. Mine with **CYD Companion** over USB (Bitcoin SHA-256).

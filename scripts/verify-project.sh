@@ -4,8 +4,8 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 
-echo "==> scrypt PoW / TMTO host verification (Litecoin block #29255)"
-python3 ./scripts/verify-scrypt.py
+echo "==> SHA256d host verification (Bitcoin genesis)"
+python3 ./scripts/verify-sha256.py
 
 echo "==> firmware + flash images"
 ./scripts/build-flash-images.sh
@@ -13,8 +13,8 @@ echo "==> firmware + flash images"
 echo "==> Windows companion"
 ./scripts/build-companion-windows.sh
 
-APP_BIN="flash/esp32-2432s028-scrypt-miner.bin"
-MERGED_BIN="flash/esp32-2432s028-scrypt-miner-merged.bin"
+APP_BIN="flash/esp32-2432s028-sha256-miner.bin"
+MERGED_BIN="flash/esp32-2432s028-sha256-miner-merged.bin"
 ZIP="dist/cyd-companion-windows.zip"
 PORTABLE_ZIP="dist/CYD-Companion-Portable.zip"
 APP_ONLY_ZIP="dist/CYD-Companion-App-Only.zip"
@@ -28,7 +28,6 @@ test -f "$ZIP"
 test -f "$PORTABLE_ZIP"
 test -f "$APP_ONLY_ZIP"
 test -f "$EXE"
-# Setup.exe optional if makensis missing
 if [[ -f "$SETUP" ]]; then
   test -f "$SETUP"
 fi
@@ -36,8 +35,8 @@ fi
 python3 - <<'PY'
 from pathlib import Path
 import sys
-app = Path("flash/esp32-2432s028-scrypt-miner.bin").read_bytes()
-merged = Path("flash/esp32-2432s028-scrypt-miner-merged.bin").read_bytes()
+app = Path("flash/esp32-2432s028-sha256-miner.bin").read_bytes()
+merged = Path("flash/esp32-2432s028-sha256-miner-merged.bin").read_bytes()
 ok = True
 if app[0] != 0xE9:
     print("ERROR: app.bin missing ESP magic 0xE9", file=sys.stderr); ok = False
@@ -59,7 +58,7 @@ cp -f "$APP_ONLY_ZIP" /opt/cursor/artifacts/
 cp -f flash/SHA256SUMS.txt /opt/cursor/artifacts/esp32-2432s028-SHA256SUMS.txt
 
 echo
-echo "OK — C++ firmware + companion verified"
+echo "OK — SHA-256 firmware + companion verified"
 ls -la "$MERGED_BIN" "$EXE" "$PORTABLE_ZIP" "$APP_ONLY_ZIP"
 [[ -f "$SETUP" ]] && ls -la "$SETUP"
 sha256sum "$MERGED_BIN" "$PORTABLE_ZIP" "$APP_ONLY_ZIP"

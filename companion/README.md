@@ -1,9 +1,9 @@
 # CYD Companion
 
-USB mining control for the ESP32-2432S028.
+USB SHA-256 Bitcoin mining control for the ESP32-2432S028.
 
 - Connect over USB-C (`cmp` protocol)
-- Run stratum on this PC
+- Run Bitcoin stratum on this PC
 - Push jobs to the board; submit shares from the board
 
 ```bash

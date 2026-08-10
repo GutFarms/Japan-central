@@ -4,7 +4,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 
-if [[ ! -f flash/esp32-2432s028-scrypt-miner-merged.bin ]]; then
+if [[ ! -f flash/esp32-2432s028-sha256-miner-merged.bin ]]; then
   echo "No merged.bin yet — building flash images..."
   "$ROOT/scripts/build-flash-images.sh"
 fi
@@ -20,7 +20,7 @@ for f in CYD-Companion-App-Only.zip CYD-Companion-Portable.zip CYD-Companion-Set
 done
 
 PORT="${1:-8080}"
-SIZE="$(wc -c < flash/esp32-2432s028-scrypt-miner-merged.bin | tr -d ' ')"
+SIZE="$(wc -c < flash/esp32-2432s028-sha256-miner-merged.bin | tr -d ' ')"
 # LAN IP hints (best-effort) so phones/PCs can open the flasher by IP.
 LAN_HINT="$(hostname -I 2>/dev/null | awk '{print $1}')"
 echo ""

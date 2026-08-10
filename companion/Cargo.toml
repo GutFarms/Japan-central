@@ -1,8 +1,8 @@
 [package]
 name = "cyd-companion"
-version = "0.3.0"
+version = "0.4.0"
 edition = "2021"
-description = "CYD Companion — USB mining control for the ESP32-2432S028 (PC stratum, board hashes)"
+description = "CYD Companion — USB SHA-256 Bitcoin mining control (PC stratum, board hashes)"
 license = "MIT OR Apache-2.0"
 
 [[bin]]

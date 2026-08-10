@@ -21,9 +21,9 @@ void DisplayUi::showSplash() {
   tft_.fillRect(0, 0, 320, 4, cLime_);
   tft_.setTextDatum(MC_DATUM);
   tft_.setTextColor(cLime_, cBg_);
-  tft_.drawString("SCRYPT", 160, 100, 4);
+  tft_.drawString("SHA-256", 160, 100, 4);
   tft_.setTextColor(cMuted_, cBg_);
-  tft_.drawString("usb hash", 160, 140, 2);
+  tft_.drawString("usb bitcoin", 160, 140, 2);
 }
 
 void DisplayUi::showWaitingCompanion() {
@@ -32,12 +32,12 @@ void DisplayUi::showWaitingCompanion() {
   tft_.fillRect(0, 0, 320, 4, cLime_);
   tft_.setTextDatum(TL_DATUM);
   tft_.setTextColor(cLime_, cBg_);
-  tft_.drawString("SCRYPT", 12, 16, 4);
+  tft_.drawString("SHA-256", 12, 16, 4);
   tft_.setTextColor(cText_, cBg_);
   tft_.drawString("Waiting for USB", 12, 70, 2);
   tft_.setTextColor(cMuted_, cBg_);
   tft_.drawString("Plug USB-C · open CYD Companion", 12, 110, 2);
-  tft_.drawString("Pool traffic stays on the PC", 12, 140, 2);
+  tft_.drawString("Bitcoin SHA-256 · pool on PC", 12, 140, 2);
 }
 
 void DisplayUi::drawMiningChrome() {
@@ -45,9 +45,9 @@ void DisplayUi::drawMiningChrome() {
   tft_.fillRect(0, 0, 320, 4, cLime_);
   tft_.setTextDatum(TL_DATUM);
   tft_.setTextColor(cLime_, cBg_);
-  tft_.drawString("SCRYPT", 12, 14, 2);
+  tft_.drawString("SHA-256", 12, 14, 2);
   tft_.setTextColor(cMuted_, cBg_);
-  tft_.drawString("H/s", 12, 48, 2);
+  tft_.drawString("kH/s", 12, 48, 2);
   tft_.drawString("usb", 12, 130, 2);
   miningDrawn_ = true;
   lastRate_ = -1;
@@ -69,8 +69,7 @@ void DisplayUi::showMining(const AppConfig& cfg, const MinerSnapshot& snap, bool
     tft_.fillRect(12, 72, 300, 40, cBg_);
     tft_.setTextColor(cLime_, cBg_);
     char rate[24];
-    // Scrypt on ESP32 is ~H/s — show H/s so activity is obvious.
-    snprintf(rate, sizeof(rate), "%.2f", snap.hashrateHs);
+    snprintf(rate, sizeof(rate), "%.2f", snap.hashrateHs / 1000.0f);
     tft_.drawString(rate, 12, 72, 4);
     lastRate_ = snap.hashrateHs;
   }
@@ -78,7 +77,7 @@ void DisplayUi::showMining(const AppConfig& cfg, const MinerSnapshot& snap, bool
   if (forceFull || snap.connected != lastConnected_ || snap.pool != lastPool_) {
     tft_.fillRect(12, 152, 300, 24, cBg_);
     tft_.setTextColor(snap.connected ? cLime_ : cText_, cBg_);
-    tft_.drawString(snap.connected ? "USB HASHING" : snap.pool, 12, 152, 2);
+    tft_.drawString(snap.connected ? "SHA256 HASHING" : snap.pool, 12, 152, 2);
     lastConnected_ = snap.connected;
     lastPool_ = snap.pool;
   }
