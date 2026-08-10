@@ -15,6 +15,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.Button
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.FilterChip
@@ -30,10 +31,14 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
+import com.solstice.dispensary.data.model.AccountRole
 import com.solstice.dispensary.data.model.CustomerProfile
 import com.solstice.dispensary.data.model.ThemeMode
 import com.solstice.dispensary.ui.components.BrandLogo
+import com.solstice.dispensary.ui.components.MetaPill
 import com.solstice.dispensary.ui.components.SectionHeader
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -48,8 +53,10 @@ fun AccountScreen(
     onClearMessage: () -> Unit,
     onSaveProfile: (String, String, String, String, Boolean) -> Unit,
     onThemeModeChange: (ThemeMode) -> Unit,
+    onCreateStaff: (email: String, password: String, fullName: String) -> Unit,
     onLogout: () -> Unit,
-    onOpenCustomers: () -> Unit
+    onOpenCustomers: () -> Unit,
+    onOpenOrders: () -> Unit
 ) {
     if (customer == null) {
         Column(
@@ -69,7 +76,12 @@ fun AccountScreen(
     var dob by remember(customer.id) { mutableStateOf(customer.dateOfBirth) }
     var notes by remember(customer.id) { mutableStateOf(customer.notes) }
     var marketing by remember(customer.id) { mutableStateOf(customer.marketingOptIn) }
+    var staffEmail by remember { mutableStateOf("") }
+    var staffPassword by remember { mutableStateOf("") }
+    var staffName by remember { mutableStateOf("") }
     val dateFormat = remember { SimpleDateFormat("MMM d, yyyy", Locale.US) }
+    val isAdminLike = customer.isAdminLike
+    val canManageStaff = customer.role.canManageStaff
 
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
@@ -87,6 +99,15 @@ fun AccountScreen(
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
+                    if (customer.username.isNotBlank()) {
+                        Text(
+                            "Username: ${customer.username}",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                    Spacer(Modifier.height(4.dp))
+                    MetaPill(customer.role.label)
                 }
             }
         }
@@ -123,12 +144,14 @@ fun AccountScreen(
             OutlinedTextField(
                 value = notes,
                 onValueChange = { notes = it },
-                label = { Text("Notes for the budtender") },
+                label = { Text(if (isAdminLike) "Internal notes" else "Notes for the budtender") },
                 modifier = Modifier.fillMaxWidth()
             )
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Checkbox(checked = marketing, onCheckedChange = { marketing = it })
-                Text("Marketing emails", style = MaterialTheme.typography.bodyMedium)
+            if (customer.role == AccountRole.CUSTOMER) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Checkbox(checked = marketing, onCheckedChange = { marketing = it })
+                    Text("Marketing emails", style = MaterialTheme.typography.bodyMedium)
+                }
             }
             Button(
                 onClick = {
@@ -146,6 +169,9 @@ fun AccountScreen(
                     style = MaterialTheme.typography.bodyMedium
                 )
                 TextButton(onClick = onClearMessage) { Text("Dismiss") }
+            }
+            TextButton(onClick = onOpenOrders) {
+                Text(if (isAdminLike) "View all orders" else "View my orders")
             }
         }
 
@@ -170,22 +196,72 @@ fun AccountScreen(
             }
         }
 
-        item {
-            Surface(
-                shape = RoundedCornerShape(14.dp),
-                color = MaterialTheme.colorScheme.secondaryContainer,
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                Column(modifier = Modifier.padding(16.dp)) {
-                    Text("Customer database", style = MaterialTheme.typography.titleLarge)
-                    Text(
-                        text = "${customers.size} registered customers on this device",
-                        style = MaterialTheme.typography.bodyMedium
-                    )
-                    Spacer(Modifier.height(8.dp))
-                    Button(onClick = onOpenCustomers, shape = RoundedCornerShape(10.dp)) {
-                        Text("View customers")
+        if (isAdminLike) {
+            item {
+                Surface(
+                    shape = RoundedCornerShape(14.dp),
+                    color = MaterialTheme.colorScheme.secondaryContainer,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Column(modifier = Modifier.padding(16.dp)) {
+                        Text("Customer database", style = MaterialTheme.typography.titleLarge)
+                        Text(
+                            text = "${customers.size} accounts · includes phone, DOB, and notes",
+                            style = MaterialTheme.typography.bodyMedium
+                        )
+                        Spacer(Modifier.height(8.dp))
+                        Button(onClick = onOpenCustomers, shape = RoundedCornerShape(10.dp)) {
+                            Text("View all customers")
+                        }
                     }
+                }
+            }
+        }
+
+        if (canManageStaff) {
+            item {
+                SectionHeader(
+                    title = "Staff sub-accounts",
+                    subtitle = "Create staff logins by email (sensitive access)"
+                )
+                OutlinedTextField(
+                    value = staffName,
+                    onValueChange = { staffName = it },
+                    label = { Text("Staff full name") },
+                    modifier = Modifier.fillMaxWidth(),
+                    singleLine = true
+                )
+                Spacer(Modifier.height(8.dp))
+                OutlinedTextField(
+                    value = staffEmail,
+                    onValueChange = { staffEmail = it },
+                    label = { Text("Staff email") },
+                    modifier = Modifier.fillMaxWidth(),
+                    singleLine = true,
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Email)
+                )
+                Spacer(Modifier.height(8.dp))
+                OutlinedTextField(
+                    value = staffPassword,
+                    onValueChange = { staffPassword = it },
+                    label = { Text("Temporary password") },
+                    modifier = Modifier.fillMaxWidth(),
+                    singleLine = true,
+                    visualTransformation = PasswordVisualTransformation(),
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password)
+                )
+                Spacer(Modifier.height(8.dp))
+                Button(
+                    onClick = {
+                        onCreateStaff(staffEmail, staffPassword, staffName)
+                        staffEmail = ""
+                        staffPassword = ""
+                        staffName = ""
+                    },
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(12.dp)
+                ) {
+                    Text("Create staff account")
                 }
             }
         }
@@ -201,9 +277,15 @@ fun AccountScreen(
 @Composable
 fun CustomersScreen(
     customers: List<CustomerProfile>,
+    showSensitive: Boolean,
     onBack: () -> Unit
 ) {
     val dateFormat = remember { SimpleDateFormat("MMM d, yyyy", Locale.US) }
+    val visible = if (showSensitive) {
+        customers
+    } else {
+        emptyList()
+    }
 
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
@@ -214,21 +296,51 @@ fun CustomersScreen(
             TextButton(onClick = onBack) { Text("← Back") }
             SectionHeader(
                 title = "Customers",
-                subtitle = "${customers.size} accounts in the local database"
+                subtitle = if (showSensitive) {
+                    "${visible.size} accounts · sensitive fields visible"
+                } else {
+                    "Access denied"
+                }
             )
         }
-        items(customers, key = { it.id }) { customer ->
+
+        if (!showSensitive) {
+            item {
+                Text(
+                    "Only admin and staff accounts can view the customer database.",
+                    style = MaterialTheme.typography.bodyLarge,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        }
+
+        items(visible, key = { it.id }) { customer ->
             Surface(
                 shape = RoundedCornerShape(14.dp),
                 tonalElevation = 1.dp,
                 color = MaterialTheme.colorScheme.surface,
                 modifier = Modifier.fillMaxWidth()
             ) {
-                Column(modifier = Modifier.padding(14.dp)) {
-                    Text(customer.fullName, style = MaterialTheme.typography.titleLarge)
+                Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Text(customer.fullName, style = MaterialTheme.typography.titleLarge)
+                        MetaPill(customer.role.label)
+                    }
                     Text(customer.email, style = MaterialTheme.typography.bodyMedium)
+                    if (customer.username.isNotBlank()) {
+                        Text("Username: ${customer.username}", style = MaterialTheme.typography.bodyMedium)
+                    }
                     if (customer.phone.isNotBlank()) {
-                        Text(customer.phone, style = MaterialTheme.typography.bodyMedium)
+                        Text("Phone: ${customer.phone}", style = MaterialTheme.typography.bodyMedium)
+                    }
+                    if (customer.dateOfBirth.isNotBlank()) {
+                        Text("DOB: ${customer.dateOfBirth}", style = MaterialTheme.typography.bodyMedium)
+                    }
+                    if (customer.notes.isNotBlank()) {
+                        Text("Notes: ${customer.notes}", style = MaterialTheme.typography.bodyMedium)
                     }
                     Text(
                         text = "Joined ${dateFormat.format(Date(customer.createdAt))}" +

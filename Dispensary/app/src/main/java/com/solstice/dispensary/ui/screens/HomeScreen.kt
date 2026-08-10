@@ -42,6 +42,7 @@ import com.solstice.dispensary.ui.theme.Sage
 fun HomeScreen(
     featured: List<Product>,
     cartCount: Int,
+    showInventory: Boolean = false,
     onOpenMenu: () -> Unit,
     onOpenProduct: (String) -> Unit,
     onOpenCart: () -> Unit,
@@ -163,22 +164,24 @@ fun HomeScreen(
             )
         }
 
-        item {
-            Surface(
-                modifier = Modifier
-                    .padding(horizontal = 20.dp)
-                    .fillMaxWidth()
-                    .clickable(onClick = onOpenInventory),
-                shape = RoundedCornerShape(16.dp),
-                color = MaterialTheme.colorScheme.secondaryContainer
-            ) {
-                Column(modifier = Modifier.padding(18.dp)) {
-                    Text("AI inventory scanner", style = MaterialTheme.typography.titleLarge)
-                    Text(
-                        text = "Scan labels or barcodes to add stock",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSecondaryContainer.copy(alpha = 0.8f)
-                    )
+        if (showInventory) {
+            item {
+                Surface(
+                    modifier = Modifier
+                        .padding(horizontal = 20.dp)
+                        .fillMaxWidth()
+                        .clickable(onClick = onOpenInventory),
+                    shape = RoundedCornerShape(16.dp),
+                    color = MaterialTheme.colorScheme.secondaryContainer
+                ) {
+                    Column(modifier = Modifier.padding(18.dp)) {
+                        Text("AI inventory scanner", style = MaterialTheme.typography.titleLarge)
+                        Text(
+                            text = "Scan labels or barcodes to add stock",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSecondaryContainer.copy(alpha = 0.8f)
+                        )
+                    }
                 }
             }
         }

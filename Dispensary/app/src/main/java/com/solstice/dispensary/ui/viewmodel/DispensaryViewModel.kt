@@ -98,13 +98,22 @@ class DispensaryViewModel(
             CartSummary(emptyList(), 0.0, 0.0, 0.0, 0)
         )
 
-    val orders: StateFlow<List<Order>> = repository.orders
+    val orders: StateFlow<List<Order>> = repository.visibleOrders
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
 
     val customers: StateFlow<List<CustomerProfile>> = repository.customers
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
 
     val isLoggedIn: Boolean get() = currentCustomer != null
+
+    val canViewSensitiveInfo: Boolean
+        get() = currentCustomer?.role?.canViewSensitiveInfo == true
+
+    val canManageStaff: Boolean
+        get() = currentCustomer?.role?.canManageStaff == true
+
+    val canManageInventory: Boolean
+        get() = currentCustomer?.role?.canManageInventory == true
 
     init {
         viewModelScope.launch {
@@ -171,6 +180,17 @@ class DispensaryViewModel(
         repository.logout()
         currentCustomer = null
         accountMessage = null
+    }
+
+    fun createStaffSubAccount(email: String, password: String, fullName: String) {
+        viewModelScope.launch {
+            when (val result = repository.createStaffSubAccount(email, password, fullName)) {
+                is AuthResult.Success ->
+                    accountMessage = "Staff account created for ${result.customer.email}."
+                is AuthResult.Error ->
+                    accountMessage = result.message
+            }
+        }
     }
 
     fun saveProfile(

@@ -11,6 +11,7 @@ import com.solstice.dispensary.data.dao.CustomerDao
 import com.solstice.dispensary.data.dao.InventoryDao
 import com.solstice.dispensary.data.dao.OrderDao
 import com.solstice.dispensary.data.dao.ProductDao
+import com.solstice.dispensary.data.model.AccountRole
 import com.solstice.dispensary.data.model.CartItem
 import com.solstice.dispensary.data.model.Customer
 import com.solstice.dispensary.data.model.InventoryIntake
@@ -32,6 +33,12 @@ class Converters {
 
     @TypeConverter
     fun toStrain(value: String): StrainType = StrainType.valueOf(value)
+
+    @TypeConverter
+    fun fromRole(value: AccountRole): String = value.name
+
+    @TypeConverter
+    fun toRole(value: String): AccountRole = AccountRole.valueOf(value)
 }
 
 @Database(
@@ -43,7 +50,7 @@ class Converters {
         InventoryIntake::class,
         Customer::class
     ],
-    version = 3,
+    version = 4,
     exportSchema = false
 )
 @TypeConverters(Converters::class)

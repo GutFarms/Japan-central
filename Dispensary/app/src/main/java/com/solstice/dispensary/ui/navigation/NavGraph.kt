@@ -1,9 +1,12 @@
 package com.solstice.dispensary.ui.navigation
 
+import androidx.compose.foundation.layout.padding
+import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.unit.dp
 import androidx.navigation.NavHostController
 import androidx.navigation.NavType
 import androidx.navigation.compose.NavHost
@@ -59,6 +62,7 @@ fun DispensaryNavHost(
             HomeScreen(
                 featured = featured,
                 cartCount = cart.itemCount,
+                showInventory = viewModel.canManageInventory,
                 onOpenMenu = { navController.navigate(Routes.MENU) },
                 onOpenProduct = { id -> navController.navigate(Routes.product(id)) },
                 onOpenCart = { navController.navigate(Routes.CART) },
@@ -107,31 +111,45 @@ fun DispensaryNavHost(
             )
         }
         composable(Routes.INVENTORY) {
-            InventoryScreen(
-                products = inventory,
-                intakes = intakes,
-                intakeMessage = viewModel.intakeMessage,
-                onClearMessage = viewModel::clearIntakeMessage,
-                onOpenScanner = {
-                    viewModel.clearScanResult()
-                    navController.navigate(Routes.SCANNER)
-                },
-                onAdjustStock = viewModel::adjustStock
-            )
+            if (!viewModel.canManageInventory) {
+                Text(
+                    "Inventory is only available to admin and staff accounts.",
+                    modifier = Modifier.padding(20.dp)
+                )
+            } else {
+                InventoryScreen(
+                    products = inventory,
+                    intakes = intakes,
+                    intakeMessage = viewModel.intakeMessage,
+                    onClearMessage = viewModel::clearIntakeMessage,
+                    onOpenScanner = {
+                        viewModel.clearScanResult()
+                        navController.navigate(Routes.SCANNER)
+                    },
+                    onAdjustStock = viewModel::adjustStock
+                )
+            }
         }
         composable(Routes.SCANNER) {
-            InventoryScannerScreen(
-                scanBusy = viewModel.scanBusy,
-                scanResult = viewModel.scanResult,
-                scanError = viewModel.scanError,
-                onBack = { navController.popBackStack() },
-                onCaptureBitmap = viewModel::analyzeLabelBitmap,
-                onClearResult = viewModel::clearScanResult,
-                onConfirm = { qty ->
-                    viewModel.confirmScanIntake(qty)
-                    navController.popBackStack()
-                }
-            )
+            if (!viewModel.canManageInventory) {
+                Text(
+                    "Scanner is only available to admin and staff accounts.",
+                    modifier = Modifier.padding(20.dp)
+                )
+            } else {
+                InventoryScannerScreen(
+                    scanBusy = viewModel.scanBusy,
+                    scanResult = viewModel.scanResult,
+                    scanError = viewModel.scanError,
+                    onBack = { navController.popBackStack() },
+                    onCaptureBitmap = viewModel::analyzeLabelBitmap,
+                    onClearResult = viewModel::clearScanResult,
+                    onConfirm = { qty ->
+                        viewModel.confirmScanIntake(qty)
+                        navController.popBackStack()
+                    }
+                )
+            }
         }
         composable(Routes.ACCOUNT) {
             AccountScreen(
@@ -142,13 +160,16 @@ fun DispensaryNavHost(
                 onClearMessage = viewModel::clearAccountMessage,
                 onSaveProfile = viewModel::saveProfile,
                 onThemeModeChange = viewModel::updateThemeMode,
+                onCreateStaff = viewModel::createStaffSubAccount,
                 onLogout = viewModel::logout,
-                onOpenCustomers = { navController.navigate(Routes.CUSTOMERS) }
+                onOpenCustomers = { navController.navigate(Routes.CUSTOMERS) },
+                onOpenOrders = { navController.navigate(Routes.ORDERS) }
             )
         }
         composable(Routes.CUSTOMERS) {
             CustomersScreen(
                 customers = customers,
+                showSensitive = viewModel.canViewSensitiveInfo,
                 onBack = { navController.popBackStack() }
             )
         }

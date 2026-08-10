@@ -6,6 +6,7 @@ import androidx.room.OnConflictStrategy
 import androidx.room.Query
 import androidx.room.Transaction
 import androidx.room.Update
+import com.solstice.dispensary.data.model.AccountRole
 import com.solstice.dispensary.data.model.CartItem
 import com.solstice.dispensary.data.model.Customer
 import com.solstice.dispensary.data.model.InventoryIntake
@@ -86,6 +87,9 @@ interface OrderDao {
     @Query("SELECT * FROM orders ORDER BY createdAt DESC")
     fun observeAll(): Flow<List<Order>>
 
+    @Query("SELECT * FROM orders WHERE customerId = :customerId ORDER BY createdAt DESC")
+    fun observeForCustomer(customerId: String): Flow<List<Order>>
+
     @Query("SELECT * FROM order_lines WHERE orderId = :orderId")
     fun observeLines(orderId: String): Flow<List<OrderLine>>
 
@@ -113,7 +117,7 @@ interface InventoryDao {
 
 @Dao
 interface CustomerDao {
-    @Query("SELECT * FROM customers ORDER BY createdAt DESC")
+    @Query("SELECT * FROM customers ORDER BY role DESC, createdAt DESC")
     fun observeAll(): Flow<List<Customer>>
 
     @Query("SELECT * FROM customers WHERE id = :id LIMIT 1")
@@ -125,11 +129,20 @@ interface CustomerDao {
     @Query("SELECT * FROM customers WHERE lower(email) = lower(:email) LIMIT 1")
     suspend fun getByEmail(email: String): Customer?
 
+    @Query("SELECT * FROM customers WHERE lower(username) = lower(:username) AND username != '' LIMIT 1")
+    suspend fun getByUsername(username: String): Customer?
+
     @Query("SELECT COUNT(*) FROM customers")
     suspend fun count(): Int
 
+    @Query("SELECT COUNT(*) FROM customers WHERE role = :role")
+    suspend fun countByRole(role: AccountRole): Int
+
     @Insert(onConflict = OnConflictStrategy.ABORT)
     suspend fun insert(customer: Customer)
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun upsert(customer: Customer)
 
     @Update
     suspend fun update(customer: Customer)

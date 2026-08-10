@@ -69,13 +69,15 @@ class MainActivity : ComponentActivity() {
                 val current = backStack?.destination?.route ?: Routes.HOME
                 val cart by viewModel.cart.collectAsState()
 
-                val destinations = listOf(
-                    NavItem(Routes.HOME, "Home", Icons.Outlined.Home),
-                    NavItem(Routes.MENU, "Menu", Icons.Outlined.LocalMall),
-                    NavItem(Routes.CART, "Bag", Icons.Outlined.ShoppingBag),
-                    NavItem(Routes.INVENTORY, "Stock", Icons.Outlined.Inventory2),
-                    NavItem(Routes.ACCOUNT, "Account", Icons.Outlined.Person)
-                )
+                val destinations = buildList {
+                    add(NavItem(Routes.HOME, "Home", Icons.Outlined.Home))
+                    add(NavItem(Routes.MENU, "Menu", Icons.Outlined.LocalMall))
+                    add(NavItem(Routes.CART, "Bag", Icons.Outlined.ShoppingBag))
+                    if (viewModel.canManageInventory) {
+                        add(NavItem(Routes.INVENTORY, "Stock", Icons.Outlined.Inventory2))
+                    }
+                    add(NavItem(Routes.ACCOUNT, "Account", Icons.Outlined.Person))
+                }
 
                 val hideBottomBar = current.startsWith("product/") ||
                     current == Routes.SCANNER ||

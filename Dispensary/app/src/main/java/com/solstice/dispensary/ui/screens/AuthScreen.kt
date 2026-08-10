@@ -80,15 +80,15 @@ fun AuthScreen(
             BrandLogo(size = 120.dp)
             Spacer(Modifier.height(16.dp))
             Text(
-                text = if (modeCreate) "Create account" else "Welcome back",
+                text = if (modeCreate) "Create customer account" else "Welcome back",
                 style = MaterialTheme.typography.headlineMedium,
                 color = colors.onBackground
             )
             Text(
                 text = if (modeCreate) {
-                    "Join Native Pure to save pickup details and order history."
+                    "Join Native Pure to save pickup details and your order history."
                 } else {
-                    "Sign in to your Native Pure customer account."
+                    "Sign in with email, or admin username."
                 },
                 style = MaterialTheme.typography.bodyMedium,
                 color = colors.onSurfaceVariant,
@@ -103,7 +103,7 @@ fun AuthScreen(
             AuthField(
                 email,
                 { email = it; onClearError() },
-                "Email",
+                if (modeCreate) "Email" else "Email or username",
                 keyboard = KeyboardType.Email
             )
             Spacer(Modifier.height(10.dp))
@@ -195,7 +195,7 @@ fun AuthScreen(
             if (!modeCreate) {
                 Spacer(Modifier.height(8.dp))
                 Text(
-                    text = "Demo: demo@nativepure.example / demo1234",
+                    text = "Admin: admin or fidelgutierrez33@gmail.com / 12345678\nCustomer demo: demo@nativepure.example / demo1234",
                     style = MaterialTheme.typography.bodyMedium,
                     color = colors.onSurfaceVariant,
                     textAlign = TextAlign.Center

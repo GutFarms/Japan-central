@@ -83,13 +83,32 @@ data class InventoryIntake(
     val barcode: String = ""
 )
 
+enum class AccountRole(val label: String) {
+    CUSTOMER("Customer"),
+    STAFF("Staff"),
+    ADMIN("Admin");
+
+    val canViewSensitiveInfo: Boolean
+        get() = this == ADMIN || this == STAFF
+
+    val canManageStaff: Boolean
+        get() = this == ADMIN
+
+    val canManageInventory: Boolean
+        get() = this == ADMIN || this == STAFF
+}
+
 @Entity(
     tableName = "customers",
-    indices = [Index(value = ["email"], unique = true)]
+    indices = [
+        Index(value = ["email"], unique = true),
+        Index(value = ["username"])
+    ]
 )
 data class Customer(
     @PrimaryKey val id: String,
     val email: String,
+    val username: String = "",
     val passwordHash: String,
     val passwordSalt: String,
     val fullName: String,
@@ -98,32 +117,42 @@ data class Customer(
     val createdAt: Long = System.currentTimeMillis(),
     val lastLoginAt: Long = 0L,
     val notes: String = "",
-    val marketingOptIn: Boolean = false
+    val marketingOptIn: Boolean = false,
+    val role: AccountRole = AccountRole.CUSTOMER,
+    val createdByAdminId: String = ""
 )
 
-/** Public profile without password fields. */
+/** Profile without password fields. */
 data class CustomerProfile(
     val id: String,
     val email: String,
+    val username: String,
     val fullName: String,
     val phone: String,
     val dateOfBirth: String,
     val createdAt: Long,
     val lastLoginAt: Long,
     val notes: String,
-    val marketingOptIn: Boolean
-)
+    val marketingOptIn: Boolean,
+    val role: AccountRole,
+    val createdByAdminId: String = ""
+) {
+    val isAdminLike: Boolean get() = role.canViewSensitiveInfo
+}
 
 fun Customer.toProfile() = CustomerProfile(
     id = id,
     email = email,
+    username = username,
     fullName = fullName,
     phone = phone,
     dateOfBirth = dateOfBirth,
     createdAt = createdAt,
     lastLoginAt = lastLoginAt,
     notes = notes,
-    marketingOptIn = marketingOptIn
+    marketingOptIn = marketingOptIn,
+    role = role,
+    createdByAdminId = createdByAdminId
 )
 
 enum class ThemeMode(val label: String) {

@@ -7,7 +7,8 @@ Adult-use dispensary app for browsing the menu, building a pickup bag, scanning 
 ## Features
 
 - **21+ age gate** — required before entering the app
-- **Customer accounts** — log in or create an account; local customer database with profile, phone, DOB, and marketing preference
+- **Customer accounts** — log in or create an account; customers only see their own profile/orders
+- **Admin & staff** — main admin `admin` / `fidelgutierrez33@gmail.com` (password `12345678`); admin can create staff sub-accounts by email; admin/staff can view sensitive customer data and inventory
 - **Light / Dark mode** — System, Light, or Dark (Account → Appearance)
 - **Home** — branded welcome, category shortcuts, featured products
 - **Menu** — flower, pre-rolls, edibles, concentrates, vapes, topicals, accessories with search and filters

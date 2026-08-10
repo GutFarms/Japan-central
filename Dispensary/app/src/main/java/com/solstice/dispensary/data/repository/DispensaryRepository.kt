@@ -4,6 +4,7 @@ import android.content.Context
 import com.solstice.dispensary.data.auth.PasswordHasher
 import com.solstice.dispensary.data.db.DispensaryDatabase
 import com.solstice.dispensary.data.db.SeedCatalog
+import com.solstice.dispensary.data.model.AccountRole
 import com.solstice.dispensary.data.model.AuthResult
 import com.solstice.dispensary.data.model.CartItem
 import com.solstice.dispensary.data.model.CartLine
@@ -19,24 +20,44 @@ import com.solstice.dispensary.data.model.ProductCategory
 import com.solstice.dispensary.data.model.ThemeMode
 import com.solstice.dispensary.data.model.toProfile
 import com.solstice.dispensary.scan.NewProductFactory
+import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.flatMapLatest
+import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.map
 import java.util.UUID
 
+@OptIn(ExperimentalCoroutinesApi::class)
 class DispensaryRepository(context: Context) {
     private val db = DispensaryDatabase.get(context)
     private val prefs = context.getSharedPreferences("solstice_prefs", Context.MODE_PRIVATE)
+
+    private val sessionCustomerId = MutableStateFlow(prefs.getString(KEY_CUSTOMER_ID, null))
 
     val products: Flow<List<Product>> = db.productDao().observeAll()
     val inventory: Flow<List<Product>> = db.productDao().observeInventory()
     val featured: Flow<List<Product>> = db.productDao().observeFeatured()
     val cartItems: Flow<List<CartItem>> = db.cartDao().observeAll()
-    val orders: Flow<List<Order>> = db.orderDao().observeAll()
     val intakes: Flow<List<InventoryIntake>> = db.inventoryDao().observeAll()
     val customers: Flow<List<CustomerProfile>> = db.customerDao().observeAll()
         .map { list -> list.map { it.toProfile() } }
+
+    /** Admins/staff see all orders; customers only see their own. */
+    val visibleOrders: Flow<List<Order>> = sessionCustomerId.flatMapLatest { id ->
+        if (id.isNullOrBlank()) {
+            flowOf(emptyList())
+        } else {
+            val me = db.customerDao().getById(id)
+            if (me?.role?.canViewSensitiveInfo == true) {
+                db.orderDao().observeAll()
+            } else {
+                db.orderDao().observeForCustomer(id)
+            }
+        }
+    }
 
     val cartSummary: Flow<CartSummary> = combine(products, cartItems) { allProducts, items ->
         val byId = allProducts.associateBy { it.id }
@@ -90,23 +111,47 @@ class DispensaryRepository(context: Context) {
         if (db.productDao().count() == 0) {
             db.productDao().insertAll(SeedCatalog.products)
         }
-        if (db.customerDao().count() == 0) {
+        ensureMainAdmin()
+        if (db.customerDao().getByEmail(DEMO_CUSTOMER_EMAIL) == null) {
             seedDemoCustomer()
         }
+    }
+
+    private suspend fun ensureMainAdmin() {
+        val existing = db.customerDao().getByEmail(MAIN_ADMIN_EMAIL)
+            ?: db.customerDao().getByUsername(MAIN_ADMIN_USERNAME)
+        if (existing != null) return
+
+        val salt = PasswordHasher.newSalt()
+        db.customerDao().insert(
+            Customer(
+                id = MAIN_ADMIN_ID,
+                email = MAIN_ADMIN_EMAIL,
+                username = MAIN_ADMIN_USERNAME,
+                passwordHash = PasswordHasher.hash(MAIN_ADMIN_PASSWORD, salt),
+                passwordSalt = salt,
+                fullName = "Main Admin",
+                phone = "",
+                notes = "Primary admin account",
+                role = AccountRole.ADMIN
+            )
+        )
     }
 
     private suspend fun seedDemoCustomer() {
         val salt = PasswordHasher.newSalt()
         val customer = Customer(
             id = "cust-demo",
-            email = "demo@nativepure.example",
+            email = DEMO_CUSTOMER_EMAIL,
+            username = "",
             passwordHash = PasswordHasher.hash("demo1234", salt),
             passwordSalt = salt,
             fullName = "Demo Customer",
             phone = "(505) 555-0142",
             dateOfBirth = "1990-01-01",
-            notes = "Seeded demo account",
-            marketingOptIn = true
+            notes = "Seeded demo customer account",
+            marketingOptIn = true,
+            role = AccountRole.CUSTOMER
         )
         db.customerDao().insert(customer)
     }
@@ -137,6 +182,7 @@ class DispensaryRepository(context: Context) {
         val customer = Customer(
             id = "cust-" + UUID.randomUUID().toString().take(8),
             email = cleanEmail,
+            username = "",
             passwordHash = PasswordHasher.hash(password, salt),
             passwordSalt = salt,
             fullName = cleanName,
@@ -144,7 +190,8 @@ class DispensaryRepository(context: Context) {
             dateOfBirth = dateOfBirth.trim(),
             createdAt = now,
             lastLoginAt = now,
-            marketingOptIn = marketingOptIn
+            marketingOptIn = marketingOptIn,
+            role = AccountRole.CUSTOMER
         )
         return try {
             db.customerDao().insert(customer)
@@ -155,10 +202,60 @@ class DispensaryRepository(context: Context) {
         }
     }
 
-    suspend fun login(email: String, password: String): AuthResult {
+    /**
+     * Main admin creates a staff sub-account by email.
+     * Staff can view sensitive customer/order info and inventory.
+     */
+    suspend fun createStaffSubAccount(
+        email: String,
+        password: String,
+        fullName: String
+    ): AuthResult {
+        val admin = currentCustomer()
+            ?: return AuthResult.Error("Not signed in.")
+        if (!admin.role.canManageStaff) {
+            return AuthResult.Error("Only the main admin can create staff sub-accounts.")
+        }
+
         val cleanEmail = email.trim().lowercase()
-        val customer = db.customerDao().getByEmail(cleanEmail)
-            ?: return AuthResult.Error("No account found for that email.")
+        val cleanName = fullName.trim().ifBlank { cleanEmail.substringBefore("@") }
+        when {
+            cleanEmail.isBlank() || "@" !in cleanEmail ->
+                return AuthResult.Error("Enter a valid staff email.")
+            password.length < 6 ->
+                return AuthResult.Error("Password must be at least 6 characters.")
+            db.customerDao().getByEmail(cleanEmail) != null ->
+                return AuthResult.Error("An account with that email already exists.")
+        }
+
+        val salt = PasswordHasher.newSalt()
+        val staff = Customer(
+            id = "staff-" + UUID.randomUUID().toString().take(8),
+            email = cleanEmail,
+            username = "",
+            passwordHash = PasswordHasher.hash(password, salt),
+            passwordSalt = salt,
+            fullName = cleanName,
+            role = AccountRole.STAFF,
+            createdByAdminId = admin.id,
+            notes = "Staff sub-account created by ${admin.email}"
+        )
+        return try {
+            db.customerDao().insert(staff)
+            AuthResult.Success(staff.toProfile())
+        } catch (_: Exception) {
+            AuthResult.Error("Could not create staff account.")
+        }
+    }
+
+    suspend fun login(emailOrUsername: String, password: String): AuthResult {
+        val raw = emailOrUsername.trim()
+        val customer = when {
+            raw.contains("@") -> db.customerDao().getByEmail(raw.lowercase())
+            else -> db.customerDao().getByUsername(raw)
+                ?: db.customerDao().getByEmail(raw.lowercase())
+        } ?: return AuthResult.Error("No account found for that email or username.")
+
         if (!PasswordHasher.matches(password, customer.passwordSalt, customer.passwordHash)) {
             return AuthResult.Error("Incorrect password.")
         }
@@ -170,10 +267,12 @@ class DispensaryRepository(context: Context) {
 
     fun logout() {
         prefs.edit().remove(KEY_CUSTOMER_ID).apply()
+        sessionCustomerId.value = null
     }
 
     private fun setSession(customerId: String) {
         prefs.edit().putString(KEY_CUSTOMER_ID, customerId).apply()
+        sessionCustomerId.value = customerId
     }
 
     suspend fun updateProfile(
@@ -222,16 +321,10 @@ class DispensaryRepository(context: Context) {
     }
 
     suspend fun adjustStock(productId: String, delta: Int): Product? {
+        val me = currentCustomer()
+        if (me?.role?.canManageInventory != true) return null
         val product = db.productDao().getById(productId) ?: return null
         val next = (product.stockQuantity + delta).coerceAtLeast(0)
-        val updated = product.copy(stockQuantity = next, inStock = next > 0)
-        db.productDao().update(updated)
-        return updated
-    }
-
-    suspend fun setStock(productId: String, quantity: Int): Product? {
-        val product = db.productDao().getById(productId) ?: return null
-        val next = quantity.coerceAtLeast(0)
         val updated = product.copy(stockQuantity = next, inStock = next > 0)
         db.productDao().update(updated)
         return updated
@@ -242,6 +335,9 @@ class DispensaryRepository(context: Context) {
         quantity: Int,
         createIfMissing: Boolean = true
     ): InventoryIntake? {
+        val me = currentCustomer()
+        if (me?.role?.canManageInventory != true) return null
+
         val qty = quantity.coerceAtLeast(1)
         val product = when {
             result.matchedProduct != null -> result.matchedProduct
@@ -310,8 +406,11 @@ class DispensaryRepository(context: Context) {
         }
         db.orderDao().placeOrder(order, orderLines)
 
+        // Only decrement stock if caller is staff/admin; customer orders still decrement via system
         lines.forEach { line ->
-            adjustStock(line.product.id, -line.quantity)
+            val product = db.productDao().getById(line.product.id) ?: return@forEach
+            val next = (product.stockQuantity - line.quantity).coerceAtLeast(0)
+            db.productDao().update(product.copy(stockQuantity = next, inStock = next > 0))
         }
 
         db.cartDao().clear()
@@ -320,6 +419,11 @@ class DispensaryRepository(context: Context) {
 
     companion object {
         const val TAX_RATE = 0.08
+        const val MAIN_ADMIN_ID = "admin-main"
+        const val MAIN_ADMIN_USERNAME = "admin"
+        const val MAIN_ADMIN_EMAIL = "fidelgutierrez33@gmail.com"
+        const val MAIN_ADMIN_PASSWORD = "12345678"
+        private const val DEMO_CUSTOMER_EMAIL = "demo@nativepure.example"
         private const val KEY_AGE = "age_verified"
         private const val KEY_CUSTOMER_ID = "customer_id"
         private const val KEY_THEME_MODE = "theme_mode"
