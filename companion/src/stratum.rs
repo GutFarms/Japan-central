@@ -235,7 +235,7 @@ impl StratumClient {
         let msg = json!({
             "id": self.subscribe_id,
             "method": "mining.subscribe",
-            "params": ["cyd-companion/0.4.0-sha256"]
+            "params": ["cyd-companion/0.5.0-sha256"]
         });
         self.phase = "sub".into();
         self.send_json(&msg)

@@ -142,8 +142,8 @@ static void serviceCompanion() {
 }
 
 static void mineLane(Sha256Miner& m, uint32_t stride) {
-  // SHA256 is cheap — large batches, then yield for USB/WDT.
-  constexpr size_t BATCH = 512;
+  // Custom midstate SHA256d: ~2–4k hashes per slice keeps USB/WDT healthy.
+  constexpr size_t BATCH = 2048;
   if (m.mineBatch(BATCH, stride)) {
     noteShare(m.lastShareNonce());
   }
@@ -159,6 +159,8 @@ static void mineTask(void*) {
       continue;
     }
     mineLane(g_minerA, 2);
+    // Brief yield so core-0 USB / LCD keep up under dual-core load.
+    taskYIELD();
     esp_task_wdt_reset();
   }
 }
@@ -207,7 +209,7 @@ void setup() {
                           1);
 
   delay(80);
-  g_ui.showMessage("SHA-256", "USB hash · 240MHz dual-core");
+  g_ui.showMessage("SHA-256", "midstate · 240MHz dual-core");
   delay(350);
   g_ui.showWaitingCompanion();
 

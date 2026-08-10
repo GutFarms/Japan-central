@@ -1,8 +1,8 @@
 #pragma once
 #include <Arduino.h>
-#include <mbedtls/sha256.h>
 
-// Bitcoin-style double-SHA256 hasher with midstate (first 64 header bytes cached).
+// Bitcoin double-SHA256 hasher with cached midstate (first 64 header bytes).
+// Hot path uses a custom compressor — no mbedtls clone/update per nonce.
 class Sha256Miner {
  public:
   static constexpr size_t HEADER_LEN = 80;
@@ -32,7 +32,9 @@ class Sha256Miner {
 
   uint8_t header_[HEADER_LEN]{};
   uint8_t target_[HASH_LEN]{};
-  mbedtls_sha256_context midCtx_{};
+  uint32_t midstate_[8]{};
+  // Prebuilt second-block words except W[3] (nonce) which changes each hash.
+  uint32_t chunk2_[16]{};
   bool midReady_ = false;
   bool ready_ = false;
   uint32_t nonce_ = 0;
