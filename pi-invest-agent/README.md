@@ -12,7 +12,7 @@ It scores tickers for expected income (dividends + capital appreciation signals)
 4. **Investment guard** (Alinia-inspired) rejects LLM ideas that disagree with income scores, prefers income ETFs, and throttles buys on drawdown.
 5. Risk gate enforces max position size, daily loss halt, cash reserve, and allowlist.
 6. Executes via local paper ledger or Alpaca (paper/live).
-7. Exposes a tiny FastAPI status dashboard + CLI.
+7. Exposes a high-graphic FastAPI display dashboard (NAV curve, allocation ring, holdings bars) + CLI.
 
 ## Safety defaults
 
