@@ -18,7 +18,7 @@ use eframe::egui::{
 use eframe::{App, NativeOptions};
 use serde::{Deserialize, Serialize};
 use serialport::SerialPort;
-use stratum::{encode_job_parts, StratumClient};
+use stratum::{encode_job_cmd, encode_job_parts, StratumClient};
 
 fn main() -> eframe::Result<()> {
     let options = NativeOptions {
@@ -1447,6 +1447,7 @@ fn mine_worker(cmd_rx: Receiver<NetCmd>, msg_tx: Sender<NetMsg>) {
     let mut usb_rx = String::new();
     let mut stratum: Option<StratumClient> = None;
     let mut mining = false;
+    let mut legacy_job = false; // old firmware without jh/jt/ja
     let mut last_stats_push = Instant::now() - Duration::from_secs(10);
     let mut last_stratum_ui = Instant::now() - Duration::from_secs(10);
 
@@ -1475,6 +1476,7 @@ fn mine_worker(cmd_rx: Receiver<NetCmd>, msg_tx: Sender<NetMsg>) {
                     usb = None;
                     usb_rx.clear();
                     mining = false;
+                    legacy_job = false;
                     if let Some(mut s) = stratum.take() {
                         s.disconnect();
                     }
@@ -1505,7 +1507,23 @@ fn mine_worker(cmd_rx: Receiver<NetCmd>, msg_tx: Sender<NetMsg>) {
                             })));
                             if let Some(p) = usb.as_mut() {
                                 if let Ok(line) = usb_cmd(p.as_mut(), &mut usb_rx, "cmp config") {
-                                    let _ = msg_tx.send(NetMsg::Config(parse_cmp_config(&line)));
+                                    if let Ok(cfg) = parse_cmp_config(&line) {
+                                        // Prefer split jobs on 0.6.2+; older boards stay legacy.
+                                        legacy_job = !fw_supports_split_jobs(&cfg.fw);
+                                        if legacy_job {
+                                            log_msg(
+                                                &msg_tx,
+                                                LogKind::Warn,
+                                                format!(
+                                                    "Board fw {} lacks jh/jt/ja — using legacy job (flash 0.6.2+)",
+                                                    cfg.fw
+                                                ),
+                                            );
+                                        }
+                                        let _ = msg_tx.send(NetMsg::Config(Ok(cfg)));
+                                    } else {
+                                        let _ = msg_tx.send(NetMsg::Config(parse_cmp_config(&line)));
+                                    }
                                 }
                                 if let Ok(line) = usb_cmd(p.as_mut(), &mut usb_rx, "cmp status") {
                                     let _ = msg_tx.send(NetMsg::Status(parse_cmp_status(&line)));
@@ -1540,7 +1558,8 @@ fn mine_worker(cmd_rx: Receiver<NetCmd>, msg_tx: Sender<NetMsg>) {
                         continue;
                     }
                     if let Some(p) = usb.as_mut() {
-                        match usb_push_job(p.as_mut(), &mut usb_rx, &warmup_job()) {
+                        match usb_push_job(p.as_mut(), &mut usb_rx, &warmup_job(), &mut legacy_job, &msg_tx)
+                        {
                             Ok(_) => {
                                 let _ = msg_tx.send(NetMsg::Action(Ok(
                                     "Board hashing (warmup job)…".into(),
@@ -1669,7 +1688,13 @@ fn mine_worker(cmd_rx: Receiver<NetCmd>, msg_tx: Sender<NetMsg>) {
                     }
                     if let Some(job) = client.take_job() {
                         if let Some(p) = usb.as_mut() {
-                            match usb_push_job(p.as_mut(), &mut usb_rx, &job) {
+                            match usb_push_job(
+                                p.as_mut(),
+                                &mut usb_rx,
+                                &job,
+                                &mut legacy_job,
+                                &msg_tx,
+                            ) {
                                 Ok(_) => {
                                     let _ = msg_tx.send(NetMsg::Action(Ok(format!(
                                         "USB ← job {}",
@@ -1868,18 +1893,74 @@ fn usb_cmd(port: &mut dyn SerialPort, buf: &mut String, cmd: &str) -> Result<Str
     Err(last_err)
 }
 
+fn fw_supports_split_jobs(fw: &str) -> bool {
+    // Split jobs landed in firmware 0.6.2-sha256.
+    let digits: String = fw
+        .chars()
+        .map(|c| if c.is_ascii_digit() || c == '.' { c } else { ' ' })
+        .collect();
+    let mut parts = digits.split_whitespace().next().unwrap_or("").split('.');
+    let major: u32 = parts.next().and_then(|s| s.parse().ok()).unwrap_or(0);
+    let minor: u32 = parts.next().and_then(|s| s.parse().ok()).unwrap_or(0);
+    let patch: u32 = parts.next().and_then(|s| s.parse().ok()).unwrap_or(0);
+    (major, minor, patch) >= (0, 6, 2)
+}
+
 fn usb_push_job(
     port: &mut dyn SerialPort,
     buf: &mut String,
     job: &stratum::WorkJob,
+    legacy_job: &mut bool,
+    msg_tx: &Sender<NetMsg>,
 ) -> Result<(), String> {
-    for part in encode_job_parts(job) {
-        let reply = usb_cmd(port, buf, &part)?;
-        if !(reply.starts_with("CMPACK") || reply.starts_with("CMP ok")) {
-            return Err(format!("unexpected job reply: {reply}"));
+    if !*legacy_job {
+        let mut split_ok = true;
+        for part in encode_job_parts(job) {
+            match usb_cmd(port, buf, &part) {
+                Ok(reply) if reply.starts_with("CMPACK") || reply.starts_with("CMP ok") => {}
+                Ok(reply) if reply.contains("unknown") || reply.starts_with("CMPERR") => {
+                    split_ok = false;
+                    log_msg(
+                        msg_tx,
+                        LogKind::Warn,
+                        format!("Board rejected `{part}` ({reply}) — falling back to legacy job"),
+                    );
+                    break;
+                }
+                Ok(reply) => {
+                    return Err(format!("unexpected job reply: {reply}"));
+                }
+                Err(e) if e.contains("CMPERR") && e.contains("unknown") => {
+                    split_ok = false;
+                    log_msg(
+                        msg_tx,
+                        LogKind::Warn,
+                        format!("Board rejected split job ({e}) — falling back to legacy job"),
+                    );
+                    break;
+                }
+                Err(e) => return Err(e),
+            }
         }
+        if split_ok {
+            return Ok(());
+        }
+        *legacy_job = true;
+        log_msg(
+            msg_tx,
+            LogKind::Warn,
+            "Flash firmware 0.6.2+ for reliable split jobs (jh/jt/ja)".into(),
+        );
     }
-    Ok(())
+
+    // Legacy one-shot — works on older boards; long line is less reliable.
+    let cmd = encode_job_cmd(job);
+    let reply = usb_cmd(port, buf, &cmd)?;
+    if reply.starts_with("CMPACK") || reply.starts_with("CMP ok") {
+        Ok(())
+    } else {
+        Err(format!("unexpected job reply: {reply}"))
+    }
 }
 
 fn warmup_job() -> stratum::WorkJob {
