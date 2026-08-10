@@ -1,8 +1,7 @@
 #pragma once
 #include <Arduino.h>
 
-// Bitcoin double-SHA256 hasher with cached midstate (first 64 header bytes).
-// Hot path uses a custom compressor — no mbedtls clone/update per nonce.
+// Peak Bitcoin double-SHA256 hasher: cached midstate + unrolled IRAM transform.
 class Sha256Miner {
  public:
   static constexpr size_t HEADER_LEN = 80;
@@ -27,13 +26,15 @@ class Sha256Miner {
   const uint8_t* lastHash() const { return lastHash_; }
 
  private:
-  bool meetsTarget(const uint8_t hash[HASH_LEN]) const;
+  bool meetsTargetWords(const uint32_t hash_be[8]) const;
   void prepareMidstate();
+  void packTarget(const uint8_t target[HASH_LEN]);
 
   uint8_t header_[HEADER_LEN]{};
   uint8_t target_[HASH_LEN]{};
+  // Target as LE uint32 words; index 7 is most significant for Bitcoin.
+  uint32_t targetLe_[8]{};
   uint32_t midstate_[8]{};
-  // Prebuilt second-block words except W[3] (nonce) which changes each hash.
   uint32_t chunk2_[16]{};
   bool midReady_ = false;
   bool ready_ = false;

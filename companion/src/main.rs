@@ -12,8 +12,8 @@ use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use eframe::egui::{
-    self, Color32, FontFamily, FontId, Frame, Margin, RichText, Rounding, ScrollArea, Stroke, TextEdit,
-    Vec2,
+    self, Align, Color32, FontData, FontDefinitions, FontFamily, FontId, Frame, Layout, Margin,
+    Pos2, Rect, RichText, Rounding, ScrollArea, Sense, Stroke, TextEdit, Vec2,
 };
 use eframe::{App, NativeOptions};
 use serde::{Deserialize, Serialize};
@@ -23,8 +23,8 @@ use stratum::{encode_job_cmd, StratumClient};
 fn main() -> eframe::Result<()> {
     let options = NativeOptions {
         viewport: egui::ViewportBuilder::default()
-            .with_inner_size([1080.0, 780.0])
-            .with_min_inner_size([900.0, 640.0])
+            .with_inner_size([1200.0, 820.0])
+            .with_min_inner_size([1020.0, 700.0])
             .with_title("CYD Companion · USB SHA-256 Miner"),
         multisampling: 8,
         depth_buffer: 0,
@@ -36,41 +36,118 @@ fn main() -> eframe::Result<()> {
         options,
         Box::new(|cc| {
             egui_extras::install_image_loaders(&cc.egui_ctx);
+            install_fonts(&cc.egui_ctx);
             apply_theme(&cc.egui_ctx);
             Box::new(CompanionApp::new(cc.storage))
         }),
     )
 }
 
-const C_BG: Color32 = Color32::from_rgb(8, 12, 16);
-const C_PANEL: Color32 = Color32::from_rgb(18, 26, 36);
-const C_BUBBLE: Color32 = Color32::from_rgb(56, 84, 118);
-const C_BUBBLE_HI: Color32 = Color32::from_rgb(110, 168, 220);
-const C_LIME: Color32 = Color32::from_rgb(180, 240, 90);
-const C_TEXT: Color32 = Color32::from_rgb(228, 238, 248);
-const C_MUTED: Color32 = Color32::from_rgb(130, 150, 170);
-const C_WARN: Color32 = Color32::from_rgb(255, 180, 90);
-const C_ERR: Color32 = Color32::from_rgb(255, 120, 100);
+const C_BG: Color32 = Color32::from_rgb(5, 8, 10);
+const C_BG_2: Color32 = Color32::from_rgb(10, 16, 18);
+const C_PANEL: Color32 = Color32::from_rgb(14, 22, 24);
+const C_PANEL_SOFT: Color32 = Color32::from_rgb(22, 34, 36);
+const C_PANEL_QUIET: Color32 = Color32::from_rgb(11, 18, 20);
+const C_STROKE: Color32 = Color32::from_rgb(43, 63, 62);
+const C_BUBBLE: Color32 = Color32::from_rgb(30, 49, 48);
+const C_BUBBLE_HI: Color32 = Color32::from_rgb(113, 153, 141);
+const C_LIME: Color32 = Color32::from_rgb(198, 255, 64);
+const C_LIME_SOFT: Color32 = Color32::from_rgb(130, 210, 52);
+const C_TEXT: Color32 = Color32::from_rgb(235, 244, 238);
+const C_MUTED: Color32 = Color32::from_rgb(134, 154, 148);
+const C_DIM: Color32 = Color32::from_rgb(82, 103, 99);
+const C_WARN: Color32 = Color32::from_rgb(255, 196, 91);
+const C_ERR: Color32 = Color32::from_rgb(255, 108, 91);
 const MAX_LOGS: usize = 500;
+const HASH_HISTORY_SAMPLES: usize = 90;
+
+fn install_fonts(ctx: &egui::Context) {
+    let mut fonts = FontDefinitions::default();
+    fonts.font_data.insert(
+        "Outfit-Regular".into(),
+        FontData::from_static(include_bytes!("../assets/fonts/Outfit-Regular.ttf")),
+    );
+    fonts.font_data.insert(
+        "Outfit-Bold".into(),
+        FontData::from_static(include_bytes!("../assets/fonts/Outfit-Bold.ttf")),
+    );
+    fonts.font_data.insert(
+        "JetBrainsMono-Regular".into(),
+        FontData::from_static(include_bytes!(
+            "../assets/fonts/JetBrainsMono-Regular.ttf"
+        )),
+    );
+    fonts.font_data.insert(
+        "JetBrainsMono-SemiBold".into(),
+        FontData::from_static(include_bytes!(
+            "../assets/fonts/JetBrainsMono-SemiBold.ttf"
+        )),
+    );
+
+    fonts
+        .families
+        .insert(FontFamily::Name("Outfit Display".into()), vec!["Outfit-Bold".into()]);
+    fonts.families.insert(
+        FontFamily::Name("JetBrains Mono UI".into()),
+        vec!["JetBrainsMono-SemiBold".into()],
+    );
+    fonts
+        .families
+        .entry(FontFamily::Proportional)
+        .or_default()
+        .splice(0..0, ["Outfit-Regular".into(), "Outfit-Bold".into()]);
+    fonts
+        .families
+        .entry(FontFamily::Monospace)
+        .or_default()
+        .splice(
+            0..0,
+            [
+                "JetBrainsMono-Regular".into(),
+                "JetBrainsMono-SemiBold".into(),
+            ],
+        );
+    ctx.set_fonts(fonts);
+}
+
+fn display_font(size: f32) -> FontId {
+    FontId::new(size, FontFamily::Name("Outfit Display".into()))
+}
+
+fn mono_ui_font(size: f32) -> FontId {
+    FontId::new(size, FontFamily::Name("JetBrains Mono UI".into()))
+}
 
 fn apply_theme(ctx: &egui::Context) {
     let mut style = (*ctx.style()).clone();
     style.visuals.dark_mode = true;
     style.visuals.panel_fill = C_BG;
     style.visuals.window_fill = C_PANEL;
-    style.visuals.extreme_bg_color = Color32::from_rgb(28, 40, 56);
+    style.visuals.extreme_bg_color = Color32::from_rgb(8, 13, 14);
     style.visuals.override_text_color = Some(C_TEXT);
     style.visuals.widgets.inactive.bg_fill = C_BUBBLE;
-    style.visuals.widgets.hovered.bg_fill = C_BUBBLE_HI;
+    style.visuals.widgets.hovered.bg_fill = Color32::from_rgb(42, 70, 66);
     style.visuals.widgets.active.bg_fill = C_LIME;
-    style.visuals.widgets.inactive.rounding = Rounding::same(18.0);
-    style.visuals.widgets.hovered.rounding = Rounding::same(18.0);
-    style.visuals.widgets.active.rounding = Rounding::same(18.0);
-    style.spacing.item_spacing = Vec2::new(12.0, 10.0);
-    style.spacing.button_padding = Vec2::new(16.0, 10.0);
+    style.visuals.widgets.inactive.fg_stroke = Stroke::new(1.0_f32, C_TEXT);
+    style.visuals.widgets.hovered.fg_stroke = Stroke::new(1.0_f32, C_TEXT);
+    style.visuals.widgets.active.fg_stroke =
+        Stroke::new(1.0_f32, Color32::from_rgb(8, 16, 10));
+    style.visuals.selection.bg_fill = Color32::from_rgba_unmultiplied(198, 255, 64, 72);
+    style.visuals.widgets.inactive.rounding = Rounding::same(16.0);
+    style.visuals.widgets.hovered.rounding = Rounding::same(16.0);
+    style.visuals.widgets.active.rounding = Rounding::same(16.0);
+    style.spacing.item_spacing = Vec2::new(14.0, 11.0);
+    style.spacing.button_padding = Vec2::new(18.0, 11.0);
     style.text_styles.insert(
         egui::TextStyle::Heading,
-        FontId::new(28.0, FontFamily::Proportional),
+        display_font(30.0),
+    );
+    style
+        .text_styles
+        .insert(egui::TextStyle::Body, FontId::new(15.0, FontFamily::Proportional));
+    style.text_styles.insert(
+        egui::TextStyle::Monospace,
+        FontId::new(13.0, FontFamily::Monospace),
     );
     ctx.set_style(style);
 }
@@ -253,6 +330,9 @@ struct CompanionApp {
     msg_rx: Receiver<NetMsg>,
     last_poll: Instant,
     pulse: f32,
+    displayed_khs: f32,
+    hashrate_history: VecDeque<f32>,
+    last_hash_sample: Instant,
     logs: VecDeque<LogEntry>,
     log_auto_scroll: bool,
     stratum_live: StratumLive,
@@ -312,6 +392,9 @@ impl CompanionApp {
             msg_rx,
             last_poll: Instant::now() - Duration::from_secs(10),
             pulse: 0.0,
+            displayed_khs: 0.0,
+            hashrate_history: VecDeque::from(vec![0.0; HASH_HISTORY_SAMPLES]),
+            last_hash_sample: Instant::now(),
             logs: VecDeque::new(),
             log_auto_scroll: true,
             stratum_live: StratumLive::default(),
@@ -321,6 +404,49 @@ impl CompanionApp {
         };
         app.push_log(LogKind::Info, "CYD Companion ready".into());
         app
+    }
+
+    fn board_khs(&self) -> f32 {
+        if self.status.hashrate_khs > 0.0 {
+            self.status.hashrate_khs as f32
+        } else {
+            (self.status.hashrate_hs / 1000.0) as f32
+        }
+    }
+
+    fn pool_state(&self) -> (&'static str, Color32) {
+        if self.stratum_live.authorized {
+            ("AUTHORIZED", C_LIME)
+        } else if self.stratum_live.phase == "err" {
+            ("ERROR", C_ERR)
+        } else if self.stratum_live.connected
+            || (self.stratum_live.phase != "off" && !self.stratum_live.phase.is_empty())
+        {
+            ("LINKING", C_WARN)
+        } else {
+            ("IDLE", C_MUTED)
+        }
+    }
+
+    fn update_motion(&mut self, ctx: &egui::Context) {
+        let dt = ctx.input(|i| i.unstable_dt).clamp(0.0, 0.12);
+        let pace = if self.mining { 1.9 } else { 0.7 };
+        self.pulse = (self.pulse + dt * pace) % std::f32::consts::TAU;
+
+        let target = self.board_khs();
+        let alpha = 1.0 - (-dt * 7.5).exp();
+        self.displayed_khs += (target - self.displayed_khs) * alpha;
+        if self.displayed_khs.abs() < 0.001 {
+            self.displayed_khs = 0.0;
+        }
+
+        if self.last_hash_sample.elapsed() > Duration::from_millis(560) {
+            self.hashrate_history.push_back(self.displayed_khs.max(0.0));
+            while self.hashrate_history.len() > HASH_HISTORY_SAMPLES {
+                self.hashrate_history.pop_front();
+            }
+            self.last_hash_sample = Instant::now();
+        }
     }
 
     fn push_log(&mut self, kind: LogKind, text: String) {
@@ -409,9 +535,151 @@ impl CompanionApp {
     }
 
     fn ui_mine(&mut self, ui: &mut egui::Ui) {
-        panel(ui, "USB-C", |ui| {
+        self.ui_mining_hero(ui);
+        ui.add_space(18.0);
+
+        ui.columns(2, |columns| {
+            let (left, right) = columns.split_at_mut(1);
+            self.ui_connection_controls(&mut left[0]);
+            self.ui_telemetry_rail(&mut right[0]);
+        });
+
+        ui.add_space(16.0);
+        self.ui_stratum_panel(ui);
+        ui.add_space(12.0);
+        self.ui_logs_panel(ui);
+    }
+
+    fn ui_mining_hero(&mut self, ui: &mut egui::Ui) {
+        let pulse = 0.5 + 0.5 * self.pulse.sin();
+        let pulse_alpha = if self.mining {
+            (34.0 + pulse * 54.0) as u8
+        } else {
+            18
+        };
+        Frame::none()
+            .fill(Color32::from_rgba_unmultiplied(12, 22, 21, 226))
+            .rounding(Rounding::same(34.0))
+            .stroke(Stroke::new(
+                1.0,
+                Color32::from_rgba_unmultiplied(198, 255, 64, pulse_alpha),
+            ))
+            .inner_margin(Margin::same(26.0))
+            .show(ui, |ui| {
+                let rect = ui.max_rect();
+                paint_hero_wash(ui, rect, self.pulse, self.mining);
+                ui.set_min_height(250.0);
+                ui.horizontal(|ui| {
+                    ui.vertical(|ui| {
+                        ui.label(
+                            RichText::new("LIVE HASHPOWER")
+                                .color(C_LIME)
+                                .font(mono_ui_font(12.0)),
+                        );
+                        ui.add_space(4.0);
+                        ui.horizontal(|ui| {
+                            ui.label(
+                                RichText::new(format!("{:.2}", self.displayed_khs))
+                                    .color(C_TEXT)
+                                    .font(display_font(78.0)),
+                            );
+                            ui.label(
+                                RichText::new("kH/s")
+                                    .color(C_LIME)
+                                    .font(display_font(30.0)),
+                            );
+                        });
+                        ui.label(
+                            RichText::new(if self.mining {
+                                "Board hashing over USB-C. Stratum jobs stay on this PC."
+                            } else if self.usb_open {
+                                "USB linked. Start mining to stream pool work to the board."
+                            } else {
+                                "Connect the CYD miner, route a pool, then bring the board online."
+                            })
+                            .color(C_MUTED)
+                            .size(16.0),
+                        );
+                        ui.add_space(20.0);
+                        sparkline(ui, &self.hashrate_history, self.pulse);
+                    });
+
+                    ui.with_layout(Layout::right_to_left(Align::Min), |ui| {
+                        Frame::none()
+                            .fill(Color32::from_rgba_unmultiplied(7, 13, 14, 188))
+                            .rounding(Rounding::same(24.0))
+                            .stroke(Stroke::new(1.0_f32, C_STROKE))
+                            .inner_margin(Margin::symmetric(18.0, 16.0))
+                            .show(ui, |ui| {
+                                ui.set_min_width(245.0);
+                                ui.vertical_centered(|ui| {
+                                    let (pool_label, pool_color) = self.pool_state();
+                                    status_chip(
+                                        ui,
+                                        if self.mining { "MINING" } else { "READY" },
+                                        if self.mining { C_LIME } else { C_MUTED },
+                                    );
+                                    ui.add_space(8.0);
+                                    ui.label(
+                                        RichText::new(format!(
+                                            "USB {} · POOL {}",
+                                            if self.usb_open { "LINKED" } else { "IDLE" },
+                                            pool_label
+                                        ))
+                                        .color(pool_color)
+                                        .font(mono_ui_font(12.0)),
+                                    );
+                                    ui.add_space(18.0);
+                                    let usb_label = if self.usb_open {
+                                        "Disconnect USB"
+                                    } else {
+                                        "Connect USB"
+                                    };
+                                    if cta_button(ui, usb_label, !self.usb_open, 190.0).clicked() {
+                                        if self.usb_open {
+                                            let _ = self.cmd_tx.send(NetCmd::CloseUsb);
+                                            self.usb_open = false;
+                                            self.mining = false;
+                                            self.push_log(LogKind::Usb, "Disconnect requested".into());
+                                        } else {
+                                            self.connect_usb();
+                                        }
+                                    }
+                                    ui.add_space(8.0);
+                                    let mine_label = if self.mining {
+                                        "Stop mining"
+                                    } else {
+                                        "Start mining"
+                                    };
+                                    if cta_button(ui, mine_label, !self.mining, 190.0).clicked() {
+                                        if self.mining {
+                                            self.stop_mine();
+                                        } else {
+                                            self.start_mine();
+                                        }
+                                    }
+                                    ui.add_space(8.0);
+                                    if soft_button(ui, "Bench board", 190.0).clicked() {
+                                        let _ = self.cmd_tx.send(NetCmd::Bench);
+                                        self.push_log(LogKind::Usb, "Bench requested".into());
+                                    }
+                                });
+                            });
+                    });
+                });
+            });
+    }
+
+    fn ui_connection_controls(&mut self, ui: &mut egui::Ui) {
+        soft_panel(ui, "Control routing", |ui| {
+            ui.label(
+                RichText::new("USB-C")
+                    .color(C_LIME)
+                    .font(mono_ui_font(12.0)),
+            );
             ui.horizontal(|ui| {
                 egui::ComboBox::from_id_source("com")
+                    .width(210.0)
                     .selected_text(if self.com_port.is_empty() {
                         "Select port"
                     } else {
@@ -422,173 +690,165 @@ impl CompanionApp {
                             ui.selectable_value(&mut self.com_port, p.clone(), p);
                         }
                     });
-                if bubble(ui, "Refresh", false).clicked() {
+                if soft_button(ui, "Refresh", 98.0).clicked() {
                     let _ = self.cmd_tx.send(NetCmd::ListPorts);
                 }
-                if bubble(ui, "Connect", true).clicked() {
-                    self.connect_usb();
-                }
-                if bubble(ui, "Disconnect", false).clicked() {
-                    let _ = self.cmd_tx.send(NetCmd::CloseUsb);
-                    self.usb_open = false;
-                    self.mining = false;
-                    self.push_log(LogKind::Usb, "Disconnect requested".into());
-                }
-            });
-        });
-
-        ui.add_space(8.0);
-        panel(ui, "Pool (on this PC)", |ui| {
-            ui.horizontal(|ui| {
-                ui.label(RichText::new("Stratum").color(C_MUTED));
-                ui.add(
-                    TextEdit::singleline(&mut self.edit_stratum)
-                        .desired_width(520.0)
-                        .hint_text("stratum+tcp://host:port"),
-                );
-            });
-            ui.horizontal(|ui| {
-                ui.label(RichText::new("Worker").color(C_MUTED));
-                ui.add(
-                    TextEdit::singleline(&mut self.edit_worker)
-                        .desired_width(360.0)
-                        .hint_text("Bitcoin address (bc1… / 1… / 3…)"),
-                );
-                ui.label(RichText::new("Pass").color(C_MUTED));
-                ui.add(TextEdit::singleline(&mut self.edit_password).desired_width(100.0));
-            });
-            ui.horizontal(|ui| {
-                if !self.mining {
-                    if bubble(ui, "Start mining", true).clicked() {
-                        self.start_mine();
-                    }
-                } else if bubble(ui, "Stop mining", false).clicked() {
-                    self.stop_mine();
-                }
-                if bubble(ui, "Bench", false).clicked() {
-                    let _ = self.cmd_tx.send(NetCmd::Bench);
-                    self.push_log(LogKind::Usb, "Bench requested".into());
-                }
-            });
-        });
-
-        ui.add_space(8.0);
-        panel(ui, "Live board", |ui| {
-            ui.horizontal(|ui| {
-                let khs = if self.status.hashrate_khs > 0.0 {
-                    self.status.hashrate_khs
-                } else {
-                    self.status.hashrate_hs / 1000.0
-                };
-                stat(ui, "Hashrate", &format!("{khs:.2} kH/s"));
-                stat(ui, "H/s", &format!("{:.0}", self.status.hashrate_hs));
-                stat(ui, "Accepted", &self.accepted.to_string());
-                stat(ui, "Rejected", &self.rejected.to_string());
-                stat(ui, "Board shares", &self.status.shares.to_string());
-                stat(
+                if soft_button(
                     ui,
-                    "Nonce",
-                    if self.status.nonce.is_empty() {
-                        "—"
+                    if self.usb_open { "Disconnect" } else { "Connect" },
+                    112.0,
+                )
+                .clicked()
+                {
+                    if self.usb_open {
+                        let _ = self.cmd_tx.send(NetCmd::CloseUsb);
+                        self.usb_open = false;
+                        self.mining = false;
+                        self.push_log(LogKind::Usb, "Disconnect requested".into());
                     } else {
-                        &self.status.nonce
-                    },
+                        self.connect_usb();
+                    }
+                }
+            });
+
+            ui.add_space(16.0);
+            ui.label(
+                RichText::new("POOL")
+                    .color(C_LIME)
+                    .font(mono_ui_font(12.0)),
+            );
+            labeled_edit(ui, "Stratum URL", &mut self.edit_stratum, "stratum+tcp://host:port");
+            labeled_edit(
+                ui,
+                "Worker",
+                &mut self.edit_worker,
+                "Bitcoin address (bc1... / 1... / 3...)",
+            );
+            ui.horizontal(|ui| {
+                ui.label(RichText::new("Password").color(C_MUTED).size(12.0));
+                ui.add(
+                    TextEdit::singleline(&mut self.edit_password)
+                        .desired_width(130.0)
+                        .font(FontId::new(13.0, FontFamily::Monospace)),
                 );
+                ui.separator();
+                ui.label(RichText::new("Clock").color(C_MUTED).size(12.0));
+                for mhz in [80_u8, 160, 240] {
+                    let selected = self.target_mhz == mhz;
+                    if clock_chip(ui, mhz, selected).clicked() {
+                        self.target_mhz = mhz;
+                        let _ = self.cmd_tx.send(NetCmd::SetClock(mhz));
+                        self.push_log(LogKind::Usb, format!("Clock request {mhz} MHz"));
+                    }
+                }
             });
         });
+    }
 
-        ui.add_space(8.0);
-        self.ui_stratum_panel(ui);
-
-        ui.add_space(8.0);
-        self.ui_logs_panel(ui);
+    fn ui_telemetry_rail(&self, ui: &mut egui::Ui) {
+        soft_panel(ui, "Board telemetry", |ui| {
+            ui.horizontal_wrapped(|ui| {
+                metric(ui, "Accepted", &self.accepted.to_string(), C_LIME);
+                metric(ui, "Rejected", &self.rejected.to_string(), if self.rejected > 0 { C_ERR } else { C_MUTED });
+                metric(ui, "Board shares", &self.status.shares.to_string(), C_TEXT);
+                metric(ui, "Raw H/s", &format!("{:.0}", self.status.hashrate_hs), C_TEXT);
+            });
+            ui.add_space(12.0);
+            telemetry_line(
+                ui,
+                "Firmware",
+                if self.fw_label.is_empty() { "—" } else { &self.fw_label },
+            );
+            telemetry_line(
+                ui,
+                "Nonce",
+                if self.status.nonce.is_empty() {
+                    "—"
+                } else {
+                    &self.status.nonce
+                },
+            );
+            telemetry_line(
+                ui,
+                "Job",
+                if self.status.job.is_empty() {
+                    "—"
+                } else {
+                    &self.status.job
+                },
+            );
+            telemetry_line(
+                ui,
+                "Uptime",
+                &format!("{}s · {} MHz", self.status.uptime_secs, self.target_mhz),
+            );
+            ui.add_space(10.0);
+            if !self.last_ok.is_empty() {
+                ui.label(RichText::new(&self.last_ok).color(C_LIME).size(12.0));
+            }
+            if !self.last_error.is_empty() {
+                ui.label(RichText::new(&self.last_error).color(C_ERR).size(12.0));
+            }
+        });
     }
 
     fn ui_stratum_panel(&self, ui: &mut egui::Ui) {
         let s = &self.stratum_live;
-        panel(ui, "Stratum communication (live)", |ui| {
-            ui.horizontal(|ui| {
-                let state = if s.authorized {
-                    ("AUTHORIZED", C_LIME)
-                } else if s.connected || s.phase != "off" && s.phase != "err" {
-                    ("LINKING", C_WARN)
-                } else if s.phase == "err" {
-                    ("ERROR", C_ERR)
-                } else {
-                    ("IDLE", C_MUTED)
-                };
-                ui.label(
-                    RichText::new(state.0)
-                        .color(state.1)
-                        .strong()
-                        .size(15.0),
-                );
+        soft_panel(ui, "Live stratum", |ui| {
+            ui.horizontal_wrapped(|ui| {
+                let (state, color) = self.pool_state();
+                status_chip(ui, state, color);
                 ui.label(
                     RichText::new(format!(
-                        "  {}  ·  phase {}  ·  diff {:.6}",
-                        if s.endpoint.is_empty() {
-                            "—"
-                        } else {
-                            &s.endpoint
-                        },
+                        "{} · phase {} · diff {:.6}",
+                        if s.endpoint.is_empty() { "—" } else { &s.endpoint },
                         if s.phase.is_empty() { "off" } else { &s.phase },
                         s.difficulty
                     ))
-                    .color(C_MUTED),
+                    .color(C_MUTED)
+                    .size(13.0),
                 );
             });
-            ui.add_space(4.0);
-            ui.horizontal(|ui| {
-                mini_stat(ui, "TX lines", &s.lines_tx.to_string());
-                mini_stat(ui, "RX lines", &s.lines_rx.to_string());
+            ui.add_space(8.0);
+            ui.horizontal_wrapped(|ui| {
+                mini_stat(ui, "TX", &s.lines_tx.to_string());
+                mini_stat(ui, "RX", &s.lines_rx.to_string());
                 mini_stat(ui, "Jobs", &s.jobs.to_string());
                 mini_stat(ui, "Accept", &s.accepted.to_string());
                 mini_stat(ui, "Reject", &s.rejected.to_string());
                 mini_stat(
                     ui,
                     "Job id",
-                    if s.last_job.is_empty() {
-                        "—"
-                    } else {
-                        &s.last_job
-                    },
+                    if s.last_job.is_empty() { "—" } else { &s.last_job },
                 );
             });
-            ui.add_space(6.0);
-            ui.label(RichText::new("Last TX → pool").color(C_BUBBLE_HI).size(12.0));
-            ui.label(
-                RichText::new(trunc(&s.last_tx, 140))
-                    .color(C_TEXT)
-                    .monospace()
-                    .size(12.0),
-            );
-            ui.label(RichText::new("Last RX ← pool").color(C_BUBBLE_HI).size(12.0));
-            ui.label(
-                RichText::new(trunc(&s.last_rx, 140))
-                    .color(C_TEXT)
-                    .monospace()
-                    .size(12.0),
-            );
+            ui.add_space(8.0);
+            stratum_line(ui, "Last TX → pool", &trunc(&s.last_tx, 150));
+            stratum_line(ui, "Last RX ← pool", &trunc(&s.last_rx, 150));
         });
     }
 
     fn ui_logs_panel(&mut self, ui: &mut egui::Ui) {
-        panel(ui, "Logs", |ui| {
+        soft_panel(ui, "Event log", |ui| {
             ui.horizontal(|ui| {
                 ui.checkbox(&mut self.log_auto_scroll, "Auto-scroll");
-                if bubble(ui, "Clear logs", false).clicked() {
+                if soft_button(ui, "Clear logs", 110.0).clicked() {
                     self.logs.clear();
                 }
             });
             Frame::none()
-                .fill(Color32::from_rgb(10, 14, 20))
-                .rounding(Rounding::same(12.0))
-                .inner_margin(Margin::same(8.0))
+                .fill(Color32::from_rgba_unmultiplied(4, 8, 9, 202))
+                .rounding(Rounding::same(16.0))
+                .stroke(Stroke::new(
+                    1.0_f32,
+                    Color32::from_rgba_unmultiplied(198, 255, 64, 18),
+                ))
+                .inner_margin(Margin::same(10.0))
                 .show(ui, |ui| {
                     ScrollArea::vertical()
                         .id_source("logs_scroll")
                         .stick_to_bottom(self.log_auto_scroll)
-                        .max_height(180.0)
+                        .max_height(170.0)
                         .auto_shrink([false, false])
                         .show(ui, |ui| {
                             for e in &self.logs {
@@ -603,14 +863,12 @@ impl CompanionApp {
                                     ui.label(
                                         RichText::new(format!("{} [{tag}]", e.time))
                                             .color(color)
-                                            .monospace()
-                                            .size(11.0),
+                                            .font(mono_ui_font(11.0)),
                                     );
                                     ui.label(
                                         RichText::new(&e.text)
                                             .color(C_TEXT)
-                                            .monospace()
-                                            .size(11.0),
+                                            .font(FontId::new(11.0, FontFamily::Monospace)),
                                     );
                                 });
                             }
@@ -620,48 +878,49 @@ impl CompanionApp {
     }
 
     fn ui_debug(&mut self, ui: &mut egui::Ui) {
-        panel(ui, "USB terminal → ESP board", |ui| {
+        soft_panel(ui, "Debug / Terminal", |ui| {
             ui.label(
-                RichText::new("Send raw `cmp …` lines over USB-C. Examples: ping, status, config, stop, bench n=4")
+                RichText::new("Send raw cmp commands over USB-C without bypassing the worker path.")
                     .color(C_MUTED)
-                    .size(12.0),
+                    .size(13.0),
             );
-            ui.add_space(4.0);
+            ui.add_space(8.0);
             ui.horizontal(|ui| {
                 let resp = ui.add(
                     TextEdit::singleline(&mut self.term_input)
-                        .desired_width(640.0)
-                        .font(FontId::monospace(14.0))
+                        .desired_width((ui.available_width() - 360.0).max(240.0))
+                        .font(FontId::new(14.0, FontFamily::Monospace))
                         .hint_text("cmp ping"),
                 );
-                if bubble(ui, "Send", true).clicked()
+                if cta_button(ui, "Send", true, 96.0).clicked()
                     || (resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)))
                 {
                     self.send_term();
                 }
-                if bubble(ui, "Ping", false).clicked() {
+                if soft_button(ui, "Ping", 82.0).clicked() {
                     self.term_input = "cmp ping".into();
                     self.send_term();
                 }
-                if bubble(ui, "Status", false).clicked() {
+                if soft_button(ui, "Status", 92.0).clicked() {
                     self.term_input = "cmp status".into();
                     self.send_term();
                 }
-                if bubble(ui, "Config", false).clicked() {
+                if soft_button(ui, "Config", 92.0).clicked() {
                     self.term_input = "cmp config".into();
                     self.send_term();
                 }
             });
-            ui.add_space(6.0);
+            ui.add_space(10.0);
             Frame::none()
-                .fill(Color32::from_rgb(10, 14, 20))
-                .rounding(Rounding::same(12.0))
-                .inner_margin(Margin::same(8.0))
+                .fill(Color32::from_rgba_unmultiplied(4, 8, 9, 224))
+                .rounding(Rounding::same(18.0))
+                .stroke(Stroke::new(1.0_f32, C_STROKE))
+                .inner_margin(Margin::same(14.0))
                 .show(ui, |ui| {
                     ScrollArea::vertical()
                         .id_source("term_scroll")
                         .stick_to_bottom(true)
-                        .max_height(280.0)
+                        .max_height(310.0)
                         .auto_shrink([false, false])
                         .show(ui, |ui| {
                             for line in self.term_history.iter().chain(self.term_out.iter()) {
@@ -674,22 +933,24 @@ impl CompanionApp {
                                 } else {
                                     C_TEXT
                                 };
-                                ui.label(RichText::new(line).color(color).monospace().size(12.0));
+                                ui.label(
+                                    RichText::new(line)
+                                        .color(color)
+                                        .font(FontId::new(12.0, FontFamily::Monospace)),
+                                );
                             }
                         });
                 });
-            ui.add_space(6.0);
-            ui.horizontal(|ui| {
-                if bubble(ui, "Clear terminal", false).clicked() {
-                    self.term_history.clear();
-                    self.term_out.clear();
-                }
-            });
+            ui.add_space(8.0);
+            if soft_button(ui, "Clear terminal", 140.0).clicked() {
+                self.term_history.clear();
+                self.term_out.clear();
+            }
         });
 
-        ui.add_space(8.0);
+        ui.add_space(14.0);
         self.ui_stratum_panel(ui);
-        ui.add_space(8.0);
+        ui.add_space(12.0);
         self.ui_logs_panel(ui);
     }
 }
@@ -788,49 +1049,54 @@ impl App for CompanionApp {
             self.last_poll = Instant::now();
         }
 
-        self.pulse = (self.pulse + ctx.input(|i| i.unstable_dt) * 1.4) % std::f32::consts::TAU;
+        self.update_motion(ctx);
 
         egui::CentralPanel::default()
-            .frame(Frame::none().fill(C_BG).inner_margin(Margin::same(18.0)))
+            .frame(Frame::none().fill(C_BG).inner_margin(Margin::same(22.0)))
             .show(ctx, |ui| {
+                paint_background(ui, ui.max_rect(), self.pulse, self.mining);
                 ui.horizontal(|ui| {
-                    ui.heading(RichText::new("CYD Companion").color(C_LIME).strong());
-                    ui.label(
-                        RichText::new(format!("  ·  fw {}", self.fw_label)).color(C_MUTED),
-                    );
-                    ui.add_space(16.0);
-                    ui.selectable_value(&mut self.tab, Tab::Mine, "Mine");
-                    ui.selectable_value(&mut self.tab, Tab::Debug, "Debug / Terminal");
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        let link = if self.usb_open { "USB linked" } else { "USB idle" };
+                    ui.label(RichText::new("CYD").color(C_LIME).font(display_font(58.0)));
+                    ui.vertical(|ui| {
+                        ui.add_space(7.0);
                         ui.label(
-                            RichText::new(link)
-                                .color(if self.usb_open { C_LIME } else { C_MUTED })
-                                .strong(),
+                            RichText::new("Companion")
+                                .color(C_TEXT)
+                                .font(display_font(24.0)),
                         );
                         ui.label(
-                            RichText::new(format!("stratum: {}", self.pool_phase)).color(C_MUTED),
+                            RichText::new("USB SHA-256 mining control surface")
+                                .color(C_MUTED)
+                                .size(12.0),
+                        );
+                    });
+                    ui.add_space(28.0);
+                    if nav_button(ui, "Mine", self.tab == Tab::Mine).clicked() {
+                        self.tab = Tab::Mine;
+                    }
+                    if nav_button(ui, "Debug / Terminal", self.tab == Tab::Debug).clicked() {
+                        self.tab = Tab::Debug;
+                    }
+                    ui.label(
+                        RichText::new(format!("fw {}", self.fw_label))
+                            .color(C_DIM)
+                            .font(mono_ui_font(11.0)),
+                    );
+                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                        let (pool, color) = self.pool_state();
+                        status_chip(ui, pool, color);
+                        status_chip(
+                            ui,
+                            if self.usb_open { "USB LINKED" } else { "USB IDLE" },
+                            if self.usb_open { C_LIME } else { C_MUTED },
                         );
                     });
                 });
-                ui.label(
-                    RichText::new("Bitcoin SHA-256 on the board · stratum pool on this PC")
-                        .color(C_MUTED)
-                        .size(13.0),
-                );
-                ui.add_space(10.0);
+                ui.add_space(18.0);
 
                 match self.tab {
                     Tab::Mine => self.ui_mine(ui),
                     Tab::Debug => self.ui_debug(ui),
-                }
-
-                ui.add_space(8.0);
-                if !self.last_ok.is_empty() {
-                    ui.label(RichText::new(&self.last_ok).color(C_LIME).size(12.0));
-                }
-                if !self.last_error.is_empty() {
-                    ui.label(RichText::new(&self.last_error).color(C_ERR).size(12.0));
                 }
             });
 
@@ -848,43 +1114,298 @@ fn trunc(s: &str, n: usize) -> String {
     }
 }
 
-fn panel(ui: &mut egui::Ui, title: &str, add: impl FnOnce(&mut egui::Ui)) {
+fn paint_background(ui: &mut egui::Ui, rect: Rect, pulse: f32, mining: bool) {
+    let painter = ui.painter();
+    let bands = 84;
+    for i in 0..bands {
+        let t = i as f32 / (bands - 1) as f32;
+        let y0 = rect.top() + rect.height() * t;
+        let y1 = rect.top() + rect.height() * ((i + 1) as f32 / bands as f32) + 1.0;
+        let c = lerp_color(C_BG, C_BG_2, t);
+        painter.rect_filled(
+            Rect::from_min_max(Pos2::new(rect.left(), y0), Pos2::new(rect.right(), y1)),
+            0.0,
+            c,
+        );
+    }
+
+    let glow = if mining {
+        (42.0 + pulse.sin().max(0.0) * 58.0) as u8
+    } else {
+        28
+    };
+    painter.circle_filled(
+        Pos2::new(rect.left() + rect.width() * 0.22, rect.top() + rect.height() * 0.18),
+        360.0,
+        rgba(C_LIME, glow / 3),
+    );
+    painter.circle_filled(
+        Pos2::new(rect.right() - rect.width() * 0.12, rect.bottom() - rect.height() * 0.12),
+        280.0,
+        rgba(C_LIME_SOFT, 18),
+    );
+
+    let step = 34.0;
+    let drift = (pulse * 18.0) % step;
+    let mut x = rect.left() - rect.height() + drift;
+    while x < rect.right() + rect.height() {
+        painter.line_segment(
+            [
+                Pos2::new(x, rect.bottom()),
+                Pos2::new(x + rect.height() * 0.66, rect.top()),
+            ],
+            Stroke::new(
+                1.0_f32,
+                Color32::from_rgba_unmultiplied(198, 255, 64, 10),
+            ),
+        );
+        x += step;
+    }
+}
+
+fn paint_hero_wash(ui: &mut egui::Ui, rect: Rect, pulse: f32, mining: bool) {
+    let painter = ui.painter();
+    let alpha = if mining {
+        (24.0 + (0.5 + 0.5 * pulse.sin()) * 42.0) as u8
+    } else {
+        18
+    };
+    painter.circle_filled(
+        Pos2::new(rect.left() + 90.0, rect.top() + 70.0),
+        170.0,
+        rgba(C_LIME, alpha),
+    );
+    painter.line_segment(
+        [
+            Pos2::new(rect.left() + 22.0, rect.bottom() - 22.0),
+            Pos2::new(rect.right() - 32.0, rect.top() + 36.0),
+        ],
+        Stroke::new(
+            1.0_f32,
+            Color32::from_rgba_unmultiplied(198, 255, 64, 16),
+        ),
+    );
+}
+
+fn sparkline(ui: &mut egui::Ui, values: &VecDeque<f32>, pulse: f32) {
+    let desired = Vec2::new((ui.available_width() * 0.72).clamp(320.0, 620.0), 86.0);
+    let (rect, _) = ui.allocate_exact_size(desired, Sense::hover());
+    let painter = ui.painter_at(rect);
+    painter.rect_filled(rect, Rounding::same(18.0), Color32::from_rgba_unmultiplied(5, 10, 11, 170));
+    painter.rect_stroke(
+        rect,
+        Rounding::same(18.0),
+        Stroke::new(
+            1.0_f32,
+            Color32::from_rgba_unmultiplied(198, 255, 64, 24),
+        ),
+    );
+
+    for i in 1..4 {
+        let y = rect.top() + rect.height() * i as f32 / 4.0;
+        painter.line_segment(
+            [Pos2::new(rect.left() + 14.0, y), Pos2::new(rect.right() - 14.0, y)],
+            Stroke::new(
+                1.0_f32,
+                Color32::from_rgba_unmultiplied(235, 244, 238, 12),
+            ),
+        );
+    }
+
+    let max = values
+        .iter()
+        .copied()
+        .fold(1.0_f32, |acc, v| acc.max(v.max(0.0)));
+    let inner = rect.shrink2(Vec2::new(16.0, 14.0));
+    let len = values.len().max(2);
+    let points: Vec<Pos2> = values
+        .iter()
+        .enumerate()
+        .map(|(i, v)| {
+            let x = inner.left() + inner.width() * i as f32 / (len - 1) as f32;
+            let y = inner.bottom() - inner.height() * (v.max(0.0) / max).clamp(0.0, 1.0);
+            Pos2::new(x, y)
+        })
+        .collect();
+    for pair in points.windows(2) {
+        painter.line_segment([pair[0], pair[1]], Stroke::new(6.0_f32, rgba(C_LIME, 22)));
+        painter.line_segment([pair[0], pair[1]], Stroke::new(2.25_f32, C_LIME));
+    }
+
+    let scan_t = (pulse * 0.16).fract();
+    let scan_x = inner.left() + inner.width() * scan_t;
+    painter.line_segment(
+        [Pos2::new(scan_x, inner.top()), Pos2::new(scan_x, inner.bottom())],
+        Stroke::new(
+            1.0_f32,
+            Color32::from_rgba_unmultiplied(198, 255, 64, 80),
+        ),
+    );
+    if let Some(last) = points.last() {
+        painter.circle_filled(*last, 4.5, C_LIME);
+        painter.circle_filled(*last, 10.0 + pulse.sin().max(0.0) * 4.0, rgba(C_LIME, 28));
+    }
+}
+
+fn soft_panel(ui: &mut egui::Ui, title: &str, add: impl FnOnce(&mut egui::Ui)) {
     Frame::none()
-        .fill(C_PANEL)
-        .rounding(Rounding::same(18.0))
-        .stroke(Stroke::new(1.0_f32, Color32::from_rgb(40, 60, 80)))
-        .inner_margin(Margin::same(12.0))
+        .fill(C_PANEL_SOFT)
+        .rounding(Rounding::same(24.0))
+        .stroke(Stroke::new(1.0_f32, C_STROKE))
+        .inner_margin(Margin::same(18.0))
         .show(ui, |ui| {
-            ui.label(RichText::new(title).color(C_BUBBLE_HI).strong().size(13.0));
-            ui.add_space(6.0);
+            ui.label(
+                RichText::new(title.to_uppercase())
+                    .color(C_BUBBLE_HI)
+                    .font(mono_ui_font(12.0)),
+            );
+            ui.add_space(10.0);
             add(ui);
         });
 }
 
-fn stat(ui: &mut egui::Ui, label: &str, value: &str) {
+fn nav_button(ui: &mut egui::Ui, label: &str, selected: bool) -> egui::Response {
+    let fill = if selected {
+        Color32::from_rgba_unmultiplied(198, 255, 64, 48)
+    } else {
+        Color32::from_rgba_unmultiplied(22, 34, 36, 128)
+    };
+    let stroke = if selected {
+        Stroke::new(1.0_f32, rgba(C_LIME, 112))
+    } else {
+        Stroke::new(1.0_f32, C_STROKE)
+    };
+    ui.add(
+        egui::Button::new(
+            RichText::new(label)
+                .color(if selected { C_LIME } else { C_MUTED })
+                .font(mono_ui_font(12.0)),
+        )
+        .fill(fill)
+        .stroke(stroke)
+        .rounding(Rounding::same(999.0))
+        .min_size(Vec2::new(86.0, 34.0)),
+    )
+}
+
+fn cta_button(ui: &mut egui::Ui, label: &str, lime: bool, width: f32) -> egui::Response {
+    let fill = if lime { C_LIME } else { Color32::from_rgb(42, 61, 57) };
+    let text = if lime {
+        Color32::from_rgb(7, 14, 8)
+    } else {
+        C_TEXT
+    };
+    ui.add(
+        egui::Button::new(RichText::new(label).color(text).font(display_font(17.0)))
+            .fill(fill)
+            .stroke(Stroke::new(
+                1.0_f32,
+                rgba(C_LIME, if lime { 100 } else { 38 }),
+            ))
+            .rounding(Rounding::same(20.0))
+            .min_size(Vec2::new(width, 46.0)),
+    )
+}
+
+fn soft_button(ui: &mut egui::Ui, label: &str, width: f32) -> egui::Response {
+    ui.add(
+        egui::Button::new(RichText::new(label).color(C_TEXT).size(13.0))
+            .fill(C_BUBBLE)
+            .stroke(Stroke::new(1.0_f32, C_STROKE))
+            .rounding(Rounding::same(16.0))
+            .min_size(Vec2::new(width, 36.0)),
+    )
+}
+
+fn status_chip(ui: &mut egui::Ui, label: &str, color: Color32) {
     Frame::none()
-        .fill(Color32::from_rgb(24, 34, 48))
-        .rounding(Rounding::same(14.0))
-        .inner_margin(Margin::symmetric(12.0, 8.0))
+        .fill(Color32::from_rgba_unmultiplied(color.r(), color.g(), color.b(), 28))
+        .rounding(Rounding::same(999.0))
+        .stroke(Stroke::new(1.0_f32, rgba(color, 92)))
+        .inner_margin(Margin::symmetric(10.0, 5.0))
         .show(ui, |ui| {
-            ui.vertical(|ui| {
-                ui.label(RichText::new(label).color(C_MUTED).size(11.0));
-                ui.label(RichText::new(value).color(C_LIME).strong().size(17.0));
-            });
+            ui.label(RichText::new(label).color(color).font(mono_ui_font(11.0)));
         });
+}
+
+fn labeled_edit(ui: &mut egui::Ui, label: &str, value: &mut String, hint: &str) {
+    ui.label(RichText::new(label).color(C_MUTED).size(12.0));
+    ui.add(
+        TextEdit::singleline(value)
+            .desired_width(ui.available_width())
+            .hint_text(hint)
+            .font(FontId::new(13.0, FontFamily::Proportional)),
+    );
+}
+
+fn clock_chip(ui: &mut egui::Ui, mhz: u8, selected: bool) -> egui::Response {
+    ui.add(
+        egui::Button::new(
+            RichText::new(format!("{mhz}"))
+                .color(if selected { Color32::from_rgb(8, 16, 10) } else { C_TEXT })
+                .font(mono_ui_font(12.0)),
+        )
+        .fill(if selected { C_LIME } else { C_BUBBLE })
+        .stroke(Stroke::new(
+            1.0_f32,
+            if selected { rgba(C_LIME, 120) } else { C_STROKE },
+        ))
+        .rounding(Rounding::same(999.0))
+        .min_size(Vec2::new(48.0, 30.0)),
+    )
+}
+
+fn metric(ui: &mut egui::Ui, label: &str, value: &str, color: Color32) {
+    ui.vertical(|ui| {
+        ui.label(RichText::new(label).color(C_MUTED).font(mono_ui_font(11.0)));
+        ui.label(RichText::new(value).color(color).font(display_font(24.0)));
+    });
+}
+
+fn telemetry_line(ui: &mut egui::Ui, label: &str, value: &str) {
+    ui.horizontal(|ui| {
+        ui.set_min_height(24.0);
+        ui.label(RichText::new(label).color(C_DIM).font(mono_ui_font(11.0)));
+        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+            ui.label(
+                RichText::new(trunc(value, 48))
+                    .color(C_TEXT)
+                    .font(FontId::new(12.0, FontFamily::Monospace)),
+            );
+        });
+    });
+}
+
+fn stratum_line(ui: &mut egui::Ui, label: &str, value: &str) {
+    ui.label(RichText::new(label).color(C_BUBBLE_HI).font(mono_ui_font(11.0)));
+    ui.label(
+        RichText::new(value)
+            .color(C_TEXT)
+            .font(FontId::new(12.0, FontFamily::Monospace)),
+    );
 }
 
 fn mini_stat(ui: &mut egui::Ui, label: &str, value: &str) {
     Frame::none()
-        .fill(Color32::from_rgb(24, 34, 48))
-        .rounding(Rounding::same(10.0))
-        .inner_margin(Margin::symmetric(10.0, 6.0))
+        .fill(C_PANEL_QUIET)
+        .rounding(Rounding::same(14.0))
+        .inner_margin(Margin::symmetric(11.0, 7.0))
         .show(ui, |ui| {
             ui.vertical(|ui| {
-                ui.label(RichText::new(label).color(C_MUTED).size(10.0));
-                ui.label(RichText::new(value).color(C_TEXT).strong().size(13.0));
+                ui.label(RichText::new(label).color(C_DIM).font(mono_ui_font(10.0)));
+                ui.label(RichText::new(value).color(C_TEXT).size(13.0));
             });
         });
+}
+
+fn rgba(base: Color32, alpha: u8) -> Color32 {
+    Color32::from_rgba_unmultiplied(base.r(), base.g(), base.b(), alpha)
+}
+
+fn lerp_color(a: Color32, b: Color32, t: f32) -> Color32 {
+    let t = t.clamp(0.0, 1.0);
+    let lerp = |x: u8, y: u8| (x as f32 + (y as f32 - x as f32) * t).round() as u8;
+    Color32::from_rgb(lerp(a.r(), b.r()), lerp(a.g(), b.g()), lerp(a.b(), b.b()))
 }
 
 fn log_msg(tx: &Sender<NetMsg>, kind: LogKind, text: impl Into<String>) {
