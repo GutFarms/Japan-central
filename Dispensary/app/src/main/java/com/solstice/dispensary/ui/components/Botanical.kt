@@ -28,7 +28,6 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.StrokeCap
-import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.Dp
@@ -37,7 +36,6 @@ import com.solstice.dispensary.ui.theme.CanopyLight
 import com.solstice.dispensary.ui.theme.Charcoal
 import com.solstice.dispensary.ui.theme.DuskCanopy
 import com.solstice.dispensary.ui.theme.DuskLeaf
-import com.solstice.dispensary.ui.theme.Fern
 import com.solstice.dispensary.ui.theme.GreenhouseMist
 import com.solstice.dispensary.ui.theme.Leaf
 import com.solstice.dispensary.ui.theme.LeafDeep

@@ -27,7 +27,6 @@ val Stem = Color(0xFF9BB59A)
 val GreenhouseMist = Color(0xFFE8F0E6)
 val CanopyLight = Color(0xFFF3F7F1)
 val Soil = Color(0xFF4A3A2E)
-val BloomClay = Color(0xFFB07858)
 val DuskCanopy = Color(0xFF0E1612)
 val DuskLeaf = Color(0xFF1E3326)
 

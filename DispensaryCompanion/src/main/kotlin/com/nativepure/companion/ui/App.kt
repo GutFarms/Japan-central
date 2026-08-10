@@ -163,9 +163,14 @@ private fun AgeGate(onVerified: () -> Unit) {
         ) {
             BrandMark(120.dp)
             Text("Native Pure", style = MaterialTheme.typography.headlineLarge)
+            Text(
+                "grown calm · picked fresh",
+                style = MaterialTheme.typography.bodyMedium,
+                color = colors.primary
+            )
             Text("Are you 18 or older?", style = MaterialTheme.typography.headlineMedium)
             Text(
-                "You must be of legal age to use the Native Pure desktop companion.",
+                "Enter only if you are of legal age to browse our living menu.",
                 style = MaterialTheme.typography.bodyLarge,
                 color = colors.onSurfaceVariant,
                 textAlign = TextAlign.Center
@@ -177,7 +182,7 @@ private fun AgeGate(onVerified: () -> Unit) {
                 colors = ButtonDefaults.buttonColors(containerColor = colors.secondary, contentColor = colors.onSecondary)
             ) { Text("Yes, I am 18+") }
             Text(
-                "Windows companion for menu, pickup orders, inventory, and account security.",
+                "Desktop companion for menu, pickup orders, inventory, and account security.",
                 style = MaterialTheme.typography.bodyMedium,
                 color = colors.onSurfaceVariant,
                 textAlign = TextAlign.Center
