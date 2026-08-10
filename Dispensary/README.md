@@ -6,7 +6,7 @@ Adult-use dispensary app for browsing the menu, building a pickup bag, scanning 
 
 ## Features
 
-- **21+ age gate** — required before entering the app
+- **18+ age gate** — required before entering the app
 - **Customer accounts** — log in or create an account; customers only see their own profile/orders
 - **Admin & staff** — main admin `admin` / `fidelgutierrez33@gmail.com` (password `12345678`); admin can create staff sub-accounts by email; admin/staff can view sensitive customer data and inventory
 - **Security** — password policy for all accounts, change password, login lockout after failed attempts, optional app PIN lock with auto-lock, forced password change for staff temp passwords

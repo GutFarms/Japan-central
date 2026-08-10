@@ -84,7 +84,7 @@ fun StoreScreen(
             Spacer(Modifier.height(12.dp))
             InfoBlock(
                 title = "Reminders",
-                body = "21+ only with valid government ID. Do not drive impaired. Keep products away from children and pets. Consume responsibly."
+                body = "18+ only with valid government ID. Do not drive impaired. Keep products away from children and pets. Consume responsibly."
             )
         }
     }

@@ -47,7 +47,7 @@ fun AgeGateScreen(
             BrandLogo(size = 168.dp)
             Spacer(Modifier.height(4.dp))
             Text(
-                text = "Are you 21 or older?",
+                text = "Are you 18 or older?",
                 style = MaterialTheme.typography.headlineMedium,
                 color = colors.onBackground,
                 textAlign = TextAlign.Center
@@ -70,7 +70,7 @@ fun AgeGateScreen(
                 )
             ) {
                 Text(
-                    text = "Yes, I am 21+",
+                    text = "Yes, I am 18+",
                     modifier = Modifier.padding(vertical = 6.dp),
                     style = MaterialTheme.typography.titleMedium
                 )

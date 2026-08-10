@@ -9,7 +9,7 @@
 3. On Android: **Settings → Apps → Special access → Install unknown apps** → allow your browser/Files
 4. Tap the APK → **Install** → open **Native Pure**
 
-Requires **Android 8.0+**. You must confirm you are 21+ on first launch.
+Requires **Android 8.0+**. You must confirm you are 18+ on first launch.
 
 ### Option B — GitHub Actions artifact
 
