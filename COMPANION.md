@@ -2,19 +2,35 @@
 
 USB mining control for the ESP32-2432S028. The **PC** talks to a Bitcoin stratum pool; the **board** only SHA-256 hashes work received over USB-C.
 
-## Download / build
+## Recommended download (all-in-one)
+
+**`CYD-Miner-Setup.exe`** — Windows setup wizard with:
+
+- CYD Companion app
+- Firmware `esp32-2432s028-sha256-miner-merged.bin`
+- `Flash-Firmware.bat` helper + flash docs
+- Start Menu / Desktop shortcuts
+
+Also available:
+
+| Package | Contents |
+|---------|----------|
+| `CYD-Miner-Portable.zip` | Same kit, no installer |
+| `CYD-Companion-App-Only.zip` | Just `cyd-companion.exe` |
+| `CYD-Companion-Setup.exe` | Alias of the full miner setup |
+
+## Build
 
 ```bash
+./scripts/build-flash-images.sh
 ./scripts/build-companion-windows.sh
 ```
 
-Outputs: `dist/CYD-Companion-App-Only.zip`, `Portable.zip`, `Setup.exe`
-
 ## Use
 
-1. Flash C++ firmware (`esp32-2432s028-sha256-miner-merged.bin` @ **0x0**)
-2. Plug USB-C — board shows **Waiting for USB**
-3. Run `cyd-companion.exe` → COM → **Connect**
+1. Run **CYD-Miner-Setup.exe** (or unpack the portable kit)
+2. **Flash Firmware** once (merged.bin @ **0x0**)
+3. Open **CYD Companion** → COM → **Connect**
 4. Enter stratum / **Bitcoin address** / password → **Start mining**
 
 ## Recommended pool (ESP32-friendly)
@@ -38,7 +54,7 @@ Alternates: `pool.nerdminer.io:3333`, `pool.nerdminers.org:3333`
 
 ```text
 cmp ping / status / config / clock / reboot / stop / bench
-cmp job header=<160hex>&target=<64hex>&job=…&en2=…&ntime=…
+cmp jh <160hex> / jt <64hex> / ja job=&en2=&ntime=
 cmp stats accepted=N&rejected=N
 board → CMPSHARE nonce=…&job=…&en2=…&ntime=…
 ```

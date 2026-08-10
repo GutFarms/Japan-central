@@ -21,8 +21,10 @@ MERGED_BIN="flash/esp32-2432s028-sha256-miner-merged.bin"
 ZIP="dist/cyd-companion-windows.zip"
 PORTABLE_ZIP="dist/CYD-Companion-Portable.zip"
 APP_ONLY_ZIP="dist/CYD-Companion-App-Only.zip"
+KIT_ZIP="dist/CYD-Miner-Portable.zip"
 EXE="dist/cyd-companion-windows/cyd-companion.exe"
-SETUP="dist/CYD-Companion-Setup.exe"
+SETUP="dist/CYD-Miner-Setup.exe"
+SETUP_ALIAS="dist/CYD-Companion-Setup.exe"
 
 echo "==> verifying artifacts"
 test -f "$APP_BIN"
@@ -30,9 +32,11 @@ test -f "$MERGED_BIN"
 test -f "$ZIP"
 test -f "$PORTABLE_ZIP"
 test -f "$APP_ONLY_ZIP"
+test -f "$KIT_ZIP"
 test -f "$EXE"
 if [[ -f "$SETUP" ]]; then
   test -f "$SETUP"
+  test -f "$SETUP_ALIAS"
 fi
 
 python3 - <<'PY'
@@ -57,12 +61,15 @@ cp -f "$MERGED_BIN" /opt/cursor/artifacts/
 cp -f "$ZIP" /opt/cursor/artifacts/
 cp -f "$PORTABLE_ZIP" /opt/cursor/artifacts/
 cp -f "$APP_ONLY_ZIP" /opt/cursor/artifacts/
+cp -f "$KIT_ZIP" /opt/cursor/artifacts/
 [[ -f "$SETUP" ]] && cp -f "$SETUP" /opt/cursor/artifacts/
+[[ -f "$SETUP_ALIAS" ]] && cp -f "$SETUP_ALIAS" /opt/cursor/artifacts/
 cp -f flash/SHA256SUMS.txt /opt/cursor/artifacts/esp32-2432s028-SHA256SUMS.txt
 
 echo
 echo "OK — SHA-256 firmware + companion verified"
-ls -la "$MERGED_BIN" "$EXE" "$PORTABLE_ZIP" "$APP_ONLY_ZIP"
-[[ -f "$SETUP" ]] && ls -la "$SETUP"
-sha256sum "$MERGED_BIN" "$PORTABLE_ZIP" "$APP_ONLY_ZIP"
+ls -la "$MERGED_BIN" "$EXE" "$PORTABLE_ZIP" "$APP_ONLY_ZIP" "$KIT_ZIP"
+[[ -f "$SETUP" ]] && ls -la "$SETUP" "$SETUP_ALIAS"
+sha256sum "$MERGED_BIN" "$PORTABLE_ZIP" "$APP_ONLY_ZIP" "$KIT_ZIP"
+[[ -f "$SETUP" ]] && sha256sum "$SETUP"
 cat flash/SHA256SUMS.txt

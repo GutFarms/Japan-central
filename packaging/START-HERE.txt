@@ -1,0 +1,42 @@
+CYD Miner Kit for Windows
+=========================
+Version: see VERSION.txt
+
+This package has everything needed to run the ESP32-2432S028 (CYD)
+USB Bitcoin SHA-256 miner from a Windows PC.
+
+What is installed
+-----------------
+1. CYD Companion          — pool + USB mining control app
+2. Firmware\*.merged.bin  — board firmware (flash once @ 0x0)
+3. Flash-Firmware.bat     — helper to flash over USB
+4. Docs                   — this file + FLASH-WINDOWS.txt
+
+First-time setup (about 5 minutes)
+----------------------------------
+A) USB driver (if Windows does not see a COM port)
+   - Most CYD boards use a CH340 USB-serial chip.
+   - Install a CH340 driver if Device Manager shows an unknown device.
+
+B) Flash the board once
+   1. Plug the CYD with USB-C.
+   2. Run "Flash Firmware" (Start Menu / Desktop) OR Flash-Firmware.bat
+   3. If prompted, hold BOOT, tap RESET, release BOOT (download mode).
+   4. Flash esp32-2432s028-sha256-miner-merged.bin at address 0x0
+      (DIO, 4 MB, 40 MHz).
+   5. Power-cycle without holding BOOT. Screen should say Waiting for USB.
+
+C) Mine
+   1. Run CYD Companion.
+   2. Select the COM port → Connect.
+   3. Stratum:  stratum+tcp://public-pool.io:21496
+   4. Worker:   your Bitcoin address
+   5. Password: x
+   6. Start mining.
+
+Notes
+-----
+- The board has no Wi-Fi. Pool traffic stays on this PC.
+- Expect tens–hundreds of kH/s. Solo BTC is a lottery.
+- Always match Companion + firmware versions (see VERSION.txt).
+- Keep the Firmware folder; you only need to reflash after updates.

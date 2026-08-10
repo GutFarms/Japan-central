@@ -1,0 +1,37 @@
+Flash the CYD on Windows
+========================
+
+Image
+-----
+Firmware\esp32-2432s028-sha256-miner-merged.bin
+Address: 0x0
+Chip: ESP32 | Mode: DIO | Size: 4 MB | Freq: 40 MHz
+
+Option 1 — Flash-Firmware.bat (recommended)
+-------------------------------------------
+1. Plug USB-C.
+2. Double-click Flash-Firmware.bat in the install folder.
+3. Enter the COM port number (e.g. 6 for COM6) when asked.
+4. If the port will not open: hold BOOT, tap RESET, release BOOT, retry.
+
+The script uses Python esptool when available:
+  py -3 -m pip install esptool
+  py -3 -m esptool ...
+
+Option 2 — Browser flasher
+--------------------------
+1. Open https://espressif.github.io/esptool-js/
+2. Connect the serial port in Chrome/Edge.
+3. Add file: esp32-2432s028-sha256-miner-merged.bin @ offset 0x0
+4. Flash.
+
+Option 3 — Espressif Flash Download Tool
+----------------------------------------
+Use SPIDownload, pick the merged.bin at offset 0x0, ESP32, DIO, 40 MHz, 4 MB.
+
+After flash
+-----------
+Unplug / replug (do not hold BOOT). LCD shows Waiting for USB.
+Then open CYD Companion → Connect → Start mining.
+
+Checksums: Firmware\SHA256SUMS.txt
