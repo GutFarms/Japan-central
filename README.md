@@ -18,7 +18,7 @@ ESP32-2432S028 board **hashes Bitcoin SHA-256 only**. **CYD Companion** on Windo
 
 Default pool: `stratum+tcp://public-pool.io:21496` · worker = **Bitcoin address** · password `x`
 
-Solo lottery mining for tiny ESP32 hashrate (custom midstate path — expect hundreds of **kH/s**).
+Solo lottery mining for tiny ESP32 hashrate (unrolled midstate SHA-256d — expect top-end board **kH/s**).
 
 ## Build
 
