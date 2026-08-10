@@ -7,9 +7,11 @@ import androidx.room.RoomDatabase
 import androidx.room.TypeConverter
 import androidx.room.TypeConverters
 import com.solstice.dispensary.data.dao.CartDao
+import com.solstice.dispensary.data.dao.InventoryDao
 import com.solstice.dispensary.data.dao.OrderDao
 import com.solstice.dispensary.data.dao.ProductDao
 import com.solstice.dispensary.data.model.CartItem
+import com.solstice.dispensary.data.model.InventoryIntake
 import com.solstice.dispensary.data.model.Order
 import com.solstice.dispensary.data.model.OrderLine
 import com.solstice.dispensary.data.model.Product
@@ -31,8 +33,8 @@ class Converters {
 }
 
 @Database(
-    entities = [Product::class, CartItem::class, Order::class, OrderLine::class],
-    version = 1,
+    entities = [Product::class, CartItem::class, Order::class, OrderLine::class, InventoryIntake::class],
+    version = 2,
     exportSchema = false
 )
 @TypeConverters(Converters::class)
@@ -40,6 +42,7 @@ abstract class DispensaryDatabase : RoomDatabase() {
     abstract fun productDao(): ProductDao
     abstract fun cartDao(): CartDao
     abstract fun orderDao(): OrderDao
+    abstract fun inventoryDao(): InventoryDao
 
     companion object {
         @Volatile
@@ -51,7 +54,10 @@ abstract class DispensaryDatabase : RoomDatabase() {
                     context.applicationContext,
                     DispensaryDatabase::class.java,
                     "solstice_dispensary.db"
-                ).build().also { instance = it }
+                )
+                    .fallbackToDestructiveMigration()
+                    .build()
+                    .also { instance = it }
             }
         }
     }
@@ -71,7 +77,9 @@ object SeedCatalog {
             unitLabel = "3.5g",
             description = "Dense purple-tipped buds with berry and cedar notes. Evening wind-down favorite.",
             effects = "Relaxed · Sleepy · Calm",
-            featured = true
+            featured = true,
+            stockQuantity = 24,
+            sku = "SOL-FL-DUSK"
         ),
         Product(
             id = "fl-citrus",
@@ -85,7 +93,9 @@ object SeedCatalog {
             unitLabel = "3.5g",
             description = "Bright zest and pine. Clean daytime energy without the jitters.",
             effects = "Uplifted · Focused · Creative",
-            featured = true
+            featured = true,
+            stockQuantity = 18,
+            sku = "SOL-FL-CITR"
         ),
         Product(
             id = "fl-harbor",
@@ -98,7 +108,9 @@ object SeedCatalog {
             price = 48.0,
             unitLabel = "3.5g",
             description = "Balanced body ease with a clear head. Great all-rounder.",
-            effects = "Balanced · Happy · Mellow"
+            effects = "Balanced · Happy · Mellow",
+            stockQuantity = 12,
+            sku = "NR-FL-HARB"
         ),
         Product(
             id = "pr-twilight",
@@ -112,7 +124,9 @@ object SeedCatalog {
             unitLabel = "5-pack",
             description = "Ready-to-light evening pre-rolls packed with Dusk Bloom flower.",
             effects = "Relaxed · Sleepy",
-            featured = true
+            featured = true,
+            stockQuantity = 30,
+            sku = "SOL-PR-TWIL"
         ),
         Product(
             id = "pr-spark",
@@ -125,7 +139,9 @@ object SeedCatalog {
             price = 12.0,
             unitLabel = "1g",
             description = "Single sativa pre-roll for a quick lift on the go.",
-            effects = "Energetic · Social"
+            effects = "Energetic · Social",
+            stockQuantity = 40,
+            sku = "NR-PR-SPARK"
         ),
         Product(
             id = "ed-cocoa",
@@ -139,7 +155,9 @@ object SeedCatalog {
             unitLabel = "10x10mg",
             description = "Dark chocolate squares with a slow, steady onset. Dose clearly marked.",
             effects = "Relaxed · Euphoric",
-            featured = true
+            featured = true,
+            stockQuantity = 22,
+            sku = "HK-ED-COCO"
         ),
         Product(
             id = "ed-gummy",
@@ -152,7 +170,9 @@ object SeedCatalog {
             price = 22.0,
             unitLabel = "10x10mg",
             description = "Berry-citrus gummies. Precise 10mg servings for easy pacing.",
-            effects = "Happy · Calm"
+            effects = "Happy · Calm",
+            stockQuantity = 28,
+            sku = "HK-ED-GUM"
         ),
         Product(
             id = "ed-cbd",
@@ -165,7 +185,9 @@ object SeedCatalog {
             price = 26.0,
             unitLabel = "20x25mg CBD",
             description = "CBD softgels for daytime calm without intoxication.",
-            effects = "Calm · Clear"
+            effects = "Calm · Clear",
+            stockQuantity = 16,
+            sku = "LL-ED-SOFT"
         ),
         Product(
             id = "co-live",
@@ -179,7 +201,9 @@ object SeedCatalog {
             unitLabel = "1g",
             description = "Cold-cured live rosin with full-spectrum flavor and potency.",
             effects = "Intense · Euphoric",
-            featured = true
+            featured = true,
+            stockQuantity = 8,
+            sku = "SOL-CO-LIVE"
         ),
         Product(
             id = "co-shatter",
@@ -192,7 +216,9 @@ object SeedCatalog {
             price = 40.0,
             unitLabel = "1g",
             description = "Classic shatter for experienced consumers. Strong and clean.",
-            effects = "Heavy · Relaxed"
+            effects = "Heavy · Relaxed",
+            stockQuantity = 10,
+            sku = "NR-CO-AMBR"
         ),
         Product(
             id = "vp-cart",
@@ -206,7 +232,9 @@ object SeedCatalog {
             unitLabel = "0.5g",
             description = "Ceramic cart with herbal and citrus terps. Discreet and consistent.",
             effects = "Balanced · Smooth",
-            featured = true
+            featured = true,
+            stockQuantity = 14,
+            sku = "SOL-VP-SAGE"
         ),
         Product(
             id = "vp-disp",
@@ -219,7 +247,9 @@ object SeedCatalog {
             price = 32.0,
             unitLabel = "0.3g",
             description = "Draw-activated disposable. No charging, no fuss.",
-            effects = "Uplifted · Creative"
+            effects = "Uplifted · Creative",
+            stockQuantity = 20,
+            sku = "LL-VP-POCK"
         ),
         Product(
             id = "tp-balm",
@@ -232,7 +262,9 @@ object SeedCatalog {
             price = 30.0,
             unitLabel = "2oz",
             description = "Menthol CBD balm for sore muscles after a long day.",
-            effects = "Soothing · Localized"
+            effects = "Soothing · Localized",
+            stockQuantity = 11,
+            sku = "HK-TP-TRAL"
         ),
         Product(
             id = "tp-lotion",
@@ -245,7 +277,9 @@ object SeedCatalog {
             price = 34.0,
             unitLabel = "4oz",
             description = "Lavender CBD body lotion — non-intoxicating daily care.",
-            effects = "Calm · Comfort"
+            effects = "Calm · Comfort",
+            stockQuantity = 9,
+            sku = "LL-TP-EVEN"
         ),
         Product(
             id = "ac-grinder",
@@ -258,7 +292,9 @@ object SeedCatalog {
             price = 18.0,
             unitLabel = "each",
             description = "Anodized aluminum grinder with pollen catcher.",
-            effects = "—"
+            effects = "—",
+            stockQuantity = 25,
+            sku = "SG-AC-GRND"
         ),
         Product(
             id = "ac-tray",
@@ -271,7 +307,9 @@ object SeedCatalog {
             price = 14.0,
             unitLabel = "each",
             description = "Matte charcoal tray with raised rim. Compact travel size.",
-            effects = "—"
+            effects = "—",
+            stockQuantity = 15,
+            sku = "SG-AC-TRAY"
         )
     )
 }

@@ -1,5 +1,6 @@
 package com.solstice.dispensary.ui.viewmodel
 
+import android.graphics.Bitmap
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
@@ -7,11 +8,14 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import com.solstice.dispensary.data.model.CartSummary
+import com.solstice.dispensary.data.model.InventoryIntake
+import com.solstice.dispensary.data.model.LabelScanResult
 import com.solstice.dispensary.data.model.Order
 import com.solstice.dispensary.data.model.OrderLine
 import com.solstice.dispensary.data.model.Product
 import com.solstice.dispensary.data.model.ProductCategory
 import com.solstice.dispensary.data.repository.DispensaryRepository
+import com.solstice.dispensary.scan.LabelAiScanner
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -24,6 +28,8 @@ import kotlinx.coroutines.launch
 class DispensaryViewModel(
     private val repository: DispensaryRepository
 ) : ViewModel() {
+
+    private val scanner = LabelAiScanner()
 
     var ageVerified by mutableStateOf(repository.isAgeVerified())
         private set
@@ -40,10 +46,28 @@ class DispensaryViewModel(
     var checkoutMessage by mutableStateOf<String?>(null)
         private set
 
+    var scanResult by mutableStateOf<LabelScanResult?>(null)
+        private set
+
+    var scanBusy by mutableStateOf(false)
+        private set
+
+    var scanError by mutableStateOf<String?>(null)
+        private set
+
+    var intakeMessage by mutableStateOf<String?>(null)
+        private set
+
     private val categoryFilter = MutableStateFlow<ProductCategory?>(null)
 
     val products: StateFlow<List<Product>> = categoryFilter
         .flatMapLatest { repository.productsByCategory(it) }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+
+    val inventory: StateFlow<List<Product>> = repository.inventory
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+
+    val intakes: StateFlow<List<InventoryIntake>> = repository.intakes
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
 
     val featured: StateFlow<List<Product>> = repository.featured
@@ -58,18 +82,6 @@ class DispensaryViewModel(
 
     val orders: StateFlow<List<Order>> = repository.orders
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
-
-    fun filteredProducts(): List<Product> {
-        val q = searchQuery.trim().lowercase()
-        val list = products.value
-        if (q.isEmpty()) return list
-        return list.filter {
-            it.name.lowercase().contains(q) ||
-                it.brand.lowercase().contains(q) ||
-                it.effects.lowercase().contains(q) ||
-                it.category.label.lowercase().contains(q)
-        }
-    }
 
     fun productFlow(id: String) = repository.product(id)
 
@@ -121,6 +133,53 @@ class DispensaryViewModel(
 
     fun clearCheckoutMessage() {
         checkoutMessage = null
+    }
+
+    fun clearIntakeMessage() {
+        intakeMessage = null
+    }
+
+    fun clearScanResult() {
+        scanResult = null
+        scanError = null
+    }
+
+    fun adjustStock(productId: String, delta: Int) {
+        viewModelScope.launch { repository.adjustStock(productId, delta) }
+    }
+
+    fun analyzeLabelBitmap(bitmap: Bitmap) {
+        viewModelScope.launch {
+            scanBusy = true
+            scanError = null
+            try {
+                val catalog = repository.catalogSnapshot()
+                scanResult = scanner.analyze(bitmap, catalog)
+            } catch (t: Throwable) {
+                scanError = t.message ?: "Could not read the label. Try again with better lighting."
+                scanResult = null
+            } finally {
+                scanBusy = false
+            }
+        }
+    }
+
+    fun confirmScanIntake(quantity: Int) {
+        val result = scanResult ?: return
+        viewModelScope.launch {
+            val intake = repository.applyScanIntake(result, quantity, createIfMissing = true)
+            if (intake != null) {
+                intakeMessage = "Added ${intake.quantityAdded} × ${intake.productName} to inventory."
+                scanResult = null
+            } else {
+                scanError = "Could not add inventory from this scan."
+            }
+        }
+    }
+
+    override fun onCleared() {
+        super.onCleared()
+        scanner.close()
     }
 }
 

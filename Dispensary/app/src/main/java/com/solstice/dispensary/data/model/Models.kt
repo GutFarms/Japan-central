@@ -35,7 +35,9 @@ data class Product(
     val description: String,
     val effects: String,
     val featured: Boolean = false,
-    val inStock: Boolean = true
+    val inStock: Boolean = true,
+    val stockQuantity: Int = 0,
+    val sku: String = ""
 )
 
 @Entity(tableName = "cart_items")
@@ -65,6 +67,19 @@ data class OrderLine(
     val quantity: Int
 )
 
+@Entity(tableName = "inventory_intakes")
+data class InventoryIntake(
+    @PrimaryKey val id: String,
+    val createdAt: Long,
+    val productId: String,
+    val productName: String,
+    val quantityAdded: Int,
+    val source: String,
+    val rawLabelText: String,
+    val confidence: Float,
+    val barcode: String = ""
+)
+
 data class CartLine(
     val product: Product,
     val quantity: Int
@@ -78,4 +93,20 @@ data class CartSummary(
     val tax: Double,
     val total: Double,
     val itemCount: Int
+)
+
+/** Result of on-device AI label / barcode analysis. */
+data class LabelScanResult(
+    val rawText: String,
+    val barcode: String?,
+    val detectedName: String?,
+    val detectedBrand: String?,
+    val detectedCategory: ProductCategory?,
+    val detectedStrain: StrainType?,
+    val detectedThc: Double?,
+    val detectedCbd: Double?,
+    val matchedProduct: Product?,
+    val matchConfidence: Float,
+    val suggestedQuantity: Int,
+    val isNewProduct: Boolean
 )

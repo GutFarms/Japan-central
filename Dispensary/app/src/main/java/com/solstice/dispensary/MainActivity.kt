@@ -7,8 +7,8 @@ import androidx.activity.enableEdgeToEdge
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.outlined.ReceiptLong
 import androidx.compose.material.icons.outlined.Home
+import androidx.compose.material.icons.outlined.Inventory2
 import androidx.compose.material.icons.outlined.LocalMall
 import androidx.compose.material.icons.outlined.ShoppingBag
 import androidx.compose.material.icons.outlined.Storefront
@@ -61,11 +61,11 @@ class MainActivity : ComponentActivity() {
                     NavItem(Routes.HOME, "Home", Icons.Outlined.Home),
                     NavItem(Routes.MENU, "Menu", Icons.Outlined.LocalMall),
                     NavItem(Routes.CART, "Bag", Icons.Outlined.ShoppingBag),
-                    NavItem(Routes.ORDERS, "Orders", Icons.AutoMirrored.Outlined.ReceiptLong),
+                    NavItem(Routes.INVENTORY, "Stock", Icons.Outlined.Inventory2),
                     NavItem(Routes.STORE, "Store", Icons.Outlined.Storefront)
                 )
 
-                val hideBottomBar = current.startsWith("product/")
+                val hideBottomBar = current.startsWith("product/") || current == Routes.SCANNER
 
                 Scaffold(
                     modifier = Modifier.fillMaxSize(),

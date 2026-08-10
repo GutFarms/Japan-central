@@ -12,13 +12,15 @@ Adult-use dispensary app for browsing the menu, building a pickup bag, and check
 - **Product detail** — THC/CBD, strain type, effects, quantity, add to bag
 - **Bag & pickup checkout** — tax estimate, pickup name, order notes
 - **Orders** — local pickup history on device
+- **Inventory + AI camera scanner** — CameraX + on-device ML Kit OCR/barcode scan to match SKUs or create products and add stock
 - **Store** — hours, address, contact, pickup guidance
 
 ## Stack
 
 - Kotlin + Jetpack Compose (Material 3)
-- Room database (offline catalog + cart + orders)
+- Room database (offline catalog + cart + orders + inventory)
 - Navigation Compose + ViewModel
+- CameraX + ML Kit text recognition & barcode scanning (on-device)
 
 ## Build
 

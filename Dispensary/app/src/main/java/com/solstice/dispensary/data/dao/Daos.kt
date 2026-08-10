@@ -7,6 +7,7 @@ import androidx.room.Query
 import androidx.room.Transaction
 import androidx.room.Update
 import com.solstice.dispensary.data.model.CartItem
+import com.solstice.dispensary.data.model.InventoryIntake
 import com.solstice.dispensary.data.model.Order
 import com.solstice.dispensary.data.model.OrderLine
 import com.solstice.dispensary.data.model.Product
@@ -18,11 +19,20 @@ interface ProductDao {
     @Query("SELECT * FROM products ORDER BY featured DESC, name ASC")
     fun observeAll(): Flow<List<Product>>
 
+    @Query("SELECT * FROM products ORDER BY stockQuantity ASC, name ASC")
+    fun observeInventory(): Flow<List<Product>>
+
     @Query("SELECT * FROM products WHERE category = :category ORDER BY name ASC")
     fun observeByCategory(category: ProductCategory): Flow<List<Product>>
 
     @Query("SELECT * FROM products WHERE id = :id LIMIT 1")
     fun observeById(id: String): Flow<Product?>
+
+    @Query("SELECT * FROM products WHERE id = :id LIMIT 1")
+    suspend fun getById(id: String): Product?
+
+    @Query("SELECT * FROM products WHERE sku = :sku LIMIT 1")
+    suspend fun getBySku(sku: String): Product?
 
     @Query("SELECT * FROM products WHERE featured = 1 ORDER BY name ASC")
     fun observeFeatured(): Flow<List<Product>>
@@ -30,8 +40,20 @@ interface ProductDao {
     @Query("SELECT COUNT(*) FROM products")
     suspend fun count(): Int
 
+    @Query("SELECT * FROM products")
+    suspend fun getAll(): List<Product>
+
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertAll(products: List<Product>)
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun upsert(product: Product)
+
+    @Update
+    suspend fun update(product: Product)
+
+    @Query("UPDATE products SET stockQuantity = :quantity, inStock = :inStock WHERE id = :id")
+    suspend fun setStock(id: String, quantity: Int, inStock: Boolean)
 }
 
 @Dao
@@ -77,4 +99,13 @@ interface OrderDao {
         insertOrder(order)
         insertLines(lines)
     }
+}
+
+@Dao
+interface InventoryDao {
+    @Query("SELECT * FROM inventory_intakes ORDER BY createdAt DESC")
+    fun observeAll(): Flow<List<InventoryIntake>>
+
+    @Insert
+    suspend fun insert(intake: InventoryIntake)
 }

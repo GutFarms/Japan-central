@@ -11,6 +11,8 @@ import androidx.navigation.compose.composable
 import androidx.navigation.navArgument
 import com.solstice.dispensary.ui.screens.CartScreen
 import com.solstice.dispensary.ui.screens.HomeScreen
+import com.solstice.dispensary.ui.screens.InventoryScannerScreen
+import com.solstice.dispensary.ui.screens.InventoryScreen
 import com.solstice.dispensary.ui.screens.MenuScreen
 import com.solstice.dispensary.ui.screens.OrdersScreen
 import com.solstice.dispensary.ui.screens.ProductDetailScreen
@@ -23,6 +25,8 @@ object Routes {
     const val CART = "cart"
     const val ORDERS = "orders"
     const val STORE = "store"
+    const val INVENTORY = "inventory"
+    const val SCANNER = "inventory/scan"
     const val PRODUCT = "product/{productId}"
 
     fun product(id: String) = "product/$id"
@@ -38,6 +42,8 @@ fun DispensaryNavHost(
     val cart by viewModel.cart.collectAsState()
     val orders by viewModel.orders.collectAsState()
     val products by viewModel.products.collectAsState()
+    val inventory by viewModel.inventory.collectAsState()
+    val intakes by viewModel.intakes.collectAsState()
 
     NavHost(
         navController = navController,
@@ -52,6 +58,7 @@ fun DispensaryNavHost(
                 onOpenProduct = { id -> navController.navigate(Routes.product(id)) },
                 onOpenCart = { navController.navigate(Routes.CART) },
                 onOpenStore = { navController.navigate(Routes.STORE) },
+                onOpenInventory = { navController.navigate(Routes.INVENTORY) },
                 onSelectCategory = viewModel::setCategory
             )
         }
@@ -89,7 +96,36 @@ fun DispensaryNavHost(
             OrdersScreen(orders = orders)
         }
         composable(Routes.STORE) {
-            StoreScreen()
+            StoreScreen(
+                onOpenOrders = { navController.navigate(Routes.ORDERS) }
+            )
+        }
+        composable(Routes.INVENTORY) {
+            InventoryScreen(
+                products = inventory,
+                intakes = intakes,
+                intakeMessage = viewModel.intakeMessage,
+                onClearMessage = viewModel::clearIntakeMessage,
+                onOpenScanner = {
+                    viewModel.clearScanResult()
+                    navController.navigate(Routes.SCANNER)
+                },
+                onAdjustStock = viewModel::adjustStock
+            )
+        }
+        composable(Routes.SCANNER) {
+            InventoryScannerScreen(
+                scanBusy = viewModel.scanBusy,
+                scanResult = viewModel.scanResult,
+                scanError = viewModel.scanError,
+                onBack = { navController.popBackStack() },
+                onCaptureBitmap = viewModel::analyzeLabelBitmap,
+                onClearResult = viewModel::clearScanResult,
+                onConfirm = { qty ->
+                    viewModel.confirmScanIntake(qty)
+                    navController.popBackStack()
+                }
+            )
         }
         composable(
             route = Routes.PRODUCT,

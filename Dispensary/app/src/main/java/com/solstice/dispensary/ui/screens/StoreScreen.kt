@@ -1,5 +1,6 @@
 package com.solstice.dispensary.ui.screens
 
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -22,7 +23,9 @@ import com.solstice.dispensary.ui.theme.Ivory
 import com.solstice.dispensary.ui.theme.Sage
 
 @Composable
-fun StoreScreen() {
+fun StoreScreen(
+    onOpenOrders: () -> Unit = {}
+) {
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -62,6 +65,23 @@ fun StoreScreen() {
                 title = "Pickup",
                 body = "Order in the app, show ID at the counter, and collect your bag. Please allow 20–30 minutes during peak hours."
             )
+            Spacer(Modifier.height(12.dp))
+            Surface(
+                shape = RoundedCornerShape(14.dp),
+                color = MaterialTheme.colorScheme.secondaryContainer,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable(onClick = onOpenOrders)
+            ) {
+                Column(modifier = Modifier.padding(16.dp)) {
+                    Text("Pickup orders", style = MaterialTheme.typography.titleLarge)
+                    Text(
+                        text = "View recent orders placed on this device",
+                        style = MaterialTheme.typography.bodyLarge,
+                        color = MaterialTheme.colorScheme.onSecondaryContainer
+                    )
+                }
+            }
             Spacer(Modifier.height(12.dp))
             InfoBlock(
                 title = "Reminders",
