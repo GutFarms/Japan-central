@@ -1,0 +1,80 @@
+package com.solstice.dispensary.data.dao
+
+import androidx.room.Dao
+import androidx.room.Insert
+import androidx.room.OnConflictStrategy
+import androidx.room.Query
+import androidx.room.Transaction
+import androidx.room.Update
+import com.solstice.dispensary.data.model.CartItem
+import com.solstice.dispensary.data.model.Order
+import com.solstice.dispensary.data.model.OrderLine
+import com.solstice.dispensary.data.model.Product
+import com.solstice.dispensary.data.model.ProductCategory
+import kotlinx.coroutines.flow.Flow
+
+@Dao
+interface ProductDao {
+    @Query("SELECT * FROM products ORDER BY featured DESC, name ASC")
+    fun observeAll(): Flow<List<Product>>
+
+    @Query("SELECT * FROM products WHERE category = :category ORDER BY name ASC")
+    fun observeByCategory(category: ProductCategory): Flow<List<Product>>
+
+    @Query("SELECT * FROM products WHERE id = :id LIMIT 1")
+    fun observeById(id: String): Flow<Product?>
+
+    @Query("SELECT * FROM products WHERE featured = 1 ORDER BY name ASC")
+    fun observeFeatured(): Flow<List<Product>>
+
+    @Query("SELECT COUNT(*) FROM products")
+    suspend fun count(): Int
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertAll(products: List<Product>)
+}
+
+@Dao
+interface CartDao {
+    @Query("SELECT * FROM cart_items")
+    fun observeAll(): Flow<List<CartItem>>
+
+    @Query("SELECT * FROM cart_items")
+    suspend fun getAll(): List<CartItem>
+
+    @Query("SELECT * FROM cart_items WHERE productId = :productId LIMIT 1")
+    suspend fun get(productId: String): CartItem?
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun upsert(item: CartItem)
+
+    @Update
+    suspend fun update(item: CartItem)
+
+    @Query("DELETE FROM cart_items WHERE productId = :productId")
+    suspend fun delete(productId: String)
+
+    @Query("DELETE FROM cart_items")
+    suspend fun clear()
+}
+
+@Dao
+interface OrderDao {
+    @Query("SELECT * FROM orders ORDER BY createdAt DESC")
+    fun observeAll(): Flow<List<Order>>
+
+    @Query("SELECT * FROM order_lines WHERE orderId = :orderId")
+    fun observeLines(orderId: String): Flow<List<OrderLine>>
+
+    @Insert
+    suspend fun insertOrder(order: Order)
+
+    @Insert
+    suspend fun insertLines(lines: List<OrderLine>)
+
+    @Transaction
+    suspend fun placeOrder(order: Order, lines: List<OrderLine>) {
+        insertOrder(order)
+        insertLines(lines)
+    }
+}

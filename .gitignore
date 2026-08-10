@@ -1,1 +1,6 @@
 target/
+
+# Android
+**/local.properties
+**/.gradle/
+Dispensary/keystore/*.jks
