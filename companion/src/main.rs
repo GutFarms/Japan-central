@@ -1092,12 +1092,21 @@ impl App for CompanionApp {
                         );
                     });
                 });
-                ui.add_space(18.0);
+                ui.add_space(14.0);
 
-                match self.tab {
-                    Tab::Mine => self.ui_mine(ui),
-                    Tab::Debug => self.ui_debug(ui),
-                }
+                // Outer scroll so Mine/Debug content is fully reachable on short screens.
+                ScrollArea::vertical()
+                    .id_source("main_app_scroll")
+                    .auto_shrink([false, false])
+                    .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysVisible)
+                    .show(ui, |ui| {
+                        ui.set_min_width(ui.available_width());
+                        match self.tab {
+                            Tab::Mine => self.ui_mine(ui),
+                            Tab::Debug => self.ui_debug(ui),
+                        }
+                        ui.add_space(28.0);
+                    });
             });
 
         ctx.request_repaint_after(Duration::from_millis(40));
