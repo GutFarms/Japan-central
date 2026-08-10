@@ -17,11 +17,11 @@ android {
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
+    val releaseKeystore = rootProject.file("keystore/solstice-release.jks")
     signingConfigs {
-        create("release") {
-            val keystoreFile = rootProject.file("keystore/solstice-release.jks")
-            if (keystoreFile.exists()) {
-                storeFile = keystoreFile
+        if (releaseKeystore.exists()) {
+            create("release") {
+                storeFile = releaseKeystore
                 storePassword = "solstice123"
                 keyAlias = "solstice"
                 keyPassword = "solstice123"
@@ -36,7 +36,13 @@ android {
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
             )
-            signingConfig = signingConfigs.getByName("release")
+            // Prefer the demo release keystore when present; otherwise sign with
+            // the debug key so CI can still produce an installable APK.
+            signingConfig = if (releaseKeystore.exists()) {
+                signingConfigs.getByName("release")
+            } else {
+                signingConfigs.getByName("debug")
+            }
         }
     }
 

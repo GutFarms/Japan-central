@@ -33,6 +33,18 @@ jobs:
       - name: Grant Gradle permission
         run: chmod +x gradlew
 
+      - name: Create demo release keystore (sideload builds)
+        run: |
+          mkdir -p keystore
+          if [ ! -f keystore/solstice-release.jks ]; then
+            keytool -genkeypair -v \
+              -keystore keystore/solstice-release.jks \
+              -alias solstice \
+              -keyalg RSA -keysize 2048 -validity 10000 \
+              -storepass solstice123 -keypass solstice123 \
+              -dname "CN=Native Pure, OU=Mobile, O=Native Pure, L=Portland, ST=OR, C=US"
+          fi
+
       - name: Build release APK
         run: ./gradlew assembleRelease --no-daemon
 
