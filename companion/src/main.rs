@@ -444,7 +444,11 @@ impl CompanionApp {
 
     fn update_motion(&mut self, ctx: &egui::Context) {
         let dt = ctx.input(|i| i.unstable_dt).clamp(0.0, 0.12);
-        let pace = if self.mining { 1.9 } else { 0.7 };
+        let pace = if self.mining || self.board_hashing() {
+            2.15
+        } else {
+            0.75
+        };
         self.pulse = (self.pulse + dt * pace) % std::f32::consts::TAU;
 
         let target = self.board_khs();
@@ -566,47 +570,41 @@ impl CompanionApp {
 
     fn ui_mining_hero(&mut self, ui: &mut egui::Ui) {
         let pulse = 0.5 + 0.5 * self.pulse.sin();
-        let pulse_alpha = if self.mining {
-            (34.0 + pulse * 54.0) as u8
+        let pulse_alpha = if self.mining || self.board_hashing() {
+            (38.0 + pulse * 58.0) as u8
         } else {
-            18
+            20
         };
         Frame::none()
-            .fill(Color32::from_rgba_unmultiplied(12, 22, 21, 226))
-            .rounding(Rounding::same(34.0))
+            .fill(Color32::from_rgba_unmultiplied(10, 18, 17, 232))
+            .rounding(Rounding::same(28.0))
             .stroke(Stroke::new(
-                1.0,
+                1.0_f32,
                 Color32::from_rgba_unmultiplied(198, 255, 64, pulse_alpha),
             ))
-            .inner_margin(Margin::same(26.0))
+            .inner_margin(Margin::symmetric(28.0, 24.0))
             .show(ui, |ui| {
                 let rect = ui.max_rect();
-                paint_hero_wash(ui, rect, self.pulse, self.mining);
-                ui.set_min_height(250.0);
+                paint_hero_wash(ui, rect, self.pulse, self.mining || self.board_hashing());
+                ui.set_min_height(278.0);
                 ui.horizontal(|ui| {
                     ui.vertical(|ui| {
+                        ui.set_min_width((ui.available_width() * 0.58).clamp(420.0, 720.0));
                         ui.label(
-                            RichText::new("LIVE HASHPOWER")
+                            RichText::new("CYD")
                                 .color(C_LIME)
-                                .font(mono_ui_font(12.0)),
+                                .font(display_font(54.0)),
                         );
-                        ui.add_space(4.0);
-                        ui.horizontal(|ui| {
-                            ui.label(
-                                RichText::new(format!("{:.2}", self.displayed_khs))
-                                    .color(C_TEXT)
-                                    .font(display_font(78.0)),
-                            );
-                            ui.label(
-                                RichText::new("kH/s")
-                                    .color(C_LIME)
-                                    .font(display_font(30.0)),
-                            );
-                        });
+                        ui.label(
+                            RichText::new("USB SHA-256 miner")
+                                .color(C_TEXT)
+                                .font(display_font(22.0)),
+                        );
+                        ui.add_space(6.0);
                         ui.label(
                             RichText::new(if self.board_hashing() {
                                 format!(
-                                    "Board hashing · {:.0} H/s · nonce {} · {} hashes",
+                                    "Board live at {:.0} H/s — nonce {} · {} hashes",
                                     self.status.hashrate_hs,
                                     if self.status.nonce.is_empty() {
                                         "—"
@@ -620,87 +618,91 @@ impl CompanionApp {
                             } else if self.usb_open {
                                 "USB linked. Start mining to stream pool work to the board.".into()
                             } else {
-                                "Connect the CYD miner, route a pool, then bring the board online."
+                                "Connect the board, route a pool, then bring hashpower online."
                                     .into()
                             })
                             .color(C_MUTED)
-                            .size(16.0),
+                            .size(15.0),
                         );
-                        ui.add_space(20.0);
+                        ui.add_space(14.0);
+                        ui.horizontal(|ui| {
+                            ui.label(
+                                RichText::new(format!("{:.2}", self.displayed_khs))
+                                    .color(C_TEXT)
+                                    .font(display_font(72.0)),
+                            );
+                            ui.vertical(|ui| {
+                                ui.add_space(28.0);
+                                ui.label(
+                                    RichText::new("kH/s")
+                                        .color(C_LIME)
+                                        .font(display_font(26.0)),
+                                );
+                            });
+                        });
+                        ui.add_space(10.0);
                         sparkline(ui, &self.hashrate_history, self.pulse);
+                        ui.add_space(8.0);
+                        hash_activity_bars(ui, self.displayed_khs, self.pulse, self.board_hashing());
                     });
 
-                    ui.with_layout(Layout::right_to_left(Align::Min), |ui| {
-                        Frame::none()
-                            .fill(Color32::from_rgba_unmultiplied(7, 13, 14, 188))
-                            .rounding(Rounding::same(24.0))
-                            .stroke(Stroke::new(1.0_f32, C_STROKE))
-                            .inner_margin(Margin::symmetric(18.0, 16.0))
-                            .show(ui, |ui| {
-                                ui.set_min_width(245.0);
-                                ui.vertical_centered(|ui| {
-                                    let (pool_label, pool_color) = self.pool_state();
-                                    status_chip(
-                                        ui,
-                                        if self.board_hashing() {
-                                            "HASHING"
-                                        } else if self.mining {
-                                            "MINING"
-                                        } else {
-                                            "READY"
-                                        },
-                                        if self.board_hashing() || self.mining {
-                                            C_LIME
-                                        } else {
-                                            C_MUTED
-                                        },
-                                    );
-                                    ui.add_space(8.0);
-                                    ui.label(
-                                        RichText::new(format!(
-                                            "USB {} · POOL {}",
-                                            if self.usb_open { "LINKED" } else { "IDLE" },
-                                            pool_label
-                                        ))
-                                        .color(pool_color)
-                                        .font(mono_ui_font(12.0)),
-                                    );
-                                    ui.add_space(18.0);
-                                    let usb_label = if self.usb_open {
-                                        "Disconnect USB"
-                                    } else {
-                                        "Connect USB"
-                                    };
-                                    if cta_button(ui, usb_label, !self.usb_open, 190.0).clicked() {
-                                        if self.usb_open {
-                                            let _ = self.cmd_tx.send(NetCmd::CloseUsb);
-                                            self.usb_open = false;
-                                            self.mining = false;
-                                            self.push_log(LogKind::Usb, "Disconnect requested".into());
-                                        } else {
-                                            self.connect_usb();
-                                        }
-                                    }
-                                    ui.add_space(8.0);
-                                    let mine_label = if self.mining {
-                                        "Stop mining"
-                                    } else {
-                                        "Start mining"
-                                    };
-                                    if cta_button(ui, mine_label, !self.mining, 190.0).clicked() {
-                                        if self.mining {
-                                            self.stop_mine();
-                                        } else {
-                                            self.start_mine();
-                                        }
-                                    }
-                                    ui.add_space(8.0);
-                                    if soft_button(ui, "Bench board", 190.0).clicked() {
-                                        let _ = self.cmd_tx.send(NetCmd::Bench);
-                                        self.push_log(LogKind::Usb, "Bench requested".into());
-                                    }
-                                });
-                            });
+                    ui.add_space(12.0);
+                    ui.with_layout(Layout::top_down(Align::Center), |ui| {
+                        paint_board_screen(
+                            ui,
+                            self.displayed_khs,
+                            self.accepted,
+                            self.rejected,
+                            self.target_mhz,
+                            self.board_hashing(),
+                            self.usb_open,
+                            self.pulse,
+                        );
+                        ui.add_space(12.0);
+                        let (pool_label, pool_color) = self.pool_state();
+                        ui.label(
+                            RichText::new(format!(
+                                "USB {} · POOL {}",
+                                if self.usb_open { "LINKED" } else { "IDLE" },
+                                pool_label
+                            ))
+                            .color(pool_color)
+                            .font(mono_ui_font(12.0)),
+                        );
+                        ui.add_space(10.0);
+                        let usb_label = if self.usb_open {
+                            "Disconnect USB"
+                        } else {
+                            "Connect USB"
+                        };
+                        if cta_button(ui, usb_label, !self.usb_open, 210.0).clicked() {
+                            if self.usb_open {
+                                let _ = self.cmd_tx.send(NetCmd::CloseUsb);
+                                self.usb_open = false;
+                                self.mining = false;
+                                self.push_log(LogKind::Usb, "Disconnect requested".into());
+                            } else {
+                                self.connect_usb();
+                            }
+                        }
+                        ui.add_space(8.0);
+                        let mine_label = if self.mining {
+                            "Stop mining"
+                        } else {
+                            "Start mining"
+                        };
+                        if cta_button(ui, mine_label, !self.mining, 210.0).clicked() {
+                            if self.mining {
+                                self.stop_mine();
+                            } else {
+                                self.start_mine();
+                            }
+                        }
+                        ui.add_space(8.0);
+                        if soft_button(ui, "Bench board", 210.0).clicked() {
+                            let _ = self.cmd_tx.send(NetCmd::Bench);
+                            self.push_log(LogKind::Usb, "Bench requested".into());
+                        }
                     });
                 });
             });
@@ -1101,23 +1103,17 @@ impl App for CompanionApp {
         egui::CentralPanel::default()
             .frame(Frame::none().fill(C_BG).inner_margin(Margin::same(22.0)))
             .show(ctx, |ui| {
-                paint_background(ui, ui.max_rect(), self.pulse, self.mining);
+                paint_background(ui, ui.max_rect(), self.pulse, self.mining || self.board_hashing());
                 ui.horizontal(|ui| {
-                    ui.label(RichText::new("CYD").color(C_LIME).font(display_font(58.0)));
                     ui.vertical(|ui| {
-                        ui.add_space(7.0);
+                        ui.label(RichText::new("CYD").color(C_LIME).font(display_font(64.0)));
                         ui.label(
-                            RichText::new("Companion")
-                                .color(C_TEXT)
-                                .font(display_font(24.0)),
-                        );
-                        ui.label(
-                            RichText::new("USB SHA-256 mining control surface")
+                            RichText::new("Companion · SHA-256")
                                 .color(C_MUTED)
-                                .size(12.0),
+                                .font(mono_ui_font(12.0)),
                         );
                     });
-                    ui.add_space(28.0);
+                    ui.add_space(24.0);
                     if nav_button(ui, "Mine", self.tab == Tab::Mine).clicked() {
                         self.tab = Tab::Mine;
                     }
@@ -1222,24 +1218,178 @@ fn paint_background(ui: &mut egui::Ui, rect: Rect, pulse: f32, mining: bool) {
 fn paint_hero_wash(ui: &mut egui::Ui, rect: Rect, pulse: f32, mining: bool) {
     let painter = ui.painter();
     let alpha = if mining {
-        (24.0 + (0.5 + 0.5 * pulse.sin()) * 42.0) as u8
+        (26.0 + (0.5 + 0.5 * pulse.sin()) * 48.0) as u8
     } else {
-        18
+        16
     };
     painter.circle_filled(
-        Pos2::new(rect.left() + 90.0, rect.top() + 70.0),
-        170.0,
+        Pos2::new(rect.left() + 110.0, rect.top() + 78.0),
+        190.0,
         rgba(C_LIME, alpha),
     );
+    painter.circle_filled(
+        Pos2::new(rect.right() - 80.0, rect.bottom() - 40.0),
+        120.0,
+        rgba(C_LIME_SOFT, if mining { 22 } else { 12 }),
+    );
+
+    // Slow diagonal sweep — presence, not noise.
+    let sweep = (pulse * 0.12).fract();
+    let x = rect.left() + rect.width() * sweep;
     painter.line_segment(
         [
-            Pos2::new(rect.left() + 22.0, rect.bottom() - 22.0),
-            Pos2::new(rect.right() - 32.0, rect.top() + 36.0),
+            Pos2::new(x, rect.bottom() - 18.0),
+            Pos2::new(x + rect.height() * 0.55, rect.top() + 18.0),
         ],
         Stroke::new(
-            1.0_f32,
-            Color32::from_rgba_unmultiplied(198, 255, 64, 16),
+            2.0_f32,
+            Color32::from_rgba_unmultiplied(198, 255, 64, if mining { 28 } else { 12 }),
         ),
+    );
+}
+
+fn hash_activity_bars(ui: &mut egui::Ui, khs: f32, pulse: f32, hashing: bool) {
+    let desired = Vec2::new((ui.available_width() * 0.72).clamp(320.0, 620.0), 28.0);
+    let (rect, _) = ui.allocate_exact_size(desired, Sense::hover());
+    let painter = ui.painter_at(rect);
+    let n = 28;
+    let gap = 3.0;
+    let bar_w = ((rect.width() - gap * (n as f32 - 1.0)) / n as f32).max(4.0);
+    for i in 0..n {
+        let phase = pulse * 2.4 + i as f32 * 0.37;
+        let breathe = 0.35 + 0.65 * (0.5 + 0.5 * phase.sin());
+        let level = if hashing {
+            ((khs / 60.0).clamp(0.08, 1.0) * breathe).clamp(0.12, 1.0)
+        } else {
+            0.08 + 0.04 * (0.5 + 0.5 * (pulse + i as f32 * 0.2).sin())
+        };
+        let h = rect.height() * level;
+        let x = rect.left() + i as f32 * (bar_w + gap);
+        let y = rect.bottom() - h;
+        painter.rect_filled(
+            Rect::from_min_max(Pos2::new(x, y), Pos2::new(x + bar_w, rect.bottom())),
+            Rounding::same(2.0),
+            if hashing {
+                rgba(C_LIME, (70.0 + level * 140.0) as u8)
+            } else {
+                rgba(C_BUBBLE_HI, 50)
+            },
+        );
+    }
+}
+
+fn paint_board_screen(
+    ui: &mut egui::Ui,
+    khs: f32,
+    accepted: u32,
+    rejected: u32,
+    mhz: u8,
+    hashing: bool,
+    usb: bool,
+    pulse: f32,
+) {
+    let desired = Vec2::new(248.0, 186.0);
+    let (outer, _) = ui.allocate_exact_size(desired, Sense::hover());
+    let painter = ui.painter_at(outer);
+
+    // Device bezel — the product is the visual anchor.
+    painter.rect_filled(outer, Rounding::same(18.0), Color32::from_rgb(18, 24, 22));
+    painter.rect_stroke(
+        outer,
+        Rounding::same(18.0),
+        Stroke::new(1.5_f32, Color32::from_rgb(64, 86, 78)),
+    );
+    let screen = outer.shrink2(Vec2::new(14.0, 16.0));
+    painter.rect_filled(screen, Rounding::same(8.0), Color32::from_rgb(6, 10, 12));
+    painter.rect_filled(
+        Rect::from_min_size(screen.min, Vec2::new(screen.width(), 3.0)),
+        Rounding::ZERO,
+        C_LIME,
+    );
+    painter.rect_filled(
+        Rect::from_min_size(Pos2::new(screen.left(), screen.top() + 10.0), Vec2::new(5.0, screen.height() - 24.0)),
+        Rounding::ZERO,
+        C_LIME,
+    );
+
+    let breath = 0.5 + 0.5 * pulse.sin();
+    painter.text(
+        Pos2::new(screen.left() + 16.0, screen.top() + 14.0),
+        egui::Align2::LEFT_TOP,
+        "CYD",
+        display_font(22.0),
+        C_LIME,
+    );
+    painter.text(
+        Pos2::new(screen.left() + 16.0, screen.top() + 42.0),
+        egui::Align2::LEFT_TOP,
+        "SHA-256",
+        mono_ui_font(11.0),
+        C_MUTED,
+    );
+    painter.text(
+        Pos2::new(screen.left() + 16.0, screen.top() + 66.0),
+        egui::Align2::LEFT_TOP,
+        format!("{khs:.2}"),
+        display_font(34.0),
+        C_TEXT,
+    );
+    painter.text(
+        Pos2::new(screen.left() + 130.0, screen.top() + 82.0),
+        egui::Align2::LEFT_TOP,
+        "kH/s",
+        mono_ui_font(12.0),
+        C_LIME,
+    );
+
+    // Activity strip
+    let bar = Rect::from_min_size(
+        Pos2::new(screen.left() + 16.0, screen.top() + 112.0),
+        Vec2::new(screen.width() - 32.0, 8.0),
+    );
+    painter.rect_filled(bar, Rounding::same(3.0), Color32::from_rgb(14, 22, 24));
+    let fill = if hashing {
+        ((khs / 80.0).clamp(0.1, 1.0) * bar.width()).max(10.0)
+    } else {
+        8.0 + breath * 18.0
+    };
+    painter.rect_filled(
+        Rect::from_min_size(bar.min, Vec2::new(fill, bar.height())),
+        Rounding::same(3.0),
+        if hashing { C_LIME } else { C_BUBBLE_HI },
+    );
+
+    painter.text(
+        Pos2::new(screen.left() + 16.0, screen.top() + 128.0),
+        egui::Align2::LEFT_TOP,
+        if hashing {
+            "HASHING"
+        } else if usb {
+            "USB READY"
+        } else {
+            "WAIT USB"
+        },
+        mono_ui_font(11.0),
+        if hashing { C_LIME } else { C_MUTED },
+    );
+    painter.text(
+        Pos2::new(screen.left() + 16.0, screen.top() + 148.0),
+        egui::Align2::LEFT_TOP,
+        format!("a{accepted}  r{rejected}  {mhz} MHz"),
+        mono_ui_font(11.0),
+        C_TEXT,
+    );
+
+    // Live pip
+    let pip = Pos2::new(screen.right() - 18.0, screen.top() + 22.0);
+    painter.circle_filled(
+        pip,
+        5.0,
+        if hashing {
+            rgba(C_LIME, (140.0 + breath * 100.0) as u8)
+        } else {
+            rgba(C_MUTED, 120)
+        },
     );
 }
 

@@ -238,8 +238,8 @@ void setup() {
                           1);
 
   delay(80);
-  g_ui.showMessage("SHA-256", "live kH/s · USB+hash");
-  delay(300);
+  g_ui.showMessage("SHA-256", "live kH/s · USB link");
+  delay(420);
   g_ui.showWaitingCompanion();
 
   g_windowStart = millis();
@@ -252,7 +252,7 @@ void loop() {
   // LCD + light assist. Hashrate is updated in usbTask/fillSnap.
   if (!g_jobLoaded) {
     uint32_t now = millis();
-    if (now - g_lastPaint > 2000) {
+    if (now - g_lastPaint >= 160) {
       g_ui.showWaitingCompanion();
       g_lastPaint = now;
     }
@@ -265,7 +265,8 @@ void loop() {
   }
 
   uint32_t now = millis();
-  if (now - g_lastPaint >= 1000) {
+  // ~8 fps keeps the activity bar / live pip alive without starving hashing.
+  if (now - g_lastPaint >= 125) {
     fillSnap();
     g_ui.showMining(g_cfg, g_snap, false);
     g_lastPaint = now;
