@@ -229,6 +229,27 @@ impl StratumClient {
         self.send_json(&msg)
     }
 
+    /// Local pre-check before pool submit. `nonce_hex` is cgminer stratum form (`%08x`).
+    pub fn verify_share_against_job(job: &WorkJob, nonce_hex: &str) -> Result<[u8; 32], String> {
+        if nonce_hex.len() != 8 || !nonce_hex.chars().all(|c| c.is_ascii_hexdigit()) {
+            return Err(format!("bad nonce hex '{nonce_hex}'"));
+        }
+        let nonce_u = u32::from_str_radix(nonce_hex, 16)
+            .map_err(|e| format!("nonce parse: {e}"))?;
+        let mut header = job.header;
+        header[76..80].copy_from_slice(&nonce_u.to_le_bytes());
+        let hash = dsha256(&header);
+        if !hash_meets_target(&hash, &job.target) {
+            let disp = {
+                let mut r = hash;
+                r.reverse();
+                hex::encode(r)
+            };
+            return Err(format!("hash {disp} does not meet share target"));
+        }
+        Ok(hash)
+    }
+
     fn send_subscribe(&mut self) -> Result<(), String> {
         self.subscribe_id = self.msg_id;
         self.msg_id += 1;
@@ -396,11 +417,11 @@ impl StratumClient {
         let coinb1 = hex::decode(&self.coinb1_hex).ok()?;
         let coinb2 = hex::decode(&self.coinb2_hex).ok()?;
         let en2_size = self.extranonce2_size.clamp(1, 16);
+        // cgminer: nonce2le = htole64(counter); memcpy into coinbase (left-to-right LE).
         let mut en2 = vec![0u8; en2_size];
-        for i in 0..en2_size {
-            let shift = (en2_size - 1 - i) * 8;
-            en2[i] = ((self.en2_counter >> shift) & 0xff) as u8;
-        }
+        let le = self.en2_counter.to_le_bytes();
+        let n = en2_size.min(le.len());
+        en2[..n].copy_from_slice(&le[..n]);
         self.en2_counter = self.en2_counter.wrapping_add(1);
         self.active_en2_hex = hex::encode(&en2);
         self.active_ntime_hex = self.ntime_hex.clone();
@@ -429,7 +450,8 @@ impl StratumClient {
         let mut prev = hex_fixed(&self.prevhash_hex, 32)?;
         let mut nbits = hex_fixed(&self.nbits_hex, 4)?;
         let mut ntime = hex_fixed(&self.ntime_hex, 4)?;
-        // Stratum sends these as big-endian hex; Bitcoin header stores LE bytes.
+        // Board hashes Bitcoin *wire* headers. Stratum version/ntime/nbits/prevhash
+        // are getwork-order hex → swab into wire bytes. Merkle from dsha256 is already wire-order.
         swab32_bytes(&mut version);
         swab256(&mut prev);
         swab32_bytes(&mut ntime);
@@ -493,6 +515,20 @@ fn dsha256(data: &[u8]) -> [u8; 32] {
     let mut out = [0u8; 32];
     out.copy_from_slice(&second);
     out
+}
+
+fn hash_meets_target(hash: &[u8; 32], target: &[u8; 32]) -> bool {
+    // Both are LE uint256 byte arrays (hash is SHA256d digest as-is; Bitcoin compares
+    // the digest as a little-endian 256-bit integer against the target).
+    for i in (0..32).rev() {
+        if hash[i] < target[i] {
+            return true;
+        }
+        if hash[i] > target[i] {
+            return false;
+        }
+    }
+    true
 }
 
 fn swab32_bytes(b: &mut [u8]) {

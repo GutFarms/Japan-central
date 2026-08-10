@@ -52,10 +52,10 @@ bool CompanionLink::poll(AppConfig& cfg, const MinerSnapshot& snap, ApplyFn onAp
 void CompanionLink::emitShare(const PendingShare& share) {
   if (!share.pending) return;
   char nonceHex[9];
-  // Nonce hex must be the 4 LE header bytes (stratum mining.submit convention).
-  snprintf(nonceHex, sizeof(nonceHex), "%02x%02x%02x%02x", (unsigned)(share.nonce & 0xff),
-           (unsigned)((share.nonce >> 8) & 0xff), (unsigned)((share.nonce >> 16) & 0xff),
-           (unsigned)((share.nonce >> 24) & 0xff));
+  // Stratum mining.submit nonce matches cgminer: printf("%08x", nonce_uint32)
+  // where nonce_uint32 is the LE reading of the wire header bytes (getwork order).
+  // Do NOT emit the raw wire byte hex (that rejects on every pool).
+  snprintf(nonceHex, sizeof(nonceHex), "%08x", (unsigned)share.nonce);
   Serial.print("CMPSHARE nonce=");
   Serial.print(nonceHex);
   Serial.print("&job=");
@@ -292,7 +292,7 @@ void CompanionLink::replyConfig(const AppConfig& cfg) {
   JsonDocument doc;
   doc["cpu_mhz"] = cfg.cpuMhz;
   doc["hash_focus"] = cfg.hashFocus;
-  doc["fw"] = "0.6.6-sha256";
+  doc["fw"] = "0.6.7-sha256";
   doc["mode"] = "usb-sha256";
   doc["configured"] = true;
   Serial.print("CMPCONFIG ");

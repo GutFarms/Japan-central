@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Verify stratum header packing endianness matches Bitcoin block headers."""
+"""Verify stratum header packing + cgminer-compatible nonce submit."""
 from __future__ import annotations
 
 import hashlib
@@ -23,7 +23,10 @@ def swab256(b: bytes) -> bytes:
     return bytes(out)
 
 
-def pack_header(version_hex: str, prev_hex: str, merkle: bytes, ntime_hex: str, nbits_hex: str, nonce_le: bytes) -> bytes:
+def pack_wire_header(
+    version_hex: str, prev_hex: str, merkle: bytes, ntime_hex: str, nbits_hex: str, nonce_le: bytes
+) -> bytes:
+    """Board hashes true Bitcoin wire headers (not cgminer getwork order)."""
     version = swab32(bytes.fromhex(version_hex))
     prev = swab256(bytes.fromhex(prev_hex))
     ntime = swab32(bytes.fromhex(ntime_hex))
@@ -32,9 +35,8 @@ def pack_header(version_hex: str, prev_hex: str, merkle: bytes, ntime_hex: str, 
 
 
 def main() -> int:
-    # Genesis reconstructed as if stratum sent BE hex fields.
     merkle = bytes.fromhex("3ba3edfd7a7b12b27ac72c3e67768f617fc81bc3888a51323a9fb8aa4b1e5e4a")
-    hdr = pack_header(
+    hdr = pack_wire_header(
         "00000001",
         "0000000000000000000000000000000000000000000000000000000000000000",
         merkle,
@@ -44,38 +46,36 @@ def main() -> int:
     )
     expected = "000000000019d6689c085ae165831e934ff763ae46a2a6c172b3f1b60a8ce26f"
     got = dsha(hdr)[::-1].hex()
-    print(f"genesis via stratum packing: {got}")
-    print(f"expected:                    {expected}")
+    print(f"genesis via stratum→wire packing: {got}")
+    print(f"expected:                         {expected}")
     if got != expected:
         print("FAIL header endianness")
         return 1
 
-    # Nonce submit must be the 4 LE header bytes as hex (cgminer bin2hex of data+76),
-    # not printf("%08x") of the uint32 value.
-    # Genesis header ends with bytes 1d ac 2b 7c → uint32 LE value 0x7c2bac1d.
+    # Wire nonce bytes 1d ac 2b 7c → uint32 LE 0x7c2bac1d
     nonce_u = int.from_bytes(hdr[76:80], "little")
     if nonce_u != 0x7C2BAC1D:
         print(f"FAIL unexpected genesis nonce uint32 {nonce_u:#x}")
         return 1
-    legacy = f"{nonce_u:08x}"  # 7c2bac1d — wrong for stratum submit
-    correct = bytes(
-        [
-            nonce_u & 0xFF,
-            (nonce_u >> 8) & 0xFF,
-            (nonce_u >> 16) & 0xFF,
-            (nonce_u >> 24) & 0xFF,
-        ]
-    ).hex()
-    print(f"legacy submit hex:  {legacy}")
-    print(f"correct submit hex: {correct}")
-    if legacy == correct:
-        print("FAIL expected legacy != correct for this nonce")
+
+    # cgminer stratum submit: bin2hex(work->data+76) in getwork order
+    # = swab32(wire) = printf("%08x", nonce_u) on LE hosts.
+    stratum_nonce = f"{nonce_u:08x}"
+    wire_hex = hdr[76:80].hex()
+    print(f"wire header nonce bytes: {wire_hex}")
+    print(f"stratum submit nonce:    {stratum_nonce}")
+    if stratum_nonce != "7c2bac1d":
+        print("FAIL stratum nonce format")
         return 1
-    if correct != "1dac2b7c":
-        print("FAIL nonce submit format")
+    if wire_hex == stratum_nonce:
+        print("FAIL wire hex must differ from stratum submit for this nonce")
         return 1
-    if hdr[76:80].hex() != correct:
-        print("FAIL nonce in header")
+
+    # Extranonce2: cgminer writes htole64(counter) truncated to n2size.
+    counter = 0x01020304
+    en2 = counter.to_bytes(8, "little")[:4]
+    if en2.hex() != "04030201":
+        print("FAIL extranonce2 LE packing", en2.hex())
         return 1
 
     print("PASS")

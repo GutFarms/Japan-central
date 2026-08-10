@@ -18,7 +18,7 @@ use eframe::egui::{
 use eframe::{App, NativeOptions};
 use serde::{Deserialize, Serialize};
 use serialport::SerialPort;
-use stratum::{encode_job_cmd, encode_job_parts, StratumClient};
+use stratum::{encode_job_cmd, encode_job_parts, StratumClient, WorkJob};
 
 fn main() -> eframe::Result<()> {
     let options = NativeOptions {
@@ -1645,6 +1645,7 @@ fn mine_worker(cmd_rx: Receiver<NetCmd>, msg_tx: Sender<NetMsg>) {
     let mut stratum: Option<StratumClient> = None;
     let mut mining = false;
     let mut legacy_job = false; // old firmware without jh/jt/ja
+    let mut recent_jobs: VecDeque<WorkJob> = VecDeque::new();
     let mut last_stats_push = Instant::now() - Duration::from_secs(10);
     let mut last_stratum_ui = Instant::now() - Duration::from_secs(10);
 
@@ -1833,6 +1834,7 @@ fn mine_worker(cmd_rx: Receiver<NetCmd>, msg_tx: Sender<NetMsg>) {
                                     p.as_mut(),
                                     &mut usb_rx,
                                     stratum.as_mut(),
+                                    &recent_jobs,
                                     &msg_tx,
                                 );
                                 let _ = msg_tx.send(NetMsg::Status(parse_cmp_status(&line)));
@@ -1893,6 +1895,10 @@ fn mine_worker(cmd_rx: Receiver<NetCmd>, msg_tx: Sender<NetMsg>) {
                                 &msg_tx,
                             ) {
                                 Ok(_) => {
+                                    recent_jobs.push_back(job.clone());
+                                    while recent_jobs.len() > 24 {
+                                        recent_jobs.pop_front();
+                                    }
                                     let _ = msg_tx.send(NetMsg::Action(Ok(format!(
                                         "USB ← job {}",
                                         job.job_id
@@ -1932,7 +1938,13 @@ fn mine_worker(cmd_rx: Receiver<NetCmd>, msg_tx: Sender<NetMsg>) {
         }
 
         if let Some(p) = usb.as_mut() {
-            harvest_shares(p.as_mut(), &mut usb_rx, stratum.as_mut(), &msg_tx);
+            harvest_shares(
+                p.as_mut(),
+                &mut usb_rx,
+                stratum.as_mut(),
+                &recent_jobs,
+                &msg_tx,
+            );
         }
 
         if mining || stratum.is_some() {
@@ -1945,6 +1957,7 @@ fn harvest_shares(
     port: &mut dyn SerialPort,
     buf: &mut String,
     stratum: Option<&mut StratumClient>,
+    recent_jobs: &VecDeque<WorkJob>,
     msg_tx: &Sender<NetMsg>,
 ) {
     drain_serial(port, buf);
@@ -1985,6 +1998,28 @@ fn harvest_shares(
                     format!("Ignoring local/warmup share nonce={nonce}"),
                 );
                 continue;
+            }
+            if let Some(wj) = recent_jobs
+                .iter()
+                .rev()
+                .find(|j| j.job_id == job && j.extranonce2_hex == en2)
+            {
+                if let Err(e) = StratumClient::verify_share_against_job(wj, &nonce) {
+                    log_msg(
+                        msg_tx,
+                        LogKind::Warn,
+                        format!("Dropping bad board share nonce={nonce} job={job}: {e}"),
+                    );
+                    continue;
+                }
+            } else {
+                log_msg(
+                    msg_tx,
+                    LogKind::Warn,
+                    format!(
+                        "Share job={job} en2={en2} not in recent job cache — submitting anyway"
+                    ),
+                );
             }
             match s.submit_share(&job, &en2, &ntime, &nonce) {
                 Ok(()) => {
