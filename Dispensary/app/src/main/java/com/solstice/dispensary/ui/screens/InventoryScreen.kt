@@ -47,7 +47,8 @@ fun InventoryScreen(
     intakeMessage: String?,
     onClearMessage: () -> Unit,
     onOpenScanner: () -> Unit,
-    onAdjustStock: (String, Int) -> Unit
+    onAdjustStock: (String, Int) -> Unit,
+    onSetPublished: (String, Boolean) -> Unit
 ) {
     val snackbar = remember { SnackbarHostState() }
     LaunchedEffect(intakeMessage) {
@@ -58,6 +59,7 @@ fun InventoryScreen(
     }
 
     val lowStock = products.count { it.stockQuantity <= 5 }
+    val draftCount = products.count { !it.published }
     val dateFormat = remember { SimpleDateFormat("MMM d · h:mm a", Locale.US) }
 
     Scaffold(
@@ -78,8 +80,15 @@ fun InventoryScreen(
             item {
                 SectionHeader(
                     title = "Inventory",
-                    subtitle = "${products.size} SKUs · $lowStock low stock"
+                    subtitle = "${products.size} SKUs · $lowStock low stock" +
+                        if (draftCount > 0) " · $draftCount unpublished" else ""
                 )
+                Text(
+                    text = "Customers only see published products on the menu.",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Spacer(Modifier.height(8.dp))
                 Button(
                     onClick = onOpenScanner,
                     modifier = Modifier.fillMaxWidth(),
@@ -102,34 +111,39 @@ fun InventoryScreen(
                     tonalElevation = 1.dp,
                     modifier = Modifier.fillMaxWidth()
                 ) {
-                    Row(
-                        modifier = Modifier.padding(12.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        ProductSwatch(product = product)
-                        Column(
-                            modifier = Modifier
-                                .weight(1f)
-                                .padding(horizontal = 12.dp)
-                        ) {
-                            Text(product.name, style = MaterialTheme.typography.titleMedium)
-                            Text(
-                                text = "${product.brand} · ${product.sku}",
-                                style = MaterialTheme.typography.bodyMedium,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                                MetaPill(product.category.label)
-                                MetaPill("${product.stockQuantity} in stock")
+                    Column(modifier = Modifier.padding(12.dp)) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            ProductSwatch(product = product)
+                            Column(
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .padding(horizontal = 12.dp)
+                            ) {
+                                Text(product.name, style = MaterialTheme.typography.titleMedium)
+                                Text(
+                                    text = "${product.brand} · ${product.sku}",
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                                    MetaPill(product.category.label)
+                                    MetaPill("${product.stockQuantity} in stock")
+                                    MetaPill(if (product.published) "Published" else "Draft")
+                                }
+                            }
+                            Column(horizontalAlignment = Alignment.End) {
+                                TextButton(onClick = { onAdjustStock(product.id, 1) }) {
+                                    Text("+1")
+                                }
+                                TextButton(onClick = { onAdjustStock(product.id, -1) }) {
+                                    Text("−1")
+                                }
                             }
                         }
-                        Column(horizontalAlignment = Alignment.End) {
-                            TextButton(onClick = { onAdjustStock(product.id, 1) }) {
-                                Text("+1")
-                            }
-                            TextButton(onClick = { onAdjustStock(product.id, -1) }) {
-                                Text("−1")
-                            }
+                        TextButton(
+                            onClick = { onSetPublished(product.id, !product.published) }
+                        ) {
+                            Text(if (product.published) "Unpublish from menu" else "Publish to customers")
                         }
                     }
                 }

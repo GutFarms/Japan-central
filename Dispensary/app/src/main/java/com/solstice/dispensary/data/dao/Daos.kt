@@ -21,8 +21,14 @@ interface ProductDao {
     @Query("SELECT * FROM products ORDER BY featured DESC, name ASC")
     fun observeAll(): Flow<List<Product>>
 
-    @Query("SELECT * FROM products ORDER BY stockQuantity ASC, name ASC")
+    @Query("SELECT * FROM products WHERE published = 1 ORDER BY featured DESC, name ASC")
+    fun observePublished(): Flow<List<Product>>
+
+    @Query("SELECT * FROM products ORDER BY published ASC, stockQuantity ASC, name ASC")
     fun observeInventory(): Flow<List<Product>>
+
+    @Query("SELECT * FROM products WHERE category = :category AND published = 1 ORDER BY name ASC")
+    fun observePublishedByCategory(category: ProductCategory): Flow<List<Product>>
 
     @Query("SELECT * FROM products WHERE category = :category ORDER BY name ASC")
     fun observeByCategory(category: ProductCategory): Flow<List<Product>>
@@ -35,6 +41,9 @@ interface ProductDao {
 
     @Query("SELECT * FROM products WHERE sku = :sku LIMIT 1")
     suspend fun getBySku(sku: String): Product?
+
+    @Query("SELECT * FROM products WHERE featured = 1 AND published = 1 ORDER BY name ASC")
+    fun observeFeaturedPublished(): Flow<List<Product>>
 
     @Query("SELECT * FROM products WHERE featured = 1 ORDER BY name ASC")
     fun observeFeatured(): Flow<List<Product>>
@@ -56,6 +65,9 @@ interface ProductDao {
 
     @Query("UPDATE products SET stockQuantity = :quantity, inStock = :inStock WHERE id = :id")
     suspend fun setStock(id: String, quantity: Int, inStock: Boolean)
+
+    @Query("UPDATE products SET published = :published WHERE id = :id")
+    suspend fun setPublished(id: String, published: Boolean)
 }
 
 @Dao

@@ -16,7 +16,8 @@ Adult-use dispensary app for browsing the menu, building a pickup bag, scanning 
 - **Product detail** — THC/CBD, strain type, effects, quantity, add to bag
 - **Bag & pickup checkout** — tax estimate, pickup name, order notes (linked to signed-in customer)
 - **Orders** — local pickup history on device
-- **Inventory + AI camera scanner** — CameraX + on-device ML Kit OCR/barcode scan to match SKUs or create products and add stock
+- **Inventory + AI camera scanner** — CameraX + on-device ML Kit OCR/barcode scan to match SKUs or create products and add stock; new scans start unpublished until staff publishes them
+- **Published catalog** — customers only see published products on the menu; staff/admin manage drafts in Stock
 - **Store** — hours, address, contact, pickup guidance
 - **Windows desktop companion** — see [`../DispensaryCompanion/README.md`](../DispensaryCompanion/README.md)
 ## Stack

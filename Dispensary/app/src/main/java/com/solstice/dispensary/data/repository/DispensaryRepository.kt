@@ -42,7 +42,33 @@ class DispensaryRepository(context: Context) {
 
     val products: Flow<List<Product>> = db.productDao().observeAll()
     val inventory: Flow<List<Product>> = db.productDao().observeInventory()
-    val featured: Flow<List<Product>> = db.productDao().observeFeatured()
+
+    /** Storefront catalog: customers only see published products; staff/admin see everything. */
+    val catalog: Flow<List<Product>> = sessionCustomerId.flatMapLatest { id ->
+        if (id.isNullOrBlank()) {
+            db.productDao().observePublished()
+        } else {
+            val me = db.customerDao().getById(id)
+            if (me?.role?.canManageInventory == true) {
+                db.productDao().observeAll()
+            } else {
+                db.productDao().observePublished()
+            }
+        }
+    }
+
+    val featured: Flow<List<Product>> = sessionCustomerId.flatMapLatest { id ->
+        if (id.isNullOrBlank()) {
+            db.productDao().observeFeaturedPublished()
+        } else {
+            val me = db.customerDao().getById(id)
+            if (me?.role?.canManageInventory == true) {
+                db.productDao().observeFeatured()
+            } else {
+                db.productDao().observeFeaturedPublished()
+            }
+        }
+    }
     val cartItems: Flow<List<CartItem>> = db.cartDao().observeAll()
     val intakes: Flow<List<InventoryIntake>> = db.inventoryDao().observeAll()
     val customers: Flow<List<CustomerProfile>> = db.customerDao().observeAll()
@@ -62,7 +88,7 @@ class DispensaryRepository(context: Context) {
         }
     }
 
-    val cartSummary: Flow<CartSummary> = combine(products, cartItems) { allProducts, items ->
+    val cartSummary: Flow<CartSummary> = combine(catalog, cartItems) { allProducts, items ->
         val byId = allProducts.associateBy { it.id }
         val lines = items.mapNotNull { item ->
             byId[item.productId]?.let { CartLine(it, item.quantity) }
@@ -79,10 +105,25 @@ class DispensaryRepository(context: Context) {
     }
 
     fun productsByCategory(category: ProductCategory?): Flow<List<Product>> {
-        return if (category == null) products else db.productDao().observeByCategory(category)
+        return sessionCustomerId.flatMapLatest { id ->
+            val staff = id?.let { db.customerDao().getById(it) }?.role?.canManageInventory == true
+            when {
+                category == null && staff -> db.productDao().observeAll()
+                category == null -> db.productDao().observePublished()
+                staff -> db.productDao().observeByCategory(category)
+                else -> db.productDao().observePublishedByCategory(category)
+            }
+        }
     }
 
-    fun product(id: String): Flow<Product?> = db.productDao().observeById(id)
+    fun product(id: String): Flow<Product?> = sessionCustomerId.flatMapLatest { customerId ->
+        db.productDao().observeById(id).map { product ->
+            if (product == null) return@map null
+            if (product.published) return@map product
+            val me = customerId?.let { db.customerDao().getById(it) }
+            if (me?.role?.canManageInventory == true) product else null
+        }
+    }
 
     fun orderLines(orderId: String): Flow<List<OrderLine>> = db.orderDao().observeLines(orderId)
 
@@ -483,6 +524,9 @@ class DispensaryRepository(context: Context) {
     }
 
     suspend fun addToCart(productId: String, quantity: Int = 1) {
+        val product = db.productDao().getById(productId) ?: return
+        val me = currentCustomer()
+        if (!product.published && me?.role?.canManageInventory != true) return
         val existing = db.cartDao().get(productId)
         if (existing == null) {
             db.cartDao().upsert(CartItem(productId, quantity.coerceAtLeast(1)))
@@ -513,6 +557,15 @@ class DispensaryRepository(context: Context) {
         val product = db.productDao().getById(productId) ?: return null
         val next = (product.stockQuantity + delta).coerceAtLeast(0)
         val updated = product.copy(stockQuantity = next, inStock = next > 0)
+        db.productDao().update(updated)
+        return updated
+    }
+
+    suspend fun setPublished(productId: String, published: Boolean): Product? {
+        val me = currentCustomer()
+        if (me?.role?.canManageInventory != true) return null
+        val product = db.productDao().getById(productId) ?: return null
+        val updated = product.copy(published = published)
         db.productDao().update(updated)
         return updated
     }

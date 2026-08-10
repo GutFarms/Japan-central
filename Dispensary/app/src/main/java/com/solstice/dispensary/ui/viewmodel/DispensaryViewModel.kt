@@ -394,6 +394,17 @@ class DispensaryViewModel(
         viewModelScope.launch { repository.adjustStock(productId, delta) }
     }
 
+    fun setPublished(productId: String, published: Boolean) {
+        viewModelScope.launch {
+            val product = repository.setPublished(productId, published)
+            intakeMessage = when {
+                product == null -> "Could not update publish status."
+                published -> "Published ${product.name} — visible to customers."
+                else -> "Unpublished ${product.name} — hidden from customers."
+            }
+        }
+    }
+
     fun analyzeLabelBitmap(bitmap: Bitmap) {
         viewModelScope.launch {
             scanBusy = true

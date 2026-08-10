@@ -49,7 +49,8 @@ data class Product(
     val featured: Boolean = false,
     val inStock: Boolean = true,
     val stockQuantity: Int = 0,
-    val sku: String = ""
+    val sku: String = "",
+    val published: Boolean = true
 )
 
 @Serializable

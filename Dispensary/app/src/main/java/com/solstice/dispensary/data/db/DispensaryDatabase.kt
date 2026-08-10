@@ -50,7 +50,7 @@ class Converters {
         InventoryIntake::class,
         Customer::class
     ],
-    version = 5,
+    version = 6,
     exportSchema = false
 )
 @TypeConverters(Converters::class)
@@ -326,7 +326,8 @@ object SeedCatalog {
             description = "Matte charcoal tray with raised rim. Compact travel size.",
             effects = "—",
             stockQuantity = 15,
-            sku = "SG-AC-TRAY"
+            sku = "SG-AC-TRAY",
+            published = false
         )
     )
 }

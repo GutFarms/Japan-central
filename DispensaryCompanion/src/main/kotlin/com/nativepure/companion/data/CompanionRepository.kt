@@ -37,10 +37,20 @@ class CompanionRepository {
 
     fun allProducts(): List<Product> = products.toList()
 
-    fun featuredProducts(): List<Product> = products.filter { it.featured }
+    fun catalogProducts(): List<Product> {
+        val me = currentCustomer()
+        return if (me?.role?.canManageInventory == true) {
+            products.toList()
+        } else {
+            products.filter { it.published }
+        }
+    }
+
+    fun featuredProducts(): List<Product> =
+        catalogProducts().filter { it.featured }
 
     fun cartSummary(): CartSummary {
-        val byId = products.associateBy { it.id }
+        val byId = catalogProducts().associateBy { it.id }
         val lines = cart.mapNotNull { item ->
             byId[item.productId]?.let { CartLine(it, item.quantity) }
         }
@@ -244,6 +254,9 @@ class CompanionRepository {
     }
 
     fun addToCart(productId: String, quantity: Int = 1) {
+        val product = products.find { it.id == productId } ?: return
+        val me = currentCustomer()
+        if (!product.published && me?.role?.canManageInventory != true) return
         val existing = cart.find { it.productId == productId }
         if (existing == null) {
             cart.add(CartItem(productId, quantity.coerceAtLeast(1)))
@@ -276,6 +289,16 @@ class CompanionRepository {
         val product = products[idx]
         val next = (product.stockQuantity + delta).coerceAtLeast(0)
         products[idx] = product.copy(stockQuantity = next, inStock = next > 0)
+        persist()
+        return true
+    }
+
+    fun setPublished(productId: String, published: Boolean): Boolean {
+        val me = currentCustomer() ?: return false
+        if (!me.role.canManageInventory) return false
+        val idx = products.indexOfFirst { it.id == productId }
+        if (idx < 0) return false
+        products[idx] = products[idx].copy(published = published)
         persist()
         return true
     }

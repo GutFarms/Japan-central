@@ -126,7 +126,8 @@ fun DispensaryNavHost(
                         viewModel.clearScanResult()
                         navController.navigate(Routes.SCANNER)
                     },
-                    onAdjustStock = viewModel::adjustStock
+                    onAdjustStock = viewModel::adjustStock,
+                    onSetPublished = viewModel::setPublished
                 )
             }
         }

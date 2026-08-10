@@ -38,7 +38,9 @@ data class Product(
     val featured: Boolean = false,
     val inStock: Boolean = true,
     val stockQuantity: Int = 0,
-    val sku: String = ""
+    val sku: String = "",
+    /** When false, product is draft inventory — customers cannot see it. */
+    val published: Boolean = true
 )
 
 @Entity(tableName = "cart_items")

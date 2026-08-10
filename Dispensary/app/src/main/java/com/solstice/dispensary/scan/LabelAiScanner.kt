@@ -242,7 +242,8 @@ object NewProductFactory {
             featured = false,
             inStock = true,
             stockQuantity = 0,
-            sku = sku
+            sku = sku,
+            published = false
         )
     }
 }

@@ -151,6 +151,9 @@ fun ProductTile(
                 )
                 Spacer(Modifier.height(4.dp))
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    if (!product.published) {
+                        MetaPill("Draft")
+                    }
                     if (product.strainType != StrainType.NONE) {
                         MetaPill(product.strainType.label)
                     }

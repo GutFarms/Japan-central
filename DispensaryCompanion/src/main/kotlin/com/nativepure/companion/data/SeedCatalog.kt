@@ -17,6 +17,6 @@ object SeedCatalog {
         Product("tp-balm", "Trail Balm", "Hearth Kitchen", ProductCategory.TOPICAL, StrainType.CBD, 0.0, 0.0, 30.0, "2oz", "Menthol CBD balm for sore muscles after a long day.", "Soothing · Localized", stockQuantity = 11, sku = "HK-TP-TRAL"),
         Product("tp-lotion", "Evening Lotion", "Lumen Lab", ProductCategory.TOPICAL, StrainType.CBD, 0.0, 0.0, 34.0, "4oz", "Lavender CBD body lotion — non-intoxicating daily care.", "Calm · Comfort", stockQuantity = 9, sku = "LL-TP-EVEN"),
         Product("ac-grinder", "Four-Piece Grinder", "Solstice Gear", ProductCategory.ACCESSORY, StrainType.NONE, 0.0, 0.0, 18.0, "each", "Anodized aluminum grinder with pollen catcher.", "—", stockQuantity = 25, sku = "SG-AC-GRND"),
-        Product("ac-tray", "Rolling Tray", "Solstice Gear", ProductCategory.ACCESSORY, StrainType.NONE, 0.0, 0.0, 14.0, "each", "Matte charcoal tray with raised rim. Compact travel size.", "—", stockQuantity = 15, sku = "SG-AC-TRAY")
+        Product("ac-tray", "Rolling Tray", "Solstice Gear", ProductCategory.ACCESSORY, StrainType.NONE, 0.0, 0.0, 14.0, "each", "Matte charcoal tray with raised rim. Compact travel size.", "—", stockQuantity = 15, sku = "SG-AC-TRAY", published = false)
     )
 }

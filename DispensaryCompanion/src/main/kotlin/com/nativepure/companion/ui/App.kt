@@ -340,7 +340,7 @@ private fun MainShell(
                     }
                 )
                 NavSection.MENU -> MenuPane(
-                    products = repository.allProducts(),
+                    products = repository.catalogProducts(),
                     onAdd = {
                         repository.addToCart(it)
                         onRefresh()
@@ -454,6 +454,9 @@ private fun ProductCard(product: Product, onAdd: (String) -> Unit) {
             Text(product.name, style = MaterialTheme.typography.titleLarge)
             Text("${product.brand} · ${product.category.label}", color = MaterialTheme.colorScheme.onSurfaceVariant)
             Text("${product.strainType.label} · THC ${product.thcPercent}%")
+            if (!product.published) {
+                Text("Draft — not visible to customers", color = MaterialTheme.colorScheme.error)
+            }
             Text(product.effects, style = MaterialTheme.typography.bodyMedium)
             Text("$${ "%.2f".format(product.price) } / ${product.unitLabel}", style = MaterialTheme.typography.titleLarge)
             Text("Stock ${product.stockQuantity}", color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -569,33 +572,52 @@ private fun InventoryPane(
     onRefresh: () -> Unit,
     onMessage: (String?) -> Unit
 ) {
-    val products = repository.allProducts().sortedBy { it.name }
+    val products = repository.allProducts().sortedWith(
+        compareBy<Product> { it.published }.thenBy { it.name }
+    )
+    val drafts = products.count { !it.published }
     Column(Modifier.fillMaxSize()) {
         Text("Stock", style = MaterialTheme.typography.headlineLarge)
-        Text("Adjust on-hand quantity for each SKU.", color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Text(
+            "Customers only see published products. $drafts unpublished draft(s).",
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
         Spacer(Modifier.height(12.dp))
         LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
             items(products, key = { it.id }) { product ->
                 Surface(shape = RoundedCornerShape(12.dp), tonalElevation = 1.dp, modifier = Modifier.fillMaxWidth()) {
-                    Row(
-                        Modifier.padding(12.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Column(Modifier.weight(1f)) {
-                            Text(product.name, style = MaterialTheme.typography.titleLarge)
-                            Text("${product.sku} · ${product.category.label}", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Column(Modifier.weight(1f)) {
+                                Text(product.name, style = MaterialTheme.typography.titleLarge)
+                                Text(
+                                    "${product.sku} · ${product.category.label} · " +
+                                        if (product.published) "Published" else "Draft",
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                            Text("${product.stockQuantity}", modifier = Modifier.padding(horizontal = 12.dp))
+                            OutlinedButton(onClick = {
+                                repository.adjustStock(product.id, -1)
+                                onRefresh()
+                            }) { Text("−") }
+                            Spacer(Modifier.width(6.dp))
+                            OutlinedButton(onClick = {
+                                repository.adjustStock(product.id, 1)
+                                onRefresh()
+                            }) { Text("+") }
                         }
-                        Text("${product.stockQuantity}", modifier = Modifier.padding(horizontal = 12.dp))
-                        OutlinedButton(onClick = {
-                            repository.adjustStock(product.id, -1)
+                        Button(onClick = {
+                            val next = !product.published
+                            repository.setPublished(product.id, next)
                             onRefresh()
-                        }) { Text("−") }
-                        Spacer(Modifier.width(6.dp))
-                        OutlinedButton(onClick = {
-                            repository.adjustStock(product.id, 1)
-                            onRefresh()
-                            onMessage("Updated ${product.name}")
-                        }) { Text("+") }
+                            onMessage(
+                                if (next) "Published ${product.name}"
+                                else "Unpublished ${product.name}"
+                            )
+                        }) {
+                            Text(if (product.published) "Unpublish from menu" else "Publish to customers")
+                        }
                     }
                 }
             }
