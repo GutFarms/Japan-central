@@ -1,0 +1,576 @@
+Puerto Rico; native land = borikén
+Puerto Rico; tierra nativa = borikén
+borikén :: Puerto Rico; native land / Puerto Rico; tierra nativa
+good / noble (people) = taíno
+bueno / noble = taíno
+taíno :: good / noble (people) / bueno / noble
+village; settlement = yukayeke
+aldea; poblado = yukayeke
+yukayeke :: village; settlement / aldea; poblado
+chief; leader = kasike
+cacique; jefe = kasike
+kasike :: chief; leader / cacique; jefe
+house; dwelling = bohío
+bohío; casa = bohío
+bohío :: house; dwelling / bohío; casa
+canoe = kanowa
+canoa = kanowa
+kanowa :: canoe / canoa
+hammock = hamaka
+hamaca = hamaka
+hamaka :: hammock / hamaca
+hurricane; storm spirit = hurakán
+huracán = hurakán
+hurakán :: hurricane; storm spirit / huracán
+barbecue; raised grill = barabakoa
+barbacoa = barabakoa
+barabakoa :: barbecue; raised grill / barbacoa
+tobacco = tabako
+tabaco = tabako
+tabako :: tobacco / tabaco
+maize; corn = maísi
+maíz = maísi
+maísi :: maize; corn / maíz
+cassava; yuca = yuka
+yuca = yuka
+yuka :: cassava; yuca / yuca
+cassava bread = kasabi
+casabe = kasabi
+kasabi :: cassava bread / casabe
+sweet potato = batata
+batata = batata
+batata :: sweet potato / batata
+chili pepper = ají
+ají = ají
+ají :: chili pepper / ají
+peanut = maní
+maní = maní
+maní :: peanut / maní
+guava = wayaba
+guayaba = wayaba
+wayaba :: guava / guayaba
+maguey; agave = magey
+maguey = magey
+magey :: maguey; agave / maguey
+ceiba tree = seyba
+ceiba = seyba
+seyba :: ceiba tree / ceiba
+iguana = iwana
+iguana = iwana
+iwana :: iguana / iguana
+manatee = manatí
+manatí = manatí
+manatí :: manatee / manatí
+shark = tiburón
+tiburón = tiburón
+tiburón :: shark / tiburón
+caiman; alligator = kaymán
+caimán = kaymán
+kaymán :: caiman; alligator / caimán
+hutia (rodent) = hutía
+jutía = hutía
+hutía :: hutia (rodent) / jutía
+chigger; sand flea = niwa
+nigua = niwa
+niwa :: chigger; sand flea / nigua
+savanna; plain = sabana
+sabana = sabana
+sabana :: savanna; plain / sabana
+key; small island = kayo
+cayo = kayo
+kayo :: key; small island / cayo
+digging stick = koa
+coa = koa
+koa :: digging stick / coa
+wooden club; war club = makana
+macana = makana
+makana :: wooden club; war club / macana
+ceremonial stool = duho
+dujo = duho
+duho :: ceremonial stool / dujo
+spirit; sacred figure = semí
+cemí = semí
+semí :: spirit; sacred figure / cemí
+mother goddess of fresh water & fertility = atabey
+Atabey = atabey
+atabey :: mother goddess of fresh water & fertility / Atabey
+spirit of cassava / sky = yokahú
+Yocahú = yokahú
+yokahú :: spirit of cassava / sky / Yocahú
+war; battle = wasábara
+guerra = wasábara
+wasábara :: war; battle / guerra
+worker; servant; commoner = naboriya
+naboría = naboriya
+naboriya :: worker; servant; commoner / naboría
+ceremonial song and dance = areyto
+areíto = areyto
+areyto :: ceremonial song and dance / areíto
+plaza; ball court = batey
+batey = batey
+batey :: plaza; ball court / batey
+gold-copper alloy ornament = wanín
+guanín = wanín
+wanín :: gold-copper alloy ornament / guanín
+gold = kawóna
+oro = kawóna
+kawóna :: gold / oro
+jewel; precious object = yari
+joya = yari
+yari :: jewel; precious object / joya
+sky; heaven = turey
+cielo = turey
+turey :: sky; heaven / cielo
+sun = wey
+sol = wey
+wey :: sun / sol
+moon = karaya
+luna = karaya
+karaya :: moon / luna
+rain = yukubiya
+lluvia = yukubiya
+yukubiya :: rain / lluvia
+sea; ocean = bara
+mar = bara
+bara :: sea; ocean / mar
+water = ni
+agua = ni
+ni :: water / agua
+farm plot; garden = konuko
+conuco = konuko
+konuko :: farm plot; garden / conuco
+lignum vitae tree = wayakán
+guayacán = wayakán
+wayakán :: lignum vitae tree / guayacán
+mabi drink (tree bark beverage) = mabí
+mabí = mabí
+mabí :: mabi drink (tree bark beverage) / mabí
+Enriquillo (historical leader name form) = enrikíyo
+Enriquillo = enrikíyo
+enrikíyo :: Enriquillo (historical leader name form) / Enriquillo
+come! = wariko
+¡ven! = wariko
+wariko :: come! / ¡ven!
+I am = daka
+yo soy = daka
+daka :: I am / yo soy
+we go; let's go = waibá
+vamos = waibá
+waibá :: we go; let's go / vamos
+we see = warikẽ
+vemos = warikẽ
+warikẽ :: we see / vemos
+hear! (imperative) = kãma
+¡oye! = kãma
+kãma :: hear! (imperative) / ¡oye!
+speak to us = ahiyakawo
+háblanos = ahiyakawo
+ahiyakawo :: speak to us / háblanos
+it is not important = makabuka
+no importa = makabuka
+makabuka :: it is not important / no importa
+do not kill = mayani
+no mates = mayani
+mayani :: do not kill / no mates
+good day = taí wey
+buenos días = taí wey
+taí wey :: good day / buenos días
+good spirit be with you = taíno tí
+que el buen espíritu te acompañe = taíno tí
+taíno tí :: good spirit be with you / que el buen espíritu te acompañe
+why? = anéke
+¿por qué? = anéke
+anéke :: why? / ¿por qué?
+yes = han
+sí = han
+han :: yes / sí
+no = ua
+no = ua
+ua :: no / no
+us; our (independent) = wakía
+nosotros = wakía
+wakía :: us; our (independent) / nosotros
+father = baba
+padre = baba
+baba :: father / padre
+mother = nana
+madre = nana
+nana :: mother / madre
+blood; kin = ití
+sangre; pariente = ití
+ití :: blood; kin / sangre; pariente
+grandfather (our grandfather stem) = waroko
+abuelo = waroko
+waroko :: grandfather (our grandfather stem) / abuelo
+sir; noble man = waxeri
+señor = waxeri
+waxeri :: sir; noble man / señor
+our master / lord = wamekina
+nuestro señor = wamekina
+wamekina :: our master / lord / nuestro señor
+angry; upset = sinato
+enojado = sinato
+sinato :: angry; upset / enojado
+greatly; very = teketa
+muy; grandemente = teketa
+teketa :: greatly; very / muy; grandemente
+eye = oka
+ojo = oka
+oka :: eye / ojo
+tooth = ari
+diente = ari
+ari :: tooth / diente
+ear = kaku
+oreja = kaku
+kaku :: ear / oreja
+hand = dama
+mano = dama
+dama :: hand / mano
+foot = kutí
+pie = kutí
+kutí :: foot / pie
+child = isa
+niño/a = isa
+isa :: child / niño/a
+woman = hiaro
+mujer = hiaro
+hiaro :: woman / mujer
+man = wori
+hombre = wori
+wori :: man / hombre
+moon (alt. neo form) = kati
+luna = kati
+kati :: moon (alt. neo form) / luna
+sun (alt. neo form) = kamú
+sol = kamú
+kamú :: sun (alt. neo form) / sol
+rain (alt.) = oni
+lluvia = oni
+oni :: rain (alt.) / lluvia
+stone; rock = shíba
+piedra = shíba
+shíba :: stone; rock / piedra
+house (neo stem) = uka
+casa = uka
+uka :: house (neo stem) / casa
+path; road = eda
+camino = eda
+eda :: path; road / camino
+tree = yana
+árbol = yana
+yana :: tree / árbol
+fire = kabo
+fuego = kabo
+kabo :: fire / fuego
+earth; soil = inabo
+tierra = inabo
+inabo :: earth; soil / tierra
+home; dwelling place = abay
+hogar = abay
+abay :: home; dwelling place / hogar
+fire (alt.) = watu
+fuego = watu
+watu :: fire (alt.) / fuego
+sea (alt. neo) = bagua
+mar = bagua
+bagua :: sea (alt. neo) / mar
+mountain; white mountain spirit = yuke
+montaña = yuke
+yuke :: mountain; white mountain spirit / montaña
+land of the dead / spirit land = koabey
+tierra de los muertos = koabey
+koabey :: land of the dead / spirit land / tierra de los muertos
+spirits of the dead = opías
+espíritus de los muertos = opías
+opías :: spirits of the dead / espíritus de los muertos
+mother (alt. attested root in names) = toa
+madre = toa
+toa :: mother (alt. attested root in names) / madre
+one = abán
+uno = abán
+abán :: one / uno
+two = biama
+dos = biama
+biama :: two / dos
+three = kabuin
+tres = kabuin
+kabuin :: three / tres
+four = biri
+cuatro = biri
+biri :: four / cuatro
+five = abare
+cinco = abare
+abare :: five / cinco
+to see = arika
+ver = arika
+arika :: to see / ver
+to go = iba
+ir = iba
+iba :: to go / ir
+to speak = ahiya
+hablar = ahiya
+ahiya :: to speak / hablar
+to hear = kama
+oír = kama
+kama :: to hear / oír
+to give = busika
+dar = busika
+busika :: to give / dar
+to eat = aka
+comer = aka
+aka :: to eat / comer
+to drink = sá
+beber = sá
+sá :: to drink / beber
+to love; heart = anichi
+amar; corazón = anichi
+anichi :: to love; heart / amar; corazón
+to live; to be alive = kaké
+vivir = kaké
+kaké :: to live; to be alive / vivir
+to know = shímaka
+saber = shímaka
+shímaka :: to know / saber
+good = taí
+bueno = taí
+taí :: good / bueno
+large; big = wa
+grande = wa
+wa :: large; big / grande
+small = i
+pequeño = i
+i :: small / pequeño
+happy; joyful = chali
+feliz = chali
+chali :: happy; joyful / feliz
+be still; quiet = teitoka
+estáte quieto = teitoka
+teitoka :: be still; quiet / estáte quieto
+the good people = naboriya-táino
+la buena gente = naboriya-táino
+naboriya-táino :: the good people / la buena gente
+my house = da-bohío
+mi casa = da-bohío
+da-bohío :: my house / mi casa
+our native land = wa-borikén
+nuestra tierra nativa = wa-borikén
+wa-borikén :: our native land / nuestra tierra nativa
+her child = to-isa
+su hijo/a (de ella) = to-isa
+to-isa :: her child / su hijo/a (de ella)
+his canoe = li-kanowa
+su canoa (de él) = li-kanowa
+li-kanowa :: his canoe / su canoa (de él)
+without water; no water = ma-ni
+sin agua = ma-ni
+ma-ni :: without water; no water / sin agua
+having gold; with gold = ka-kawóna
+con oro = ka-kawóna
+ka-kawóna :: having gold; with gold / con oro
+I drink water = da-sá ni
+yo bebo agua = da-sá ni
+da-sá ni :: I drink water / yo bebo agua
+we eat cassava bread = wa-aka kasabi
+comemos casabe = wa-aka kasabi
+wa-aka kasabi :: we eat cassava bread / comemos casabe
+O hear, sir = o kãma, waxeri
+oh oye, señor = o kãma, waxeri
+o kãma, waxeri :: O hear, sir / oh oye, señor
+I am God's worker = Dios naboriya daka
+soy siervo de Dios = Dios naboriya daka
+Dios naboriya daka :: I am God's worker / soy siervo de Dios
+speak to us, our grandfather = ahiyakawo, warokoel
+háblanos, nuestro abuelo = ahiyakawo, warokoel
+ahiyakawo, warokoel :: speak to us, our grandfather / háblanos, nuestro abuelo
+let's go = waibá
+vámonos = waibá
+waibá :: let's go / vámonos
+red-tailed hawk = warawáo
+guaraguao = warawáo
+warawáo :: red-tailed hawk / guaraguao
+river crab = haíba
+jaiba = haíba
+haíba :: river crab / jaiba
+parrot = loro
+loro = loro
+loro :: parrot / loro
+owl = múcaro
+múcaro = múcaro
+múcaro :: owl / múcaro
+mahogany = kaoba
+caoba = kaoba
+kaoba :: mahogany / caoba
+soursop = wanábana
+guanábana = wanábana
+wanábana :: soursop / guanábana
+pumpkin; squash = auyama
+auyama = auyama
+auyama :: pumpkin; squash / auyama
+mangrove = manglar
+manglar = manglar
+manglar :: mangrove / manglar
+wild; runaway = simarón
+cimarrón = simarón
+simarón :: wild; runaway / cimarrón
+cave = shagüey
+cueva = shagüey
+shagüey :: cave / cueva
+sword (from Spanish espada) = isúbara
+espada = isúbara
+isúbara :: sword (from Spanish espada) / espada
+mirror (from Spanish espejo) = isíbuse
+espejo = isíbuse
+isíbuse :: mirror (from Spanish espejo) / espejo
+butterfly = tanama
+mariposa = tanama
+tanama :: butterfly / mariposa
+loincloth = wayuko
+taparrabo = wayuko
+wayuko :: loincloth / taparrabo
+skirt; wrap = nagua
+nagua = nagua
+nagua :: skirt; wrap / nagua
+face; facial ornament = wayíza
+rostro; máscara facial = wayíza
+wayíza :: face; facial ornament / rostro; máscara facial
+shaman; healer = behíke
+behíque = behíke
+behíke :: shaman; healer / behíque
+rectangular chiefly house = kaney
+caney = kaney
+kaney :: rectangular chiefly house / caney
+conch shell = kobo
+cobo = kobo
+kobo :: conch shell / cobo
+calabash tree/gourd = higüera
+higüera = higüera
+higüera :: calabash tree/gourd / higüera
+hog plum = hobo
+jobo = hobo
+hobo :: hog plum / jobo
+mamey fruit = mamey
+mamey = mamey
+mamey :: mamey fruit / mamey
+sugar apple = anón
+anón = anón
+anón :: sugar apple / anón
+Spanish lime = kenepa
+quenepa = kenepa
+kenepa :: Spanish lime / quenepa
+coquí frog = kokí
+coquí = kokí
+kokí :: coquí frog / coquí
+gray kingbird = pitirre
+pitirre = pitirre
+pitirre :: gray kingbird / pitirre
+sea turtle = karey
+carey = karey
+karey :: sea turtle / carey
+gourd bowl = ditas
+dita = ditas
+ditas :: gourd bowl / dita
+conch trumpet = fotuto
+fotuto = fotuto
+fotuto :: conch trumpet / fotuto
+rattle = maraka
+maraca = maraka
+maraka :: rattle / maraca
+gourd scraper instrument = güiro
+güiro = güiro
+güiro :: gourd scraper instrument / güiro
+I am Taíno / I am good = taíno daka
+soy taíno / soy bueno = taíno daka
+taíno daka :: I am Taíno / I am good / soy taíno / soy bueno
+our father = wakía baba
+nuestro padre = wakía baba
+wakía baba :: our father / nuestro padre
+give to us = busika wakía
+danos = busika wakía
+busika wakía :: give to us / danos
+come to us = wariko wakía
+ven a nosotros = wariko wakía
+wariko wakía :: come to us / ven a nosotros
+island of blood = oubao moín
+isla de sangre = oubao moín
+oubao moín :: island of blood / isla de sangre
+lord of earth and waters = guami kení
+señor de tierra y aguas = guami kení
+guami kení :: lord of earth and waters / señor de tierra y aguas
+lord of moon and sun = guami karaya wey
+señor de luna y sol = guami karaya wey
+guami karaya wey :: lord of moon and sun / señor de luna y sol
+O hear, sir, we see gold jewels. => O kãma, waxeri, warikẽ kawóna yari.
+Oh oye, señor, vemos joyas de oro. => O kãma, waxeri, warikẽ kawóna yari.
+O kãma, waxeri, warikẽ kawóna yari.
+Do not kill [me], I am Juan de Esquivel. => Mayani makana, Juan desquivel daka.
+No me mates, yo soy Juan de Esquivel. => Mayani makana, Juan desquivel daka.
+Mayani makana, Juan desquivel daka.
+I am God's worker. => Dios naboriya daka.
+Soy siervo de Dios. => Dios naboriya daka.
+Dios naboriya daka.
+Speak to us, our grandfather. => Ahiyakawo, warokoel.
+Háblanos, nuestro abuelo. => Ahiyakawo, warokoel.
+Ahiyakawo, warokoel.
+Let's go, it is not important that our master is upset. => Waibá, sinato makabuka wamekina.
+Vámonos, no importa que nuestro señor esté enojado. => Waibá, sinato makabuka wamekina.
+Waibá, sinato makabuka wamekina.
+Our master is greatly irritated. => Teketa sinato wamekina.
+Nuestro señor está muy irritado. => Teketa sinato wamekina.
+Teketa sinato wamekina.
+Good day. => Taí wey.
+Buenos días. => Taí wey.
+Taí wey.
+I am Taíno. => Taíno daka.
+Soy taíno. => Taíno daka.
+Taíno daka.
+Our Borikén is good. => Wa-borikén taí.
+Nuestro Borikén es bueno. => Wa-borikén taí.
+Wa-borikén taí.
+My house has water. => Da-bohío ka-ni.
+Mi casa tiene agua. => Da-bohío ka-ni.
+Da-bohío ka-ni.
+Let's go to the batey. => Waibá batey.
+Vamos al batey. => Waibá batey.
+Waibá batey.
+His canoe is large. => Li-kanowa wa.
+Su canoa es grande. => Li-kanowa wa.
+Li-kanowa wa.
+Her child is happy. => To-isa chali.
+Su hijo/a está feliz. => To-isa chali.
+To-isa chali.
+I eat cassava bread. => Da-aka kasabi.
+Como casabe. => Da-aka kasabi.
+Da-aka kasabi.
+We drink water. => Wa-sá ni.
+Bebemos agua. => Wa-sá ni.
+Wa-sá ni.
+No hurricane / without storm. => Ma-hurakán.
+Sin huracán. => Ma-hurakán.
+Ma-hurakán.
+The village has spirits. => Ka-semí yukayeke.
+La aldea tiene cemíes. => Ka-semí yukayeke.
+Ka-semí yukayeke.
+Speak, our father. => Ahiya wakía baba.
+Habla, nuestro padre. => Ahiya wakía baba.
+Ahiya wakía baba.
+I see the sun. => Da-arika wey.
+Veo el sol. => Da-arika wey.
+Da-arika wey.
+The coquí speaks / sings. => Kokí ahiya.
+El coquí habla / canta. => Kokí ahiya.
+Kokí ahiya.
+Love Borikén. => Anichi borikén.
+Ama a Borikén. => Anichi borikén.
+Anichi borikén.
+da- means my or I
+wa- means our or we
+li- means his or he
+to- means her or she
+ma- means without or not
+ka- means having or with
+Borikén is the native land
+Taíno daka means I am good
+Waibá means lets go
+O kãma, waxeri, warikẽ kawóna yari
+Ahiyakawo, warokoel
+Dios naboriya daka
