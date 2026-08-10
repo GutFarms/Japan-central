@@ -46,8 +46,8 @@ fn main() -> eframe::Result<()> {
 const C_BG: Color32 = Color32::from_rgb(5, 8, 10);
 const C_BG_2: Color32 = Color32::from_rgb(10, 16, 18);
 const C_PANEL: Color32 = Color32::from_rgb(14, 22, 24);
-const C_PANEL_SOFT: Color32 = Color32::from_rgba_unmultiplied(22, 34, 36, 208);
-const C_PANEL_QUIET: Color32 = Color32::from_rgba_unmultiplied(11, 18, 20, 188);
+const C_PANEL_SOFT: Color32 = Color32::from_rgb(22, 34, 36);
+const C_PANEL_QUIET: Color32 = Color32::from_rgb(11, 18, 20);
 const C_STROKE: Color32 = Color32::from_rgb(43, 63, 62);
 const C_BUBBLE: Color32 = Color32::from_rgb(30, 49, 48);
 const C_BUBBLE_HI: Color32 = Color32::from_rgb(113, 153, 141);
@@ -128,9 +128,10 @@ fn apply_theme(ctx: &egui::Context) {
     style.visuals.widgets.inactive.bg_fill = C_BUBBLE;
     style.visuals.widgets.hovered.bg_fill = Color32::from_rgb(42, 70, 66);
     style.visuals.widgets.active.bg_fill = C_LIME;
-    style.visuals.widgets.inactive.fg_stroke = Stroke::new(1.0, C_TEXT);
-    style.visuals.widgets.hovered.fg_stroke = Stroke::new(1.0, C_TEXT);
-    style.visuals.widgets.active.fg_stroke = Stroke::new(1.0, Color32::from_rgb(8, 16, 10));
+    style.visuals.widgets.inactive.fg_stroke = Stroke::new(1.0_f32, C_TEXT);
+    style.visuals.widgets.hovered.fg_stroke = Stroke::new(1.0_f32, C_TEXT);
+    style.visuals.widgets.active.fg_stroke =
+        Stroke::new(1.0_f32, Color32::from_rgb(8, 16, 10));
     style.visuals.selection.bg_fill = Color32::from_rgba_unmultiplied(198, 255, 64, 72);
     style.visuals.widgets.inactive.rounding = Rounding::same(16.0);
     style.visuals.widgets.hovered.rounding = Rounding::same(16.0);
@@ -607,7 +608,7 @@ impl CompanionApp {
                         Frame::none()
                             .fill(Color32::from_rgba_unmultiplied(7, 13, 14, 188))
                             .rounding(Rounding::same(24.0))
-                            .stroke(Stroke::new(1.0, C_STROKE))
+                            .stroke(Stroke::new(1.0_f32, C_STROKE))
                             .inner_margin(Margin::symmetric(18.0, 16.0))
                             .show(ui, |ui| {
                                 ui.set_min_width(245.0);
@@ -838,7 +839,10 @@ impl CompanionApp {
             Frame::none()
                 .fill(Color32::from_rgba_unmultiplied(4, 8, 9, 202))
                 .rounding(Rounding::same(16.0))
-                .stroke(Stroke::new(1.0, Color32::from_rgba_unmultiplied(198, 255, 64, 18)))
+                .stroke(Stroke::new(
+                    1.0_f32,
+                    Color32::from_rgba_unmultiplied(198, 255, 64, 18),
+                ))
                 .inner_margin(Margin::same(10.0))
                 .show(ui, |ui| {
                     ScrollArea::vertical()
@@ -910,7 +914,7 @@ impl CompanionApp {
             Frame::none()
                 .fill(Color32::from_rgba_unmultiplied(4, 8, 9, 224))
                 .rounding(Rounding::same(18.0))
-                .stroke(Stroke::new(1.0, C_STROKE))
+                .stroke(Stroke::new(1.0_f32, C_STROKE))
                 .inner_margin(Margin::same(14.0))
                 .show(ui, |ui| {
                     ScrollArea::vertical()
@@ -1150,7 +1154,10 @@ fn paint_background(ui: &mut egui::Ui, rect: Rect, pulse: f32, mining: bool) {
                 Pos2::new(x, rect.bottom()),
                 Pos2::new(x + rect.height() * 0.66, rect.top()),
             ],
-            Stroke::new(1.0, Color32::from_rgba_unmultiplied(198, 255, 64, 10)),
+            Stroke::new(
+                1.0_f32,
+                Color32::from_rgba_unmultiplied(198, 255, 64, 10),
+            ),
         );
         x += step;
     }
@@ -1173,7 +1180,10 @@ fn paint_hero_wash(ui: &mut egui::Ui, rect: Rect, pulse: f32, mining: bool) {
             Pos2::new(rect.left() + 22.0, rect.bottom() - 22.0),
             Pos2::new(rect.right() - 32.0, rect.top() + 36.0),
         ],
-        Stroke::new(1.0, Color32::from_rgba_unmultiplied(198, 255, 64, 16)),
+        Stroke::new(
+            1.0_f32,
+            Color32::from_rgba_unmultiplied(198, 255, 64, 16),
+        ),
     );
 }
 
@@ -1185,14 +1195,20 @@ fn sparkline(ui: &mut egui::Ui, values: &VecDeque<f32>, pulse: f32) {
     painter.rect_stroke(
         rect,
         Rounding::same(18.0),
-        Stroke::new(1.0, Color32::from_rgba_unmultiplied(198, 255, 64, 24)),
+        Stroke::new(
+            1.0_f32,
+            Color32::from_rgba_unmultiplied(198, 255, 64, 24),
+        ),
     );
 
     for i in 1..4 {
         let y = rect.top() + rect.height() * i as f32 / 4.0;
         painter.line_segment(
             [Pos2::new(rect.left() + 14.0, y), Pos2::new(rect.right() - 14.0, y)],
-            Stroke::new(1.0, Color32::from_rgba_unmultiplied(235, 244, 238, 12)),
+            Stroke::new(
+                1.0_f32,
+                Color32::from_rgba_unmultiplied(235, 244, 238, 12),
+            ),
         );
     }
 
@@ -1212,15 +1228,18 @@ fn sparkline(ui: &mut egui::Ui, values: &VecDeque<f32>, pulse: f32) {
         })
         .collect();
     for pair in points.windows(2) {
-        painter.line_segment([pair[0], pair[1]], Stroke::new(6.0, rgba(C_LIME, 22)));
-        painter.line_segment([pair[0], pair[1]], Stroke::new(2.25, C_LIME));
+        painter.line_segment([pair[0], pair[1]], Stroke::new(6.0_f32, rgba(C_LIME, 22)));
+        painter.line_segment([pair[0], pair[1]], Stroke::new(2.25_f32, C_LIME));
     }
 
     let scan_t = (pulse * 0.16).fract();
     let scan_x = inner.left() + inner.width() * scan_t;
     painter.line_segment(
         [Pos2::new(scan_x, inner.top()), Pos2::new(scan_x, inner.bottom())],
-        Stroke::new(1.0, Color32::from_rgba_unmultiplied(198, 255, 64, 80)),
+        Stroke::new(
+            1.0_f32,
+            Color32::from_rgba_unmultiplied(198, 255, 64, 80),
+        ),
     );
     if let Some(last) = points.last() {
         painter.circle_filled(*last, 4.5, C_LIME);
@@ -1232,7 +1251,7 @@ fn soft_panel(ui: &mut egui::Ui, title: &str, add: impl FnOnce(&mut egui::Ui)) {
     Frame::none()
         .fill(C_PANEL_SOFT)
         .rounding(Rounding::same(24.0))
-        .stroke(Stroke::new(1.0, C_STROKE))
+        .stroke(Stroke::new(1.0_f32, C_STROKE))
         .inner_margin(Margin::same(18.0))
         .show(ui, |ui| {
             ui.label(
@@ -1252,9 +1271,9 @@ fn nav_button(ui: &mut egui::Ui, label: &str, selected: bool) -> egui::Response 
         Color32::from_rgba_unmultiplied(22, 34, 36, 128)
     };
     let stroke = if selected {
-        Stroke::new(1.0, rgba(C_LIME, 112))
+        Stroke::new(1.0_f32, rgba(C_LIME, 112))
     } else {
-        Stroke::new(1.0, C_STROKE)
+        Stroke::new(1.0_f32, C_STROKE)
     };
     ui.add(
         egui::Button::new(
@@ -1279,7 +1298,10 @@ fn cta_button(ui: &mut egui::Ui, label: &str, lime: bool, width: f32) -> egui::R
     ui.add(
         egui::Button::new(RichText::new(label).color(text).font(display_font(17.0)))
             .fill(fill)
-            .stroke(Stroke::new(1.0, rgba(C_LIME, if lime { 100 } else { 38 })))
+            .stroke(Stroke::new(
+                1.0_f32,
+                rgba(C_LIME, if lime { 100 } else { 38 }),
+            ))
             .rounding(Rounding::same(20.0))
             .min_size(Vec2::new(width, 46.0)),
     )
@@ -1289,7 +1311,7 @@ fn soft_button(ui: &mut egui::Ui, label: &str, width: f32) -> egui::Response {
     ui.add(
         egui::Button::new(RichText::new(label).color(C_TEXT).size(13.0))
             .fill(C_BUBBLE)
-            .stroke(Stroke::new(1.0, C_STROKE))
+            .stroke(Stroke::new(1.0_f32, C_STROKE))
             .rounding(Rounding::same(16.0))
             .min_size(Vec2::new(width, 36.0)),
     )
@@ -1299,7 +1321,7 @@ fn status_chip(ui: &mut egui::Ui, label: &str, color: Color32) {
     Frame::none()
         .fill(Color32::from_rgba_unmultiplied(color.r(), color.g(), color.b(), 28))
         .rounding(Rounding::same(999.0))
-        .stroke(Stroke::new(1.0, rgba(color, 92)))
+        .stroke(Stroke::new(1.0_f32, rgba(color, 92)))
         .inner_margin(Margin::symmetric(10.0, 5.0))
         .show(ui, |ui| {
             ui.label(RichText::new(label).color(color).font(mono_ui_font(11.0)));
@@ -1324,7 +1346,10 @@ fn clock_chip(ui: &mut egui::Ui, mhz: u8, selected: bool) -> egui::Response {
                 .font(mono_ui_font(12.0)),
         )
         .fill(if selected { C_LIME } else { C_BUBBLE })
-        .stroke(Stroke::new(1.0, if selected { rgba(C_LIME, 120) } else { C_STROKE }))
+        .stroke(Stroke::new(
+            1.0_f32,
+            if selected { rgba(C_LIME, 120) } else { C_STROKE },
+        ))
         .rounding(Rounding::same(999.0))
         .min_size(Vec2::new(48.0, 30.0)),
     )
