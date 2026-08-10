@@ -9,9 +9,10 @@ It scores tickers for expected income (dividends + capital appreciation signals)
 1. Pulls market snapshots (Yahoo Finance public quotes; works offline with a built-in simulator).
 2. Scores candidates on momentum, dividend yield proxy, volatility risk, and trend.
 3. Optionally asks **Ollama** (recommended on Pi 5) or OpenAI to pick/weight ideas.
-4. Risk gate enforces max position size, daily loss halt, cash reserve, and allowlist.
-5. Executes via local paper ledger or Alpaca (paper/live).
-6. Exposes a tiny FastAPI status dashboard + CLI.
+4. **Investment guard** (Alinia-inspired) rejects LLM ideas that disagree with income scores, prefers income ETFs, and throttles buys on drawdown.
+5. Risk gate enforces max position size, daily loss halt, cash reserve, and allowlist.
+6. Executes via local paper ledger or Alpaca (paper/live).
+7. Exposes a tiny FastAPI status dashboard + CLI.
 
 ## Safety defaults
 
@@ -19,6 +20,7 @@ It scores tickers for expected income (dividends + capital appreciation signals)
 |---|---|
 | Trading mode | `paper` |
 | Live unlock | Off (`ALLOW_LIVE_TRADING=false`) |
+| Investment guard | On (score agreement + DD throttle) |
 | Wallet transfers | Paper simulation (`wallet.backend: paper`) |
 | Live transfers unlock | Off (`ALLOW_LIVE_TRANSFERS=false`) |
 | Kill switch | `pi-invest halt` freezes orders + outbound sends |

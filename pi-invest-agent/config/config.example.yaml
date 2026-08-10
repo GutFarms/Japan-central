@@ -22,9 +22,24 @@ risk:
   max_position_pct: 0.15       # 15% of equity per symbol
   max_daily_loss_pct: 0.03     # halt trading after -3% day
   cash_reserve_pct: 0.10       # keep 10% cash
-  max_open_positions: 8
+  max_open_positions: 6
   min_confidence: 0.55         # ignore weak signals
   min_trade_notional: 25.0     # USD
+
+# Investment guard (Alinia-inspired): block reckless / hallucinated AI trades
+guard:
+  enabled: true
+  require_score_agreement: true   # LLM buys need heuristic agreement (or very high proxy)
+  agreement_bypass_proxy: 0.62
+  min_buy_income_proxy: 0.48      # selectivity → better expected income
+  max_sell_income_proxy: 0.42     # don't dump healthy income names
+  max_confidence_above_composite: 0.12
+  prefer_income_etfs: true
+  income_etf_boost: 0.02
+  max_buy_intents: 4              # concentrate capital
+  drawdown_throttle_pct: 0.04     # halve buys after 4% NAV DD
+  drawdown_halt_buys_pct: 0.08    # stop new buys after 8% DD
+  audit_intents: true
 
 broker:
   backend: paper               # paper | alpaca

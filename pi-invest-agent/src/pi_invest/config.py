@@ -17,6 +17,30 @@ class RiskConfig(BaseModel):
     min_trade_notional: float = 25.0
 
 
+class GuardConfig(BaseModel):
+    """Alinia-style investment guard — validate AI intents against scores."""
+
+    enabled: bool = True
+    # LLM buys must also clear heuristic buy set unless proxy is very strong
+    require_score_agreement: bool = True
+    agreement_bypass_proxy: float = 0.62
+    # Quality floor for new buys (profitability via selectivity)
+    min_buy_income_proxy: float = 0.48
+    # Refuse LLM sells of names still scoring as healthy income
+    max_sell_income_proxy: float = 0.42
+    # Cap LLM-reported confidence vs quantitative composite
+    max_confidence_above_composite: float = 0.12
+    max_llm_target_weight: float = 0.15
+    prefer_income_etfs: bool = True
+    income_etf_boost: float = 0.02
+    # Concentrate capital in best ideas
+    max_buy_intents: int = 4
+    # Drawdown protection (fraction, e.g. 0.04 = 4%)
+    drawdown_throttle_pct: float = 0.04
+    drawdown_halt_buys_pct: float = 0.08
+    audit_intents: bool = True
+
+
 class BrokerConfig(BaseModel):
     backend: Literal["paper", "alpaca"] = "paper"
     starting_cash: float = 10_000.0
@@ -122,6 +146,7 @@ class AppConfig(BaseModel):
         default_factory=lambda: ["SCHD", "VYM", "JEPI", "QQQ", "SPY", "BND"]
     )
     risk: RiskConfig = Field(default_factory=RiskConfig)
+    guard: GuardConfig = Field(default_factory=GuardConfig)
     broker: BrokerConfig = Field(default_factory=BrokerConfig)
     market: MarketConfig = Field(default_factory=MarketConfig)
     llm: LlmConfig = Field(default_factory=LlmConfig)

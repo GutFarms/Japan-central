@@ -72,19 +72,39 @@ def score_symbol(quote: Quote, history: list[Bar]) -> SignalScore:
 def heuristic_intents(
     scores: list[SignalScore],
     top_n: int = 4,
+    min_buy_proxy: float = 0.46,
+    max_sell_proxy: float = 0.34,
 ) -> list[TradeIntent]:
-    """Allocate more weight to higher expected-income scores."""
-    ranked = sorted(scores, key=lambda s: s.expected_income_proxy, reverse=True)
-    buys = [s for s in ranked if s.expected_income_proxy >= 0.45][:top_n]
+    """Allocate more weight to higher expected-income scores.
+
+    Prefer durable income names when proxies are close — concentrates edge
+    without raising live risk.
+    """
+    preferred = {"SCHD", "VYM", "JEPI", "JEPQ", "BND", "DIVO"}
+
+    def rank_key(s: SignalScore) -> tuple:
+        bonus = 0.03 if s.symbol.upper() in preferred else 0.0
+        return (s.expected_income_proxy + bonus, s.composite)
+
+    ranked = sorted(scores, key=rank_key, reverse=True)
+    buys = [s for s in ranked if s.expected_income_proxy >= min_buy_proxy][:top_n]
+    if not buys:
+        # Fall back to single best name if anything clears a softer floor
+        soft = [s for s in ranked if s.expected_income_proxy >= 0.40][:1]
+        buys = soft
     if not buys:
         return []
 
-    # Softmax-ish weights from scores
-    exps = [2.71828 ** (s.expected_income_proxy * 3) for s in buys]
+    # Softmax-ish weights from scores — concentrate a bit more on #1
+    exps = [2.71828 ** (s.expected_income_proxy * 3.4) for s in buys]
     total = sum(exps) or 1.0
     intents: list[TradeIntent] = []
-    for s, e in zip(buys, exps):
-        weight = 0.08 + 0.10 * (e / total)  # ~8–18% each, risk gate caps later
+    for idx, (s, e) in enumerate(zip(buys, exps)):
+        # Top idea gets a slightly larger slice (still capped by risk gate)
+        tip = 0.02 if idx == 0 else 0.0
+        weight = 0.09 + 0.09 * (e / total) + tip  # ~9–20% before cap
+        if s.symbol.upper() in preferred:
+            weight += 0.01
         intents.append(
             TradeIntent(
                 symbol=s.symbol,
@@ -99,8 +119,8 @@ def heuristic_intents(
             )
         )
 
-    # Suggest trimming weak holdings later in orchestrator via sells for bottom scores
-    weak = [s for s in ranked if s.expected_income_proxy < 0.35][-3:]
+    # Trim only clearly weak holdings
+    weak = [s for s in ranked if s.expected_income_proxy < max_sell_proxy][-3:]
     for s in weak:
         intents.append(
             TradeIntent(

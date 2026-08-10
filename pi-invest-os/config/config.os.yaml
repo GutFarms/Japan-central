@@ -20,9 +20,21 @@ risk:
   max_position_pct: 0.15
   max_daily_loss_pct: 0.03
   cash_reserve_pct: 0.10
-  max_open_positions: 8
+  max_open_positions: 6
   min_confidence: 0.55
   min_trade_notional: 25.0
+
+# Alinia-style guard: AI intents must clear quantitative income scores
+guard:
+  enabled: true
+  require_score_agreement: true
+  min_buy_income_proxy: 0.48
+  max_sell_income_proxy: 0.42
+  prefer_income_etfs: true
+  max_buy_intents: 4
+  drawdown_throttle_pct: 0.04
+  drawdown_halt_buys_pct: 0.08
+  audit_intents: true
 
 broker:
   backend: paper

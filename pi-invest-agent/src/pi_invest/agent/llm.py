@@ -11,9 +11,11 @@ from pi_invest.models import AccountSnapshot, Side, SignalScore, TradeIntent
 
 
 SYSTEM_PROMPT = """You are an income-focused portfolio assistant running on a Raspberry Pi.
-Given scored tickers and the current account, propose a small set of trades that
-you believe will maximize expected income (dividends + durable appreciation)
-while staying conservative.
+Your job is expected income (dividends + durable appreciation), not speculation.
+
+Given scored tickers and the current account, propose a SMALL set of trades.
+A separate investment guard will REJECT any idea that disagrees with the
+quantitative income scores — so align with high expected_income_proxy names.
 
 Return ONLY valid JSON with this shape:
 {
@@ -31,9 +33,11 @@ Return ONLY valid JSON with this shape:
 
 Rules:
 - Only use symbols from the provided universe/scores.
-- Prefer diversified income ETFs over speculative single names unless momentum is strong.
+- Prefer diversified income ETFs (SCHD, VYM, JEPI, BND) over speculative single names.
+- Prefer buys where expected_income_proxy is strong; do not sell strong income names.
 - target_weight must be between 0 and 0.15.
-- Be concise. No markdown.
+- confidence must not greatly exceed the symbol's composite score.
+- At most 4 buy intents. Be concise. No markdown.
 """
 
 
@@ -154,8 +158,8 @@ def _parse_intents(raw: str, universe: list[str]) -> list[TradeIntent]:
             TradeIntent(
                 symbol=sym,
                 side=side,
-                target_weight=float(item.get("target_weight") or 0.0),
-                confidence=float(item.get("confidence") or 0.0),
+                target_weight=min(0.15, max(0.0, float(item.get("target_weight") or 0.0))),
+                confidence=min(1.0, max(0.0, float(item.get("confidence") or 0.0))),
                 rationale=str(item.get("rationale") or "llm"),
                 source="llm",
             )

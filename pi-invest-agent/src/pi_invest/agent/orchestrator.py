@@ -6,6 +6,7 @@ from zoneinfo import ZoneInfo
 
 from typing import TYPE_CHECKING, Any
 
+from pi_invest.agent.guard import InvestmentGuard
 from pi_invest.agent.llm import LlmAdvisor
 from pi_invest.agent.risk import RiskGate
 from pi_invest.agent.scoring import heuristic_intents, score_symbol
@@ -52,6 +53,7 @@ class InvestAgent:
         self.broker = broker
         self.db = db
         self.risk = RiskGate(cfg.risk, cfg.universe)
+        self.guard = InvestmentGuard(cfg.guard)
         self.llm = LlmAdvisor(cfg.llm, env)
         self.safety = safety or SafetyGate(db)
         self.journal = journal or PerformanceJournal(db, self.safety)
@@ -91,19 +93,36 @@ class InvestAgent:
             skipped.append(f"HALTED: {st.reason or 'kill switch active'}")
 
         intents: list[TradeIntent] = self.risk.trim_overweight(account)
+        heur = heuristic_intents(scores) if scores else []
 
         llm_raw = None
+        guard_meta: dict = {}
         if self.llm.enabled() and scores:
             llm_intents, llm_raw = self.llm.advise(scores, account, self.cfg.universe)
-            if llm_intents:
-                intents.extend(llm_intents)
-            elif llm_raw and str(llm_raw).startswith("llm error"):
+            if llm_raw and str(llm_raw).startswith("llm error"):
                 skipped.append(str(llm_raw))
-                intents.extend(heuristic_intents(scores))
-            else:
-                intents.extend(heuristic_intents(scores))
+                llm_intents = []
+            merged, guard_notes, guard_meta = self.guard.merge_intents(
+                scores, llm_intents or [], heur
+            )
+            intents.extend(merged)
+            skipped.extend(guard_notes)
+            self._audit_guard(cycle_id, guard_meta)
         else:
-            intents.extend(heuristic_intents(scores))
+            merged, guard_notes, guard_meta = self.guard.merge_intents(
+                scores, [], heur
+            )
+            intents.extend(merged)
+            skipped.extend(guard_notes)
+
+        # Drawdown throttle (Alinia-style capital protection)
+        try:
+            summary = self.journal.summary()
+            dd = float(summary.max_drawdown_pct or 0.0)
+        except Exception:  # noqa: BLE001
+            dd = 0.0
+        intents, dd_notes = self.guard.apply_drawdown_throttle(intents, dd)
+        skipped.extend(dd_notes)
 
         held = {p.symbol for p in account.positions}
         filtered_intents: list[TradeIntent] = []
@@ -128,6 +147,8 @@ class InvestAgent:
                 meta={
                     "data_source": self.market.last_source,
                     "halted": halted,
+                    "guard": guard_meta,
+                    "drawdown_pct": dd,
                 },
             )
             self.db.save_decision(decision)
@@ -186,12 +207,33 @@ class InvestAgent:
                 "halted": halted,
                 "preview": dry_run,
                 "planned_orders": planned_orders,
+                "guard": guard_meta,
+                "drawdown_pct": dd,
             },
         )
         self.db.save_decision(decision)
         if self.cfg.safety.journal_enabled:
             self._journal(account_after, cycle_id)
         return decision
+
+    def _audit_guard(self, cycle_id: str, meta: dict) -> None:
+        if not self.cfg.guard.audit_intents or not self.cfg.safety.audit_enabled:
+            return
+        try:
+            blocked = meta.get("blocked") or []
+            allowed = meta.get("allowed") or []
+            if blocked:
+                self.db.audit(
+                    "intent.guard.blocked",
+                    f"{cycle_id}: " + "; ".join(blocked[:12]),
+                )
+            if allowed:
+                self.db.audit(
+                    "intent.guard.allowed",
+                    f"{cycle_id}: " + "; ".join(allowed[:12]),
+                )
+        except Exception:  # noqa: BLE001
+            pass
 
     def _plan_orders(
         self,

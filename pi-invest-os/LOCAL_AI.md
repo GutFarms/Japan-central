@@ -31,7 +31,17 @@ Later cycles do not call OpenAI, Alpaca, Coinbase, or ntfy.
 curl -fsSL https://raw.githubusercontent.com/GutFarms/Japan-central/cursor/pi-invest-os-0b6b/pi-invest-os/scripts/enable-local-ai-on-pi.sh | sudo bash
 ```
 
-## Verify
+## Investment guard (Alinia-inspired)
+
+On-device policy layer between Ollama and the risk gate:
+
+- Rejects LLM buys that disagree with quantitative income scores
+- Prefers income ETFs (SCHD/VYM/JEPI/BND) when scores are close
+- Halves new buys after ~4% NAV drawdown; blocks buys after ~8%
+- Audits allowed/blocked intents when `safety.audit_enabled` is on
+
+Still paper-default; does not unlock live trading.
+
 
 **Browser UI is the dashboard, not Ollama:**
 
