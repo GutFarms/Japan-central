@@ -1949,7 +1949,7 @@ fn usb_push_job(
         log_msg(
             msg_tx,
             LogKind::Warn,
-            "Flash firmware 0.6.2+ for reliable split jobs (jh/jt/ja)".into(),
+            String::from("Flash firmware 0.6.2+ for reliable split jobs (jh/jt/ja)"),
         );
     }
 
