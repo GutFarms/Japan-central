@@ -80,13 +80,28 @@ class TutorEngine:
 
         return {
             "skill": skill,
-            "title": f"Boriken lesson: {skill.replace('_', ' ')}",
+            "title": f"Play Borikén: {skill.replace('_', ' ')}",
             "explanation": self._explain_skill(skill),
+            "vibe": "areyto",
             "examples": [
                 {"boriken": b, "english": e, "spanish": s} for b, e, s in examples if b
             ],
-            "practice": {"prompt": prompt, "answer": answer},
+            "practice": {"prompt": prompt, "answer": answer, "xp": 12},
+            "cheer": "Small reps, big reclaiming. Say it out loud once.",
+            "fun_hook": self._fun_hook(skill),
         }
+
+    def _fun_hook(self, skill: str) -> str:
+        return {
+            "greetings": "Mission: greet one person (or your mirror) with Taí wey.",
+            "identity": "Mission: whisper Taíno daka like a power-up.",
+            "home": "Mission: point at a room and name bohío.",
+            "nature": "Mission: look outside and name wey, yukubiya, or bara.",
+            "food": "Mission: before your next snack, say the Boriken food word.",
+            "kinship": "Mission: text a family member using baba or nana in a joke caption.",
+            "grammar_possessive": "Mission: invent da- + any noun you know.",
+            "grammar_negation": "Mission: make a silly ma- phrase (ma-hurakán = no storm vibes).",
+        }.get(skill, "Mission: use one new word before sunset.")
 
     def _explain_skill(self, skill: str) -> str:
         return {
@@ -104,13 +119,14 @@ class TutorEngine:
         msg = message.strip()
         lower = msg.lower()
 
-        if any(k in lower for k in ("hello", "hi", "hola", "taiguey", "taí wey")):
+        if any(k in lower for k in ("hello", "hi", "hola", "taiguey", "taí wey", "play", "fun")):
             return {
-                "reply_boriken": "Taí wey! Taíno tí.",
-                "reply_english": "Good day! Good spirit be with you.",
-                "reply_spanish": "¡Buenos días! Que el buen espíritu te acompañe.",
+                "reply_boriken": "Taí wey! Waibá — let's play Borikén.",
+                "reply_english": "Good day! Let's make learning feel like an areyto.",
+                "reply_spanish": "¡Buenos días! Aprendamos como un areíto.",
                 "correction": None,
                 "suggestion": self.lesson("greetings"),
+                "play_idea": "Try /v1/fun/daily for a three-step island run.",
             }
 
         if lower.startswith("translate:") or lower.startswith("traduce:"):
@@ -122,33 +138,40 @@ class TutorEngine:
                 "reply_spanish": result.spanish,
                 "correction": None,
                 "result": result.to_dict(),
+                "fun_fact": result.fun_fact,
             }
 
-        if "?" in msg or lower.startswith("what") or lower.startswith("cómo") or lower.startswith("que"):
-            explained = self.recon.explain(msg.replace("?", ""))
+        if "?" in msg or lower.startswith("what") or lower.startswith("cómo") or lower.startswith("que") or lower.startswith("define"):
+            term = msg.replace("?", "")
+            for prefix in ("what is", "what's", "define", "qué es", "que es", "cómo se dice"):
+                if term.lower().startswith(prefix):
+                    term = term[len(prefix) :]
+                    break
+            explained = self.recon.explain(term.strip())
             if explained["matches"]:
                 m = explained["matches"][0]
                 return {
                     "reply_boriken": m["boriken"],
-                    "reply_english": m["english"],
-                    "reply_spanish": m["spanish"],
+                    "reply_english": m.get("definition_en") or m["english"],
+                    "reply_spanish": m.get("definition_es") or m["spanish"],
                     "correction": None,
                     "result": explained,
+                    "fun_fact": m.get("fun_fact", ""),
                 }
 
-        # Treat as attempted Boriken or English to translate
         result = self.recon.translate(msg)
         lesson = self.lesson()
         return {
             "reply_boriken": result.boriken or "Ahiya wakía.",
             "reply_english": (
                 f"I read that as: {result.english or msg}. "
-                f"Try this practice: {lesson['practice']['prompt']}"
+                f"Quest: {lesson['fun_hook']}"
             ),
             "reply_spanish": result.spanish or "Practiquemos boriken juntos.",
             "correction": None,
             "result": result.to_dict(),
             "suggestion": lesson,
+            "fun_fact": result.fun_fact,
         }
 
     def quiz(self, n: int = 5) -> list[dict[str, Any]]:
@@ -161,8 +184,11 @@ class TutorEngine:
                     "prompt": f"Translate to Boriken: {e.english.split(';')[0].strip()}",
                     "answer": e.boriken,
                     "spanish": e.spanish,
+                    "definition_en": e.definition_en,
+                    "fun_fact": e.fun_fact,
                     "attested": e.attested,
                     "confidence": e.confidence,
+                    "xp": 8,
                 }
             )
         return cards

@@ -43,6 +43,10 @@ class ReconstructionResult:
     morphology: list[str]
     notes: str
     matches: list[dict[str, Any]]
+    definition_en: str = ""
+    definition_es: str = ""
+    fun_fact: str = ""
+    example: str = ""
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -53,6 +57,10 @@ class ReconstructionResult:
             "attestation": self.attestation,
             "morphology": self.morphology,
             "notes": self.notes,
+            "definition_en": self.definition_en,
+            "definition_es": self.definition_es,
+            "fun_fact": self.fun_fact,
+            "example": self.example,
             "matches": self.matches,
         }
 
@@ -98,6 +106,10 @@ class ReconstructionEngine:
                 ),
                 notes=best.etymology or best.source or "Lexicon match.",
                 matches=[h.to_dict() for h in hits[:5]],
+                definition_en=best.definition_en,
+                definition_es=best.definition_es,
+                fun_fact=best.fun_fact,
+                example=best.example or best.boriken,
             )
 
         composed = self._try_compose(text)

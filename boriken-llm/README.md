@@ -39,7 +39,24 @@ curl -s -X POST http://127.0.0.1:8080/v1/translate \
   -d '{"text":"my house"}' | python3 -m json.tool
 ```
 
-## iOS integration
+## Fun learning (iOS)
+
+Modes under `/v1/fun/*`:
+
+| Mode | Endpoint | Vibe |
+|---|---|---|
+| Word of the Day | `GET /v1/fun/word-of-the-day` | One island word + XP quest |
+| Memory Bohío | `GET /v1/fun/flashcards` | Flip cards with definitions + fun facts |
+| Batey Match | `GET /v1/fun/match` | Match Boriken ↔ meaning |
+| Konuko Fill-In | `GET /v1/fun/fill-blank` | Plant the missing word |
+| Areyto Quest | `GET /v1/fun/story` | Tiny choose-your-path adventure |
+| Daily Island Run | `GET /v1/fun/daily` | Three-step streak combo |
+
+Definitions: every lexicon entry now has `definition_en`, `definition_es`, `fun_fact`, and `example`. Use `GET /v1/define/{term}`.
+
+The sample SwiftUI home (`ios/SampleApp/BorikenHomeView.swift`) plays Word of the Day, Batey Match, lessons, XP, and streaks.
+
+## How the “LLM” works
 
 1. In Xcode, **File → Add Package Dependencies…** and add the local package `boriken-llm/ios/BorikenKit`.
 2. Point `BorikenClient` at your API host (simulator: `http://127.0.0.1:8080`, device: your LAN/Tailscale/production URL).

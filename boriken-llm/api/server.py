@@ -14,14 +14,15 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 from engine.corpus import load_corpus  # noqa: E402
+from engine.fun import FunLearnEngine  # noqa: E402
 from engine.llm import BorikenLLM  # noqa: E402
 from engine.reconstruct import ReconstructionEngine  # noqa: E402
 from engine.tutor import TutorEngine  # noqa: E402
 
 app = FastAPI(
     title="BorikenLLM API",
-    description="Language reconstruction & tutoring API for the Boriken iOS app",
-    version="0.1.0",
+    description="Fun Boriken language reconstruction & learning API for iOS",
+    version="0.2.0",
 )
 app.add_middleware(
     CORSMiddleware,
@@ -34,6 +35,7 @@ app.add_middleware(
 corpus = load_corpus()
 recon = ReconstructionEngine(corpus)
 tutor = TutorEngine(corpus)
+fun = FunLearnEngine(corpus)
 llm = BorikenLLM()
 
 
@@ -60,14 +62,27 @@ class LessonRequest(BaseModel):
     skill: str | None = None
 
 
+class GradeRequest(BaseModel):
+    mode: str = "practice"
+    answer: str
+    expected: str
+
+
+class ProgressRequest(BaseModel):
+    xp: int = 0
+    streak: int = 0
+
+
 @app.get("/health")
 def health() -> dict[str, Any]:
     return {
         "status": "ok",
         "language": "Boriken (Taíno-Borikenaíki)",
         "lexicon_size": len(corpus.entries),
+        "has_definitions": bool(getattr(corpus.entries[0], "definition_en", "")),
         "llm": llm.info(),
-        "version": "0.1.0",
+        "version": "0.2.0",
+        "play": "/v1/fun/menu",
     }
 
 
@@ -80,6 +95,11 @@ def lexicon(q: str | None = None, tag: str | None = None, limit: int = 50) -> di
     else:
         items = corpus.entries[:limit]
     return {"count": len(items), "items": [i.to_dict() for i in items]}
+
+
+@app.get("/v1/define/{term}")
+def define(term: str) -> dict[str, Any]:
+    return fun.define(term)
 
 
 @app.get("/v1/grammar")
@@ -139,6 +159,54 @@ def complete(req: CompleteRequest) -> dict[str, Any]:
 def system_prompt() -> dict[str, str]:
     path = ROOT / "prompts" / "system.md"
     return {"prompt": path.read_text(encoding="utf-8")}
+
+
+# --- Fun learning modes ---
+
+
+@app.get("/v1/fun/menu")
+def fun_menu() -> dict[str, Any]:
+    return fun.play_menu()
+
+
+@app.get("/v1/fun/word-of-the-day")
+def word_of_the_day() -> dict[str, Any]:
+    return fun.word_of_the_day()
+
+
+@app.get("/v1/fun/flashcards")
+def flashcards(n: int = 8, tag: str | None = None) -> dict[str, Any]:
+    return fun.flashcards(n=n, tag=tag)
+
+
+@app.get("/v1/fun/match")
+def match_game(n: int = 4, tag: str | None = None) -> dict[str, Any]:
+    return fun.match_game(n=n, tag=tag)
+
+
+@app.get("/v1/fun/fill-blank")
+def fill_blank(n: int = 5) -> dict[str, Any]:
+    return fun.fill_blank(n=n)
+
+
+@app.get("/v1/fun/story")
+def story_quest() -> dict[str, Any]:
+    return fun.story_quest()
+
+
+@app.get("/v1/fun/daily")
+def daily_challenge() -> dict[str, Any]:
+    return fun.daily_challenge()
+
+
+@app.post("/v1/fun/grade")
+def grade(req: GradeRequest) -> dict[str, Any]:
+    return fun.grade(req.mode, req.answer, req.expected)
+
+
+@app.post("/v1/fun/progress")
+def progress(req: ProgressRequest) -> dict[str, Any]:
+    return fun.progress_preview(xp=req.xp, streak=req.streak)
 
 
 def main() -> None:

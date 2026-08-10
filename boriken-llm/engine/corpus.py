@@ -46,6 +46,10 @@ class Lexeme:
     tags: tuple[str, ...]
     etymology: str | None = None
     source: str | None = None
+    definition_en: str = ""
+    definition_es: str = ""
+    fun_fact: str = ""
+    example: str = ""
 
     @property
     def confidence(self) -> str:
@@ -69,6 +73,10 @@ class Lexeme:
             "tags": list(self.tags),
             "etymology": self.etymology,
             "source": self.source,
+            "definition_en": self.definition_en,
+            "definition_es": self.definition_es,
+            "fun_fact": self.fun_fact,
+            "example": self.example or self.boriken,
         }
 
 
@@ -90,6 +98,10 @@ class Corpus:
                     tags=tuple(item.get("tags", [])),
                     etymology=item.get("etymology"),
                     source=item.get("source"),
+                    definition_en=item.get("definition_en", ""),
+                    definition_es=item.get("definition_es", ""),
+                    fun_fact=item.get("fun_fact", ""),
+                    example=item.get("example", item["boriken"]),
                 )
             )
         self.grammar = json.loads((self.root / "grammar.json").read_text(encoding="utf-8"))
@@ -123,7 +135,10 @@ class Corpus:
         # Fuzzy contains
         hits: list[Lexeme] = []
         for lex in self.entries:
-            blob = normalize(f"{lex.boriken} {lex.english} {lex.spanish} {' '.join(lex.tags)}")
+            blob = normalize(
+                f"{lex.boriken} {lex.english} {lex.spanish} {lex.definition_en} "
+                f"{lex.definition_es} {lex.fun_fact} {' '.join(lex.tags)}"
+            )
             if key and key in blob:
                 hits.append(lex)
         return hits[:20]
@@ -172,9 +187,19 @@ def iter_training_pairs(corpus: Corpus | None = None) -> Iterable[dict[str, str]
         }
         yield {
             "instruction": f"What does '{lex.boriken}' mean?",
-            "output": f"{lex.english} / {lex.spanish} [{('attested' if lex.attested else 'reconstructed')}]",
+            "output": (
+                f"{lex.english} / {lex.spanish} "
+                f"[{('attested' if lex.attested else 'reconstructed')}]. "
+                f"{lex.definition_en} Fun fact: {lex.fun_fact}"
+            ).strip(),
             "meta": "define",
         }
+        if lex.definition_en:
+            yield {
+                "instruction": f"Define {lex.boriken} for a language learner.",
+                "output": f"{lex.definition_en} Ejemplo: {lex.example or lex.boriken}",
+                "meta": "define_long",
+            }
     for s in c.sentences.get("sentences", []) + c.sentences.get("learner_sentences", []):
         yield {
             "instruction": f"Translate to Boriken: {s['english']}",
