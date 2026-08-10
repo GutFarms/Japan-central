@@ -7,9 +7,9 @@ import androidx.activity.enableEdgeToEdge
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.outlined.ReceiptLong
 import androidx.compose.material.icons.outlined.Home
 import androidx.compose.material.icons.outlined.LocalMall
-import androidx.compose.material.icons.outlined.ReceiptLong
 import androidx.compose.material.icons.outlined.ShoppingBag
 import androidx.compose.material.icons.outlined.Storefront
 import androidx.compose.material3.BadgedBox
@@ -61,7 +61,7 @@ class MainActivity : ComponentActivity() {
                     NavItem(Routes.HOME, "Home", Icons.Outlined.Home),
                     NavItem(Routes.MENU, "Menu", Icons.Outlined.LocalMall),
                     NavItem(Routes.CART, "Bag", Icons.Outlined.ShoppingBag),
-                    NavItem(Routes.ORDERS, "Orders", Icons.Outlined.ReceiptLong),
+                    NavItem(Routes.ORDERS, "Orders", Icons.AutoMirrored.Outlined.ReceiptLong),
                     NavItem(Routes.STORE, "Store", Icons.Outlined.Storefront)
                 )
 

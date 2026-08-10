@@ -56,14 +56,12 @@ fun MenuScreen(
                 horizontalArrangement = Arrangement.spacedBy(8.dp)
             ) {
                 CategoryChip(
-                    category = null,
                     label = "All",
                     selected = selectedCategory == null,
                     onClick = { onSelectCategory(null) }
                 )
                 ProductCategory.entries.forEach { category ->
                     CategoryChip(
-                        category = category,
                         label = category.label,
                         selected = selectedCategory == category,
                         onClick = { onSelectCategory(category) }

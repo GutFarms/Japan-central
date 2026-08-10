@@ -65,7 +65,6 @@ fun BrandMark(modifier: Modifier = Modifier, compact: Boolean = false) {
 
 @Composable
 fun CategoryChip(
-    category: ProductCategory?,
     label: String,
     selected: Boolean,
     onClick: () -> Unit
