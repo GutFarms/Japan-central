@@ -6,21 +6,19 @@
 struct MinerSnapshot {
   float hashrateHs = 0;
   uint64_t shares = 0;
-  uint32_t accepted = 0;
+  uint32_t accepted = 0;  // echoed from PC over USB (optional)
   uint32_t rejected = 0;
-  uint32_t dropped = 0;
-  String pool = "off";
-  bool connected = false;
-  String wifi = "off";
-  String ip = "---";
+  String pool = "usb";
+  bool connected = false;  // has active USB job
   uint32_t difficulty = 0;
   uint32_t nonce = 0;
   uint8_t cpuMhz = 240;
   bool hashFocus = true;
-  String netTicker;  // USB-pushed network/market line from companion
+  String netTicker;
+  String jobId;
 };
 
-// Network / market feed pushed from the PC over USB (`cmp netdata`).
+// Optional LCD ticker pushed from the PC (`cmp netdata`).
 struct NetFeed {
   String ticker;
   String source;
@@ -28,23 +26,50 @@ struct NetFeed {
   bool fresh = false;
 };
 
-// UART0 companion protocol only — never prompts for field text.
+// Work unit delivered over USB-C (`cmp job`).
+struct UsbJob {
+  uint8_t header[80]{};
+  uint8_t target[32]{};
+  String jobId;
+  String extranonce2;
+  String ntime;
+  uint32_t startNonce = 0;
+  bool valid = false;
+  bool fresh = false;
+};
+
+struct PendingShare {
+  uint32_t nonce = 0;
+  String jobId;
+  String extranonce2;
+  String ntime;
+  bool pending = false;
+};
+
+// UART0 companion protocol — board mines only; PC owns pool + WiFi.
 class CompanionLink {
  public:
-  using ApplyFn = std::function<bool(AppConfig& updated, bool& reboot, bool reconnect)>;
+  using ApplyFn = std::function<bool(AppConfig& updated, bool& reboot)>;
+  using JobFn = std::function<void(const UsbJob& job)>;
+  using StopFn = std::function<void()>;
+  using StatsFn = std::function<void(uint32_t accepted, uint32_t rejected)>;
 
   void begin(uint32_t baud = 115200);
-  // Call often from loop(). Returns true if config was applied.
-  bool poll(AppConfig& cfg, const MinerSnapshot& snap, ApplyFn onApply, NetFeed* net = nullptr);
+  bool poll(AppConfig& cfg, const MinerSnapshot& snap, ApplyFn onApply, NetFeed* net, JobFn onJob,
+            StopFn onStop, StatsFn onStats);
+
+  // Emit a found share to the PC (non-blocking print).
+  void emitShare(const PendingShare& share);
 
  private:
   String line_;
   void handleLine(const String& line, AppConfig& cfg, const MinerSnapshot& snap, ApplyFn onApply,
-                  NetFeed* net);
+                  NetFeed* net, JobFn onJob, StopFn onStop, StatsFn onStats);
   void replyStatus(const AppConfig& cfg, const MinerSnapshot& snap);
   void replyConfig(const AppConfig& cfg);
   static String urlDecode(const String& in);
-  static void parseBody(const String& body, AppConfig& cfg, bool& reboot, bool& reconnect,
-                        String& auth);
+  static void parseBody(const String& body, AppConfig& cfg, bool& reboot);
   static void parseNetData(const String& body, NetFeed& net);
+  static bool parseJob(const String& body, UsbJob& job);
+  static bool hexDecodeFixed(const String& hex, uint8_t* out, size_t n);
 };

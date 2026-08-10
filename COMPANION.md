@@ -1,7 +1,6 @@
 # CYD Companion (Windows)
 
-GPU **egui** desktop app — control interface for the ESP32-2432S028 miner.
-Fetches market/network data on the PC and pushes a ticker to the board over USB.
+USB mining control for the ESP32-2432S028. The **PC** talks to the pool; the **board** only hashes work received over USB-C (no board Wi‑Fi).
 
 ## Download / build
 
@@ -11,41 +10,29 @@ Fetches market/network data on the PC and pushes a ticker to the board over USB.
 
 Outputs: `dist/CYD-Companion-App-Only.zip`, `Portable.zip`, `Setup.exe`
 
-## First-time setup
+## Use
 
-1. Flash C++ firmware  
-2. Plug USB — board shows **Waiting for app**  
-3. Run `cyd-companion.exe` → COM → **Connect**  
-4. **Setup** → WiFi + pool → **Save & reboot**
+1. Flash C++ firmware (`esp32-2432s028-scrypt-miner-merged.bin` @ **0x0**)
+2. Plug USB-C — board shows **Waiting for USB**
+3. Run `cyd-companion.exe` → select COM → **Connect**
+4. Enter stratum / worker / password → **Start mining**
 
-## Recommended pool (ESP32 hashrate)
-
-Same scrypt engine as Litecoin (~1 H/s class). **ViaBTC-style pools reject almost all ESP32 shares** (min difficulty too high).
-
-Default in the app:
+## Recommended pool
 
 | Field | Value |
 |-------|--------|
 | Stratum | `stratum+tcp://scrypt.mysolopool.com:3341` |
 | Worker | Your **Litecoin** address |
-| Password | `d=1` (force low share difficulty) |
+| Password | `d=1` |
 
-This is **LTC + DOGE merged** mining: every hash counts toward both. Hashrate is identical to LTC-only; share acceptance is far higher at `d=1`.
-
-## Network data over USB
-
-While USB is connected, the **Markets** tab refreshes CoinGecko on the PC and sends:
-
-```text
-cmp netdata source=coingecko&text=LTC+%2485.2%2B1.2%25+%C2%B7+...
-→ CMPACK net
-```
-
-The board shows that ticker on the mining screen. No board Wi‑Fi required for prices.
+LTC + DOGE merged mining at low share difficulty.
 
 ## USB protocol
 
 ```text
-cmp ping / status / config / set / clock / reboot
-cmp netdata source=…&text=…     → CMPACK net
+cmp ping / status / config / clock / reboot / stop
+cmp job header=<160hex>&target=<64hex>&job=…&en2=…&ntime=…
+cmp stats accepted=N&rejected=N
+cmp netdata source=…&text=…          (optional LCD ticker)
+board → CMPSHARE nonce=…&job=…&en2=…&ntime=…
 ```

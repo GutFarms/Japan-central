@@ -23,7 +23,7 @@ void DisplayUi::showSplash() {
   tft_.setTextColor(cLime_, cBg_);
   tft_.drawString("SCRYPT", 160, 100, 4);
   tft_.setTextColor(cMuted_, cBg_);
-  tft_.drawString("mining", 160, 140, 2);
+  tft_.drawString("usb hash", 160, 140, 2);
 }
 
 void DisplayUi::showWaitingCompanion() {
@@ -34,10 +34,10 @@ void DisplayUi::showWaitingCompanion() {
   tft_.setTextColor(cLime_, cBg_);
   tft_.drawString("SCRYPT", 12, 16, 4);
   tft_.setTextColor(cText_, cBg_);
-  tft_.drawString("Waiting for app", 12, 70, 2);
+  tft_.drawString("Waiting for USB", 12, 70, 2);
   tft_.setTextColor(cMuted_, cBg_);
-  tft_.drawString("Plug USB and open CYD Companion", 12, 110, 2);
-  tft_.drawString("Setup is done in the app only", 12, 140, 2);
+  tft_.drawString("Plug USB-C · open CYD Companion", 12, 110, 2);
+  tft_.drawString("Pool traffic stays on the PC", 12, 140, 2);
 }
 
 void DisplayUi::drawMiningChrome() {
@@ -48,7 +48,7 @@ void DisplayUi::drawMiningChrome() {
   tft_.drawString("SCRYPT", 12, 14, 2);
   tft_.setTextColor(cMuted_, cBg_);
   tft_.drawString("H/s", 12, 48, 2);
-  tft_.drawString("pool", 12, 130, 2);
+  tft_.drawString("usb", 12, 130, 2);
   miningDrawn_ = true;
   lastRate_ = -1;
   lastAccepted_ = 0xFFFFFFFFu;
@@ -56,7 +56,6 @@ void DisplayUi::drawMiningChrome() {
   lastMhz_ = 0xFFFFFFFFu;
   lastConnected_ = false;
   lastPool_ = "";
-  lastWifiIp_ = "";
   lastTicker_ = "";
 }
 
@@ -78,7 +77,7 @@ void DisplayUi::showMining(const AppConfig& cfg, const MinerSnapshot& snap, bool
   if (forceFull || snap.connected != lastConnected_ || snap.pool != lastPool_) {
     tft_.fillRect(12, 152, 300, 24, cBg_);
     tft_.setTextColor(snap.connected ? cLime_ : cText_, cBg_);
-    tft_.drawString(snap.connected ? "CONNECTED" : snap.pool, 12, 152, 2);
+    tft_.drawString(snap.connected ? "USB HASHING" : snap.pool, 12, 152, 2);
     lastConnected_ = snap.connected;
     lastPool_ = snap.pool;
   }
@@ -95,21 +94,16 @@ void DisplayUi::showMining(const AppConfig& cfg, const MinerSnapshot& snap, bool
     lastMhz_ = snap.cpuMhz;
   }
 
-  String wifiIp = snap.wifi + "  " + snap.ip;
-  if (forceFull || wifiIp != lastWifiIp_) {
-    tft_.fillRect(12, 214, 300, 12, cBg_);
-    tft_.setTextColor(cMuted_, cBg_);
-    tft_.drawString(wifiIp, 12, 212, 1);
-    lastWifiIp_ = wifiIp;
-  }
+  tft_.fillRect(12, 214, 300, 12, cBg_);
+  tft_.setTextColor(cMuted_, cBg_);
+  tft_.drawString("link: USB-C only · no WiFi", 12, 212, 1);
 
-  // USB-pushed network/market ticker from companion.
   if (forceFull || snap.netTicker != lastTicker_) {
     tft_.fillRect(0, 226, 320, 14, cBg_);
     tft_.fillRect(0, 226, 320, 14, to565(14, 22, 32));
     tft_.setTextDatum(TL_DATUM);
     tft_.setTextColor(cLime_, to565(14, 22, 32));
-    String tick = snap.netTicker.length() ? snap.netTicker : String("net: waiting for app");
+    String tick = snap.netTicker.length() ? snap.netTicker : String("usb: companion linked");
     if (tick.length() > 40) tick = tick.substring(0, 40);
     tft_.drawString(tick, 6, 228, 1);
     lastTicker_ = snap.netTicker;

@@ -1,15 +1,12 @@
-CYD Companion — quick start
-===========================
+CYD Companion — USB scrypt miner control
+========================================
 
-1. Flash the C++ firmware (merged.bin @ 0x0) if you have not already.
-2. Plug the CYD USB cable (CH340 COM port).
+1. Flash esp32-2432s028-scrypt-miner-merged.bin @ 0x0
+2. Plug the board with USB-C
 3. Run cyd-companion.exe
 4. Select COM port → Connect
-5. Enter WiFi SSID/password
-6. Pool defaults: scrypt.mysolopool.com:3341 · worker = LTC address · password d=1
-7. Save & reboot
+5. Enter stratum URL, worker (Litecoin address), password (d=1)
+6. Start mining
 
-LTC+DOGE merged mining (same scrypt H/s; low d=1 so ESP32 shares can be accepted).
-The board shows mining stats + a network ticker. Markets prices are pushed over USB.
-
-USB protocol: cmp ping | status | config | set | clock | reboot | netdata
+The board has no Wi-Fi. Pool traffic stays on this PC.
+Work is sent over USB; shares come back over USB.

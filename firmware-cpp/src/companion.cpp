@@ -1,17 +1,19 @@
 #include "companion.hpp"
 #include <ArduinoJson.h>
+#include <cstring>
+#include <esp_system.h>
 
 void CompanionLink::begin(uint32_t baud) {
-  // CYD CH340 is UART0 (Serial). Companion owns this link — no log spam.
   Serial.setRxBufferSize(4096);
   Serial.setTxBufferSize(1024);
   Serial.begin(baud);
   Serial.setTimeout(0);
-  line_.reserve(1536);
+  line_.reserve(2048);
   line_ = "";
 }
 
-bool CompanionLink::poll(AppConfig& cfg, const MinerSnapshot& snap, ApplyFn onApply, NetFeed* net) {
+bool CompanionLink::poll(AppConfig& cfg, const MinerSnapshot& snap, ApplyFn onApply, NetFeed* net,
+                         JobFn onJob, StopFn onStop, StatsFn onStats) {
   bool applied = false;
   while (Serial.available() > 0) {
     char c = (char)Serial.read();
@@ -22,22 +24,38 @@ bool CompanionLink::poll(AppConfig& cfg, const MinerSnapshot& snap, ApplyFn onAp
         cmd.trim();
         if (cmd.length() == 0) continue;
         handleLine(cmd, cfg, snap,
-                   [&](AppConfig& u, bool& reboot, bool reconnect) {
-                     bool ok = onApply(u, reboot, reconnect);
+                   [&](AppConfig& u, bool& reboot) {
+                     bool ok = onApply(u, reboot);
                      if (ok) applied = true;
                      return ok;
                    },
-                   net);
+                   net, onJob, onStop, onStats);
       }
     } else if (c >= 32 && c < 127) {
-      if (line_.length() < 1500) line_ += c;
+      if (line_.length() < 2000) line_ += c;
     }
   }
   return applied;
 }
 
+void CompanionLink::emitShare(const PendingShare& share) {
+  if (!share.pending) return;
+  char nonceHex[9];
+  snprintf(nonceHex, sizeof(nonceHex), "%08x", share.nonce);
+  Serial.print("CMPSHARE nonce=");
+  Serial.print(nonceHex);
+  Serial.print("&job=");
+  Serial.print(share.jobId);
+  Serial.print("&en2=");
+  Serial.print(share.extranonce2);
+  Serial.print("&ntime=");
+  Serial.println(share.ntime);
+  Serial.flush();
+}
+
 void CompanionLink::handleLine(const String& line, AppConfig& cfg, const MinerSnapshot& snap,
-                               ApplyFn onApply, NetFeed* net) {
+                               ApplyFn onApply, NetFeed* net, JobFn onJob, StopFn onStop,
+                               StatsFn onStats) {
   String t = line;
   int idx = -1;
   {
@@ -80,7 +98,45 @@ void CompanionLink::handleLine(const String& line, AppConfig& cfg, const MinerSn
     Serial.flush();
     return;
   }
-  // PC → board network/market feed (no auth — display only).
+  if (verb == "job") {
+    UsbJob job;
+    if (!parseJob(args, job)) {
+      Serial.println("CMPERR job header+target required");
+      Serial.flush();
+      return;
+    }
+    if (onJob) onJob(job);
+    Serial.println("CMPACK job");
+    Serial.flush();
+    return;
+  }
+  if (verb == "stop") {
+    if (onStop) onStop();
+    Serial.println("CMPACK stop");
+    Serial.flush();
+    return;
+  }
+  if (verb == "stats") {
+    // PC reports accept/reject counts for the LCD.
+    uint32_t acc = 0, rej = 0;
+    int start = 0;
+    while (start < (int)args.length()) {
+      int amp = args.indexOf('&', start);
+      String pair = (amp < 0) ? args.substring(start) : args.substring(start, amp);
+      int eq = pair.indexOf('=');
+      String key = (eq < 0) ? pair : pair.substring(0, eq);
+      String val = (eq < 0) ? "" : urlDecode(pair.substring(eq + 1));
+      key.toLowerCase();
+      if (key == "accepted" || key == "a") acc = (uint32_t)val.toInt();
+      else if (key == "rejected" || key == "r") rej = (uint32_t)val.toInt();
+      if (amp < 0) break;
+      start = amp + 1;
+    }
+    if (onStats) onStats(acc, rej);
+    Serial.println("CMPACK stats");
+    Serial.flush();
+    return;
+  }
   if (verb == "netdata" || verb == "net" || verb == "push") {
     if (!net) {
       Serial.println("CMPERR net feed unavailable");
@@ -101,27 +157,19 @@ void CompanionLink::handleLine(const String& line, AppConfig& cfg, const MinerSn
   }
   if (verb == "set" || verb == "clock" || verb == "reboot") {
     AppConfig updated = cfg;
-    bool reboot = false;
-    bool reconnect = false;
-    String authVal;
-    parseBody(args, updated, reboot, reconnect, authVal);
-    if (verb == "reboot") reboot = true;
+    bool reboot = (verb == "reboot");
+    parseBody(args, updated, reboot);
     if (verb == "clock" && args.indexOf("cpu_mhz") < 0 && args.indexOf("clock") < 0) {
       Serial.println("CMPERR cpu_mhz required");
       Serial.flush();
       return;
     }
-    if (!cfg.authorizeOrSetup(authVal)) {
-      Serial.println("CMPERR bad auth");
-      Serial.flush();
-      return;
-    }
     Serial.println("CMPACK queued");
     Serial.flush();
-    (void)onApply(updated, reboot, reconnect);
+    (void)onApply(updated, reboot);
     return;
   }
-  Serial.println("CMPERR unknown (ping|status|config|set|clock|reboot|netdata)");
+  Serial.println("CMPERR unknown (ping|status|config|job|stop|stats|clock|reboot|netdata)");
   Serial.flush();
 }
 
@@ -131,18 +179,15 @@ void CompanionLink::replyStatus(const AppConfig& cfg, const MinerSnapshot& snap)
   doc["shares"] = snap.shares;
   doc["accepted"] = snap.accepted;
   doc["rejected"] = snap.rejected;
-  doc["dropped"] = snap.dropped;
   doc["pool"] = snap.pool;
   doc["connected"] = snap.connected;
-  doc["wifi"] = snap.wifi;
-  doc["ip"] = snap.ip;
-  doc["address"] = cfg.worker;
-  doc["stratum"] = cfg.stratum;
+  doc["link"] = "usb";
   doc["difficulty"] = snap.difficulty;
   doc["uptime_secs"] = (uint32_t)(millis() / 1000);
   doc["cpu_mhz"] = snap.cpuMhz ? snap.cpuMhz : cfg.cpuMhz;
   doc["hash_focus"] = snap.hashFocus;
   doc["net_ticker"] = snap.netTicker;
+  doc["job"] = snap.jobId;
   char nonceHex[9];
   snprintf(nonceHex, sizeof(nonceHex), "%08x", snap.nonce);
   doc["nonce"] = nonceHex;
@@ -153,14 +198,11 @@ void CompanionLink::replyStatus(const AppConfig& cfg, const MinerSnapshot& snap)
 
 void CompanionLink::replyConfig(const AppConfig& cfg) {
   JsonDocument doc;
-  doc["worker"] = cfg.worker;
-  doc["stratum"] = cfg.stratum;
-  doc["wifi_ssid"] = cfg.wifiSsid;
-  doc["wifi_password"] = cfg.wifiPassword.length() ? "********" : "";
   doc["cpu_mhz"] = cfg.cpuMhz;
   doc["hash_focus"] = cfg.hashFocus;
-  doc["fw"] = "0.2.2-cpp";
-  doc["configured"] = cfg.isComplete();
+  doc["fw"] = "0.3.0-usb";
+  doc["mode"] = "usb-hash";
+  doc["configured"] = true;
   Serial.print("CMPCONFIG ");
   serializeJson(doc, Serial);
   Serial.println();
@@ -184,8 +226,7 @@ String CompanionLink::urlDecode(const String& in) {
   return out;
 }
 
-void CompanionLink::parseBody(const String& body, AppConfig& cfg, bool& reboot, bool& reconnect,
-                              String& auth) {
+void CompanionLink::parseBody(const String& body, AppConfig& cfg, bool& reboot) {
   int start = 0;
   while (start < (int)body.length()) {
     int amp = body.indexOf('&', start);
@@ -194,23 +235,13 @@ void CompanionLink::parseBody(const String& body, AppConfig& cfg, bool& reboot, 
     String key = (eq < 0) ? pair : pair.substring(0, eq);
     String val = (eq < 0) ? "" : urlDecode(pair.substring(eq + 1));
     key.toLowerCase();
-    if (key == "wifi_ssid" || key == "ssid") cfg.wifiSsid = val;
-    else if (key == "wifi_password" || key == "wifi_pass") cfg.wifiPassword = val;
-    else if (key == "stratum") cfg.stratum = val;
-    else if (key == "worker" || key == "address") cfg.worker = val;
-    else if (key == "password" || key == "pool_password") cfg.password = val;
-    else if (key == "auth" || key == "password_auth" || key == "current_password") auth = val;
-    else if (key == "cpu_mhz" || key == "clock") {
+    if (key == "cpu_mhz" || key == "clock") {
       cfg.cpuMhz = cfg.normalizeCpu((uint8_t)val.toInt());
       reboot = true;
     } else if (key == "hash_focus" || key == "perf") {
       cfg.hashFocus = (val == "1" || val.equalsIgnoreCase("true"));
-    } else if (key == "touch_map") {
-      cfg.touchMap = (uint8_t)val.toInt();
     } else if (key == "reboot") {
       reboot = (val == "1" || val.equalsIgnoreCase("true"));
-    } else if (key == "reconnect") {
-      reconnect = (val == "1" || val.equalsIgnoreCase("true"));
     }
     if (amp < 0) break;
     start = amp + 1;
@@ -236,4 +267,53 @@ void CompanionLink::parseNetData(const String& body, NetFeed& net) {
     if (amp < 0) break;
     start = amp + 1;
   }
+}
+
+bool CompanionLink::hexDecodeFixed(const String& hex, uint8_t* out, size_t n) {
+  if (hex.length() != n * 2) return false;
+  auto nib = [](char c) -> int {
+    if (c >= '0' && c <= '9') return c - '0';
+    if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+    if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+    return -1;
+  };
+  for (size_t i = 0; i < n; i++) {
+    int hi = nib(hex[i * 2]), lo = nib(hex[i * 2 + 1]);
+    if (hi < 0 || lo < 0) return false;
+    out[i] = (uint8_t)((hi << 4) | lo);
+  }
+  return true;
+}
+
+bool CompanionLink::parseJob(const String& body, UsbJob& job) {
+  String headerHex, targetHex, startStr;
+  job = UsbJob{};
+  int start = 0;
+  while (start < (int)body.length()) {
+    int amp = body.indexOf('&', start);
+    String pair = (amp < 0) ? body.substring(start) : body.substring(start, amp);
+    int eq = pair.indexOf('=');
+    String key = (eq < 0) ? pair : pair.substring(0, eq);
+    String val = (eq < 0) ? "" : urlDecode(pair.substring(eq + 1));
+    key.toLowerCase();
+    if (key == "header" || key == "hdr") headerHex = val;
+    else if (key == "target" || key == "tgt") targetHex = val;
+    else if (key == "job" || key == "job_id" || key == "id") job.jobId = val;
+    else if (key == "en2" || key == "extranonce2") job.extranonce2 = val;
+    else if (key == "ntime" || key == "time") job.ntime = val;
+    else if (key == "start" || key == "nonce") startStr = val;
+    if (amp < 0) break;
+    start = amp + 1;
+  }
+  if (!hexDecodeFixed(headerHex, job.header, 80)) return false;
+  if (!hexDecodeFixed(targetHex, job.target, 32)) return false;
+  if (startStr.length()) {
+    job.startNonce = (uint32_t)strtoul(startStr.c_str(), nullptr, 16);
+  } else {
+    job.startNonce = esp_random();
+  }
+  if (job.jobId.length() == 0) job.jobId = "0";
+  job.valid = true;
+  job.fresh = true;
+  return true;
 }

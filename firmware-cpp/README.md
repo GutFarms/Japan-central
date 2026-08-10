@@ -1,33 +1,21 @@
-# ESP32-2432S028 (CYD) — mining firmware (C++)
+# CYD scrypt miner (C++ / USB hash)
 
-Mining-only firmware. LCD shows basic live stats. UART0 speaks only the `cmp`
-protocol — **CYD Companion** is the sole control / setup UI.
-
-## Protocol
-
-| Command | Reply |
-|---------|--------|
-| `cmp ping` | `CMP ok usb` |
-| `cmp status` | `CMPSTATUS {…}` |
-| `cmp config` | `CMPCONFIG {…}` |
-| `cmp set …` | `CMPACK queued` / `CMPERR …` |
-| `cmp clock cpu_mhz=240` | same |
-| `cmp reboot` | same |
-| `cmp netdata source=…&text=…` | `CMPACK net` — PC-pushed market/network ticker |
+ESP32-2432S028 firmware: **scrypt hashing only**. No Wi‑Fi. Pool traffic stays on the PC companion; work and shares move over USB-C (`cmp`).
 
 ## Build
 
 ```bash
-pio run -d firmware-cpp
+./scripts/build-flash-images.sh
 ```
 
-Outputs (via post script):
+Flash `flash/esp32-2432s028-scrypt-miner-merged.bin` at **0x0** (DIO, 4 MB, 40 MHz).
 
-- `flash/esp32-2432s028-scrypt-miner.bin`
-- `flash/esp32-2432s028-scrypt-miner-merged.bin` — flash at **0x0**, DIO, 4 MB, 40 MHz
+## Runtime
 
-## Board
+- LCD: waiting for USB → hashrate / accept-reject (from PC) / USB link
+- UART0 @ 115200: companion protocol only
+- Wi‑Fi radio forced **OFF** at boot
 
-- ESP32-2432S028 (ILI9341, CH340 USB-UART)
-- CPU default 240 MHz, hash-focus on
-- Litecoin-style scrypt N=1024 with TMTO (64 checkpoints)
+## Protocol (board)
+
+See [`../COMPANION.md`](../COMPANION.md).

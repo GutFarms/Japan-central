@@ -2,29 +2,28 @@
 #include "config.hpp"
 #include "display_ui.hpp"
 #include "scrypt_lite.hpp"
-#include "stratum_client.hpp"
 
-#include <WiFi.h>
 #include <cstring>
 #include <esp_system.h>
+#include <esp_wifi.h>
 
 static ConfigStore g_store;
 static AppConfig g_cfg;
 static CompanionLink g_cmp;
 static DisplayUi g_ui;
 static ScryptLite g_miner;
-static StratumClient g_stratum;
 static MinerSnapshot g_snap;
 static NetFeed g_net;
+static UsbJob g_job;
+static PendingShare g_shareOut;
 
 static uint32_t g_windowStart = 0;
 static uint64_t g_windowHashes = 0;
 static float g_hashrate = 0;
 static uint32_t g_lastPaint = 0;
-static uint32_t g_lastWifiAttempt = 0;
-static bool g_wifiStarted = false;
 static bool g_jobLoaded = false;
-static bool g_poolMode = false;
+static uint32_t g_accepted = 0;
+static uint32_t g_rejected = 0;
 
 static void applyCpu(uint8_t mhz) {
   mhz = g_cfg.normalizeCpu(mhz);
@@ -32,101 +31,25 @@ static void applyCpu(uint8_t mhz) {
   g_cfg.cpuMhz = mhz;
 }
 
-static const char* wifiLabel() {
-  switch (WiFi.status()) {
-    case WL_CONNECTED:
-      return "ok";
-    case WL_NO_SSID_AVAIL:
-      return "ssid";
-    case WL_CONNECT_FAILED:
-      return "fail";
-    case WL_IDLE_STATUS:
-      return "idle";
-    case WL_DISCONNECTED:
-      return "off";
-    default:
-      return "...";
-  }
-}
-
-static void startWifi() {
-  if (!g_cfg.wifiSsid.length()) return;
-  WiFi.mode(WIFI_STA);
-  WiFi.setSleep(false);
-  WiFi.setAutoReconnect(true);
-  WiFi.begin(g_cfg.wifiSsid.c_str(), g_cfg.wifiPassword.c_str());
-  g_wifiStarted = true;
-  g_lastWifiAttempt = millis();
-}
-
-static void serviceWifi() {
-  if (!g_cfg.wifiSsid.length()) return;
-  if (!g_wifiStarted) {
-    startWifi();
-    g_stratum.begin(g_cfg);
-    return;
-  }
-  if (WiFi.status() == WL_CONNECTED) return;
-  uint32_t now = millis();
-  if (now - g_lastWifiAttempt < 15000) return;
-  g_lastWifiAttempt = now;
-  WiFi.disconnect();
-  WiFi.begin(g_cfg.wifiSsid.c_str(), g_cfg.wifiPassword.c_str());
-}
-
 static void fillSnap() {
   g_snap.hashrateHs = g_hashrate;
   g_snap.shares = g_miner.shares();
-  g_snap.accepted = g_stratum.accepted();
-  g_snap.rejected = g_stratum.rejected();
-  g_snap.dropped = g_stratum.dropped();
-  g_snap.pool = g_stratum.phase();
-  if (g_stratum.connected()) g_snap.pool = "CONNECTED";
-  g_snap.connected = g_stratum.connected();
-  g_snap.wifi = wifiLabel();
-  if (WiFi.status() == WL_CONNECTED) {
-    g_snap.ip = WiFi.localIP().toString();
-  } else {
-    g_snap.ip = "---";
-  }
-  g_snap.difficulty = g_stratum.difficulty();
+  g_snap.accepted = g_accepted;
+  g_snap.rejected = g_rejected;
+  g_snap.pool = g_jobLoaded ? "USB HASH" : "WAIT USB";
+  g_snap.connected = g_jobLoaded;
+  g_snap.difficulty = 0;
   g_snap.nonce = g_miner.nonce();
   g_snap.cpuMhz = (uint8_t)getCpuFrequencyMhz();
   g_snap.hashFocus = g_cfg.hashFocus;
   g_snap.netTicker = g_net.ticker;
+  g_snap.jobId = g_job.jobId;
 }
 
-static bool applyConfig(AppConfig& updated, bool& reboot, bool reconnect) {
-  if (updated.wifiPassword.length() == 0 && g_cfg.wifiPassword.length()) {
-    updated.wifiPassword = g_cfg.wifiPassword;
-  }
-  if (updated.password.length() == 0 && g_cfg.password.length()) {
-    updated.password = g_cfg.password;
-  }
+static bool applyConfig(AppConfig& updated, bool& reboot) {
   updated.cpuMhz = updated.normalizeCpu(updated.cpuMhz);
-
-  bool wifiChanged = updated.wifiSsid != g_cfg.wifiSsid ||
-                     updated.wifiPassword != g_cfg.wifiPassword;
-  bool poolChanged = updated.stratum != g_cfg.stratum || updated.worker != g_cfg.worker ||
-                     updated.password != g_cfg.password;
-
   g_cfg = updated;
-
-  if (g_cfg.isComplete()) {
-    g_store.save(g_cfg);
-  }
-
-  if (wifiChanged && g_cfg.wifiSsid.length()) {
-    WiFi.disconnect(true);
-    delay(40);
-    startWifi();
-  }
-  if (poolChanged || wifiChanged || reconnect) {
-    g_stratum.updateConfig(g_cfg);
-    g_stratum.requestReconnect();
-    g_jobLoaded = false;
-    g_poolMode = false;
-  }
+  g_store.save(g_cfg);
 
   if (reboot) {
     Serial.flush();
@@ -136,57 +59,81 @@ static bool applyConfig(AppConfig& updated, bool& reboot, bool reconnect) {
   if (updated.cpuMhz != (uint8_t)getCpuFrequencyMhz()) {
     applyCpu(updated.cpuMhz);
   }
-  return g_cfg.isComplete();
+  return true;
+}
+
+static void onJob(const UsbJob& job) {
+  g_job = job;
+  g_miner.setJob(job.header, job.target, job.startNonce);
+  g_jobLoaded = true;
+  g_windowHashes = 0;
+  g_windowStart = millis();
+}
+
+static void onStop() {
+  g_jobLoaded = false;
+  g_job.valid = false;
+  g_hashrate = 0;
+}
+
+static void onStats(uint32_t accepted, uint32_t rejected) {
+  g_accepted = accepted;
+  g_rejected = rejected;
 }
 
 static void serviceCompanion() {
   fillSnap();
-  g_cmp.poll(g_cfg, g_snap, applyConfig, &g_net);
+  g_cmp.poll(g_cfg, g_snap, applyConfig, &g_net, onJob, onStop, onStats);
   if (g_net.fresh) {
     g_snap.netTicker = g_net.ticker;
     g_net.fresh = false;
   }
+  if (g_shareOut.pending) {
+    g_cmp.emitShare(g_shareOut);
+    g_shareOut.pending = false;
+  }
 }
 
 static void mineBurst() {
-  // Larger bursts when hash-focus; still break for USB between sub-batches.
   const size_t total = g_cfg.hashFocus ? 12 : 4;
   const size_t slice = g_cfg.hashFocus ? 3 : 2;
   size_t done = 0;
-  while (done < total) {
+  while (done < total && g_jobLoaded) {
     size_t n = total - done;
     if (n > slice) n = slice;
     bool share = g_miner.mineBatch(n);
     g_windowHashes += n;
     done += n;
-    if (share && g_poolMode) {
-      g_stratum.submitShare(g_miner.lastShareNonce());
+    if (share) {
+      g_shareOut.nonce = g_miner.lastShareNonce();
+      g_shareOut.jobId = g_job.jobId;
+      g_shareOut.extranonce2 = g_job.extranonce2;
+      g_shareOut.ntime = g_job.ntime;
+      g_shareOut.pending = true;
+      g_cmp.emitShare(g_shareOut);
+      g_shareOut.pending = false;
     }
-    // Keep CMP responsive during hashing (incl. netdata pushes).
-    g_cmp.poll(g_cfg, g_snap, applyConfig, &g_net);
+    // Keep USB responsive while hashing.
+    g_cmp.poll(g_cfg, g_snap, applyConfig, &g_net, onJob, onStop, onStats);
   }
 }
 
 void setup() {
+  // Ensure Wi‑Fi stays down — pool traffic is USB-C companion only.
+  // Safe if the driver was never started.
+  (void)esp_wifi_stop();
+  (void)esp_wifi_deinit();
+
   g_cmp.begin(115200);
   g_ui.begin();
   g_ui.showSplash();
 
-  bool fromFlash = g_store.load(g_cfg);
+  g_store.load(g_cfg);
   applyCpu(g_cfg.cpuMhz);
-
-  // Allocate miner buffers before WiFi eats heap.
   g_miner = ScryptLite();
 
-  delay(250);
-
-  if (!fromFlash || !g_cfg.isComplete()) {
-    g_ui.showWaitingCompanion();
-  } else {
-    g_ui.showMessage("Connecting", g_cfg.wifiSsid.c_str());
-    startWifi();
-    g_stratum.begin(g_cfg);
-  }
+  delay(200);
+  g_ui.showWaitingCompanion();
 
   g_windowStart = millis();
   g_lastPaint = millis();
@@ -196,9 +143,9 @@ void setup() {
 void loop() {
   serviceCompanion();
 
-  if (!g_cfg.isComplete()) {
+  if (!g_jobLoaded) {
     uint32_t now = millis();
-    if (now - g_lastPaint > 3000) {
+    if (now - g_lastPaint > 2500) {
       g_ui.showWaitingCompanion();
       g_lastPaint = now;
     }
@@ -206,46 +153,17 @@ void loop() {
     return;
   }
 
-  serviceWifi();
-  g_stratum.loop();
-
-  uint8_t header[80], target[32];
-  if (g_stratum.peekJob(header, target)) {
-    static uint8_t lastHdr[80];
-    static bool haveLast = false;
-    if (!haveLast || memcmp(header, lastHdr, 76) != 0) {
-      g_miner.setJob(header, target, esp_random());
-      memcpy(lastHdr, header, 80);
-      haveLast = true;
-      g_jobLoaded = true;
-      g_poolMode = true;
-    } else {
-      g_miner.updateTarget(target);
-      g_jobLoaded = true;
-      g_poolMode = true;
-    }
-  }
-
-  if (g_jobLoaded && g_poolMode) {
-    mineBurst();
-  }
-
+  mineBurst();
   serviceCompanion();
-  g_stratum.loop();
 
   uint32_t now = millis();
   uint32_t elapsed = now - g_windowStart;
   if (elapsed >= 2000) {
-    if (g_poolMode) {
-      g_hashrate = (float)g_windowHashes * 1000.0f / (float)elapsed;
-    } else {
-      g_hashrate = 0;
-    }
+    g_hashrate = (float)g_windowHashes * 1000.0f / (float)elapsed;
     g_windowHashes = 0;
     g_windowStart = now;
   }
 
-  // Rare paints in hash-focus; partial updates keep cost low.
   uint32_t paintMs = g_cfg.hashFocus ? 4000 : 1000;
   if (now - g_lastPaint >= paintMs) {
     fillSnap();

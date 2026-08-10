@@ -43,4 +43,4 @@ if [[ -f "$SETUP_EXE" ]]; then
 fi
 ls -la dist/cyd-companion-windows/cyd-companion.exe "$PORTABLE_ZIP" "$APP_ONLY_ZIP" || true
 [[ -f "$SETUP_EXE" ]] && ls -la "$SETUP_EXE"
-echo "Windows companion ready (egui graphics + USB netdata bridge)"
+echo "Windows companion ready (USB hash bridge · PC stratum)"

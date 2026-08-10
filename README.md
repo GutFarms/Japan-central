@@ -1,48 +1,30 @@
-# ESP32-2432S028 Scrypt Miner (Cheap Yellow Display)
+# Japan-central — CYD USB scrypt miner
 
-**C++ only.** The board mines Litecoin-style scrypt and shows a basic stats screen.
-**CYD Companion** (Windows) is the only control interface — WiFi, pool, clock, reboot.
+ESP32-2432S028 board **hashes only**. **CYD Companion** on Windows owns the pool connection; work and shares move over **USB-C**. No board Wi‑Fi.
 
-| Piece | Path |
-|-------|------|
-| Firmware | `firmware-cpp/` (PlatformIO / Arduino) |
-| Control app | `companion/` (egui GPU UI; USB control + network data bridge) |
-| Flash images | `flash/` |
+## Pieces
 
-## Board (mining only)
+| Path | Role |
+|------|------|
+| `firmware-cpp/` | C++ firmware — scrypt + LCD + USB `cmp` |
+| `companion/` | egui app — stratum on PC, USB job/share bridge |
+| `flash/` | Merged `.bin` images |
 
-- Litecoin/Dogecoin scrypt `N=1024` (TMTO, fits classic ESP32 + WiFi)
-- Default pool: **LTC+DOGE merged** at low share difficulty (`d=1`) so ESP32 shares can land
-- LCD: hashrate, pool state, accepts/rejects, CPU MHz, WiFi/IP, USB market ticker
-- UART0: `cmp` protocol only — no on-device typing / touch setup
-- Unconfigured boards show **Waiting for app**
-- PoW verified against Litecoin block **#29255** (`scripts/verify-scrypt.py`)
+## Flash & mine
 
-## App (control)
+1. Flash `flash/esp32-2432s028-scrypt-miner-merged.bin` @ **0x0** (DIO, 4 MB, 40 MHz)
+2. Power on (not BOOT) — LCD: **Waiting for USB**
+3. Run Companion → COM → **Connect** → pool fields → **Start mining**
 
-1. Flash merged firmware @ `0x0`
-2. Plug USB (CH340)
-3. Run `cyd-companion.exe` → COM → **Connect**
-4. Fill WiFi + Pool → **Save & reboot**
+Default pool: `stratum+tcp://scrypt.mysolopool.com:3341` · worker = Litecoin address · password `d=1`
 
-## Build & flash
+## Build
 
 ```bash
-./scripts/build-flash-images.sh      # → flash/*-merged.bin
-./scripts/build-companion-windows.sh # → dist/CYD-Companion-*.zip / Setup.exe
-./scripts/flash-cyd.sh COM6          # or /dev/ttyUSB0
-./scripts/serve-web-flasher.sh       # browser flasher + app downloads
+./scripts/build-flash-images.sh
+./scripts/build-companion-windows.sh
 ```
 
-Full verify: `./scripts/verify-project.sh`
+## Protocol
 
-## Hardware
-
-| Item | Notes |
-|------|--------|
-| Board | ESP32-2432S028 (CYD) |
-| Flash | 4 MB · DIO · 40 MHz |
-| Display | ILI9341 320×240 |
-| Serial | CH340 → UART0 @ 115200 |
-
-See [FLASH.md](FLASH.md) and [COMPANION.md](COMPANION.md).
+See [`COMPANION.md`](COMPANION.md).
