@@ -11,10 +11,12 @@
 
 ## Board (mining only)
 
-- Litecoin scrypt `N=1024` (TMTO, fits classic ESP32 + WiFi)
-- LCD: hashrate, pool state, accepts/rejects, CPU MHz, WiFi/IP
+- Litecoin/Dogecoin scrypt `N=1024` (TMTO, fits classic ESP32 + WiFi)
+- Default pool: **LTC+DOGE merged** at low share difficulty (`d=1`) so ESP32 shares can land
+- LCD: hashrate, pool state, accepts/rejects, CPU MHz, WiFi/IP, USB market ticker
 - UART0: `cmp` protocol only — no on-device typing / touch setup
 - Unconfigured boards show **Waiting for app**
+- PoW verified against Litecoin block **#29255** (`scripts/verify-scrypt.py`)
 
 ## App (control)
 

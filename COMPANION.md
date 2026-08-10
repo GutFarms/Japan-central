@@ -18,6 +18,20 @@ Outputs: `dist/CYD-Companion-App-Only.zip`, `Portable.zip`, `Setup.exe`
 3. Run `cyd-companion.exe` → COM → **Connect**  
 4. **Setup** → WiFi + pool → **Save & reboot**
 
+## Recommended pool (ESP32 hashrate)
+
+Same scrypt engine as Litecoin (~1 H/s class). **ViaBTC-style pools reject almost all ESP32 shares** (min difficulty too high).
+
+Default in the app:
+
+| Field | Value |
+|-------|--------|
+| Stratum | `stratum+tcp://scrypt.mysolopool.com:3341` |
+| Worker | Your **Litecoin** address |
+| Password | `d=1` (force low share difficulty) |
+
+This is **LTC + DOGE merged** mining: every hash counts toward both. Hashrate is identical to LTC-only; share acceptance is far higher at `d=1`.
+
 ## Network data over USB
 
 While USB is connected, the **Markets** tab refreshes CoinGecko on the PC and sends:

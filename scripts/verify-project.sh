@@ -4,6 +4,9 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 
+echo "==> scrypt PoW / TMTO host verification (Litecoin block #29255)"
+python3 ./scripts/verify-scrypt.py
+
 echo "==> firmware + flash images"
 ./scripts/build-flash-images.sh
 

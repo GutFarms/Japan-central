@@ -460,8 +460,8 @@ impl CompanionApp {
             last_ok: "Welcome — Connect USB, then follow the Setup wizard.".into(),
             connected_ui: false,
             edit_worker: String::new(),
-            edit_stratum: "stratum+tcp://ltc.viabtc.io:3333".into(),
-            edit_password: "x".into(),
+            edit_stratum: "stratum+tcp://scrypt.mysolopool.com:3341".into(),
+            edit_password: "d=1".into(),
             edit_wifi_ssid: String::new(),
             edit_wifi_password: String::new(),
             update_wifi_password: true,
@@ -649,7 +649,7 @@ impl CompanionApp {
             return;
         }
         if self.edit_password.trim().is_empty() {
-            self.last_error = "Pool password is required (often x).".into();
+            self.last_error = "Pool password is required (use d=1 for this ESP32).".into();
             return;
         }
         let wifi_pass = if self.wifi_open {
@@ -1176,8 +1176,13 @@ Board mines at 240 MHz with hash-focus after setup.",
                 .num_columns(2)
                 .spacing([14.0, 10.0])
                 .show(ui, |ui| {
-                    ui.label("Stratum");
+                    ui.label("Stratum (LTC+DOGE merged, low-diff)");
                     ui.add(egui::TextEdit::singleline(&mut self.edit_stratum).desired_width(340.0));
+                    ui.label(
+                        RichText::new("Worker = your Litecoin address · Password d=1 (ESP32-friendly share difficulty)")
+                            .small()
+                            .color(C_MUTED),
+                    );
                     ui.end_row();
                     ui.label("Worker");
                     ui.add(egui::TextEdit::singleline(&mut self.edit_worker).desired_width(340.0));
@@ -1596,8 +1601,13 @@ Board mines at 240 MHz with hash-focus after setup.",
             .num_columns(2)
             .spacing([16.0, 10.0])
             .show(ui, |ui| {
-                ui.label("Stratum");
+                ui.label("Stratum (LTC+DOGE merged)");
                 ui.add(egui::TextEdit::singleline(&mut self.edit_stratum).desired_width(360.0));
+                ui.label(
+                    RichText::new("Worker = LTC address · password d=1 for ESP32 low share difficulty")
+                        .small()
+                        .color(C_MUTED),
+                );
                 ui.end_row();
                 ui.label("Worker");
                 ui.add(egui::TextEdit::singleline(&mut self.edit_worker).desired_width(360.0));
