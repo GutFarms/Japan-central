@@ -9,10 +9,8 @@
 .externalNativeBuild
 .cxx
 *.apk
-!dist/*.apk
 *.ap_
 *.aab
-!dist/*.aab
 *.dex
 *.class
 bin/

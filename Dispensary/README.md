@@ -2,7 +2,7 @@
 
 Adult-use dispensary app for browsing the menu, building a pickup bag, scanning inventory, and checking store info.
 
-> **Download APK:** [`dist/Solstice-Dispensary.apk`](./dist/Solstice-Dispensary.apk) — see also [`../DOWNLOAD-DISPENSARY.md`](../DOWNLOAD-DISPENSARY.md).
+> **Download:** GitHub Actions artifact **`NativePure-Dispensary-apk`** — full steps in [`../DOWNLOAD-DISPENSARY.md`](../DOWNLOAD-DISPENSARY.md).
 
 ## Features
 
