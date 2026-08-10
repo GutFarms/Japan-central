@@ -7,7 +7,9 @@ import androidx.compose.runtime.setValue
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
+import com.solstice.dispensary.data.model.AuthResult
 import com.solstice.dispensary.data.model.CartSummary
+import com.solstice.dispensary.data.model.CustomerProfile
 import com.solstice.dispensary.data.model.InventoryIntake
 import com.solstice.dispensary.data.model.LabelScanResult
 import com.solstice.dispensary.data.model.Order
@@ -32,6 +34,18 @@ class DispensaryViewModel(
     private val scanner = LabelAiScanner()
 
     var ageVerified by mutableStateOf(repository.isAgeVerified())
+        private set
+
+    var currentCustomer by mutableStateOf<CustomerProfile?>(null)
+        private set
+
+    var authBusy by mutableStateOf(false)
+        private set
+
+    var authError by mutableStateOf<String?>(null)
+        private set
+
+    var accountMessage by mutableStateOf<String?>(null)
         private set
 
     var selectedCategory by mutableStateOf<ProductCategory?>(null)
@@ -83,6 +97,17 @@ class DispensaryViewModel(
     val orders: StateFlow<List<Order>> = repository.orders
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
 
+    val customers: StateFlow<List<CustomerProfile>> = repository.customers
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+
+    val isLoggedIn: Boolean get() = currentCustomer != null
+
+    init {
+        viewModelScope.launch {
+            currentCustomer = repository.currentCustomer()
+        }
+    }
+
     fun productFlow(id: String) = repository.product(id)
 
     fun orderLines(orderId: String): StateFlow<List<OrderLine>> =
@@ -92,6 +117,77 @@ class DispensaryViewModel(
     fun verifyAge() {
         repository.setAgeVerified(true)
         ageVerified = true
+    }
+
+    fun clearAuthError() {
+        authError = null
+    }
+
+    fun login(email: String, password: String) {
+        viewModelScope.launch {
+            authBusy = true
+            authError = null
+            when (val result = repository.login(email, password)) {
+                is AuthResult.Success -> currentCustomer = result.customer
+                is AuthResult.Error -> authError = result.message
+            }
+            authBusy = false
+        }
+    }
+
+    fun register(
+        email: String,
+        password: String,
+        fullName: String,
+        phone: String,
+        dateOfBirth: String,
+        marketingOptIn: Boolean
+    ) {
+        viewModelScope.launch {
+            authBusy = true
+            authError = null
+            when (
+                val result = repository.registerCustomer(
+                    email, password, fullName, phone, dateOfBirth, marketingOptIn
+                )
+            ) {
+                is AuthResult.Success -> currentCustomer = result.customer
+                is AuthResult.Error -> authError = result.message
+            }
+            authBusy = false
+        }
+    }
+
+    fun logout() {
+        repository.logout()
+        currentCustomer = null
+        accountMessage = null
+    }
+
+    fun saveProfile(
+        fullName: String,
+        phone: String,
+        dateOfBirth: String,
+        notes: String,
+        marketingOptIn: Boolean
+    ) {
+        viewModelScope.launch {
+            when (
+                val result = repository.updateProfile(
+                    fullName, phone, dateOfBirth, notes, marketingOptIn
+                )
+            ) {
+                is AuthResult.Success -> {
+                    currentCustomer = result.customer
+                    accountMessage = "Profile saved."
+                }
+                is AuthResult.Error -> accountMessage = result.message
+            }
+        }
+    }
+
+    fun clearAccountMessage() {
+        accountMessage = null
     }
 
     fun setCategory(category: ProductCategory?) {

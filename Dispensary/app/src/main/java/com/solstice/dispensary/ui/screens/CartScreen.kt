@@ -36,6 +36,7 @@ import com.solstice.dispensary.ui.components.money
 @Composable
 fun CartScreen(
     cart: CartSummary,
+    defaultPickupName: String = "",
     checkoutMessage: String?,
     onClearMessage: () -> Unit,
     onSetQuantity: (String, Int) -> Unit,
@@ -44,12 +45,12 @@ fun CartScreen(
     onPlaceOrder: (String, String) -> Unit,
     onBrowseMenu: () -> Unit
 ) {
-    var name by remember { mutableStateOf("") }
+    var name by remember(defaultPickupName) { mutableStateOf(defaultPickupName) }
     var notes by remember { mutableStateOf("") }
 
     LaunchedEffect(checkoutMessage) {
         if (checkoutMessage != null) {
-            name = ""
+            name = defaultPickupName
             notes = ""
         }
     }

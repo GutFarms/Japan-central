@@ -10,8 +10,8 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Home
 import androidx.compose.material.icons.outlined.Inventory2
 import androidx.compose.material.icons.outlined.LocalMall
+import androidx.compose.material.icons.outlined.Person
 import androidx.compose.material.icons.outlined.ShoppingBag
-import androidx.compose.material.icons.outlined.Storefront
 import androidx.compose.material3.BadgedBox
 import androidx.compose.material3.Badge
 import androidx.compose.material3.Icon
@@ -29,6 +29,7 @@ import androidx.navigation.compose.rememberNavController
 import com.solstice.dispensary.ui.navigation.DispensaryNavHost
 import com.solstice.dispensary.ui.navigation.Routes
 import com.solstice.dispensary.ui.screens.AgeGateScreen
+import com.solstice.dispensary.ui.screens.AuthScreen
 import com.solstice.dispensary.ui.theme.SolsticeTheme
 import com.solstice.dispensary.ui.viewmodel.DispensaryViewModel
 import com.solstice.dispensary.ui.viewmodel.DispensaryViewModelFactory
@@ -52,6 +53,17 @@ class MainActivity : ComponentActivity() {
                     return@SolsticeTheme
                 }
 
+                if (!viewModel.isLoggedIn) {
+                    AuthScreen(
+                        busy = viewModel.authBusy,
+                        error = viewModel.authError,
+                        onLogin = viewModel::login,
+                        onRegister = viewModel::register,
+                        onClearError = viewModel::clearAuthError
+                    )
+                    return@SolsticeTheme
+                }
+
                 val navController = rememberNavController()
                 val backStack by navController.currentBackStackEntryAsState()
                 val current = backStack?.destination?.route ?: Routes.HOME
@@ -62,10 +74,14 @@ class MainActivity : ComponentActivity() {
                     NavItem(Routes.MENU, "Menu", Icons.Outlined.LocalMall),
                     NavItem(Routes.CART, "Bag", Icons.Outlined.ShoppingBag),
                     NavItem(Routes.INVENTORY, "Stock", Icons.Outlined.Inventory2),
-                    NavItem(Routes.STORE, "Store", Icons.Outlined.Storefront)
+                    NavItem(Routes.ACCOUNT, "Account", Icons.Outlined.Person)
                 )
 
-                val hideBottomBar = current.startsWith("product/") || current == Routes.SCANNER
+                val hideBottomBar = current.startsWith("product/") ||
+                    current == Routes.SCANNER ||
+                    current == Routes.CUSTOMERS ||
+                    current == Routes.ORDERS ||
+                    current == Routes.STORE
 
                 Scaffold(
                     modifier = Modifier.fillMaxSize(),

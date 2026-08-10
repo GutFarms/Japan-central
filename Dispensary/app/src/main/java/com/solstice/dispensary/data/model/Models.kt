@@ -1,6 +1,7 @@
 package com.solstice.dispensary.data.model
 
 import androidx.room.Entity
+import androidx.room.Index
 import androidx.room.PrimaryKey
 
 enum class ProductCategory(val label: String) {
@@ -54,7 +55,9 @@ data class Order(
     val itemCount: Int,
     val status: String,
     val pickupName: String,
-    val notes: String
+    val notes: String,
+    val customerId: String = "",
+    val customerEmail: String = ""
 )
 
 @Entity(tableName = "order_lines")
@@ -79,6 +82,54 @@ data class InventoryIntake(
     val confidence: Float,
     val barcode: String = ""
 )
+
+@Entity(
+    tableName = "customers",
+    indices = [Index(value = ["email"], unique = true)]
+)
+data class Customer(
+    @PrimaryKey val id: String,
+    val email: String,
+    val passwordHash: String,
+    val passwordSalt: String,
+    val fullName: String,
+    val phone: String = "",
+    val dateOfBirth: String = "",
+    val createdAt: Long = System.currentTimeMillis(),
+    val lastLoginAt: Long = 0L,
+    val notes: String = "",
+    val marketingOptIn: Boolean = false
+)
+
+/** Public profile without password fields. */
+data class CustomerProfile(
+    val id: String,
+    val email: String,
+    val fullName: String,
+    val phone: String,
+    val dateOfBirth: String,
+    val createdAt: Long,
+    val lastLoginAt: Long,
+    val notes: String,
+    val marketingOptIn: Boolean
+)
+
+fun Customer.toProfile() = CustomerProfile(
+    id = id,
+    email = email,
+    fullName = fullName,
+    phone = phone,
+    dateOfBirth = dateOfBirth,
+    createdAt = createdAt,
+    lastLoginAt = lastLoginAt,
+    notes = notes,
+    marketingOptIn = marketingOptIn
+)
+
+sealed class AuthResult {
+    data class Success(val customer: CustomerProfile) : AuthResult()
+    data class Error(val message: String) : AuthResult()
+}
 
 data class CartLine(
     val product: Product,

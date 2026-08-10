@@ -80,6 +80,13 @@ fun OrdersScreen(orders: List<Order>) {
                         text = "${order.status} · ${order.itemCount} items · ${order.pickupName}",
                         style = MaterialTheme.typography.bodyMedium
                     )
+                    if (order.customerEmail.isNotBlank()) {
+                        Text(
+                            text = order.customerEmail,
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
                     if (order.notes.isNotBlank()) {
                         Text(
                             text = "Note: ${order.notes}",

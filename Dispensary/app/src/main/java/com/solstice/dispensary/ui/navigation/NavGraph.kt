@@ -9,7 +9,9 @@ import androidx.navigation.NavType
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.navArgument
+import com.solstice.dispensary.ui.screens.AccountScreen
 import com.solstice.dispensary.ui.screens.CartScreen
+import com.solstice.dispensary.ui.screens.CustomersScreen
 import com.solstice.dispensary.ui.screens.HomeScreen
 import com.solstice.dispensary.ui.screens.InventoryScannerScreen
 import com.solstice.dispensary.ui.screens.InventoryScreen
@@ -27,6 +29,8 @@ object Routes {
     const val STORE = "store"
     const val INVENTORY = "inventory"
     const val SCANNER = "inventory/scan"
+    const val ACCOUNT = "account"
+    const val CUSTOMERS = "customers"
     const val PRODUCT = "product/{productId}"
 
     fun product(id: String) = "product/$id"
@@ -44,6 +48,7 @@ fun DispensaryNavHost(
     val products by viewModel.products.collectAsState()
     val inventory by viewModel.inventory.collectAsState()
     val intakes by viewModel.intakes.collectAsState()
+    val customers by viewModel.customers.collectAsState()
 
     NavHost(
         navController = navController,
@@ -83,6 +88,7 @@ fun DispensaryNavHost(
         composable(Routes.CART) {
             CartScreen(
                 cart = cart,
+                defaultPickupName = viewModel.currentCustomer?.fullName.orEmpty(),
                 checkoutMessage = viewModel.checkoutMessage,
                 onClearMessage = viewModel::clearCheckoutMessage,
                 onSetQuantity = viewModel::setQuantity,
@@ -125,6 +131,23 @@ fun DispensaryNavHost(
                     viewModel.confirmScanIntake(qty)
                     navController.popBackStack()
                 }
+            )
+        }
+        composable(Routes.ACCOUNT) {
+            AccountScreen(
+                customer = viewModel.currentCustomer,
+                customers = customers,
+                message = viewModel.accountMessage,
+                onClearMessage = viewModel::clearAccountMessage,
+                onSaveProfile = viewModel::saveProfile,
+                onLogout = viewModel::logout,
+                onOpenCustomers = { navController.navigate(Routes.CUSTOMERS) }
+            )
+        }
+        composable(Routes.CUSTOMERS) {
+            CustomersScreen(
+                customers = customers,
+                onBack = { navController.popBackStack() }
             )
         }
         composable(

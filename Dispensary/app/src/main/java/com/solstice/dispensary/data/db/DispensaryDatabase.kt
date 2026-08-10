@@ -7,10 +7,12 @@ import androidx.room.RoomDatabase
 import androidx.room.TypeConverter
 import androidx.room.TypeConverters
 import com.solstice.dispensary.data.dao.CartDao
+import com.solstice.dispensary.data.dao.CustomerDao
 import com.solstice.dispensary.data.dao.InventoryDao
 import com.solstice.dispensary.data.dao.OrderDao
 import com.solstice.dispensary.data.dao.ProductDao
 import com.solstice.dispensary.data.model.CartItem
+import com.solstice.dispensary.data.model.Customer
 import com.solstice.dispensary.data.model.InventoryIntake
 import com.solstice.dispensary.data.model.Order
 import com.solstice.dispensary.data.model.OrderLine
@@ -33,8 +35,15 @@ class Converters {
 }
 
 @Database(
-    entities = [Product::class, CartItem::class, Order::class, OrderLine::class, InventoryIntake::class],
-    version = 2,
+    entities = [
+        Product::class,
+        CartItem::class,
+        Order::class,
+        OrderLine::class,
+        InventoryIntake::class,
+        Customer::class
+    ],
+    version = 3,
     exportSchema = false
 )
 @TypeConverters(Converters::class)
@@ -43,6 +52,7 @@ abstract class DispensaryDatabase : RoomDatabase() {
     abstract fun cartDao(): CartDao
     abstract fun orderDao(): OrderDao
     abstract fun inventoryDao(): InventoryDao
+    abstract fun customerDao(): CustomerDao
 
     companion object {
         @Volatile

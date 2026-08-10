@@ -7,6 +7,7 @@ import androidx.room.Query
 import androidx.room.Transaction
 import androidx.room.Update
 import com.solstice.dispensary.data.model.CartItem
+import com.solstice.dispensary.data.model.Customer
 import com.solstice.dispensary.data.model.InventoryIntake
 import com.solstice.dispensary.data.model.Order
 import com.solstice.dispensary.data.model.OrderLine
@@ -109,3 +110,31 @@ interface InventoryDao {
     @Insert
     suspend fun insert(intake: InventoryIntake)
 }
+
+@Dao
+interface CustomerDao {
+    @Query("SELECT * FROM customers ORDER BY createdAt DESC")
+    fun observeAll(): Flow<List<Customer>>
+
+    @Query("SELECT * FROM customers WHERE id = :id LIMIT 1")
+    fun observeById(id: String): Flow<Customer?>
+
+    @Query("SELECT * FROM customers WHERE id = :id LIMIT 1")
+    suspend fun getById(id: String): Customer?
+
+    @Query("SELECT * FROM customers WHERE lower(email) = lower(:email) LIMIT 1")
+    suspend fun getByEmail(email: String): Customer?
+
+    @Query("SELECT COUNT(*) FROM customers")
+    suspend fun count(): Int
+
+    @Insert(onConflict = OnConflictStrategy.ABORT)
+    suspend fun insert(customer: Customer)
+
+    @Update
+    suspend fun update(customer: Customer)
+
+    @Query("DELETE FROM customers WHERE id = :id")
+    suspend fun delete(id: String)
+}
+
