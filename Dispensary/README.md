@@ -1,6 +1,6 @@
-# Solstice Dispensary (Android)
+# Native Pure Dispensary (Android)
 
-Adult-use dispensary app for browsing the menu, building a pickup bag, and checking store info.
+Adult-use dispensary app for browsing the menu, building a pickup bag, scanning inventory, and checking store info.
 
 > **Download APK:** [`dist/Solstice-Dispensary.apk`](./dist/Solstice-Dispensary.apk) — see also [`../DOWNLOAD-DISPENSARY.md`](../DOWNLOAD-DISPENSARY.md).
 

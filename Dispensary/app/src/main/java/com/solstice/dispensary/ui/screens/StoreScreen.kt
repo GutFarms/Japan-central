@@ -14,12 +14,12 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
+import com.solstice.dispensary.ui.components.BrandLogo
 import com.solstice.dispensary.ui.components.HeroBackdrop
 import com.solstice.dispensary.ui.components.SectionHeader
-import com.solstice.dispensary.ui.theme.Amber
-import com.solstice.dispensary.ui.theme.Ivory
 import com.solstice.dispensary.ui.theme.Sage
 
 @Composable
@@ -32,9 +32,8 @@ fun StoreScreen(
             .verticalScroll(rememberScrollState())
     ) {
         HeroBackdrop {
-            Column {
-                Text("SOLSTICE", style = MaterialTheme.typography.displayMedium, color = Ivory)
-                Text("DISPENSARY", style = MaterialTheme.typography.labelLarge, color = Amber)
+            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                BrandLogo(size = 128.dp)
                 Spacer(Modifier.height(12.dp))
                 Text(
                     text = "Adult-use cannabis · Pickup only",

@@ -30,12 +30,12 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import com.solstice.dispensary.data.model.Product
 import com.solstice.dispensary.data.model.ProductCategory
+import com.solstice.dispensary.ui.components.BrandLogo
 import com.solstice.dispensary.ui.components.HeroBackdrop
 import com.solstice.dispensary.ui.components.ProductTile
 import com.solstice.dispensary.ui.components.SectionHeader
 import com.solstice.dispensary.ui.theme.Amber
 import com.solstice.dispensary.ui.theme.Charcoal
-import com.solstice.dispensary.ui.theme.Ivory
 import com.solstice.dispensary.ui.theme.Sage
 
 @Composable
@@ -61,18 +61,7 @@ fun HomeScreen(
                         horizontalArrangement = Arrangement.SpaceBetween,
                         verticalAlignment = Alignment.Top
                     ) {
-                        Column {
-                            Text(
-                                text = "SOLSTICE",
-                                style = MaterialTheme.typography.displayMedium,
-                                color = Ivory
-                            )
-                            Text(
-                                text = "DISPENSARY",
-                                style = MaterialTheme.typography.labelLarge,
-                                color = Amber
-                            )
-                        }
+                        BrandLogo(size = 96.dp)
                         if (cartCount > 0) {
                             Surface(
                                 shape = RoundedCornerShape(20.dp),

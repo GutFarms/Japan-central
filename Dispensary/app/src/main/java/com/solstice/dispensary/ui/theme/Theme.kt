@@ -12,83 +12,91 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.sp
 
-val Charcoal = Color(0xFF141816)
-val CharcoalLift = Color(0xFF1E2420)
-val Sage = Color(0xFF7FA187)
-val SageDeep = Color(0xFF3E5C45)
-val Amber = Color(0xFFC9A45C)
-val AmberSoft = Color(0xFFE2C88A)
-val Ivory = Color(0xFFF2EFE6)
-val MistGreen = Color(0xFFD8E3D7)
-val Slate = Color(0xFF5C675F)
+// Native Pure brand palette (from main logo)
+val Charcoal = Color(0xFF0B0B0B)
+val CharcoalLift = Color(0xFF1A1714)
+val Terracotta = Color(0xFFC47A4E)
+val TerracottaDeep = Color(0xFF9E5A35)
+val Teal = Color(0xFF5B8A8A)
+val TealDeep = Color(0xFF3E6464)
+val Cream = Color(0xFFF0E6D8)
+val Ivory = Color(0xFFF7F1E8)
+val Slate = Color(0xFF6B6258)
 val Clay = Color(0xFFB56A4C)
 
+// Legacy aliases used across screens
+val Sage = Teal
+val SageDeep = TealDeep
+val Amber = Terracotta
+val AmberSoft = Color(0xFFD4A07A)
+val MistGreen = Color(0xFFD9E4E2)
+
 private val LightColors = lightColorScheme(
-    primary = SageDeep,
+    primary = TealDeep,
     onPrimary = Ivory,
-    primaryContainer = MistGreen,
+    primaryContainer = Color(0xFFD9E4E2),
     onPrimaryContainer = Charcoal,
-    secondary = Amber,
+    secondary = Terracotta,
     onSecondary = Charcoal,
-    secondaryContainer = Color(0xFFF3E6C8),
-    onSecondaryContainer = Color(0xFF3A2E12),
-    tertiary = Sage,
-    onTertiary = Charcoal,
-    background = Color(0xFFF7F5F0),
+    secondaryContainer = Color(0xFFF3E0D2),
+    onSecondaryContainer = Color(0xFF3A2415),
+    tertiary = Teal,
+    onTertiary = Ivory,
+    background = Color(0xFFF8F4EE),
     onBackground = Charcoal,
     surface = Color.White,
     onSurface = Charcoal,
-    surfaceVariant = Color(0xFFE8EDE7),
+    surfaceVariant = Color(0xFFECE6DC),
     onSurfaceVariant = Slate,
     error = Clay,
     onError = Ivory,
-    outline = Color(0xFF9AAB9C)
+    outline = Color(0xFFB8A99A)
 )
 
 private val DarkColors = darkColorScheme(
-    primary = Sage,
+    primary = Teal,
     onPrimary = Charcoal,
-    primaryContainer = SageDeep,
+    primaryContainer = TealDeep,
     onPrimaryContainer = Ivory,
     secondary = AmberSoft,
     onSecondary = Charcoal,
-    secondaryContainer = Color(0xFF4A3B1C),
-    onSecondaryContainer = AmberSoft,
-    tertiary = MistGreen,
+    secondaryContainer = TerracottaDeep,
+    onSecondaryContainer = Ivory,
+    tertiary = Cream,
     onTertiary = Charcoal,
     background = Charcoal,
     onBackground = Ivory,
     surface = CharcoalLift,
     onSurface = Ivory,
-    surfaceVariant = Color(0xFF2A332C),
-    onSurfaceVariant = Color(0xFFB7C4B8),
+    surfaceVariant = Color(0xFF2A2420),
+    onSurfaceVariant = Color(0xFFC9BDB0),
     error = Clay,
     onError = Ivory,
-    outline = Color(0xFF6E7B70)
+    outline = Color(0xFF7A6E62)
 )
 
 private val AppTypography = Typography(
     displayLarge = TextStyle(
-        fontFamily = FontFamily.Serif,
+        fontFamily = FontFamily.SansSerif,
         fontWeight = FontWeight.Bold,
         fontSize = 42.sp,
         lineHeight = 48.sp,
         letterSpacing = (-0.8).sp
     ),
     displayMedium = TextStyle(
-        fontFamily = FontFamily.Serif,
+        fontFamily = FontFamily.SansSerif,
         fontWeight = FontWeight.Bold,
         fontSize = 32.sp,
         lineHeight = 38.sp
     ),
     headlineLarge = TextStyle(
-        fontFamily = FontFamily.Serif,
+        fontFamily = FontFamily.SansSerif,
         fontWeight = FontWeight.SemiBold,
         fontSize = 28.sp,
         lineHeight = 34.sp
     ),
     headlineMedium = TextStyle(
-        fontFamily = FontFamily.Serif,
+        fontFamily = FontFamily.SansSerif,
         fontWeight = FontWeight.SemiBold,
         fontSize = 22.sp,
         lineHeight = 28.sp

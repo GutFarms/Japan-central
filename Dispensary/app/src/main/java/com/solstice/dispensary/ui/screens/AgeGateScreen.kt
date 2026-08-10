@@ -19,13 +19,14 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import com.solstice.dispensary.ui.components.BrandLogo
 import com.solstice.dispensary.ui.theme.Amber
 import com.solstice.dispensary.ui.theme.Charcoal
 import com.solstice.dispensary.ui.theme.Ivory
 import com.solstice.dispensary.ui.theme.Sage
-import com.solstice.dispensary.ui.theme.SageDeep
 
 @Composable
 fun AgeGateScreen(
@@ -37,7 +38,7 @@ fun AgeGateScreen(
             .fillMaxSize()
             .background(
                 Brush.verticalGradient(
-                    listOf(Charcoal, SageDeep, Charcoal)
+                    listOf(Charcoal, Color(0xFF1A1410), Charcoal)
                 )
             )
             .padding(28.dp),
@@ -47,17 +48,8 @@ fun AgeGateScreen(
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
-            Text(
-                text = "SOLSTICE",
-                style = MaterialTheme.typography.displayLarge,
-                color = Ivory
-            )
-            Text(
-                text = "DISPENSARY",
-                style = MaterialTheme.typography.labelLarge,
-                color = Amber
-            )
-            Spacer(Modifier.height(12.dp))
+            BrandLogo(size = 168.dp)
+            Spacer(Modifier.height(4.dp))
             Text(
                 text = "Are you 21 or older?",
                 style = MaterialTheme.typography.headlineMedium,
@@ -65,7 +57,7 @@ fun AgeGateScreen(
                 textAlign = TextAlign.Center
             )
             Text(
-                text = "You must be of legal age to enter this store and browse our menu.",
+                text = "You must be of legal age to enter Native Pure and browse our menu.",
                 style = MaterialTheme.typography.bodyLarge,
                 color = Sage,
                 textAlign = TextAlign.Center,

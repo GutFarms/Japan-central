@@ -1,5 +1,6 @@
 package com.solstice.dispensary.ui.components
 
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -28,9 +29,13 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import com.solstice.dispensary.R
 import com.solstice.dispensary.data.model.Product
 import com.solstice.dispensary.data.model.ProductCategory
 import com.solstice.dispensary.data.model.StrainType
@@ -46,20 +51,47 @@ fun money(amount: Double): String =
     NumberFormat.getCurrencyInstance(Locale.US).format(amount)
 
 @Composable
-fun BrandMark(modifier: Modifier = Modifier, compact: Boolean = false) {
-    Column(modifier = modifier) {
-        Text(
-            text = "SOLSTICE",
-            style = if (compact) MaterialTheme.typography.titleLarge else MaterialTheme.typography.displayMedium,
-            color = MaterialTheme.colorScheme.onBackground,
-            fontWeight = FontWeight.Bold
-        )
-        Text(
-            text = "DISPENSARY",
-            style = MaterialTheme.typography.labelLarge,
-            color = MaterialTheme.colorScheme.secondary,
-            letterSpacing = MaterialTheme.typography.labelLarge.letterSpacing
-        )
+fun BrandLogo(
+    modifier: Modifier = Modifier,
+    size: Dp = 120.dp,
+    contentDescription: String = "Native Pure"
+) {
+    Image(
+        painter = painterResource(id = R.drawable.logo_main),
+        contentDescription = contentDescription,
+        modifier = modifier
+            .size(size)
+            .clip(RoundedCornerShape(size / 8)),
+        contentScale = ContentScale.Crop
+    )
+}
+
+@Composable
+fun BrandMark(
+    modifier: Modifier = Modifier,
+    compact: Boolean = false,
+    showWordmark: Boolean = false
+) {
+    val logoSize = if (compact) 56.dp else 112.dp
+    Column(
+        modifier = modifier,
+        horizontalAlignment = Alignment.Start
+    ) {
+        BrandLogo(size = logoSize)
+        if (showWordmark) {
+            Spacer(Modifier.height(8.dp))
+            Text(
+                text = "NATIVE PURE",
+                style = if (compact) MaterialTheme.typography.titleLarge else MaterialTheme.typography.displayMedium,
+                color = MaterialTheme.colorScheme.onBackground,
+                fontWeight = FontWeight.Bold
+            )
+            Text(
+                text = "DISPENSARY",
+                style = MaterialTheme.typography.labelLarge,
+                color = MaterialTheme.colorScheme.secondary
+            )
+        }
     }
 }
 
@@ -238,7 +270,7 @@ fun HeroBackdrop(modifier: Modifier = Modifier, content: @Composable () -> Unit)
             .fillMaxWidth()
             .background(
                 Brush.verticalGradient(
-                    listOf(Charcoal, SageDeep, Color(0xFF243028))
+                    listOf(Charcoal, Color(0xFF1A1410), Color(0xFF2A1C14))
                 )
             )
             .padding(20.dp)
