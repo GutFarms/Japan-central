@@ -47,7 +47,7 @@ void DisplayUi::drawMiningChrome() {
   tft_.setTextColor(cLime_, cBg_);
   tft_.drawString("SCRYPT", 12, 14, 2);
   tft_.setTextColor(cMuted_, cBg_);
-  tft_.drawString("H/s", 12, 48, 2);
+  tft_.drawString("kH/s", 12, 48, 2);
   tft_.drawString("usb", 12, 130, 2);
   miningDrawn_ = true;
   lastRate_ = -1;
@@ -69,7 +69,8 @@ void DisplayUi::showMining(const AppConfig& cfg, const MinerSnapshot& snap, bool
     tft_.fillRect(12, 72, 300, 40, cBg_);
     tft_.setTextColor(cLime_, cBg_);
     char rate[24];
-    snprintf(rate, sizeof(rate), "%.2f", snap.hashrateHs);
+    // Show kilohashes; scrypt on ESP32 is sub-kH so more decimals help.
+    snprintf(rate, sizeof(rate), "%.4f", snap.hashrateHs / 1000.0f);
     tft_.drawString(rate, 12, 72, 4);
     lastRate_ = snap.hashrateHs;
   }

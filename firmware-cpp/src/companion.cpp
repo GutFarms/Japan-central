@@ -3,6 +3,8 @@
 #include <cstring>
 #include <esp_system.h>
 
+extern "C" float cyd_run_bench(uint32_t n);
+
 void CompanionLink::begin(uint32_t baud) {
   Serial.setRxBufferSize(4096);
   Serial.setTxBufferSize(1024);
@@ -116,6 +118,22 @@ void CompanionLink::handleLine(const String& line, AppConfig& cfg, const MinerSn
     Serial.flush();
     return;
   }
+  if (verb == "bench") {
+    uint32_t n = 8;
+    if (args.length()) {
+      int eq = args.indexOf('=');
+      String val = (eq < 0) ? args : args.substring(eq + 1);
+      int v = val.toInt();
+      if (v > 0) n = (uint32_t)v;
+    }
+    float hs = cyd_run_bench(n);
+    char line[96];
+    snprintf(line, sizeof(line), "CMPBENCH hashes=%u hs=%.4f khs=%.6f", (unsigned)n, hs,
+             hs / 1000.0f);
+    Serial.println(line);
+    Serial.flush();
+    return;
+  }
   if (verb == "stats") {
     // PC reports accept/reject counts for the LCD.
     uint32_t acc = 0, rej = 0;
@@ -169,13 +187,14 @@ void CompanionLink::handleLine(const String& line, AppConfig& cfg, const MinerSn
     (void)onApply(updated, reboot);
     return;
   }
-  Serial.println("CMPERR unknown (ping|status|config|job|stop|stats|clock|reboot|netdata)");
+  Serial.println("CMPERR unknown (ping|status|config|job|stop|stats|bench|clock|reboot|netdata)");
   Serial.flush();
 }
 
 void CompanionLink::replyStatus(const AppConfig& cfg, const MinerSnapshot& snap) {
   JsonDocument doc;
   doc["hashrate_hs"] = snap.hashrateHs;
+  doc["hashrate_khs"] = snap.hashrateHs / 1000.0f;
   doc["shares"] = snap.shares;
   doc["accepted"] = snap.accepted;
   doc["rejected"] = snap.rejected;
@@ -188,6 +207,8 @@ void CompanionLink::replyStatus(const AppConfig& cfg, const MinerSnapshot& snap)
   doc["hash_focus"] = snap.hashFocus;
   doc["net_ticker"] = snap.netTicker;
   doc["job"] = snap.jobId;
+  doc["full_v"] = snap.fullV;
+  doc["bench_hs"] = snap.benchHs;
   char nonceHex[9];
   snprintf(nonceHex, sizeof(nonceHex), "%08x", snap.nonce);
   doc["nonce"] = nonceHex;
@@ -200,8 +221,8 @@ void CompanionLink::replyConfig(const AppConfig& cfg) {
   JsonDocument doc;
   doc["cpu_mhz"] = cfg.cpuMhz;
   doc["hash_focus"] = cfg.hashFocus;
-  doc["fw"] = "0.3.0-usb";
-  doc["mode"] = "usb-hash";
+  doc["fw"] = "0.3.1-max";
+  doc["mode"] = "usb-hash-max";
   doc["configured"] = true;
   Serial.print("CMPCONFIG ");
   serializeJson(doc, Serial);

@@ -90,6 +90,8 @@ struct StatusJson {
     #[serde(default)]
     hashrate_hs: f64,
     #[serde(default)]
+    hashrate_khs: f64,
+    #[serde(default)]
     shares: u64,
     #[serde(default)]
     accepted: u32,
@@ -163,6 +165,7 @@ enum NetCmd {
     StopMine,
     SetClock(u8),
     PollStatus,
+    Bench,
 }
 
 struct CompanionApp {
@@ -446,29 +449,26 @@ impl App for CompanionApp {
                 ui.add_space(10.0);
                 panel(ui, "Live", |ui| {
                     ui.horizontal(|ui| {
-                        stat(ui, "Hashrate", &format!("{:.2} H/s", self.status.hashrate_hs));
+                        let khs = if self.status.hashrate_khs > 0.0 {
+                            self.status.hashrate_khs
+                        } else {
+                            self.status.hashrate_hs / 1000.0
+                        };
+                        stat(ui, "Hashrate", &format!("{khs:.4} kH/s"));
+                        stat(ui, "H/s", &format!("{:.2}", self.status.hashrate_hs));
                         stat(ui, "Accepted", &self.accepted.to_string());
                         stat(ui, "Rejected", &self.rejected.to_string());
                         stat(ui, "Board shares", &self.status.shares.to_string());
-                        stat(
-                            ui,
-                            "CPU",
-                            &format!("{} MHz", if self.status.cpu_mhz > 0 {
-                                self.status.cpu_mhz
-                            } else {
-                                self.target_mhz
-                            }),
-                        );
                     });
                     ui.add_space(6.0);
                     ui.horizontal(|ui| {
-                        ui.label(RichText::new("Board clock").color(C_MUTED));
-                        for mhz in [80u8, 160, 240] {
-                            let on = self.target_mhz == mhz;
-                            if bubble(ui, &format!("{mhz}"), on).clicked() {
-                                self.target_mhz = mhz;
-                                let _ = self.cmd_tx.send(NetCmd::SetClock(mhz));
-                            }
+                        ui.label(
+                            RichText::new("Locked 240 MHz · dual-core · full-V scrypt when RAM allows")
+                                .color(C_MUTED)
+                                .size(12.0),
+                        );
+                        if bubble(ui, "Bench max", true).clicked() {
+                            let _ = self.cmd_tx.send(NetCmd::Bench);
                         }
                     });
                 });
@@ -658,6 +658,20 @@ fn mine_worker(cmd_rx: Receiver<NetCmd>, msg_tx: Sender<NetMsg>) {
                         }
                     }
                 }
+                NetCmd::Bench => {
+                    if let Some(p) = usb.as_mut() {
+                        match usb_cmd(p.as_mut(), &mut usb_rx, "cmp bench n=8") {
+                            Ok(line) => {
+                                let _ = msg_tx.send(NetMsg::Action(Ok(line)));
+                            }
+                            Err(e) => {
+                                let _ = msg_tx.send(NetMsg::Action(Err(e)));
+                            }
+                        }
+                    } else {
+                        let _ = msg_tx.send(NetMsg::Action(Err("USB not open".into())));
+                    }
+                }
             }
         }
 
@@ -782,6 +796,7 @@ fn cmp_reply_line(buf: &str) -> Option<String> {
         for prefix in [
             "CMPSTATUS ",
             "CMPCONFIG ",
+            "CMPBENCH ",
             "CMPACK",
             "CMP ok",
             "CMPERR",

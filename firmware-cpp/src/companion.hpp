@@ -16,6 +16,8 @@ struct MinerSnapshot {
   bool hashFocus = true;
   String netTicker;
   String jobId;
+  float benchHs = 0;
+  bool fullV = false;
 };
 
 // Optional LCD ticker pushed from the PC (`cmp netdata`).
