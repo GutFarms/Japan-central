@@ -15,6 +15,18 @@ A language reconstruction **LLM + API + iOS client** for rebuilding **Borikén T
 
 This is a **community language-rebuilding toolkit**. Attested colonial forms are preferred and labeled `attested`. Neo-Taíno / comparative reconstructions are labeled clearly so the app never pretends certainty.
 
+# Download BorikenLLM
+
+See **[DOWNLOAD.md](DOWNLOAD.md)** for the three packages:
+
+| Package | File |
+|---|---|
+| Offline learner (iPhone/desktop) | `dist/Boriken-Offline-Learner.zip` |
+| iOS Xcode content bundle | `dist/Boriken-iOS-ContentBundle.zip` |
+| Full API + model toolkit | `dist/BorikenLLM-Toolkit.zip` |
+
+Rebuild anytime with `./scripts/package.sh`.
+
 ## Quick start
 
 ```bash
