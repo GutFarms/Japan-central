@@ -1,9 +1,9 @@
-name: Build downloadable Solstice Dispensary APK
+name: Build downloadable Native Pure Dispensary APK
 
 on:
   push:
     branches: [master, "cursor/**"]
-    tags: ["dispensary-v*"]
+    tags: ["dispensary-v*", "nativepure-v*"]
   pull_request:
     paths:
       - "Dispensary/**"
@@ -39,12 +39,15 @@ jobs:
       - name: Stage downloadable APK
         run: |
           mkdir -p dist
+          cp app/build/outputs/apk/release/app-release.apk dist/NativePure-Dispensary.apk
           cp app/build/outputs/apk/release/app-release.apk dist/Solstice-Dispensary.apk
           ls -lh dist/
 
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
-          name: Solstice-Dispensary-apk
-          path: Dispensary/dist/Solstice-Dispensary.apk
+          name: NativePure-Dispensary-apk
+          path: |
+            Dispensary/dist/NativePure-Dispensary.apk
+            Dispensary/dist/Solstice-Dispensary.apk
           if-no-files-found: error

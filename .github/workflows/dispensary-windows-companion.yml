@@ -2,6 +2,7 @@ name: Build Native Pure Windows companion
 
 on:
   push:
+    branches: [master, "cursor/**"]
     paths:
       - "DispensaryCompanion/**"
       - ".github/workflows/dispensary-windows-companion.yml"
@@ -19,11 +20,46 @@ jobs:
       - name: Package Windows EXE / MSI
         working-directory: DispensaryCompanion
         run: |
-          .\gradlew.bat packageExe packageMsi --no-daemon
+          .\gradlew.bat packageExe packageMsi packageUberJarForCurrentOS --no-daemon
+      - name: Stage dist folder
+        working-directory: DispensaryCompanion
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path dist | Out-Null
+          Copy-Item build\compose\binaries\main\exe\* dist\ -Recurse -ErrorAction SilentlyContinue
+          Copy-Item build\compose\binaries\main\msi\* dist\ -Recurse -ErrorAction SilentlyContinue
+          Copy-Item build\compose\jars\*.jar dist\ -ErrorAction SilentlyContinue
+          Get-ChildItem dist -Recurse | Format-Table Name, Length
       - name: Upload Windows installers
         uses: actions/upload-artifact@v4
         with:
           name: NativePure-Companion-Windows
           path: |
+            DispensaryCompanion/dist/**
             DispensaryCompanion/build/compose/binaries/main/exe/**
             DispensaryCompanion/build/compose/binaries/main/msi/**
+          if-no-files-found: error
+
+  linux-jar:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+      - name: Package Linux uber JAR
+        working-directory: DispensaryCompanion
+        run: |
+          chmod +x gradlew
+          ./gradlew packageUberJarForCurrentOS --no-daemon
+          mkdir -p dist
+          cp build/compose/jars/NativePureCompanion-*-*.jar dist/NativePure-Companion-linux-x64.jar
+          cp dist/NativePure-Companion-linux-x64.jar dist/NativePure-Companion.jar
+          ls -lh dist/
+      - name: Upload Linux companion JAR
+        uses: actions/upload-artifact@v4
+        with:
+          name: NativePure-Companion-linux-jar
+          path: DispensaryCompanion/dist/*.jar
+          if-no-files-found: error

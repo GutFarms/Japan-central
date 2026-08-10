@@ -5,6 +5,10 @@ target/
 **/.gradle/
 Dispensary/keystore/*.jks
 
+# Large installers — download from GitHub Actions artifacts (see DOWNLOAD-DISPENSARY.md)
+Dispensary/dist/*.apk
+Dispensary/app/build/
+
 # Desktop companion
 DispensaryCompanion/.gradle/
 DispensaryCompanion/build/

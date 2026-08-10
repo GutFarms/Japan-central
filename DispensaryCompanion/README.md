@@ -2,6 +2,24 @@
 
 Desktop companion for the Native Pure dispensary phone app. Browse the menu, place pickup orders, manage stock, view customers (staff/admin), and manage account security on Windows.
 
+## Download
+
+See [`../DOWNLOAD-DISPENSARY.md`](../DOWNLOAD-DISPENSARY.md).
+
+GitHub Actions workflow **Build Native Pure Windows companion** uploads:
+
+- **`NativePure-Companion-Windows`** — EXE / MSI + Windows uber JAR
+- **`NativePure-Companion-linux-jar`** — cross-platform runnable JAR
+
+Run a JAR with JDK 17+:
+
+```bash
+java -jar NativePure-Companion.jar
+# or, after a local package:
+./run-companion.sh
+run-companion.bat
+```
+
 ## Features
 
 - **18+ age gate** on first launch
@@ -25,7 +43,7 @@ Desktop companion for the Native Pure dispensary phone app. Browse the menu, pla
 - **JDK 17+**
 - Windows 10/11 for native `.exe` / `.msi` installers (or any OS to run the JVM app)
 
-## Run (any OS with JDK)
+## Run from source
 
 ```bash
 cd DispensaryCompanion
@@ -39,9 +57,9 @@ cd DispensaryCompanion
 gradlew.bat run
 ```
 
-## Build Windows installers
+## Build installers
 
-On a Windows machine with JDK 17+ (or via GitHub Actions workflow **Build Native Pure Windows companion**):
+On a Windows machine with JDK 17+ (or via GitHub Actions):
 
 ```bat
 cd DispensaryCompanion
@@ -54,17 +72,12 @@ Outputs land under:
 `build/compose/binaries/main/exe/`  
 `build/compose/binaries/main/msi/`
 
-You can also create a distributable app directory:
-
-```bat
-gradlew.bat createDistributable
-```
-
-Or a single runnable uber JAR for the current OS:
+Uber JAR for the current OS:
 
 ```bash
 ./gradlew packageUberJarForCurrentOS
-# → build/compose/jars/NativePureCompanion-*-1.0.0.jar
+mkdir -p dist
+cp build/compose/jars/NativePureCompanion-*-*.jar dist/NativePure-Companion.jar
 ```
 
 ## Sync with the Android app
