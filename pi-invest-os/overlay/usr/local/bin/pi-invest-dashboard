@@ -1,23 +1,22 @@
 #!/usr/bin/env bash
-# Open the local Pi Invest web dashboard in a browser.
-# Menu name: "Pi Invest Dashboard"  |  CLI: pi-invest-dashboard
+# Launch Pi Invest as a local desktop application (no browser address bar).
 set -euo pipefail
 
-URL="${PI_INVEST_KIOSK_URL:-http://127.0.0.1:8787}"
-ENV_FILE=/opt/pi-invest-agent/.env
+AGENT_ROOT="${PI_INVEST_AGENT_ROOT:-/opt/pi-invest-agent}"
+ENV_FILE="${AGENT_ROOT}/.env"
+VENV_BIN="${AGENT_ROOT}/.venv/bin"
+
 if [[ -f "$ENV_FILE" ]]; then
   set -a
   # shellcheck disable=SC1090
   source "$ENV_FILE" || true
   set +a
-  URL="${PI_INVEST_KIOSK_URL:-$URL}"
 fi
 
-start_dashboard_service() {
+start_backend() {
   if systemctl is-active --quiet pi-invest-dashboard.service 2>/dev/null; then
     return 0
   fi
-  # Passwordless via /etc/sudoers.d/pi-invest-dashboard when present
   if sudo -n /usr/bin/systemctl start pi-invest-dashboard.service 2>/dev/null; then
     return 0
   fi
@@ -26,53 +25,33 @@ start_dashboard_service() {
   fi
 }
 
-healthy() {
-  curl -fsS --max-time 2 "$URL/api/health" >/dev/null 2>&1 \
-    || curl -fsS --max-time 2 "$URL" >/dev/null 2>&1
-}
+start_backend || true
 
-if ! healthy; then
-  start_dashboard_service || true
-  for _ in $(seq 1 45); do
-    healthy && break
-    sleep 1
-  done
+# Preferred: native app window via pi-invest app (pywebview or Chromium --app)
+if [[ -x "${VENV_BIN}/pi-invest" ]]; then
+  export PI_INVEST_DESKTOP_TRUST_LOOPBACK="${PI_INVEST_DESKTOP_TRUST_LOOPBACK:-true}"
+  cd "$AGENT_ROOT"
+  exec "${VENV_BIN}/pi-invest" app
 fi
 
-if ! healthy; then
-  MSG="Dashboard is not responding at ${URL}.\nTry: sudo systemctl start pi-invest-dashboard"
-  if command -v zenity >/dev/null 2>&1; then
-    zenity --error --title="Pi Invest Dashboard" --text="$MSG" || true
-  elif command -v notify-send >/dev/null 2>&1; then
-    notify-send "Pi Invest Dashboard" "$MSG" || true
-  else
-    echo "ERROR: $MSG" >&2
-  fi
-  # Still try to open the URL so the user sees the browser error page
+# Fallback if agent CLI missing
+URL="${PI_INVEST_KIOSK_URL:-http://127.0.0.1:8787}"
+for _ in $(seq 1 30); do
+  curl -fsS --max-time 2 "$URL/api/health" >/dev/null 2>&1 && break
+  sleep 1
+done
+BROWSER="$(command -v chromium || command -v chromium-browser || true)"
+if [[ -n "${BROWSER:-}" ]]; then
+  PROFILE="${HOME}/.local/share/pi-invest-app-profile"
+  mkdir -p "$PROFILE"
+  exec "$BROWSER" --user-data-dir="$PROFILE" --class=PiInvest --app="$URL" \
+    --no-first-run --disable-session-crashed-bubble
 fi
 
-pick_browser() {
-  local c
-  for c in chromium chromium-browser firefox-esr firefox xdg-open; do
-    command -v "$c" >/dev/null 2>&1 && { echo "$c"; return 0; }
-  done
-  return 1
-}
-
-BROWSER="$(pick_browser)" || {
-  echo "ERROR: no web browser installed (need chromium)" >&2
-  exit 1
-}
-
-case "$BROWSER" in
-  chromium|chromium-browser)
-    exec "$BROWSER" --new-window --app="$URL" --no-first-run \
-      --disable-session-crashed-bubble --check-for-update-interval=31536000
-    ;;
-  firefox|firefox-esr)
-    exec "$BROWSER" --new-window "$URL"
-    ;;
-  *)
-    exec "$BROWSER" "$URL"
-    ;;
-esac
+MSG="Pi Invest app could not start. Install the agent venv, then run: pi-invest app"
+if command -v zenity >/dev/null 2>&1; then
+  zenity --error --title="Pi Invest" --text="$MSG" || true
+else
+  echo "ERROR: $MSG" >&2
+fi
+exit 1

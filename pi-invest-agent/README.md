@@ -94,7 +94,10 @@ pi-invest once --preview
 # Continuous paper loop
 pi-invest run
 
-# Status dashboard (http://127.0.0.1:8787 — Tailscale recommended)
+# Native desktop app on the Pi (preferred — no browser URL)
+pi-invest app
+
+# Backend only (optional SSH tunnel / service)
 pi-invest dashboard
 ```
 
@@ -130,7 +133,8 @@ pi-invest once          # single research + trade cycle
 pi-invest once --preview  # score + planned orders, no fills
 pi-invest run           # scheduled loop
 pi-invest status        # portfolio + wallet + recent decisions
-pi-invest dashboard     # web UI on 127.0.0.1:8787
+pi-invest app           # native desktop window on the Pi
+pi-invest dashboard     # backend service (used by the app)
 pi-invest reset-paper   # wipe paper brokerage ledger (keeps config)
 
 # USD + crypto wallet

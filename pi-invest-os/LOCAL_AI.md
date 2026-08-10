@@ -43,12 +43,12 @@ On-device policy layer between Ollama and the risk gate:
 Still paper-default; does not unlock live trading.
 
 
-**Browser UI is the dashboard, not Ollama:**
+**Use the desktop app — not a typed web address:**
 
-| URL | What it is |
+| How | What it is |
 |---|---|
-| `http://127.0.0.1:8787` | Pi Invest dashboard (open this in Chromium) |
-| `http://127.0.0.1:11434` | Ollama **API only** — not a website (browser will look “broken”) |
+| Menu / Desktop → **Pi Invest** | Local app window on the Pi (`pi-invest app`) |
+| Ollama `:11434` | LLM **API only** — not a UI |
 
 Check the API from a terminal instead:
 

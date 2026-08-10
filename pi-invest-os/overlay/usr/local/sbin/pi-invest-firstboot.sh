@@ -65,6 +65,10 @@ apt-get install -y --no-install-recommends \
   chromium \
   fonts-liberation fonts-dejavu-core \
   gvfs mousepad
+# Native desktop app window (WebKit) — optional if packages missing
+apt-get install -y --no-install-recommends \
+  python3-webview gir1.2-webkit2-4.1 \
+  || apt-get install -y --no-install-recommends gir1.2-webkit2-4.0 || true
 
 echo "==> Installing Raspberry Pi desktop (Wayland / labwc)"
 # Trixie metapackages (replaces legacy raspberrypi-ui-mods)
@@ -130,6 +134,7 @@ ensure_env PI_INVEST_KIOSK false
 ensure_env OLLAMA_BASE_URL http://127.0.0.1:11434
 ensure_env OLLAMA_MODEL llama3.2:3b
 ensure_env PI_INVEST_OLLAMA_MODEL llama3.2:3b
+ensure_env PI_INVEST_DESKTOP_TRUST_LOOPBACK true
 chown "$TARGET_USER:$TARGET_USER" "$AGENT_ROOT/.env"
 chmod 600 "$AGENT_ROOT/.env"
 
@@ -147,20 +152,19 @@ chown -R "$TARGET_USER:$TARGET_USER" "$AGENT_ROOT"
 mkdir -p "$AGENT_ROOT/data"
 chown "$TARGET_USER:$TARGET_USER" "$AGENT_ROOT/data"
 
-# System application + Desktop / autostart launchers
+# Local desktop application (native window — not a web address)
 install -d -m 755 /usr/local/bin /usr/share/applications
 if [[ ! -x /usr/local/bin/pi-invest-dashboard ]]; then
   cat >/usr/local/bin/pi-invest-dashboard <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
-URL="${PI_INVEST_KIOSK_URL:-http://127.0.0.1:8787}"
-systemctl start pi-invest-dashboard.service 2>/dev/null || true
-for _ in $(seq 1 45); do
-  curl -fsS --max-time 2 "$URL/api/health" >/dev/null 2>&1 && break
-  sleep 1
-done
-BROWSER="$(command -v chromium || command -v chromium-browser || command -v xdg-open)"
-exec "$BROWSER" --new-window --app="$URL"
+AGENT_ROOT=/opt/pi-invest-agent
+sudo -n systemctl start pi-invest-dashboard.service 2>/dev/null || true
+if [[ -x "$AGENT_ROOT/.venv/bin/pi-invest" ]]; then
+  cd "$AGENT_ROOT"
+  exec "$AGENT_ROOT/.venv/bin/pi-invest" app
+fi
+exec chromium --class=PiInvest --app=http://127.0.0.1:8787 --no-first-run
 EOF
   chmod 755 /usr/local/bin/pi-invest-dashboard
 fi
@@ -168,13 +172,14 @@ if [[ ! -f /usr/share/applications/pi-invest-dashboard.desktop ]]; then
   cat >/usr/share/applications/pi-invest-dashboard.desktop <<'EOF'
 [Desktop Entry]
 Type=Application
-Name=Pi Invest Dashboard
-Comment=Open the local Pi Invest agent dashboard
+Name=Pi Invest
+Comment=On-device income agent — local app on this Pi
 Exec=/usr/local/bin/pi-invest-dashboard
 Icon=utilities-system-monitor
 Terminal=false
-Categories=Network;Finance;Office;
+Categories=Finance;Office;Utility;
 StartupNotify=true
+StartupWMClass=PiInvest
 EOF
 fi
 mkdir -p \
@@ -276,14 +281,14 @@ RestartSec=10
 WantedBy=multi-user.target
 EOF
 
-echo "==> Creating Python venv + installing agent"
+echo "==> Creating Python venv + installing agent (+ desktop UI)"
 sudo -u "$TARGET_USER" bash -lc "
   set -euo pipefail
   cd '$AGENT_ROOT'
   python3 -m venv .venv
   . .venv/bin/activate
   pip install --upgrade pip wheel
-  pip install -e .
+  pip install -e '.[desktop]' || pip install -e . && pip install 'pywebview>=5'
 "
 
 echo "==> Smoke test (simulator preview)"
@@ -370,8 +375,8 @@ IP="$(hostname -I 2>/dev/null | awk '{print $1}')"
 echo "==== First-boot complete ===="
 echo "Mode:      LOCAL-ONLY AI on this Pi (Ollama + paper + simulator)"
 echo "Desktop:   Raspberry Pi Wayland desktop with autologin as ${TARGET_USER}"
-echo "Dashboard: opens automatically in Chromium; also on the Desktop"
-echo "URL:       http://127.0.0.1:8787"
+echo "App:       Pi Invest (menu / Desktop icon) — local window, not a web URL"
+echo "CLI app:   pi-invest app   or   pi-invest-dashboard"
 echo "Remote:    ssh -L 8787:127.0.0.1:8787 ${TARGET_USER}@${IP:-pi-invest.local}"
 echo "Local AI:  sudo systemctl status ollama ; ollama list"
 echo "GitHub auto-update: disabled (PI_INVEST_LOCAL_ONLY=true)"

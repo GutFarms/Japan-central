@@ -4,7 +4,7 @@ import secrets
 from pathlib import Path
 from typing import Literal
 
-from fastapi import Depends, FastAPI, HTTPException, status
+from fastapi import Depends, FastAPI, HTTPException, Request, status
 from fastapi.responses import HTMLResponse
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from pydantic import BaseModel, Field
@@ -85,12 +85,24 @@ def create_app(
         return user_ok and pass_ok
 
     def require_user(
+        request: Request,
         credentials: HTTPBasicCredentials | None = Depends(security),
     ) -> DashboardUser:
         """Return admin or viewer identity."""
         if not cfg.dashboard.require_auth or not env.dashboard_password:
             return DashboardUser(
                 username=env.dashboard_username or "anonymous",
+                role="admin",
+            )
+        # Local desktop app on the Pi — no browser login dialog
+        client_host = request.client.host if request.client else ""
+        if env.pi_invest_desktop_trust_loopback and client_host in {
+            "127.0.0.1",
+            "::1",
+            "localhost",
+        }:
+            return DashboardUser(
+                username=env.dashboard_username or "local",
                 role="admin",
             )
         if credentials is None:

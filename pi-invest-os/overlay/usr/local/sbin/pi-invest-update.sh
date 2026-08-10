@@ -115,7 +115,7 @@ sudo -u "$TARGET_USER" bash -lc "
   fi
   . .venv/bin/activate
   pip install --upgrade pip wheel
-  pip install -e .
+  pip install -e '.[desktop]' || { pip install -e .; pip install 'pywebview>=5'; }
 "
 
 echo "==> Restarting services"

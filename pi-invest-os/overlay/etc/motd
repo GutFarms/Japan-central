@@ -5,9 +5,11 @@ Runs solely on-device after first boot (Ollama + paper + simulator):
   • Graphical desktop (Wayland / labwc) with autologin
   • ollama.service                 (local LLM on :11434)
   • pi-invest.service              (paper trading loop)
-  • pi-invest-dashboard.service    (http://127.0.0.1:8787)
-  • Chromium dashboard on login (Desktop + app menu)
+  • pi-invest-dashboard.service    (local app backend)
+  • Desktop app:  Pi Invest        (menu / Desktop icon — not a web URL)
   • GitHub auto-update             OFF (local-only)
+
+Open the app: click "Pi Invest" on the Desktop, or run:  pi-invest app
 
 Secrets: edit /boot/firmware/pi-invest.env before first boot
          or /opt/pi-invest-agent/.env after login.

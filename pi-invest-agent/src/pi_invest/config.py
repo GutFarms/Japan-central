@@ -189,6 +189,8 @@ class EnvSettings(BaseSettings):
     pi_invest_local_only: bool = False
     # When true with local_only: keep yahoo quotes (still no cloud LLM)
     pi_invest_allow_online_quotes: bool = False
+    # Desktop app / loopback clients skip HTTP basic auth (local Pi display)
+    pi_invest_desktop_trust_loopback: bool = True
 
 
 def load_config(path: str | Path | None = None) -> AppConfig:

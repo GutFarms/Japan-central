@@ -246,6 +246,20 @@ def reset_paper(
     console.print(f"Paper account reset to ${cfg.broker.starting_cash:,.2f}")
 
 
+@app.command("app")
+def desktop_app(
+    config: Optional[str] = typer.Option(None, help="Path to config.yaml"),
+) -> None:
+    """Open Pi Invest as a native desktop window on the Pi (no browser URL)."""
+    from pi_invest.desktop import run_desktop_app
+
+    try:
+        run_desktop_app(config_path=config, log=lambda m: console.print(m))
+    except Exception as exc:  # noqa: BLE001
+        console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(1) from exc
+
+
 @app.command()
 def dashboard(
     config: Optional[str] = typer.Option(None, help="Path to config.yaml"),
@@ -255,7 +269,7 @@ def dashboard(
         help="Allow unauthenticated dashboard (not recommended on LAN)",
     ),
 ) -> None:
-    """Start the local status dashboard (HTTP basic auth by default)."""
+    """Start the local backend service (used by the desktop app / optional tunnel)."""
     import uvicorn
 
     from pi_invest.web.app import create_app
@@ -283,7 +297,8 @@ def dashboard(
             "dashboard.host: 127.0.0.1 and reach it via Tailscale/SSH tunnel."
         )
     console.print(
-        f"Dashboard on http://{host}:{cfg.dashboard.port} ({auth_note})"
+        f"Backend ready on {host}:{cfg.dashboard.port} ({auth_note}). "
+        "Open the desktop app with: pi-invest app"
     )
     uvicorn.run(api, host=host, port=cfg.dashboard.port, log_level="info")
 

@@ -125,6 +125,7 @@ def test_readonly_dashboard_forbidden_writes(tmp_path):
         dashboard_password="secret",
         dashboard_readonly_username="viewer",
         dashboard_readonly_password="look",
+        pi_invest_desktop_trust_loopback=False,
     )
     broker = PaperBroker(db, 10_000)
     wallet = build_wallet(cfg, env, db, safety=safety)

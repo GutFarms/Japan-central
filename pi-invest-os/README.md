@@ -9,7 +9,7 @@
 | Base OS | Raspberry Pi OS **64-bit** (Trixie) |
 | Desktop | Official **Wayland / labwc** desktop with autologin |
 | Local AI | **Ollama** on `127.0.0.1:11434` (`llama3.2:3b` by default) |
-| App menu | **Pi Invest Dashboard** local application |
+| App menu | **Pi Invest** local desktop app (native window, not a URL) |
 | Agent | `/opt/pi-invest-agent` — paper broker/wallet, simulator quotes |
 | Cloud | Off by default (no OpenAI / Alpaca / Coinbase / ntfy / GitHub auto-update) |
 | Hostname | `pi-invest` |
@@ -25,7 +25,7 @@ See **[FLASH.md](./FLASH.md)** if Raspberry Pi Imager does not show the `.img.xz
 
 1. HDMI + keyboard/mouse recommended; network needed **once** (apt + Ollama model pull).
 2. Wait for desktop packages + local model download (can take a while on first boot).
-3. Autologin; Chromium opens the dashboard at `http://127.0.0.1:8787`.
+3. Autologin; the **Pi Invest** desktop app opens as a local window (no web address).
 4. Change password: `passwd`
 
 After that, the agent does **not** require cloud APIs. Decisions use Ollama on the Pi; trading stays paper unless you deliberately unlock live mode.
