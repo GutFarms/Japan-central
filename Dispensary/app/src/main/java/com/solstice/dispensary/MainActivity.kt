@@ -19,17 +19,23 @@ import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import com.solstice.dispensary.ui.navigation.DispensaryNavHost
 import com.solstice.dispensary.ui.navigation.Routes
 import com.solstice.dispensary.ui.screens.AgeGateScreen
+import com.solstice.dispensary.ui.screens.AppLockScreen
 import com.solstice.dispensary.ui.screens.AuthScreen
+import com.solstice.dispensary.ui.screens.ForcePasswordChangeScreen
 import com.solstice.dispensary.ui.theme.SolsticeTheme
 import com.solstice.dispensary.ui.viewmodel.DispensaryViewModel
 import com.solstice.dispensary.ui.viewmodel.DispensaryViewModelFactory
@@ -43,6 +49,19 @@ class MainActivity : ComponentActivity() {
             val viewModel: DispensaryViewModel = viewModel(
                 factory = DispensaryViewModelFactory(app.repository)
             )
+
+            val lifecycleOwner = LocalLifecycleOwner.current
+            DisposableEffect(lifecycleOwner, viewModel) {
+                val observer = LifecycleEventObserver { _, event ->
+                    when (event) {
+                        Lifecycle.Event.ON_STOP -> viewModel.onAppBackgrounded()
+                        Lifecycle.Event.ON_START -> viewModel.onAppResumed()
+                        else -> Unit
+                    }
+                }
+                lifecycleOwner.lifecycle.addObserver(observer)
+                onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+            }
 
             SolsticeTheme(themeMode = viewModel.themeMode) {
                 if (!viewModel.ageVerified) {
@@ -60,6 +79,27 @@ class MainActivity : ComponentActivity() {
                         onLogin = viewModel::login,
                         onRegister = viewModel::register,
                         onClearError = viewModel::clearAuthError
+                    )
+                    return@SolsticeTheme
+                }
+
+                if (viewModel.mustChangePassword) {
+                    ForcePasswordChangeScreen(
+                        busy = viewModel.authBusy,
+                        error = viewModel.authError,
+                        onSubmit = viewModel::forceChangePassword,
+                        onClearError = viewModel::clearAuthError,
+                        onLogout = viewModel::logout
+                    )
+                    return@SolsticeTheme
+                }
+
+                if (viewModel.appLocked) {
+                    AppLockScreen(
+                        error = viewModel.lockError,
+                        onUnlock = viewModel::unlockWithPin,
+                        onClearError = viewModel::clearLockError,
+                        onLogout = viewModel::logout
                     )
                     return@SolsticeTheme
                 }

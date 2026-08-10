@@ -8,6 +8,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import com.solstice.dispensary.data.model.AuthResult
+import com.solstice.dispensary.data.model.AutoLockTimeout
 import com.solstice.dispensary.data.model.CartSummary
 import com.solstice.dispensary.data.model.CustomerProfile
 import com.solstice.dispensary.data.model.InventoryIntake
@@ -40,6 +41,9 @@ class DispensaryViewModel(
     var themeMode by mutableStateOf(repository.getThemeMode())
         private set
 
+    var securitySettings by mutableStateOf(repository.getSecuritySettings())
+        private set
+
     var currentCustomer by mutableStateOf<CustomerProfile?>(null)
         private set
 
@@ -50,6 +54,12 @@ class DispensaryViewModel(
         private set
 
     var accountMessage by mutableStateOf<String?>(null)
+        private set
+
+    var appLocked by mutableStateOf(false)
+        private set
+
+    var lockError by mutableStateOf<String?>(null)
         private set
 
     var selectedCategory by mutableStateOf<ProductCategory?>(null)
@@ -106,6 +116,9 @@ class DispensaryViewModel(
 
     val isLoggedIn: Boolean get() = currentCustomer != null
 
+    val mustChangePassword: Boolean
+        get() = currentCustomer?.mustChangePassword == true
+
     val canViewSensitiveInfo: Boolean
         get() = currentCustomer?.role?.canViewSensitiveInfo == true
 
@@ -118,6 +131,10 @@ class DispensaryViewModel(
     init {
         viewModelScope.launch {
             currentCustomer = repository.currentCustomer()
+            refreshSecuritySettings()
+            if (currentCustomer != null && repository.getSecuritySettings().appLockEnabled) {
+                appLocked = true
+            }
         }
     }
 
@@ -137,6 +154,10 @@ class DispensaryViewModel(
         themeMode = mode
     }
 
+    fun refreshSecuritySettings() {
+        securitySettings = repository.getSecuritySettings()
+    }
+
     fun clearAuthError() {
         authError = null
     }
@@ -146,7 +167,12 @@ class DispensaryViewModel(
             authBusy = true
             authError = null
             when (val result = repository.login(email, password)) {
-                is AuthResult.Success -> currentCustomer = result.customer
+                is AuthResult.Success -> {
+                    currentCustomer = result.customer
+                    refreshSecuritySettings()
+                    appLocked = false
+                    repository.clearBackgroundMark()
+                }
                 is AuthResult.Error -> authError = result.message
             }
             authBusy = false
@@ -169,7 +195,11 @@ class DispensaryViewModel(
                     email, password, fullName, phone, dateOfBirth, marketingOptIn
                 )
             ) {
-                is AuthResult.Success -> currentCustomer = result.customer
+                is AuthResult.Success -> {
+                    currentCustomer = result.customer
+                    refreshSecuritySettings()
+                    appLocked = false
+                }
                 is AuthResult.Error -> authError = result.message
             }
             authBusy = false
@@ -180,13 +210,16 @@ class DispensaryViewModel(
         repository.logout()
         currentCustomer = null
         accountMessage = null
+        appLocked = false
+        lockError = null
     }
 
     fun createStaffSubAccount(email: String, password: String, fullName: String) {
         viewModelScope.launch {
             when (val result = repository.createStaffSubAccount(email, password, fullName)) {
                 is AuthResult.Success ->
-                    accountMessage = "Staff account created for ${result.customer.email}."
+                    accountMessage =
+                        "Staff account created for ${result.customer.email}. They must change the temporary password on first login."
                 is AuthResult.Error ->
                     accountMessage = result.message
             }
@@ -213,6 +246,94 @@ class DispensaryViewModel(
                 is AuthResult.Error -> accountMessage = result.message
             }
         }
+    }
+
+    fun changePassword(current: String, newPassword: String, confirm: String) {
+        viewModelScope.launch {
+            when (val result = repository.changePassword(current, newPassword, confirm)) {
+                is AuthResult.Success -> {
+                    currentCustomer = result.customer
+                    accountMessage = "Password updated."
+                }
+                is AuthResult.Error -> accountMessage = result.message
+            }
+        }
+    }
+
+    fun forceChangePassword(newPassword: String, confirm: String) {
+        viewModelScope.launch {
+            authBusy = true
+            authError = null
+            when (val result = repository.forceChangePassword(newPassword, confirm)) {
+                is AuthResult.Success -> {
+                    currentCustomer = result.customer
+                    accountMessage = "Password updated. Your account is now secured."
+                }
+                is AuthResult.Error -> authError = result.message
+            }
+            authBusy = false
+        }
+    }
+
+    fun enableAppLock(pin: String, confirmPin: String) {
+        if (pin != confirmPin) {
+            accountMessage = "PINs do not match."
+            return
+        }
+        val error = repository.enableAppLock(pin)
+        if (error != null) {
+            accountMessage = error
+        } else {
+            refreshSecuritySettings()
+            accountMessage = "App lock enabled. Your PIN protects this device session."
+        }
+    }
+
+    fun disableAppLock(accountPassword: String) {
+        viewModelScope.launch {
+            if (!repository.verifyAccountPassword(accountPassword)) {
+                accountMessage = "Account password is incorrect."
+                return@launch
+            }
+            repository.disableAppLock()
+            refreshSecuritySettings()
+            appLocked = false
+            accountMessage = "App lock disabled."
+        }
+    }
+
+    fun setAutoLockTimeout(timeout: AutoLockTimeout) {
+        repository.setAutoLockTimeout(timeout)
+        refreshSecuritySettings()
+        accountMessage = "Auto-lock set to ${timeout.label.lowercase()}."
+    }
+
+    fun onAppBackgrounded() {
+        if (isLoggedIn && securitySettings.appLockEnabled) {
+            repository.markAppBackgrounded()
+        }
+    }
+
+    fun onAppResumed() {
+        if (!isLoggedIn) return
+        refreshSecuritySettings()
+        if (repository.shouldLockOnResume()) {
+            appLocked = true
+        }
+    }
+
+    fun unlockWithPin(pin: String) {
+        if (repository.verifyAppPin(pin)) {
+            appLocked = false
+            lockError = null
+            repository.clearBackgroundMark()
+        } else {
+            lockError = "Incorrect PIN."
+        }
+    }
+
+    fun clearLockError() {
+        lockError = null
     }
 
     fun clearAccountMessage() {

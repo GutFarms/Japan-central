@@ -119,7 +119,8 @@ data class Customer(
     val notes: String = "",
     val marketingOptIn: Boolean = false,
     val role: AccountRole = AccountRole.CUSTOMER,
-    val createdByAdminId: String = ""
+    val createdByAdminId: String = "",
+    val mustChangePassword: Boolean = false
 )
 
 /** Profile without password fields. */
@@ -135,7 +136,8 @@ data class CustomerProfile(
     val notes: String,
     val marketingOptIn: Boolean,
     val role: AccountRole,
-    val createdByAdminId: String = ""
+    val createdByAdminId: String = "",
+    val mustChangePassword: Boolean = false
 ) {
     val isAdminLike: Boolean get() = role.canViewSensitiveInfo
 }
@@ -152,7 +154,23 @@ fun Customer.toProfile() = CustomerProfile(
     notes = notes,
     marketingOptIn = marketingOptIn,
     role = role,
-    createdByAdminId = createdByAdminId
+    createdByAdminId = createdByAdminId,
+    mustChangePassword = mustChangePassword
+)
+
+enum class AutoLockTimeout(val label: String, val millis: Long) {
+    IMMEDIATE("Immediately", 0L),
+    ONE_MINUTE("1 minute", 60_000L),
+    FIVE_MINUTES("5 minutes", 5 * 60_000L),
+    FIFTEEN_MINUTES("15 minutes", 15 * 60_000L),
+    THIRTY_MINUTES("30 minutes", 30 * 60_000L),
+    NEVER("Never", -1L)
+}
+
+data class SecuritySettings(
+    val appLockEnabled: Boolean = false,
+    val autoLockTimeout: AutoLockTimeout = AutoLockTimeout.FIVE_MINUTES,
+    val hasPin: Boolean = false
 )
 
 enum class ThemeMode(val label: String) {

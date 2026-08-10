@@ -195,7 +195,15 @@ fun AuthScreen(
             if (!modeCreate) {
                 Spacer(Modifier.height(8.dp))
                 Text(
-                    text = "Admin: admin or fidelgutierrez33@gmail.com / 12345678\nCustomer demo: demo@nativepure.example / demo1234",
+                    text = "Sign in with your email or username.\nNew passwords need 8+ characters with a letter and a number.",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = colors.onSurfaceVariant,
+                    textAlign = TextAlign.Center
+                )
+            } else {
+                Spacer(Modifier.height(8.dp))
+                Text(
+                    text = "Password: at least 8 characters, with a letter and a number.",
                     style = MaterialTheme.typography.bodyMedium,
                     color = colors.onSurfaceVariant,
                     textAlign = TextAlign.Center
