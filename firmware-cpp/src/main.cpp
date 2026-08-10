@@ -16,7 +16,7 @@ static AppConfig g_cfg;
 static CompanionLink g_cmp;
 static DisplayUi g_ui;
 static Sha256Miner g_minerA;  // core 1
-static Sha256Miner g_minerB;  // core 0 light assist from loop only
+static Sha256Miner g_minerB;  // core 0 light assist
 static MinerSnapshot g_snap;
 static NetFeed g_net;
 static UsbJob g_job;
@@ -51,9 +51,27 @@ static void applyCpu(uint8_t mhz) {
 
 extern "C" float cyd_last_bench_hs();
 
+static void updateHashrate() {
+  // Must run from usbTask — Arduino loop() is starved by a high-prio USB task.
+  if (!g_jobLoaded || !g_mining) {
+    g_hashrate = 0;
+    return;
+  }
+  uint32_t now = millis();
+  uint32_t elapsed = now - g_windowStart;
+  if (elapsed < 400) return;
+  uint64_t cur = g_hashCounter.load(std::memory_order_relaxed);
+  uint64_t delta = cur - g_windowHashesStart;
+  g_hashrate = (float)delta * 1000.0f / (float)elapsed;
+  g_windowHashesStart = cur;
+  g_windowStart = now;
+}
+
 static void fillSnap() {
+  updateHashrate();
   g_snap.hashrateHs = g_hashrate;
   g_snap.shares = g_shareCounter;
+  g_snap.totalHashes = g_hashCounter.load(std::memory_order_relaxed);
   g_snap.accepted = g_accepted;
   g_snap.rejected = g_rejected;
   g_snap.pool = g_jobLoaded ? "SHA256" : "WAIT USB";
@@ -89,8 +107,10 @@ static void onJob(const UsbJob& job) {
   g_minerB.setJob(job.header, job.target, start + 1);
   g_jobLoaded = true;
   g_mining = true;
+  // Reset rate window so the next status shows climbing H/s quickly.
   g_windowHashesStart = g_hashCounter.load(std::memory_order_relaxed);
   g_windowStart = millis();
+  g_hashrate = 0;
 }
 
 static void onStop() {
@@ -162,11 +182,12 @@ static void mineTaskA(void*) {
   }
 }
 
-// High-priority USB pump on core 0 — never blocked by hashing.
+// USB + hashrate accounting on core 0. Leave headroom for Arduino loop (LCD).
 static void usbTask(void*) {
   for (;;) {
     serviceCompanion();
-    vTaskDelay(1);  // ~1 tick — keeps WDT happy, still drains Serial fast
+    // 5ms keeps Serial snappy without permanently preempting loopTask.
+    vTaskDelay(pdMS_TO_TICKS(5));
     esp_task_wdt_reset();
   }
 }
@@ -211,12 +232,13 @@ void setup() {
   g_minerA.begin();
   g_minerB.begin();
 
-  xTaskCreatePinnedToCore(usbTask, "usb", 8192, nullptr, configMAX_PRIORITIES - 2, &g_usbTask, 0);
+  // USB below miner, above default loop — enough to answer cmp without freezing LCD.
+  xTaskCreatePinnedToCore(usbTask, "usb", 8192, nullptr, 3, &g_usbTask, 0);
   xTaskCreatePinnedToCore(mineTaskA, "shaA", 10240, nullptr, configMAX_PRIORITIES - 1, &g_mineTaskA,
                           1);
 
   delay(80);
-  g_ui.showMessage("SHA-256", "USB task · split jobs");
+  g_ui.showMessage("SHA-256", "live kH/s · USB+hash");
   delay(300);
   g_ui.showWaitingCompanion();
 
@@ -227,7 +249,7 @@ void setup() {
 }
 
 void loop() {
-  // LCD + light assist only. USB is owned by usbTask.
+  // LCD + light assist. Hashrate is updated in usbTask/fillSnap.
   if (!g_jobLoaded) {
     uint32_t now = millis();
     if (now - g_lastPaint > 2000) {
@@ -243,21 +265,12 @@ void loop() {
   }
 
   uint32_t now = millis();
-  uint32_t elapsed = now - g_windowStart;
-  if (elapsed >= 1000) {
-    uint64_t cur = g_hashCounter.load(std::memory_order_relaxed);
-    uint64_t delta = cur - g_windowHashesStart;
-    g_hashrate = (float)delta * 1000.0f / (float)elapsed;
-    g_windowHashesStart = cur;
-    g_windowStart = now;
-  }
-
-  if (now - g_lastPaint >= 2500) {
+  if (now - g_lastPaint >= 1000) {
     fillSnap();
     g_ui.showMining(g_cfg, g_snap, false);
     g_lastPaint = now;
   }
-  delay(1);
+  delay(2);
 }
 
 extern "C" float cyd_run_bench(uint32_t n) {

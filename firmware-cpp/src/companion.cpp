@@ -262,6 +262,8 @@ void CompanionLink::replyStatus(const AppConfig& cfg, const MinerSnapshot& snap)
   doc["hashrate_hs"] = snap.hashrateHs;
   doc["hashrate_khs"] = snap.hashrateHs / 1000.0f;
   doc["shares"] = snap.shares;
+  doc["hashes"] = snap.totalHashes;
+  doc["mining"] = snap.connected;
   doc["accepted"] = snap.accepted;
   doc["rejected"] = snap.rejected;
   doc["pool"] = snap.pool;
@@ -287,7 +289,7 @@ void CompanionLink::replyConfig(const AppConfig& cfg) {
   JsonDocument doc;
   doc["cpu_mhz"] = cfg.cpuMhz;
   doc["hash_focus"] = cfg.hashFocus;
-  doc["fw"] = "0.6.2-sha256";
+  doc["fw"] = "0.6.4-sha256";
   doc["mode"] = "usb-sha256";
   doc["configured"] = true;
   Serial.print("CMPCONFIG ");

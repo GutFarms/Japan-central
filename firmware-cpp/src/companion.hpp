@@ -6,6 +6,7 @@
 struct MinerSnapshot {
   float hashrateHs = 0;
   uint64_t shares = 0;
+  uint64_t totalHashes = 0;
   uint32_t accepted = 0;
   uint32_t rejected = 0;
   String pool = "usb";

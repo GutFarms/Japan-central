@@ -226,6 +226,10 @@ struct StatusJson {
     #[serde(default)]
     shares: u64,
     #[serde(default)]
+    hashes: u64,
+    #[serde(default)]
+    mining: bool,
+    #[serde(default)]
     accepted: u32,
     #[serde(default)]
     rejected: u32,
@@ -409,9 +413,19 @@ impl CompanionApp {
     fn board_khs(&self) -> f32 {
         if self.status.hashrate_khs > 0.0 {
             self.status.hashrate_khs as f32
-        } else {
+        } else if self.status.hashrate_hs > 0.0 {
             (self.status.hashrate_hs / 1000.0) as f32
+        } else {
+            0.0
         }
+    }
+
+    fn board_hashing(&self) -> bool {
+        self.status.mining
+            || self.status.connected
+            || self.status.hashrate_hs > 0.0
+            || self.status.hashes > 0
+            || (!self.status.nonce.is_empty() && self.status.nonce != "00000000")
     }
 
     fn pool_state(&self) -> (&'static str, Color32) {
@@ -590,12 +604,24 @@ impl CompanionApp {
                             );
                         });
                         ui.label(
-                            RichText::new(if self.mining {
-                                "Board hashing over USB-C. Stratum jobs stay on this PC."
+                            RichText::new(if self.board_hashing() {
+                                format!(
+                                    "Board hashing · {:.0} H/s · nonce {} · {} hashes",
+                                    self.status.hashrate_hs,
+                                    if self.status.nonce.is_empty() {
+                                        "—"
+                                    } else {
+                                        &self.status.nonce
+                                    },
+                                    self.status.hashes
+                                )
+                            } else if self.mining {
+                                "Jobs streaming — waiting for board hashrate…".into()
                             } else if self.usb_open {
-                                "USB linked. Start mining to stream pool work to the board."
+                                "USB linked. Start mining to stream pool work to the board.".into()
                             } else {
                                 "Connect the CYD miner, route a pool, then bring the board online."
+                                    .into()
                             })
                             .color(C_MUTED)
                             .size(16.0),
@@ -616,8 +642,18 @@ impl CompanionApp {
                                     let (pool_label, pool_color) = self.pool_state();
                                     status_chip(
                                         ui,
-                                        if self.mining { "MINING" } else { "READY" },
-                                        if self.mining { C_LIME } else { C_MUTED },
+                                        if self.board_hashing() {
+                                            "HASHING"
+                                        } else if self.mining {
+                                            "MINING"
+                                        } else {
+                                            "READY"
+                                        },
+                                        if self.board_hashing() || self.mining {
+                                            C_LIME
+                                        } else {
+                                            C_MUTED
+                                        },
                                     );
                                     ui.add_space(8.0);
                                     ui.label(
@@ -752,6 +788,17 @@ impl CompanionApp {
                 metric(ui, "Rejected", &self.rejected.to_string(), if self.rejected > 0 { C_ERR } else { C_MUTED });
                 metric(ui, "Board shares", &self.status.shares.to_string(), C_TEXT);
                 metric(ui, "Raw H/s", &format!("{:.0}", self.status.hashrate_hs), C_TEXT);
+                metric(ui, "Hashes", &self.status.hashes.to_string(), C_BUBBLE_HI);
+                metric(
+                    ui,
+                    "Nonce",
+                    if self.status.nonce.is_empty() {
+                        "—"
+                    } else {
+                        &self.status.nonce
+                    },
+                    C_TEXT,
+                );
             });
             ui.add_space(12.0);
             telemetry_line(
@@ -1044,7 +1091,7 @@ impl App for CompanionApp {
             }
         }
 
-        if self.usb_open && self.last_poll.elapsed() > Duration::from_millis(2000) {
+        if self.usb_open && self.last_poll.elapsed() > Duration::from_millis(800) {
             let _ = self.cmd_tx.send(NetCmd::PollStatus);
             self.last_poll = Instant::now();
         }
