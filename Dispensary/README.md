@@ -22,6 +22,7 @@ Adult-use dispensary app for browsing the menu, building a pickup bag, scanning 
 - **Encrypted session prefs** + forced bootstrap admin password change
 - **Inventory sync JSON** — export/import between Android and Windows companion
 - **Store** — hours, address, contact, pickup guidance
+- **Plant-inspired UI** — canopy greens, Fraunces + Nunito Sans, botanical hero/age-gate motion, leaf empty states
 - **Windows desktop companion** — see [`../DispensaryCompanion/README.md`](../DispensaryCompanion/README.md)
 ## Stack
 

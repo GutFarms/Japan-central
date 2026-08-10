@@ -29,7 +29,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
@@ -122,52 +121,45 @@ fun ProductTile(
     onClick: () -> Unit,
     modifier: Modifier = Modifier
 ) {
-    Surface(
+    Row(
         modifier = modifier
             .fillMaxWidth()
-            .clickable(onClick = onClick),
-        shape = RoundedCornerShape(16.dp),
-        color = MaterialTheme.colorScheme.surface,
-        tonalElevation = 1.dp,
-        shadowElevation = 0.dp
+            .clickable(onClick = onClick)
+            .padding(vertical = 10.dp),
+        verticalAlignment = Alignment.CenterVertically
     ) {
-        Row(
-            modifier = Modifier.padding(14.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            ProductSwatch(product = product)
-            Spacer(Modifier.width(14.dp))
-            Column(modifier = Modifier.weight(1f)) {
-                Text(
-                    text = product.name,
-                    style = MaterialTheme.typography.titleMedium,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
-                )
-                Text(
-                    text = "${product.brand} · ${product.unitLabel}",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-                Spacer(Modifier.height(4.dp))
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    if (!product.published) {
-                        MetaPill("Draft")
-                    }
-                    if (product.strainType != StrainType.NONE) {
-                        MetaPill(product.strainType.label)
-                    }
-                    if (product.thcPercent > 0) {
-                        MetaPill("THC ${product.thcPercent}%")
-                    }
+        ProductSwatch(product = product)
+        Spacer(Modifier.width(14.dp))
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                text = product.name,
+                style = MaterialTheme.typography.titleMedium,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+            Text(
+                text = "${product.brand} · ${product.unitLabel}",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            Spacer(Modifier.height(4.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                if (!product.published) {
+                    MetaPill("Draft")
+                }
+                if (product.strainType != StrainType.NONE) {
+                    MetaPill(product.strainType.label)
+                }
+                if (product.thcPercent > 0) {
+                    MetaPill("THC ${product.thcPercent}%")
                 }
             }
-            Text(
-                text = money(product.price),
-                style = MaterialTheme.typography.titleMedium,
-                color = MaterialTheme.colorScheme.primary
-            )
         }
+        Text(
+            text = money(product.price),
+            style = MaterialTheme.typography.titleMedium,
+            color = MaterialTheme.colorScheme.primary
+        )
     }
 }
 
@@ -264,23 +256,6 @@ fun SectionHeader(title: String, subtitle: String? = null) {
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
         }
-    }
-}
-
-@Composable
-fun HeroBackdrop(modifier: Modifier = Modifier, content: @Composable () -> Unit) {
-    val isDark = MaterialTheme.colorScheme.background.luminance() < 0.5f
-    val gradient = if (isDark) {
-        listOf(Charcoal, Color(0xFF1A1410), Color(0xFF2A1C14))
-    } else {
-        listOf(Color(0xFF1A1410), Color(0xFF2E2316), Color(0xFF3A2A1C))
-    }
-    Box(
-        modifier = modifier
-            .fillMaxWidth()
-            .background(Brush.verticalGradient(gradient))
-            .padding(20.dp)
-    ) {
-        content()
+        BotanicalDivider(modifier = Modifier.padding(top = 8.dp))
     }
 }

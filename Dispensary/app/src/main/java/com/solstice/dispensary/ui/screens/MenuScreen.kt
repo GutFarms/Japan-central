@@ -22,7 +22,9 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import com.solstice.dispensary.data.model.Product
 import com.solstice.dispensary.data.model.ProductCategory
+import com.solstice.dispensary.ui.components.BotanicalScreenBackground
 import com.solstice.dispensary.ui.components.CategoryChip
+import com.solstice.dispensary.ui.components.LeafEmptyState
 import com.solstice.dispensary.ui.components.ProductTile
 import com.solstice.dispensary.ui.components.SectionHeader
 
@@ -35,59 +37,59 @@ fun MenuScreen(
     onSelectCategory: (ProductCategory?) -> Unit,
     onOpenProduct: (String) -> Unit
 ) {
-    Column(modifier = Modifier.fillMaxSize()) {
-        Column(modifier = Modifier.padding(horizontal = 20.dp, vertical = 16.dp)) {
-            SectionHeader(
-                title = "Menu",
-                subtitle = "${products.size} products"
-            )
-            OutlinedTextField(
-                value = searchQuery,
-                onValueChange = onSearchChange,
-                modifier = Modifier.fillMaxWidth(),
-                singleLine = true,
-                placeholder = { Text("Search strains, brands, effects") },
-                leadingIcon = { Icon(Icons.Outlined.Search, contentDescription = null) }
-            )
-            Row(
-                modifier = Modifier
-                    .padding(top = 12.dp)
-                    .horizontalScroll(rememberScrollState()),
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                CategoryChip(
-                    label = "All",
-                    selected = selectedCategory == null,
-                    onClick = { onSelectCategory(null) }
+    BotanicalScreenBackground {
+        Column(modifier = Modifier.fillMaxSize()) {
+            Column(modifier = Modifier.padding(horizontal = 20.dp, vertical = 16.dp)) {
+                SectionHeader(
+                    title = "Menu",
+                    subtitle = "${products.size} living products on the shelf"
                 )
-                ProductCategory.entries.forEach { category ->
+                OutlinedTextField(
+                    value = searchQuery,
+                    onValueChange = onSearchChange,
+                    modifier = Modifier.fillMaxWidth(),
+                    singleLine = true,
+                    placeholder = { Text("Search strains, brands, effects") },
+                    leadingIcon = { Icon(Icons.Outlined.Search, contentDescription = null) }
+                )
+                Row(
+                    modifier = Modifier
+                        .padding(top = 12.dp)
+                        .horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
                     CategoryChip(
-                        label = category.label,
-                        selected = selectedCategory == category,
-                        onClick = { onSelectCategory(category) }
+                        label = "All",
+                        selected = selectedCategory == null,
+                        onClick = { onSelectCategory(null) }
                     )
+                    ProductCategory.entries.forEach { category ->
+                        CategoryChip(
+                            label = category.label,
+                            selected = selectedCategory == category,
+                            onClick = { onSelectCategory(category) }
+                        )
+                    }
                 }
             }
-        }
 
-        LazyColumn(
-            contentPadding = PaddingValues(start = 20.dp, end = 20.dp, bottom = 24.dp),
-            verticalArrangement = Arrangement.spacedBy(10.dp)
-        ) {
-            items(products, key = { it.id }) { product ->
-                ProductTile(
-                    product = product,
-                    onClick = { onOpenProduct(product.id) }
-                )
-            }
-            if (products.isEmpty()) {
-                item {
-                    Text(
-                        text = "No products match your search.",
-                        style = MaterialTheme.typography.bodyLarge,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.padding(top = 24.dp)
+            LazyColumn(
+                contentPadding = PaddingValues(start = 20.dp, end = 20.dp, bottom = 24.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                items(products, key = { it.id }) { product ->
+                    ProductTile(
+                        product = product,
+                        onClick = { onOpenProduct(product.id) }
                     )
+                }
+                if (products.isEmpty()) {
+                    item {
+                        LeafEmptyState(
+                            title = "Nothing in this bed",
+                            subtitle = "Try another search or category — fresh stock appears when published."
+                        )
+                    }
                 }
             }
         }

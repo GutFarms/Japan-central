@@ -11,136 +11,149 @@ import androidx.compose.runtime.SideEffect
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.TextStyle
-import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.sp
 import androidx.core.view.WindowCompat
 import com.solstice.dispensary.data.model.ThemeMode
 
-// Native Pure brand palette (from main logo)
-val Charcoal = Color(0xFF0B0B0B)
-val CharcoalLift = Color(0xFF1A1714)
-val Terracotta = Color(0xFFC47A4E)
-val TerracottaDeep = Color(0xFF9E5A35)
-val Teal = Color(0xFF5B8A8A)
-val TealDeep = Color(0xFF3E6464)
-val Cream = Color(0xFFF0E6D8)
-val Ivory = Color(0xFFF7F1E8)
-val Slate = Color(0xFF6B6258)
-val Clay = Color(0xFFB56A4C)
+// Plant-inspired Native Pure palette — canopy greens + soil warmth
+val Charcoal = Color(0xFF121A16)
+val CharcoalLift = Color(0xFF1B2620)
+val Leaf = Color(0xFF3F6B4F)
+val LeafDeep = Color(0xFF2A4A36)
+val Fern = Color(0xFF5E8A6A)
+val Moss = Color(0xFF7FA388)
+val Stem = Color(0xFF9BB59A)
+val GreenhouseMist = Color(0xFFE8F0E6)
+val CanopyLight = Color(0xFFF3F7F1)
+val Soil = Color(0xFF4A3A2E)
+val BloomClay = Color(0xFFB07858)
+val DuskCanopy = Color(0xFF0E1612)
+val DuskLeaf = Color(0xFF1E3326)
+
+// Keep brand-adjacent accents from logo
+val Terracotta = Color(0xFFB07858)
+val TerracottaDeep = Color(0xFF8A5A3C)
+val Teal = Fern
+val TealDeep = LeafDeep
+val Cream = GreenhouseMist
+val Ivory = CanopyLight
+val Slate = Color(0xFF5A6A5E)
+val Clay = Color(0xFFA8654A)
 
 // Legacy aliases used across screens
-val Sage = Teal
-val SageDeep = TealDeep
+val Sage = Fern
+val SageDeep = LeafDeep
 val Amber = Terracotta
-val AmberSoft = Color(0xFFD4A07A)
-val MistGreen = Color(0xFFD9E4E2)
+val AmberSoft = Color(0xFFD0A07A)
+val MistGreen = Stem
 
 private val LightColors = lightColorScheme(
-    primary = TealDeep,
-    onPrimary = Ivory,
-    primaryContainer = Color(0xFFD9E4E2),
+    primary = LeafDeep,
+    onPrimary = CanopyLight,
+    primaryContainer = Color(0xFFD5E6D8),
     onPrimaryContainer = Charcoal,
     secondary = Terracotta,
     onSecondary = Charcoal,
-    secondaryContainer = Color(0xFFF3E0D2),
-    onSecondaryContainer = Color(0xFF3A2415),
-    tertiary = Teal,
-    onTertiary = Ivory,
-    background = Color(0xFFF8F4EE),
+    secondaryContainer = Color(0xFFEEDFCC),
+    onSecondaryContainer = Soil,
+    tertiary = Fern,
+    onTertiary = CanopyLight,
+    background = CanopyLight,
     onBackground = Charcoal,
-    surface = Color.White,
+    surface = Color(0xFFFAFCF8),
     onSurface = Charcoal,
-    surfaceVariant = Color(0xFFECE6DC),
+    surfaceVariant = GreenhouseMist,
     onSurfaceVariant = Slate,
     error = Clay,
-    onError = Ivory,
-    outline = Color(0xFFB8A99A)
+    onError = CanopyLight,
+    outline = Color(0xFFA8B8AA)
 )
 
 private val DarkColors = darkColorScheme(
-    primary = Teal,
-    onPrimary = Charcoal,
-    primaryContainer = TealDeep,
-    onPrimaryContainer = Ivory,
+    primary = Moss,
+    onPrimary = DuskCanopy,
+    primaryContainer = LeafDeep,
+    onPrimaryContainer = GreenhouseMist,
     secondary = AmberSoft,
     onSecondary = Charcoal,
     secondaryContainer = TerracottaDeep,
-    onSecondaryContainer = Ivory,
-    tertiary = Cream,
-    onTertiary = Charcoal,
-    background = Charcoal,
-    onBackground = Ivory,
+    onSecondaryContainer = CanopyLight,
+    tertiary = Stem,
+    onTertiary = DuskCanopy,
+    background = DuskCanopy,
+    onBackground = GreenhouseMist,
     surface = CharcoalLift,
-    onSurface = Ivory,
-    surfaceVariant = Color(0xFF2A2420),
-    onSurfaceVariant = Color(0xFFC9BDB0),
+    onSurface = GreenhouseMist,
+    surfaceVariant = DuskLeaf,
+    onSurfaceVariant = Color(0xFFB7C8B8),
     error = Clay,
-    onError = Ivory,
-    outline = Color(0xFF7A6E62)
+    onError = CanopyLight,
+    outline = Color(0xFF6A7C6C)
 )
 
 private val AppTypography = Typography(
     displayLarge = TextStyle(
-        fontFamily = FontFamily.SansSerif,
+        fontFamily = FrauncesFamily,
         fontWeight = FontWeight.Bold,
-        fontSize = 42.sp,
-        lineHeight = 48.sp,
-        letterSpacing = (-0.8).sp
+        fontSize = 44.sp,
+        lineHeight = 50.sp,
+        letterSpacing = (-0.6).sp
     ),
     displayMedium = TextStyle(
-        fontFamily = FontFamily.SansSerif,
+        fontFamily = FrauncesFamily,
         fontWeight = FontWeight.Bold,
-        fontSize = 32.sp,
-        lineHeight = 38.sp
+        fontSize = 34.sp,
+        lineHeight = 40.sp,
+        letterSpacing = (-0.4).sp
     ),
     headlineLarge = TextStyle(
-        fontFamily = FontFamily.SansSerif,
+        fontFamily = FrauncesFamily,
         fontWeight = FontWeight.SemiBold,
         fontSize = 28.sp,
         lineHeight = 34.sp
     ),
     headlineMedium = TextStyle(
-        fontFamily = FontFamily.SansSerif,
+        fontFamily = FrauncesFamily,
         fontWeight = FontWeight.SemiBold,
         fontSize = 22.sp,
         lineHeight = 28.sp
     ),
     titleLarge = TextStyle(
-        fontFamily = FontFamily.SansSerif,
+        fontFamily = NunitoSansFamily,
         fontWeight = FontWeight.SemiBold,
         fontSize = 18.sp,
         lineHeight = 24.sp
     ),
     titleMedium = TextStyle(
-        fontFamily = FontFamily.SansSerif,
+        fontFamily = NunitoSansFamily,
         fontWeight = FontWeight.Medium,
         fontSize = 16.sp,
         lineHeight = 22.sp
     ),
     bodyLarge = TextStyle(
-        fontFamily = FontFamily.SansSerif,
+        fontFamily = NunitoSansFamily,
         fontWeight = FontWeight.Normal,
         fontSize = 16.sp,
         lineHeight = 24.sp
     ),
     bodyMedium = TextStyle(
-        fontFamily = FontFamily.SansSerif,
+        fontFamily = NunitoSansFamily,
         fontWeight = FontWeight.Normal,
         fontSize = 14.sp,
         lineHeight = 20.sp
     ),
     labelLarge = TextStyle(
-        fontFamily = FontFamily.SansSerif,
+        fontFamily = NunitoSansFamily,
         fontWeight = FontWeight.Medium,
         fontSize = 13.sp,
-        letterSpacing = 0.4.sp
+        letterSpacing = 0.3.sp
     ),
     labelSmall = TextStyle(
-        fontFamily = FontFamily.SansSerif,
+        fontFamily = NunitoSansFamily,
         fontWeight = FontWeight.Medium,
         fontSize = 11.sp,
-        letterSpacing = 0.6.sp
+        letterSpacing = 0.5.sp
     )
 )
 

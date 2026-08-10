@@ -11,57 +11,61 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.sp
 import androidx.compose.material3.Typography
 
-val Charcoal = Color(0xFF0B0B0B)
-val CharcoalLift = Color(0xFF1A1714)
-val Terracotta = Color(0xFFC47A4E)
-val TerracottaDeep = Color(0xFF9E5A35)
-val Teal = Color(0xFF5B8A8A)
-val TealDeep = Color(0xFF3E6464)
-val Cream = Color(0xFFF0E6D8)
-val Ivory = Color(0xFFF7F1E8)
-val Slate = Color(0xFF6B6258)
-val Clay = Color(0xFFB56A4C)
+val Charcoal = Color(0xFF121A16)
+val CharcoalLift = Color(0xFF1B2620)
+val LeafDeep = Color(0xFF2A4A36)
+val Fern = Color(0xFF5E8A6A)
+val Moss = Color(0xFF7FA388)
+val Stem = Color(0xFF9BB59A)
+val GreenhouseMist = Color(0xFFE8F0E6)
+val CanopyLight = Color(0xFFF3F7F1)
+val Terracotta = Color(0xFFB07858)
+val TerracottaDeep = Color(0xFF8A5A3C)
+val Clay = Color(0xFFA8654A)
+val DuskCanopy = Color(0xFF0E1612)
+val DuskLeaf = Color(0xFF1E3326)
+val Slate = Color(0xFF5A6A5E)
 
 private val LightColors = lightColorScheme(
-    primary = TealDeep,
-    onPrimary = Ivory,
-    primaryContainer = Color(0xFFD9E4E2),
+    primary = LeafDeep,
+    onPrimary = CanopyLight,
+    primaryContainer = Color(0xFFD5E6D8),
     onPrimaryContainer = Charcoal,
     secondary = Terracotta,
     onSecondary = Charcoal,
-    secondaryContainer = Color(0xFFF3E0D2),
-    onSecondaryContainer = Color(0xFF3A2415),
-    tertiary = Teal,
-    background = Color(0xFFF8F4EE),
+    secondaryContainer = Color(0xFFEEDFCC),
+    onSecondaryContainer = Color(0xFF4A3A2E),
+    tertiary = Fern,
+    background = CanopyLight,
     onBackground = Charcoal,
-    surface = Color.White,
+    surface = Color(0xFFFAFCF8),
     onSurface = Charcoal,
-    surfaceVariant = Color(0xFFECE6DC),
+    surfaceVariant = GreenhouseMist,
     onSurfaceVariant = Slate,
     error = Clay,
-    onError = Ivory,
-    outline = Color(0xFFB8A99A)
+    onError = CanopyLight,
+    outline = Color(0xFFA8B8AA)
 )
 
 private val DarkColors = darkColorScheme(
-    primary = Teal,
-    onPrimary = Charcoal,
-    primaryContainer = TealDeep,
-    onPrimaryContainer = Ivory,
-    secondary = Color(0xFFD4A07A),
+    primary = Moss,
+    onPrimary = DuskCanopy,
+    primaryContainer = LeafDeep,
+    onPrimaryContainer = GreenhouseMist,
+    secondary = Color(0xFFD0A07A),
     onSecondary = Charcoal,
     secondaryContainer = TerracottaDeep,
-    onSecondaryContainer = Ivory,
-    tertiary = Cream,
-    background = Charcoal,
-    onBackground = Ivory,
+    onSecondaryContainer = CanopyLight,
+    tertiary = Stem,
+    background = DuskCanopy,
+    onBackground = GreenhouseMist,
     surface = CharcoalLift,
-    onSurface = Ivory,
-    surfaceVariant = Color(0xFF2A2420),
-    onSurfaceVariant = Color(0xFFC9BDB0),
+    onSurface = GreenhouseMist,
+    surfaceVariant = DuskLeaf,
+    onSurfaceVariant = Color(0xFFB7C8B8),
     error = Clay,
-    onError = Ivory,
-    outline = Color(0xFF7A6E62)
+    onError = CanopyLight,
+    outline = Color(0xFF6A7C6C)
 )
 
 private val AppTypography = Typography(

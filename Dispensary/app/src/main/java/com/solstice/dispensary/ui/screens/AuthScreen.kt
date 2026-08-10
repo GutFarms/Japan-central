@@ -1,6 +1,5 @@
 package com.solstice.dispensary.ui.screens
 
-import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -28,12 +27,12 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import com.solstice.dispensary.ui.components.BotanicalScreenBackground
 import com.solstice.dispensary.ui.components.BrandLogo
 
 @Composable
@@ -60,15 +59,7 @@ fun AuthScreen(
     var marketing by remember { mutableStateOf(true) }
     val colors = MaterialTheme.colorScheme
 
-    Box(
-        modifier = Modifier
-            .fillMaxSize()
-            .background(
-                Brush.verticalGradient(
-                    listOf(colors.background, colors.surfaceVariant, colors.background)
-                )
-            )
-    ) {
+    BotanicalScreenBackground {
         Column(
             modifier = Modifier
                 .fillMaxSize()
@@ -77,12 +68,18 @@ fun AuthScreen(
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
             Spacer(Modifier.height(12.dp))
-            BrandLogo(size = 120.dp)
-            Spacer(Modifier.height(16.dp))
+            BrandLogo(size = 112.dp)
+            Spacer(Modifier.height(14.dp))
             Text(
-                text = if (modeCreate) "Create customer account" else "Welcome back",
-                style = MaterialTheme.typography.headlineMedium,
+                text = "Native Pure",
+                style = MaterialTheme.typography.displayMedium,
                 color = colors.onBackground
+            )
+            Text(
+                text = if (modeCreate) "Create customer account" else "Welcome back under the leaves",
+                style = MaterialTheme.typography.headlineMedium,
+                color = colors.onBackground,
+                modifier = Modifier.padding(top = 8.dp)
             )
             Text(
                 text = if (modeCreate) {
