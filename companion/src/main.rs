@@ -1828,9 +1828,19 @@ fn harvest_shares(
     *buf = keep;
     if let Some(s) = stratum {
         for (job, en2, ntime, nonce) in shares {
+            if job == "warmup" || job.is_empty() {
+                log_msg(
+                    msg_tx,
+                    LogKind::Info,
+                    format!("Ignoring local/warmup share nonce={nonce}"),
+                );
+                continue;
+            }
             match s.submit_share(&job, &en2, &ntime, &nonce) {
                 Ok(()) => {
-                    let _ = msg_tx.send(NetMsg::Action(Ok(format!("Share submitted {nonce}"))));
+                    let _ = msg_tx.send(NetMsg::Action(Ok(format!(
+                        "Share submitted {nonce} job={job}"
+                    ))));
                 }
                 Err(e) => {
                     let _ = msg_tx.send(NetMsg::Action(Err(format!("Share submit: {e}"))));

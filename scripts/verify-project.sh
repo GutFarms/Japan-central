@@ -7,6 +7,9 @@ cd "$ROOT"
 echo "==> SHA256d host verification (Bitcoin genesis)"
 python3 ./scripts/verify-sha256.py
 
+echo "==> stratum header endianness + LE nonce submit format"
+python3 ./scripts/verify-stratum-header.py
+
 echo "==> firmware + flash images"
 ./scripts/build-flash-images.sh
 

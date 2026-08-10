@@ -366,14 +366,25 @@ impl StratumClient {
             }
             if ok {
                 self.accepted += 1;
+                self.push_recent(format!("← share ACCEPTED id={id}"));
             } else {
                 self.rejected += 1;
+                let why = v
+                    .get("error")
+                    .map(|e| e.to_string())
+                    .unwrap_or_else(|| "false".into());
+                self.push_recent(format!("← share REJECTED id={id} {why}"));
             }
             return Ok(());
         }
 
         if has_error && id != 0 && id != self.subscribe_id && id != self.authorize_id {
             self.rejected += 1;
+            let why = v
+                .get("error")
+                .map(|e| e.to_string())
+                .unwrap_or_else(|| "error".into());
+            self.push_recent(format!("← share REJECTED id={id} {why}"));
         } else if id == self.authorize_id && !self.authorized && !has_error {
             self.authorized = true;
             self.phase = "idle".into();
@@ -414,11 +425,15 @@ impl StratumClient {
             merkle = dsha256(&cat);
         }
 
-        let version = hex_fixed(&self.version_hex, 4)?;
+        let mut version = hex_fixed(&self.version_hex, 4)?;
         let mut prev = hex_fixed(&self.prevhash_hex, 32)?;
-        let nbits = hex_fixed(&self.nbits_hex, 4)?;
-        let ntime = hex_fixed(&self.ntime_hex, 4)?;
+        let mut nbits = hex_fixed(&self.nbits_hex, 4)?;
+        let mut ntime = hex_fixed(&self.ntime_hex, 4)?;
+        // Stratum sends these as big-endian hex; Bitcoin header stores LE bytes.
+        swab32_bytes(&mut version);
         swab256(&mut prev);
+        swab32_bytes(&mut ntime);
+        swab32_bytes(&mut nbits);
 
         let mut header = [0u8; 80];
         header[0..4].copy_from_slice(&version);
@@ -480,11 +495,16 @@ fn dsha256(data: &[u8]) -> [u8; 32] {
     out
 }
 
+fn swab32_bytes(b: &mut [u8]) {
+    if b.len() >= 4 {
+        b.swap(0, 3);
+        b.swap(1, 2);
+    }
+}
+
 fn swab256(hash: &mut [u8]) {
     for i in 0..8 {
-        let c = &mut hash[i * 4..i * 4 + 4];
-        c.swap(0, 3);
-        c.swap(1, 2);
+        swab32_bytes(&mut hash[i * 4..i * 4 + 4]);
     }
 }
 
