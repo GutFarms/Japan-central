@@ -19,7 +19,21 @@
 
 See **[FLASH.md](./FLASH.md)** if Raspberry Pi Imager does not show the `.img.xz` file.
 
-**Release:** [Pi Invest OS v0.4.0](https://github.com/GutFarms/Japan-central/releases/tag/pi-invest-os-v0.4.0) (desktop). Rebuild for **0.5.0** local-AI image, or convert an existing Pi with the one-liner below.
+**Release:** [Pi Invest OS v0.5.0](https://github.com/GutFarms/Japan-central/releases/tag/pi-invest-os-v0.5.0)
+
+| File | Link |
+|---|---|
+| Image | [pi-invest-os-0.5.0-arm64.img.xz](https://github.com/GutFarms/Japan-central/releases/download/pi-invest-os-v0.5.0/pi-invest-os-0.5.0-arm64.img.xz) |
+| Checksums | [pi-invest-os-0.5.0-arm64.sha256](https://github.com/GutFarms/Japan-central/releases/download/pi-invest-os-v0.5.0/pi-invest-os-0.5.0-arm64.sha256) |
+
+```bash
+xz -dk pi-invest-os-0.5.0-arm64.img.xz   # then Imager → Use custom → .img
+```
+
+Imager OS list JSON:
+```
+https://raw.githubusercontent.com/GutFarms/Japan-central/cursor/pi-invest-os-0b6b/pi-invest-os/imager/os_list.json
+```
 
 ## First boot
 

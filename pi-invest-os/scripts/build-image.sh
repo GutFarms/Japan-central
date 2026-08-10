@@ -202,9 +202,9 @@ cat > "$MNT_ROOT/etc/pi-invest-os-release" <<EOF
 NAME="Pi Invest OS"
 VERSION="$VERSION"
 ID=pi-invest-os
-VARIANT="Raspberry Pi 5 / arm64 Desktop (Wayland) + Chromium"
+VARIANT="Raspberry Pi 5 / arm64 Desktop + local AI app"
 AGENT_PATH=/opt/pi-invest-agent
-FEATURES="desktop,auto-update,chromium,unattended-upgrades"
+FEATURES="desktop-app,local-ai,ollama,chromium,investment-guard"
 UPDATE_BRANCH=$UPDATE_BRANCH
 EOF
 
