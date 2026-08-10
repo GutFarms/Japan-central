@@ -8,6 +8,8 @@
 #define SHA_HOT
 #endif
 
+#define SHA_INLINE __attribute__((always_inline)) inline
+
 namespace {
 
 constexpr uint32_t K[64] = {
@@ -28,55 +30,114 @@ constexpr uint32_t IV[8] = {
     0x510e527fu, 0x9b05688cu, 0x1f83d9abu, 0x5be0cd19u,
 };
 
-static inline uint32_t rotr(uint32_t x, uint32_t n) {
-  return (x >> n) | (x << (32 - n));
+SHA_INLINE uint32_t rotr(uint32_t x, uint32_t n) {
+  return (x >> n) | (x << (32u - n));
 }
 
-static inline uint32_t be32(const uint8_t* p) {
+SHA_INLINE uint32_t be32(const uint8_t* p) {
   return ((uint32_t)p[0] << 24) | ((uint32_t)p[1] << 16) | ((uint32_t)p[2] << 8) | (uint32_t)p[3];
 }
 
-static inline void store_be32(uint8_t* p, uint32_t v) {
+SHA_INLINE void store_be32(uint8_t* p, uint32_t v) {
   p[0] = (uint8_t)(v >> 24);
   p[1] = (uint8_t)(v >> 16);
   p[2] = (uint8_t)(v >> 8);
   p[3] = (uint8_t)v;
 }
 
-static inline uint32_t nonce_be(uint32_t nonce_le) {
-  // Header stores nonce little-endian; SHA-256 consumes big-endian words.
+SHA_INLINE uint32_t nonce_be(uint32_t nonce_le) {
   return ((nonce_le & 0xffu) << 24) | (((nonce_le >> 8) & 0xffu) << 16) |
          (((nonce_le >> 16) & 0xffu) << 8) | ((nonce_le >> 24) & 0xffu);
 }
 
+SHA_INLINE uint32_t bswap32(uint32_t x) {
+  return ((x & 0x000000ffu) << 24) | ((x & 0x0000ff00u) << 8) | ((x & 0x00ff0000u) >> 8) |
+         ((x & 0xff000000u) >> 24);
+}
+
+#define CH(x, y, z) (((x) & (y)) ^ (~(x) & (z)))
+#define MAJ(x, y, z) (((x) & (y)) ^ ((x) & (z)) ^ ((y) & (z)))
+#define EP0(x) (rotr((x), 2) ^ rotr((x), 13) ^ rotr((x), 22))
+#define EP1(x) (rotr((x), 6) ^ rotr((x), 11) ^ rotr((x), 25))
+#define SIG0(x) (rotr((x), 7) ^ rotr((x), 18) ^ ((x) >> 3))
+#define SIG1(x) (rotr((x), 17) ^ rotr((x), 19) ^ ((x) >> 10))
+
+#define RND(a, b, c, d, e, f, g, h, ki, wi)                 \
+  do {                                                      \
+    const uint32_t t1 = (h) + EP1(e) + CH(e, f, g) + (ki) + (wi); \
+    const uint32_t t2 = EP0(a) + MAJ(a, b, c);              \
+    (d) += t1;                                              \
+    (h) = t1 + t2;                                          \
+  } while (0)
+
+// Fully unrolled SHA-256 compression into `state`.
 SHA_HOT static void sha256_transform(uint32_t state[8], const uint32_t w_in[16]) {
-  uint32_t w[64];
-  for (int i = 0; i < 16; i++) w[i] = w_in[i];
-  for (int i = 16; i < 64; i++) {
-    const uint32_t s0 = rotr(w[i - 15], 7) ^ rotr(w[i - 15], 18) ^ (w[i - 15] >> 3);
-    const uint32_t s1 = rotr(w[i - 2], 17) ^ rotr(w[i - 2], 19) ^ (w[i - 2] >> 10);
-    w[i] = w[i - 16] + s0 + w[i - 7] + s1;
-  }
+  uint32_t w0 = w_in[0], w1 = w_in[1], w2 = w_in[2], w3 = w_in[3];
+  uint32_t w4 = w_in[4], w5 = w_in[5], w6 = w_in[6], w7 = w_in[7];
+  uint32_t w8 = w_in[8], w9 = w_in[9], w10 = w_in[10], w11 = w_in[11];
+  uint32_t w12 = w_in[12], w13 = w_in[13], w14 = w_in[14], w15 = w_in[15];
 
   uint32_t a = state[0], b = state[1], c = state[2], d = state[3];
   uint32_t e = state[4], f = state[5], g = state[6], h = state[7];
 
-  for (int i = 0; i < 64; i++) {
-    const uint32_t S1 = rotr(e, 6) ^ rotr(e, 11) ^ rotr(e, 25);
-    const uint32_t ch = (e & f) ^ ((~e) & g);
-    const uint32_t t1 = h + S1 + ch + K[i] + w[i];
-    const uint32_t S0 = rotr(a, 2) ^ rotr(a, 13) ^ rotr(a, 22);
-    const uint32_t maj = (a & b) ^ (a & c) ^ (b & c);
-    const uint32_t t2 = S0 + maj;
-    h = g;
-    g = f;
-    f = e;
-    e = d + t1;
-    d = c;
-    c = b;
-    b = a;
-    a = t1 + t2;
-  }
+  RND(a, b, c, d, e, f, g, h, K[0], w0);
+  RND(h, a, b, c, d, e, f, g, K[1], w1);
+  RND(g, h, a, b, c, d, e, f, K[2], w2);
+  RND(f, g, h, a, b, c, d, e, K[3], w3);
+  RND(e, f, g, h, a, b, c, d, K[4], w4);
+  RND(d, e, f, g, h, a, b, c, K[5], w5);
+  RND(c, d, e, f, g, h, a, b, K[6], w6);
+  RND(b, c, d, e, f, g, h, a, K[7], w7);
+  RND(a, b, c, d, e, f, g, h, K[8], w8);
+  RND(h, a, b, c, d, e, f, g, K[9], w9);
+  RND(g, h, a, b, c, d, e, f, K[10], w10);
+  RND(f, g, h, a, b, c, d, e, K[11], w11);
+  RND(e, f, g, h, a, b, c, d, K[12], w12);
+  RND(d, e, f, g, h, a, b, c, K[13], w13);
+  RND(c, d, e, f, g, h, a, b, K[14], w14);
+  RND(b, c, d, e, f, g, h, a, K[15], w15);
+
+#define SCHED(i0, i1, i2, i3, i4, i5, i6, i7, i8, i9, i10, i11, i12, i13, i14, i15, base) \
+  do {                                                                                    \
+    i0 += SIG1(i14) + i9 + SIG0(i1);                                                      \
+    RND(a, b, c, d, e, f, g, h, K[(base) + 0], i0);                                       \
+    i1 += SIG1(i15) + i10 + SIG0(i2);                                                     \
+    RND(h, a, b, c, d, e, f, g, K[(base) + 1], i1);                                       \
+    i2 += SIG1(i0) + i11 + SIG0(i3);                                                      \
+    RND(g, h, a, b, c, d, e, f, K[(base) + 2], i2);                                       \
+    i3 += SIG1(i1) + i12 + SIG0(i4);                                                      \
+    RND(f, g, h, a, b, c, d, e, K[(base) + 3], i3);                                       \
+    i4 += SIG1(i2) + i13 + SIG0(i5);                                                      \
+    RND(e, f, g, h, a, b, c, d, K[(base) + 4], i4);                                       \
+    i5 += SIG1(i3) + i14 + SIG0(i6);                                                      \
+    RND(d, e, f, g, h, a, b, c, K[(base) + 5], i5);                                       \
+    i6 += SIG1(i4) + i15 + SIG0(i7);                                                      \
+    RND(c, d, e, f, g, h, a, b, K[(base) + 6], i6);                                       \
+    i7 += SIG1(i5) + i0 + SIG0(i8);                                                       \
+    RND(b, c, d, e, f, g, h, a, K[(base) + 7], i7);                                       \
+    i8 += SIG1(i6) + i1 + SIG0(i9);                                                       \
+    RND(a, b, c, d, e, f, g, h, K[(base) + 8], i8);                                       \
+    i9 += SIG1(i7) + i2 + SIG0(i10);                                                      \
+    RND(h, a, b, c, d, e, f, g, K[(base) + 9], i9);                                       \
+    i10 += SIG1(i8) + i3 + SIG0(i11);                                                     \
+    RND(g, h, a, b, c, d, e, f, K[(base) + 10], i10);                                     \
+    i11 += SIG1(i9) + i4 + SIG0(i12);                                                     \
+    RND(f, g, h, a, b, c, d, e, K[(base) + 11], i11);                                     \
+    i12 += SIG1(i10) + i5 + SIG0(i13);                                                    \
+    RND(e, f, g, h, a, b, c, d, K[(base) + 12], i12);                                     \
+    i13 += SIG1(i11) + i6 + SIG0(i14);                                                    \
+    RND(d, e, f, g, h, a, b, c, K[(base) + 13], i13);                                     \
+    i14 += SIG1(i12) + i7 + SIG0(i15);                                                    \
+    RND(c, d, e, f, g, h, a, b, K[(base) + 14], i14);                                     \
+    i15 += SIG1(i13) + i8 + SIG0(i0);                                                     \
+    RND(b, c, d, e, f, g, h, a, K[(base) + 15], i15);                                     \
+  } while (0)
+
+  SCHED(w0, w1, w2, w3, w4, w5, w6, w7, w8, w9, w10, w11, w12, w13, w14, w15, 16);
+  SCHED(w0, w1, w2, w3, w4, w5, w6, w7, w8, w9, w10, w11, w12, w13, w14, w15, 32);
+  SCHED(w0, w1, w2, w3, w4, w5, w6, w7, w8, w9, w10, w11, w12, w13, w14, w15, 48);
+
+#undef SCHED
 
   state[0] += a;
   state[1] += b;
@@ -88,24 +149,31 @@ SHA_HOT static void sha256_transform(uint32_t state[8], const uint32_t w_in[16])
   state[7] += h;
 }
 
-SHA_HOT static void sha256_mid_finish(const uint32_t mid[8], const uint32_t chunk2[16],
-                                      uint8_t out[32]) {
+SHA_HOT static void sha256d_mid(const uint32_t mid[8], uint32_t w2[16], uint32_t out_be[8]) {
   uint32_t st[8];
   memcpy(st, mid, sizeof(st));
-  sha256_transform(st, chunk2);
-  for (int i = 0; i < 8; i++) store_be32(out + i * 4, st[i]);
-}
+  sha256_transform(st, w2);
 
-SHA_HOT static void sha256_32(const uint8_t in[32], uint8_t out[32]) {
-  uint32_t w[16];
-  for (int i = 0; i < 8; i++) w[i] = be32(in + i * 4);
-  w[8] = 0x80000000u;
-  for (int i = 9; i < 15; i++) w[i] = 0;
-  w[15] = 256u;
-  uint32_t st[8];
-  memcpy(st, IV, sizeof(st));
-  sha256_transform(st, w);
-  for (int i = 0; i < 8; i++) store_be32(out + i * 4, st[i]);
+  // Second SHA-256 of the 32-byte digest (keep as BE words — no byte store).
+  uint32_t w3[16];
+  w3[0] = st[0];
+  w3[1] = st[1];
+  w3[2] = st[2];
+  w3[3] = st[3];
+  w3[4] = st[4];
+  w3[5] = st[5];
+  w3[6] = st[6];
+  w3[7] = st[7];
+  w3[8] = 0x80000000u;
+  w3[9] = 0;
+  w3[10] = 0;
+  w3[11] = 0;
+  w3[12] = 0;
+  w3[13] = 0;
+  w3[14] = 0;
+  w3[15] = 256u;
+  memcpy(out_be, IV, sizeof(IV));
+  sha256_transform(out_be, w3);
 }
 
 }  // namespace
@@ -114,39 +182,54 @@ bool Sha256Miner::begin() {
   memset(target_, 0xFF, HASH_LEN);
   target_[31] = 0x00;
   target_[30] = 0xFF;
+  packTarget(target_);
   ready_ = true;
   return true;
 }
 
+void Sha256Miner::packTarget(const uint8_t target[HASH_LEN]) {
+  memcpy(target_, target, HASH_LEN);
+  for (int i = 0; i < 8; i++) {
+    targetLe_[i] = (uint32_t)target[i * 4] | ((uint32_t)target[i * 4 + 1] << 8) |
+                   ((uint32_t)target[i * 4 + 2] << 16) | ((uint32_t)target[i * 4 + 3] << 24);
+  }
+}
+
 void Sha256Miner::prepareMidstate() {
-  // Block 1: header[0..63] → midstate.
   uint32_t w[16];
   for (int i = 0; i < 16; i++) w[i] = be32(header_ + i * 4);
   memcpy(midstate_, IV, sizeof(midstate_));
   sha256_transform(midstate_, w);
 
-  // Block 2: header[64..79] + SHA-256 padding for an 80-byte message.
-  // [64..67]=merkle tail, [68..71]=ntime, [72..75]=nbits, [76..79]=nonce.
   memset(chunk2_, 0, sizeof(chunk2_));
   chunk2_[0] = be32(header_ + 64);
   chunk2_[1] = be32(header_ + 68);
   chunk2_[2] = be32(header_ + 72);
-  chunk2_[3] = 0;  // nonce, filled per hash
+  chunk2_[3] = 0;
   chunk2_[4] = 0x80000000u;
-  chunk2_[15] = 640u;  // 80 * 8 bits
+  chunk2_[15] = 640u;
   midReady_ = true;
 }
 
 void Sha256Miner::setJob(const uint8_t header[HEADER_LEN], const uint8_t target[HASH_LEN],
                          uint32_t startNonce) {
   memcpy(header_, header, HEADER_LEN);
-  memcpy(target_, target, HASH_LEN);
+  packTarget(target);
   nonce_ = startNonce;
   prepareMidstate();
 }
 
-void Sha256Miner::updateTarget(const uint8_t target[HASH_LEN]) {
-  memcpy(target_, target, HASH_LEN);
+void Sha256Miner::updateTarget(const uint8_t target[HASH_LEN]) { packTarget(target); }
+
+bool Sha256Miner::meetsTargetWords(const uint32_t hash_be[8]) const {
+  // Convert BE digest words to LE uint32s matching stratum target layout.
+  for (int i = 7; i >= 0; i--) {
+    const uint32_t hv = bswap32(hash_be[i]);
+    const uint32_t tv = targetLe_[i];
+    if (hv < tv) return true;
+    if (hv > tv) return false;
+  }
+  return true;
 }
 
 void Sha256Miner::hashNonce(uint32_t nonce, uint8_t out[HASH_LEN]) {
@@ -158,18 +241,9 @@ void Sha256Miner::hashNonce(uint32_t nonce, uint8_t out[HASH_LEN]) {
   uint32_t w2[16];
   memcpy(w2, chunk2_, sizeof(w2));
   w2[3] = nonce_be(nonce);
-
-  uint8_t hash1[32];
-  sha256_mid_finish(midstate_, w2, hash1);
-  sha256_32(hash1, out);
-}
-
-bool Sha256Miner::meetsTarget(const uint8_t hash[HASH_LEN]) const {
-  for (int i = 31; i >= 0; i--) {
-    if (hash[i] < target_[i]) return true;
-    if (hash[i] > target_[i]) return false;
-  }
-  return true;
+  uint32_t digest[8];
+  sha256d_mid(midstate_, w2, digest);
+  for (int i = 0; i < 8; i++) store_be32(out + i * 4, digest[i]);
 }
 
 bool Sha256Miner::mineBatch(size_t count, uint32_t stride) {
@@ -181,16 +255,18 @@ bool Sha256Miner::mineBatch(size_t count, uint32_t stride) {
 
   bool found = false;
   uint32_t n = nonce_;
+  const uint32_t msb_target = targetLe_[7];
+
   for (size_t i = 0; i < count; i++) {
     w2[3] = nonce_be(n);
-
-    uint8_t hash1[32];
-    sha256_mid_finish(midstate_, w2, hash1);
-    sha256_32(hash1, lastHash_);
+    uint32_t digest[8];
+    sha256d_mid(midstate_, w2, digest);
     hashes_++;
 
-    // Fast reject on most-significant byte (Bitcoin LE hash).
-    if (lastHash_[31] <= target_[31] && meetsTarget(lastHash_)) {
+    // Fast reject: LE most-significant word (digest word 7, byte-swapped).
+    const uint32_t msb = bswap32(digest[7]);
+    if (msb <= msb_target && meetsTargetWords(digest)) {
+      for (int j = 0; j < 8; j++) store_be32(lastHash_ + j * 4, digest[j]);
       shares_++;
       lastShareNonce_ = n;
       found = true;

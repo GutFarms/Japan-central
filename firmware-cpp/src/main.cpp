@@ -3,6 +3,7 @@
 #include "display_ui.hpp"
 #include "sha256_miner.hpp"
 
+#include <atomic>
 #include <cstring>
 #include <esp_system.h>
 #include <esp_task_wdt.h>
@@ -15,7 +16,7 @@ static AppConfig g_cfg;
 static CompanionLink g_cmp;
 static DisplayUi g_ui;
 static Sha256Miner g_minerA;  // core 1
-static Sha256Miner g_minerB;  // core 0 assist
+static Sha256Miner g_minerB;  // core 0
 static MinerSnapshot g_snap;
 static NetFeed g_net;
 static UsbJob g_job;
@@ -23,7 +24,7 @@ static UsbJob g_job;
 static portMUX_TYPE g_mux = portMUX_INITIALIZER_UNLOCKED;
 static volatile bool g_jobLoaded = false;
 static volatile bool g_mining = false;
-static volatile uint64_t g_hashCounter = 0;
+static std::atomic<uint64_t> g_hashCounter{0};
 static volatile uint64_t g_shareCounter = 0;
 static volatile uint32_t g_lastShareNonce = 0;
 static volatile bool g_sharePending = false;
@@ -38,7 +39,8 @@ static float g_hashrate = 0;
 static uint32_t g_lastPaint = 0;
 static uint32_t g_accepted = 0;
 static uint32_t g_rejected = 0;
-static TaskHandle_t g_mineTask = nullptr;
+static TaskHandle_t g_mineTaskA = nullptr;
+static TaskHandle_t g_mineTaskB = nullptr;
 
 static void applyCpu(uint8_t mhz) {
   mhz = g_cfg.normalizeCpu(mhz);
@@ -87,7 +89,7 @@ static void onJob(const UsbJob& job) {
   g_minerB.setJob(job.header, job.target, start + 1);
   g_jobLoaded = true;
   g_mining = true;
-  g_windowHashesStart = g_hashCounter;
+  g_windowHashesStart = g_hashCounter.load(std::memory_order_relaxed);
   g_windowStart = millis();
 }
 
@@ -141,25 +143,33 @@ static void serviceCompanion() {
   }
 }
 
-static void mineLane(Sha256Miner& m, uint32_t stride) {
-  // Custom midstate SHA256d: ~2–4k hashes per slice keeps USB/WDT healthy.
-  constexpr size_t BATCH = 2048;
-  if (m.mineBatch(BATCH, stride)) {
+static void mineLane(Sha256Miner& m, uint32_t stride, size_t batch) {
+  if (m.mineBatch(batch, stride)) {
     noteShare(m.lastShareNonce());
   }
-  portENTER_CRITICAL(&g_mux);
-  g_hashCounter += BATCH;
-  portEXIT_CRITICAL(&g_mux);
+  g_hashCounter.fetch_add(batch, std::memory_order_relaxed);
 }
 
-static void mineTask(void*) {
+// Core 1 — dedicated hasher, minimal yields.
+static void mineTaskA(void*) {
   for (;;) {
     if (!g_mining || !g_jobLoaded) {
       vTaskDelay(pdMS_TO_TICKS(2));
       continue;
     }
-    mineLane(g_minerA, 2);
-    // Brief yield so core-0 USB / LCD keep up under dual-core load.
+    mineLane(g_minerA, 2, 4096);
+    esp_task_wdt_reset();
+  }
+}
+
+// Core 0 — hasher that yields often so USB/LCD stay alive.
+static void mineTaskB(void*) {
+  for (;;) {
+    if (!g_mining || !g_jobLoaded) {
+      vTaskDelay(pdMS_TO_TICKS(2));
+      continue;
+    }
+    mineLane(g_minerB, 2, 2048);
     taskYIELD();
     esp_task_wdt_reset();
   }
@@ -167,7 +177,7 @@ static void mineTask(void*) {
 
 static float runBench(uint32_t hashes) {
   if (hashes < 1000) hashes = 1000;
-  if (hashes > 200000) hashes = 200000;
+  if (hashes > 400000) hashes = 400000;
   uint8_t hdr[80];
   memset(hdr, 0x11, 80);
   uint8_t tgt[32];
@@ -179,7 +189,7 @@ static float runBench(uint32_t hashes) {
   uint8_t out[32];
   for (uint32_t i = 0; i < hashes; i++) {
     bench.hashNonce(i, out);
-    if ((i & 0x3ff) == 0) {
+    if ((i & 0x7ff) == 0) {
       yield();
       esp_task_wdt_reset();
     }
@@ -205,12 +215,15 @@ void setup() {
   g_minerA.begin();
   g_minerB.begin();
 
-  xTaskCreatePinnedToCore(mineTask, "sha256", 12288, nullptr, configMAX_PRIORITIES - 2, &g_mineTask,
+  // Core 1: max priority hasher. Core 0: slightly lower so USB loop can run.
+  xTaskCreatePinnedToCore(mineTaskA, "shaA", 10240, nullptr, configMAX_PRIORITIES - 1, &g_mineTaskA,
                           1);
+  xTaskCreatePinnedToCore(mineTaskB, "shaB", 10240, nullptr, configMAX_PRIORITIES - 3, &g_mineTaskB,
+                          0);
 
   delay(80);
-  g_ui.showMessage("SHA-256", "midstate · 240MHz dual-core");
-  delay(350);
+  g_ui.showMessage("SHA-256", "unrolled midstate · dual-core");
+  delay(300);
   g_ui.showWaitingCompanion();
 
   g_windowStart = millis();
@@ -220,11 +233,8 @@ void setup() {
 }
 
 void loop() {
+  // Core 0 loop: USB + LCD only (hashing is on dedicated tasks).
   serviceCompanion();
-
-  if (g_mining && g_jobLoaded) {
-    mineLane(g_minerB, 2);
-  }
 
   if (!g_jobLoaded) {
     uint32_t now = millis();
@@ -236,36 +246,32 @@ void loop() {
     return;
   }
 
-  static uint32_t lastUsb = 0;
   uint32_t now = millis();
-  if (now - lastUsb >= 20) {
-    serviceCompanion();
-    lastUsb = now;
-  }
-
   uint32_t elapsed = now - g_windowStart;
   if (elapsed >= 1000) {
-    uint64_t cur = g_hashCounter;
+    uint64_t cur = g_hashCounter.load(std::memory_order_relaxed);
     uint64_t delta = cur - g_windowHashesStart;
     g_hashrate = (float)delta * 1000.0f / (float)elapsed;
     g_windowHashesStart = cur;
     g_windowStart = now;
   }
 
-  if (now - g_lastPaint >= 1500) {
+  // Paint less often — SPI steals cycles from core-0 hasher.
+  if (now - g_lastPaint >= 2500) {
     fillSnap();
     g_ui.showMining(g_cfg, g_snap, false);
     g_lastPaint = now;
   }
+
+  delay(1);
 }
 
 extern "C" float cyd_run_bench(uint32_t n) {
   bool was = g_mining;
   g_mining = false;
-  delay(5);
-  // n is unused small count from cmp — run a real KH/s bench.
+  delay(8);
   (void)n;
-  g_lastBenchHs = runBench(50000);
+  g_lastBenchHs = runBench(100000);
   g_mining = was;
   if (g_jobLoaded) {
     g_minerA.setJob(g_job.header, g_job.target, g_minerA.nonce());
