@@ -25,3 +25,17 @@ cd Dispensary
 ./gradlew assembleRelease
 # output: app/build/outputs/apk/release/app-release.apk
 ```
+
+## Windows desktop companion
+
+Kotlin Compose Desktop app for menu, pickup orders, stock, customers, and account security on PC.
+
+```bash
+cd DispensaryCompanion
+./gradlew run                 # run on any OS with JDK 17+
+# On Windows, for installers:
+gradlew.bat packageExe
+gradlew.bat packageMsi
+```
+
+See [`DispensaryCompanion/README.md`](./DispensaryCompanion/README.md).

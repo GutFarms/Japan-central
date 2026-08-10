@@ -4,3 +4,8 @@ target/
 **/local.properties
 **/.gradle/
 Dispensary/keystore/*.jks
+
+# Desktop companion
+DispensaryCompanion/.gradle/
+DispensaryCompanion/build/
+DispensaryCompanion/dist/

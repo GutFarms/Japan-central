@@ -1,0 +1,29 @@
+name: Build Native Pure Windows companion
+
+on:
+  push:
+    paths:
+      - "DispensaryCompanion/**"
+      - ".github/workflows/dispensary-windows-companion.yml"
+  workflow_dispatch:
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+      - name: Package Windows EXE / MSI
+        working-directory: DispensaryCompanion
+        run: |
+          .\gradlew.bat packageExe packageMsi --no-daemon
+      - name: Upload Windows installers
+        uses: actions/upload-artifact@v4
+        with:
+          name: NativePure-Companion-Windows
+          path: |
+            DispensaryCompanion/build/compose/binaries/main/exe/**
+            DispensaryCompanion/build/compose/binaries/main/msi/**

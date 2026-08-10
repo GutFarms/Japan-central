@@ -18,7 +18,7 @@ Adult-use dispensary app for browsing the menu, building a pickup bag, scanning 
 - **Orders** — local pickup history on device
 - **Inventory + AI camera scanner** — CameraX + on-device ML Kit OCR/barcode scan to match SKUs or create products and add stock
 - **Store** — hours, address, contact, pickup guidance
-
+- **Windows desktop companion** — see [`../DispensaryCompanion/README.md`](../DispensaryCompanion/README.md)
 ## Stack
 
 - Kotlin + Jetpack Compose (Material 3)
