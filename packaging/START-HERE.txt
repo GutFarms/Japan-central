@@ -8,9 +8,10 @@ USB Bitcoin SHA-256 miner from a Windows PC.
 What is installed
 -----------------
 1. CYD Companion          — pool + USB mining control app
-2. Firmware\*.merged.bin  — board firmware (flash once @ 0x0)
-3. Flash-Firmware.bat     — helper to flash over USB
-4. Docs                   — this file + FLASH-WINDOWS.txt
+2. Firmware\*.merged.bin  — board firmware (flash @ 0x0)
+3. Tools\espflash.exe     — used by in-app "Update board"
+4. Flash-Firmware.bat     — optional flash helper
+5. Docs                   — this file + FLASH-WINDOWS.txt
 
 First-time setup (about 5 minutes)
 ----------------------------------
@@ -18,13 +19,12 @@ A) USB driver (if Windows does not see a COM port)
    - Most CYD boards use a CH340 USB-serial chip.
    - Install a CH340 driver if Device Manager shows an unknown device.
 
-B) Flash the board once
-   1. Plug the CYD with USB-C.
-   2. Run "Flash Firmware" (Start Menu / Desktop) OR Flash-Firmware.bat
-   3. If prompted, hold BOOT, tap RESET, release BOOT (download mode).
-   4. Flash esp32-2432s028-sha256-miner-merged.bin at address 0x0
-      (DIO, 4 MB, 40 MHz).
-   5. Power-cycle without holding BOOT. Screen should say Waiting for USB.
+B) Flash / update the board
+   Option 1 (recommended): open CYD Companion → select COM → Update board
+   Option 2: run "Flash Firmware" (Start Menu) OR Flash-Firmware.bat
+   If flash fails: hold BOOT, tap RESET, release BOOT, then retry.
+   Image: esp32-2432s028-sha256-miner-merged.bin @ 0x0 (DIO, 4 MB, 40 MHz).
+   After flash, power-cycle without holding BOOT.
 
 C) Mine
    1. Run CYD Companion.

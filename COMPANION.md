@@ -29,9 +29,11 @@ Also available:
 ## Use
 
 1. Run **CYD-Miner-Setup.exe** (or unpack the portable kit)
-2. **Flash Firmware** once (merged.bin @ **0x0**)
-3. Open **CYD Companion** → COM → **Connect**
-4. Enter stratum / **Bitcoin address** / password → **Start mining**
+2. Open **CYD Companion** → select COM → **Update board** (pushes bundled firmware over USB @ **0x0**)  
+   — or run `Flash-Firmware.bat` once if you prefer
+3. **Connect** USB → enter stratum / **Bitcoin address** / password → **Start mining**
+
+`Update board` stops mining, frees the COM port, flashes `Firmware\esp32-2432s028-sha256-miner-merged.bin` with bundled `Tools\espflash.exe`, then reconnects. If flash fails: hold **BOOT**, tap **RESET**, release **BOOT**, then retry.
 
 ## Recommended pool (ESP32-friendly)
 

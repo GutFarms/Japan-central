@@ -3,6 +3,7 @@
 
 #![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
 
+mod flash_update;
 mod live_bar;
 mod stratum;
 
@@ -12,6 +13,7 @@ use std::sync::mpsc::{self, Receiver, Sender};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
+use flash_update::{find_firmware_image, flash_merged_bin, FirmwareImage};
 use live_bar::{format_change, format_usd, LiveFeed};
 
 use eframe::egui::{
@@ -377,6 +379,11 @@ enum NetMsg {
         text: String,
     },
     Terminal(String),
+    /// Firmware flash finished; `reopen` is the COM port to reclaim if flash succeeded.
+    FlashDone {
+        result: Result<String, String>,
+        reopen: Option<String>,
+    },
 }
 
 enum NetCmd {
@@ -393,6 +400,12 @@ enum NetCmd {
     PollStatus,
     Bench,
     UsbRaw(String),
+    /// Stop mining, release USB, flash merged.bin @ 0x0, optionally reopen.
+    UpdateFirmware {
+        port: String,
+        image: String,
+        reopen: bool,
+    },
 }
 
 struct CompanionApp {
@@ -426,6 +439,10 @@ struct CompanionApp {
     term_history: VecDeque<String>,
     term_out: VecDeque<String>,
     live: LiveFeed,
+    firmware: Option<FirmwareImage>,
+    update_confirm: bool,
+    update_busy: bool,
+    update_status: String,
 }
 
 impl CompanionApp {
@@ -489,8 +506,28 @@ impl CompanionApp {
             term_history: VecDeque::new(),
             term_out: VecDeque::new(),
             live: LiveFeed::start(),
+            firmware: find_firmware_image().ok(),
+            update_confirm: false,
+            update_busy: false,
+            update_status: String::new(),
         };
         app.push_log(LogKind::Info, "CYD Companion ready".into());
+        if let Some(fw) = &app.firmware {
+            app.push_log(
+                LogKind::Info,
+                format!(
+                    "Bundled firmware ready · {} ({} KB)",
+                    fw.path.display(),
+                    fw.bytes / 1024
+                ),
+            );
+        } else {
+            app.push_log(
+                LogKind::Warn,
+                "No bundled firmware found — Update board needs Firmware\\ next to the app (Miner kit)."
+                    .into(),
+            );
+        }
         app
     }
 
@@ -617,6 +654,59 @@ impl CompanionApp {
         self.mining = false;
         self.last_ok = "Mining stopped.".into();
         self.push_log(LogKind::Info, "Mining stopped".into());
+    }
+
+    fn request_board_update(&mut self) {
+        self.firmware = find_firmware_image().ok().or_else(|| self.firmware.clone());
+        if self.firmware.is_none() {
+            self.last_error =
+                "Firmware image not found. Install CYD Miner kit so Firmware\\ sits next to the app."
+                    .into();
+            self.push_log(LogKind::Err, self.last_error.clone());
+            return;
+        }
+        if self.com_port.trim().is_empty() {
+            self.last_error = "Select a COM / serial port before updating.".into();
+            return;
+        }
+        self.update_confirm = true;
+    }
+
+    fn begin_board_update(&mut self) {
+        self.update_confirm = false;
+        let Some(fw) = self.firmware.clone() else {
+            self.last_error = "No firmware image available.".into();
+            return;
+        };
+        if self.com_port.trim().is_empty() {
+            self.last_error = "Select a COM / serial port before updating.".into();
+            return;
+        }
+        let reopen = self.usb_open;
+        if self.mining {
+            self.stop_mine();
+        }
+        self.update_busy = true;
+        self.update_status = format!("Updating board via {}…", self.com_port);
+        self.last_ok = self.update_status.clone();
+        self.last_error.clear();
+        self.push_log(
+            LogKind::Usb,
+            format!(
+                "Update board → {} ({} KB) on {}",
+                fw.path.display(),
+                fw.bytes / 1024,
+                self.com_port
+            ),
+        );
+        // Release USB in the worker before flash (port must be free).
+        self.usb_open = false;
+        self.mining = false;
+        let _ = self.cmd_tx.send(NetCmd::UpdateFirmware {
+            port: self.com_port.clone(),
+            image: fw.path.to_string_lossy().into_owned(),
+            reopen,
+        });
     }
 
     fn send_term(&mut self) {
@@ -793,6 +883,23 @@ impl CompanionApp {
                         if soft_button(ui, "Bench board", 210.0).clicked() {
                             let _ = self.cmd_tx.send(NetCmd::Bench);
                             self.push_log(LogKind::Usb, "Bench requested".into());
+                        }
+                        ui.add_space(8.0);
+                        let update_label = if self.update_busy {
+                            "Updating…"
+                        } else {
+                            "Update board"
+                        };
+                        if soft_button(ui, update_label, 210.0).clicked() && !self.update_busy {
+                            self.request_board_update();
+                        }
+                        if !self.update_status.is_empty() {
+                            ui.add_space(6.0);
+                            ui.label(
+                                RichText::new(&self.update_status)
+                                    .color(if self.update_busy { C_WARN } else { C_MUTED })
+                                    .font(mono_ui_font(11.0)),
+                            );
                         }
                     });
                 });
@@ -1220,6 +1327,30 @@ impl App for CompanionApp {
                     }
                     self.push_log(LogKind::Usb, format!("RX {line}"));
                 }
+                NetMsg::FlashDone { result, reopen } => {
+                    self.update_busy = false;
+                    match result {
+                        Ok(s) => {
+                            self.update_status = s.clone();
+                            self.last_ok = s.clone();
+                            self.last_error.clear();
+                            self.push_log(LogKind::Usb, s);
+                            if let Some(port) = reopen {
+                                self.com_port = port.clone();
+                                self.push_log(
+                                    LogKind::Usb,
+                                    format!("Reconnecting USB on {port}…"),
+                                );
+                                let _ = self.cmd_tx.send(NetCmd::OpenUsb(port));
+                            }
+                        }
+                        Err(e) => {
+                            self.update_status = e.clone();
+                            self.last_error = e.clone();
+                            self.push_log(LogKind::Err, e);
+                        }
+                    }
+                }
             }
         }
 
@@ -1230,6 +1361,70 @@ impl App for CompanionApp {
 
         self.update_motion(ctx);
         self.live.poll();
+        if self.update_busy {
+            ctx.request_repaint();
+        }
+
+        if self.update_confirm {
+            egui::Window::new("Update board firmware")
+                .collapsible(false)
+                .resizable(false)
+                .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+                .show(ctx, |ui| {
+                    ui.set_min_width(420.0);
+                    ui.label(
+                        RichText::new("Push the bundled firmware image to the ESP over USB.")
+                            .color(C_TEXT)
+                            .size(14.0),
+                    );
+                    ui.add_space(8.0);
+                    if let Some(fw) = &self.firmware {
+                        ui.label(
+                            RichText::new(format!(
+                                "Image · {} ({} KB)",
+                                fw.path
+                                    .file_name()
+                                    .and_then(|s| s.to_str())
+                                    .unwrap_or("merged.bin"),
+                                fw.bytes / 1024
+                            ))
+                            .color(C_LIME)
+                            .font(mono_ui_font(12.0)),
+                        );
+                        ui.label(
+                            RichText::new(fw.path.display().to_string())
+                                .color(C_DIM)
+                                .font(mono_ui_font(10.0)),
+                        );
+                    }
+                    ui.add_space(6.0);
+                    ui.label(
+                        RichText::new(format!(
+                            "Port · {}  ·  write @ 0x0 (ESP32 · DIO · 4MB · 40MHz)",
+                            self.com_port
+                        ))
+                        .color(C_MUTED)
+                        .font(mono_ui_font(11.0)),
+                    );
+                    ui.add_space(8.0);
+                    ui.label(
+                        RichText::new(
+                            "Mining will stop and USB will disconnect for the flash. If it fails, hold BOOT, tap RESET, release BOOT, then retry.",
+                        )
+                        .color(C_MUTED)
+                        .size(13.0),
+                    );
+                    ui.add_space(14.0);
+                    ui.horizontal(|ui| {
+                        if cta_button(ui, "Flash now", true, 140.0).clicked() {
+                            self.begin_board_update();
+                        }
+                        if soft_button(ui, "Cancel", 100.0).clicked() {
+                            self.update_confirm = false;
+                        }
+                    });
+                });
+        }
 
         egui::TopBottomPanel::bottom("live_ticker_bar")
             .exact_height(36.0)
@@ -2150,6 +2345,48 @@ fn mine_worker(cmd_rx: Receiver<NetCmd>, msg_tx: Sender<NetMsg>) {
                     } else {
                         let _ = msg_tx.send(NetMsg::Terminal("ERR USB not open".into()));
                     }
+                }
+                NetCmd::UpdateFirmware {
+                    port,
+                    image,
+                    reopen,
+                } => {
+                    mining = false;
+                    legacy_job = false;
+                    if let Some(mut s) = stratum.take() {
+                        s.disconnect();
+                    }
+                    if let Some(mut p) = usb.take() {
+                        let _ = usb_cmd(p.as_mut(), &mut usb_rx, "cmp stop");
+                        drop(p);
+                    }
+                    usb_rx.clear();
+                    // Give Windows a moment to release the COM handle.
+                    thread::sleep(Duration::from_millis(400));
+                    let img = std::path::PathBuf::from(&image);
+                    let tx = msg_tx.clone();
+                    let progress = move |line: String| {
+                        log_msg(&tx, LogKind::Usb, line);
+                    };
+                    let result = flash_merged_bin(&port, &img, &progress).map(|_| {
+                        format!(
+                            "Board update OK · flashed {} @ 0x0 on {port}",
+                            img.file_name()
+                                .and_then(|s| s.to_str())
+                                .unwrap_or("firmware.bin")
+                        )
+                    });
+                    let reopen_port = if result.is_ok() && reopen {
+                        // Board reboots after flash — wait briefly before reclaiming USB.
+                        thread::sleep(Duration::from_millis(1200));
+                        Some(port)
+                    } else {
+                        None
+                    };
+                    let _ = msg_tx.send(NetMsg::FlashDone {
+                        result,
+                        reopen: reopen_port,
+                    });
                 }
             }
         }

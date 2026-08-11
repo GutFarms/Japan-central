@@ -17,9 +17,22 @@ if [[ ! -f "$MERGED" ]]; then
   exit 1
 fi
 
+# Vendored Windows espflash for in-app Update board (no Python required).
+ESPFLASH_VER="4.5.0"
+ESPFLASH_EXE="$ROOT/packaging/Tools/espflash.exe"
+if [[ ! -f "$ESPFLASH_EXE" ]]; then
+  echo "==> Downloading espflash ${ESPFLASH_VER} (Windows)…"
+  mkdir -p "$ROOT/packaging/Tools" /tmp/espflash-fetch
+  curl -fsSL -o /tmp/espflash-fetch/espflash.zip \
+    "https://github.com/esp-rs/espflash/releases/download/v${ESPFLASH_VER}/espflash-x86_64-pc-windows-msvc.zip"
+  unzip -o /tmp/espflash-fetch/espflash.zip -d /tmp/espflash-fetch
+  cp -f /tmp/espflash-fetch/espflash.exe "$ESPFLASH_EXE"
+fi
+test -f "$ESPFLASH_EXE"
+
 KIT="$ROOT/dist/cyd-miner-kit"
 rm -rf "$KIT"
-mkdir -p "$KIT/Firmware"
+mkdir -p "$KIT/Firmware" "$KIT/Tools"
 cp -f target/x86_64-pc-windows-gnu/release/cyd-companion.exe "$KIT/"
 cp -f "$ROOT/packaging/START-HERE.txt" "$KIT/"
 cp -f "$ROOT/packaging/FLASH-WINDOWS.txt" "$KIT/"
@@ -29,21 +42,26 @@ cp -f "$ROOT/packaging/README-windows.txt" "$KIT/README.txt"
 cp -f "$MERGED" "$KIT/Firmware/"
 cp -f "$SUMS" "$KIT/Firmware/"
 cp -f "$ROOT/FLASH.md" "$KIT/Firmware/"
+cp -f "$ESPFLASH_EXE" "$KIT/Tools/"
 {
   echo "CYD Miner Kit ${VER}"
   echo "Companion: ${VER}"
   echo "Firmware image: esp32-2432s028-sha256-miner-merged.bin"
   echo "Flash offset: 0x0 (DIO, 4MB, 40MHz)"
+  echo "In-app Update: Tools/espflash.exe + Firmware/"
   date -u +"Built: %Y-%m-%dT%H:%MZ"
 } > "$KIT/VERSION.txt"
 
-# Legacy portable layout (app docs only) + app-only zip
-mkdir -p "$ROOT/dist/cyd-companion-windows"
+# Portable companion also gets Firmware + Tools so Update board works.
+mkdir -p "$ROOT/dist/cyd-companion-windows/Firmware" "$ROOT/dist/cyd-companion-windows/Tools"
 cp -f "$KIT/cyd-companion.exe" "$ROOT/dist/cyd-companion-windows/"
 cp -f "$KIT/COMPANION.md" "$ROOT/dist/cyd-companion-windows/"
 cp -f "$KIT/README.txt" "$ROOT/dist/cyd-companion-windows/README.txt"
 cp -f "$KIT/START-HERE.txt" "$ROOT/dist/cyd-companion-windows/"
 cp -f "$KIT/FLASH-WINDOWS.txt" "$ROOT/dist/cyd-companion-windows/"
+cp -f "$MERGED" "$ROOT/dist/cyd-companion-windows/Firmware/"
+cp -f "$SUMS" "$ROOT/dist/cyd-companion-windows/Firmware/"
+cp -f "$ESPFLASH_EXE" "$ROOT/dist/cyd-companion-windows/Tools/"
 
 cd "$ROOT"
 rm -f dist/cyd-companion-windows.zip dist/CYD-Companion-Portable.zip dist/CYD-Companion-App-Only.zip

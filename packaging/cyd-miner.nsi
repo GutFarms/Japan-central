@@ -6,7 +6,7 @@
 
 !define PRODUCT_NAME "CYD Miner"
 !define PRODUCT_PUBLISHER "GutFarms"
-!define PRODUCT_VERSION "0.8.2"
+!define PRODUCT_VERSION "0.8.3"
 !define PRODUCT_WEB "https://github.com/GutFarms/Japan-central"
 
 Name "${PRODUCT_NAME} ${PRODUCT_VERSION}"
@@ -22,7 +22,7 @@ SetCompressor /SOLID lzma
 !define MUI_ICON "${NSISDIR}\Contrib\Graphics\Icons\modern-install.ico"
 !define MUI_UNICON "${NSISDIR}\Contrib\Graphics\Icons\modern-uninstall.ico"
 !define MUI_WELCOMEPAGE_TITLE "CYD Miner Setup"
-!define MUI_WELCOMEPAGE_TEXT "Install everything needed to run the ESP32-2432S028 (CYD) USB Bitcoin SHA-256 miner on this Windows PC.$\r$\n$\r$\nIncludes:$\r$\n  • CYD Companion (pool + USB control)$\r$\n  • Firmware image to flash @ 0x0$\r$\n  • Flash helper + quick-start docs$\r$\n$\r$\nAfter setup: flash the board once, then Connect → Start mining."
+!define MUI_WELCOMEPAGE_TEXT "Install everything needed to run the ESP32-2432S028 (CYD) USB Bitcoin SHA-256 miner on this Windows PC.$\r$\n$\r$\nIncludes:$\r$\n  • CYD Companion (pool + USB control)$\r$\n  • In-app Update board (push firmware over USB)$\r$\n  • Firmware image + espflash helper$\r$\n$\r$\nAfter setup: Connect USB → Update board (or flash once) → Start mining."
 !define MUI_FINISHPAGE_RUN "$INSTDIR\cyd-companion.exe"
 !define MUI_FINISHPAGE_RUN_TEXT "Launch CYD Companion"
 !define MUI_FINISHPAGE_SHOWREADME "$INSTDIR\START-HERE.txt"
@@ -52,6 +52,9 @@ Section "CYD Companion (required)" SecApp
   File "..\dist\cyd-miner-kit\Firmware\esp32-2432s028-sha256-miner-merged.bin"
   File "..\dist\cyd-miner-kit\Firmware\SHA256SUMS.txt"
   File "..\dist\cyd-miner-kit\Firmware\FLASH.md"
+
+  SetOutPath "$INSTDIR\Tools"
+  File "..\dist\cyd-miner-kit\Tools\espflash.exe"
 
   WriteRegStr HKLM "Software\CYDMiner" "Install_Dir" "$INSTDIR"
   WriteRegStr HKLM "Software\CYDMiner" "Version" "${PRODUCT_VERSION}"
@@ -103,6 +106,8 @@ Section "Uninstall"
   Delete "$INSTDIR\Firmware\SHA256SUMS.txt"
   Delete "$INSTDIR\Firmware\FLASH.md"
   RMDir "$INSTDIR\Firmware"
+  Delete "$INSTDIR\Tools\espflash.exe"
+  RMDir "$INSTDIR\Tools"
   RMDir "$INSTDIR"
 
   Delete "$SMPROGRAMS\CYD Miner\CYD Companion.lnk"
