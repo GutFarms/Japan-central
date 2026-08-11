@@ -19,16 +19,19 @@ Ready-to-use packages (no build required):
 | --- | --- |
 | **Everything (recommended)** | [`downloads/CYD-Monitor-bundle.zip`](downloads/CYD-Monitor-bundle.zip) |
 | Firmware flash images | [`downloads/CYD-Firmware.zip`](downloads/CYD-Firmware.zip) |
-| PC app (portable) | [`downloads/CYD-Monitor-portable.zip`](downloads/CYD-Monitor-portable.zip) |
-| Linux app binary | [`downloads/CYD-Monitor-linux`](downloads/CYD-Monitor-linux) |
+| PC monitor app (portable) | [`downloads/CYD-Monitor-portable.zip`](downloads/CYD-Monitor-portable.zip) |
+| Linux monitor binary | [`downloads/CYD-Monitor-linux`](downloads/CYD-Monitor-linux) |
+| **JC Time egui clock (Linux)** | [`downloads/JC-Time-linux`](downloads/JC-Time-linux) / [`zip`](downloads/JC-Time-linux.zip) |
 
-**Quick start:** unzip the bundle → flash `firmware/esp32-cyd-pc-monitor-merged.bin` at `0x0` → run the app → plug USB.
+**Quick start (CYD):** unzip the bundle → flash `firmware/esp32-cyd-pc-monitor-merged.bin` at `0x0` → run the app → plug USB.
 
 ```bash
 pip install esptool
 esptool.py --chip esp32 --port COMx --baud 921600 \
   write_flash 0x0 esp32-cyd-pc-monitor-merged.bin
 ```
+
+**JC Time:** `chmod +x downloads/JC-Time-linux && ./downloads/JC-Time-linux` — Japan + Central dual egui clocks.
 
 See [`downloads/README.md`](downloads/README.md) for details.
 
@@ -37,6 +40,7 @@ See [`downloads/README.md`](downloads/README.md) for details.
 | Path | Purpose |
 | --- | --- |
 | `downloads/` | **Downloadable** firmware + app zip packages |
+| `clock/` | **egui** Japan & Central Time dual world clock |
 | `firmware/` | PlatformIO project for ESP32-2432S028 (ILI9341, 320×240) |
 | `host/` | Python agent that samples CPU/RAM/GPU and sends over USB serial and/or UDP |
 | `protocol/` | Wire-format docs shared by both sides |
