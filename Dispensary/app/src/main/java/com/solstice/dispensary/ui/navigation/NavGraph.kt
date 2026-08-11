@@ -227,7 +227,6 @@ fun DispensaryNavHost(
             }
         }
         composable(Routes.ACCOUNT) {
-            val context = androidx.compose.ui.platform.LocalContext.current
             val staff by viewModel.staffAccounts.collectAsState()
             AccountScreen(
                 customer = viewModel.currentCustomer,

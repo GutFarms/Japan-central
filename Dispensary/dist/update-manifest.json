@@ -1,6 +1,6 @@
 {
-  "versionCode": 18,
-  "versionName": "1.14.0",
+  "versionCode": 19,
+  "versionName": "1.14.1",
   "apkUrl": "https://github.com/GutFarms/Japan-central/releases/latest/download/NativePure-Dispensary.apk",
-  "releaseNotes": "New Deals tab with sale prices at checkout. Staff can mark products On Deals from Stock."
+  "releaseNotes": "Clean verified build of Native Pure 1.14 — Deals tab, admin inventory editing, loyalty redeem, order receipts."
 }
