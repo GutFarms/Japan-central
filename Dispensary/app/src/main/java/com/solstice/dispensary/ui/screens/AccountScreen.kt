@@ -546,7 +546,7 @@ fun AccountScreen(
             item {
                 SectionHeader(
                     title = "Desktop sync",
-                    subtitle = "Export/import inventory JSON for the Windows companion"
+                    subtitle = "Export/import inventory + customers for the PC companion (saved on the PC hard drive)"
                 )
                 Button(
                     onClick = onExportSync,
