@@ -4,20 +4,20 @@ use egui::{
     Color32, FontId, Pos2, Rect, RichText, Sense, Stroke, Vec2,
 };
 use std::f32::consts::{PI, TAU};
-use std::time::{Duration, Instant};
 
-/// Contemplative spin: ease through one turn, then rest for a beat.
+/// Contemplative spin: ease through one turn (~1s), then rest a beat.
 const SPIN_DURATION: f32 = 1.0;
-const REST_DURATION: f32 = 0.85;
+const REST_DURATION: f32 = 0.9;
 
 struct ClockApp {
     japan_time: String,
     central_time: String,
-    started: Instant,
+    /// Absolute seconds when the current phase began (`ctx.input.time`).
+    phase_t0: f64,
     phase: SpinPhase,
-    phase_t0: Instant,
-    /// Accumulated completed turns (radians) so the emblem keeps its place.
+    /// Completed full turns (radians).
     turns: f32,
+    boot_time: Option<f64>,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -28,29 +28,32 @@ enum SpinPhase {
 
 impl Default for ClockApp {
     fn default() -> Self {
-        let now = Instant::now();
         Self {
             japan_time: get_japan_time(),
             central_time: get_central_time(),
-            started: now,
+            phase_t0: 0.0,
             phase: SpinPhase::Thinking,
-            phase_t0: now,
             turns: 0.0,
+            boot_time: None,
         }
     }
 }
 
 impl ClockApp {
-    fn spin_angle(&mut self) -> f32 {
-        let elapsed = self.phase_t0.elapsed().as_secs_f32();
+    fn spin_angle(&mut self, now: f64) -> f32 {
+        if self.boot_time.is_none() {
+            self.boot_time = Some(now);
+            self.phase_t0 = now;
+        }
+        let elapsed = (now - self.phase_t0) as f32;
         match self.phase {
             SpinPhase::Thinking => {
                 let t = (elapsed / SPIN_DURATION).clamp(0.0, 1.0);
                 let eased = ease_in_out_cubic(t);
                 if t >= 1.0 {
-                    self.turns += TAU;
+                    self.turns = (self.turns + TAU) % TAU;
                     self.phase = SpinPhase::Resting;
-                    self.phase_t0 = Instant::now();
+                    self.phase_t0 = now;
                     return self.turns;
                 }
                 self.turns + eased * TAU
@@ -58,7 +61,7 @@ impl ClockApp {
             SpinPhase::Resting => {
                 if elapsed >= REST_DURATION {
                     self.phase = SpinPhase::Thinking;
-                    self.phase_t0 = Instant::now();
+                    self.phase_t0 = now;
                 }
                 self.turns
             }
@@ -71,19 +74,23 @@ impl App for ClockApp {
         self.japan_time = get_japan_time();
         self.central_time = get_central_time();
 
-        let angle = self.spin_angle();
-        let breath = ((self.started.elapsed().as_secs_f32() * 0.55).sin() * 0.5 + 0.5) * 0.04;
+        let now = ctx.input(|i| i.time);
+        let angle = self.spin_angle(now);
+        let boot = self.boot_time.unwrap_or(now);
+        let breath = (((now - boot) as f32) * 0.7).sin() * 0.035;
 
-        // Deep indigo → warm dawn atmosphere (not purple-on-white, not cream).
-        let bg_top = Color32::from_rgb(12, 28, 48);
-        let bg_bot = Color32::from_rgb(36, 22, 18);
-        paint_vertical_gradient(ctx, bg_top, bg_bot);
+        // Deep indigo → warm dawn (avoid purple-on-white / cream / terracotta clichés).
+        paint_vertical_gradient(
+            ctx,
+            Color32::from_rgb(10, 24, 42),
+            Color32::from_rgb(42, 26, 18),
+        );
 
         egui::CentralPanel::default()
-            .frame(egui::Frame::none().inner_margin(egui::Margin::symmetric(28.0, 24.0)))
+            .frame(egui::Frame::none().inner_margin(egui::Margin::symmetric(28.0, 22.0)))
             .show(ctx, |ui| {
                 ui.vertical_centered(|ui| {
-                    ui.add_space(8.0);
+                    ui.add_space(6.0);
                     ui.label(
                         RichText::new("JC TIME")
                             .font(FontId::proportional(13.0))
@@ -97,28 +104,26 @@ impl App for ClockApp {
                             .color(Color32::from_rgb(248, 241, 230))
                             .strong(),
                     );
-                    ui.add_space(6.0);
+                    ui.add_space(4.0);
                     ui.label(
                         RichText::new("One emblem. Two dawns. A second to think.")
                             .font(FontId::proportional(14.0))
                             .color(Color32::from_rgb(168, 176, 188)),
                     );
 
-                    ui.add_space(18.0);
+                    ui.add_space(16.0);
 
-                    let emblem_side = ui.available_width().min(280.0).max(180.0);
-                    let (rect, _resp) = ui.allocate_exact_size(
-                        Vec2::splat(emblem_side),
-                        Sense::hover(),
-                    );
-                    paint_thought_emblem(ui, rect, angle, breath, self.phase);
+                    let emblem_side = ui.available_width().min(300.0).max(200.0);
+                    let (rect, _) =
+                        ui.allocate_exact_size(Vec2::splat(emblem_side), Sense::hover());
+                    paint_thought_emblem(ui, rect, angle, breath, self.phase, now);
 
-                    ui.add_space(22.0);
+                    ui.add_space(20.0);
 
-                    // Single composition: both clocks side by side, not tabs.
+                    // Single composition — both clocks together, never tabs.
                     let row_w = ui.available_width().min(520.0);
                     ui.allocate_ui_with_layout(
-                        Vec2::new(row_w, 96.0),
+                        Vec2::new(row_w, 100.0),
                         egui::Layout::left_to_right(egui::Align::Center),
                         |ui| {
                             let half = (ui.available_width() - 16.0) * 0.5;
@@ -142,32 +147,41 @@ impl App for ClockApp {
                         },
                     );
 
-                    ui.add_space(18.0);
-                    let status = match self.phase {
-                        SpinPhase::Thinking => "thought spin",
-                        SpinPhase::Resting => "held a second",
+                    ui.add_space(16.0);
+                    let (status, accent) = match self.phase {
+                        SpinPhase::Thinking => (
+                            "thought spin",
+                            Color32::from_rgb(232, 150, 96),
+                        ),
+                        SpinPhase::Resting => (
+                            "held a second",
+                            Color32::from_rgb(120, 140, 160),
+                        ),
                     };
                     ui.label(
                         RichText::new(status)
-                            .font(FontId::proportional(12.0))
-                            .color(Color32::from_rgb(120, 132, 148))
+                            .font(FontId::proportional(13.0))
+                            .color(accent)
                             .italics(),
                     );
                 });
             });
 
-        // Smooth animation: ~60fps while spinning, slower while resting.
-        let after = match self.phase {
-            SpinPhase::Thinking => Duration::from_millis(16),
-            SpinPhase::Resting => Duration::from_millis(50),
-        };
-        ctx.request_repaint_after(after);
+        // Keep painting every frame so the spin is fluid on VNC/X11.
+        ctx.request_repaint();
     }
 }
 
-fn time_column(ui: &mut egui::Ui, width: f32, title: &str, zone: &str, value: &str, accent: Color32) {
+fn time_column(
+    ui: &mut egui::Ui,
+    width: f32,
+    title: &str,
+    zone: &str,
+    value: &str,
+    accent: Color32,
+) {
     ui.allocate_ui_with_layout(
-        Vec2::new(width, 96.0),
+        Vec2::new(width, 100.0),
         egui::Layout::top_down(egui::Align::Center),
         |ui| {
             ui.label(
@@ -177,7 +191,6 @@ fn time_column(ui: &mut egui::Ui, width: f32, title: &str, zone: &str, value: &s
                     .extra_letter_spacing(2.5),
             );
             ui.add_space(4.0);
-            // Show HH:MM:SS prominently if we can split the string.
             let (date, clock) = split_datetime(value);
             ui.label(
                 RichText::new(clock)
@@ -199,17 +212,13 @@ fn time_column(ui: &mut egui::Ui, width: f32, title: &str, zone: &str, value: &s
 }
 
 fn split_datetime(value: &str) -> (&str, &str) {
-    if let Some((d, t)) = value.split_once(' ') {
-        (d, t)
-    } else {
-        ("", value)
-    }
+    value.split_once(' ').unwrap_or(("", value))
 }
 
 fn paint_vertical_gradient(ctx: &egui::Context, top: Color32, bottom: Color32) {
     let screen = ctx.screen_rect();
     let painter = ctx.layer_painter(egui::LayerId::background());
-    const STEPS: i32 = 48;
+    const STEPS: i32 = 56;
     for i in 0..STEPS {
         let t0 = i as f32 / STEPS as f32;
         let t1 = (i + 1) as f32 / STEPS as f32;
@@ -217,90 +226,129 @@ fn paint_vertical_gradient(ctx: &egui::Context, top: Color32, bottom: Color32) {
         let y1 = egui::lerp(screen.top()..=screen.bottom(), t1);
         let c = lerp_color(top, bottom, (t0 + t1) * 0.5);
         painter.rect_filled(
-            Rect::from_min_max(Pos2::new(screen.left(), y0), Pos2::new(screen.right(), y1)),
+            Rect::from_min_max(
+                Pos2::new(screen.left(), y0),
+                Pos2::new(screen.right(), y1),
+            ),
             0.0,
             c,
         );
     }
 }
 
-fn paint_thought_emblem(ui: &egui::Ui, rect: Rect, angle: f32, breath: f32, phase: SpinPhase) {
+fn paint_thought_emblem(
+    ui: &egui::Ui,
+    rect: Rect,
+    angle: f32,
+    breath: f32,
+    phase: SpinPhase,
+    now: f64,
+) {
     let painter = ui.painter();
     let center = rect.center();
-    let r = rect.width().min(rect.height()) * 0.5 * (0.92 + breath);
+    let r = rect.width().min(rect.height()) * 0.5 * (0.90 + breath);
 
-    // Soft outer glow disc
-    painter.circle_filled(center, r * 1.02, Color32::from_rgba_unmultiplied(40, 56, 72, 90));
+    // Soft halo
+    painter.circle_filled(
+        center,
+        r * 1.05,
+        Color32::from_rgba_unmultiplied(48, 64, 80, 70),
+    );
 
-    // Outer ring — slow counter-spin of hash marks (thought orbit)
-    let ring_stroke = Stroke::new(2.2, Color32::from_rgb(214, 186, 140));
-    painter.circle_stroke(center, r * 0.96, ring_stroke);
-
-    let marks = 12;
+    // Outer tick ring — rotates with the thought so the spin is obvious.
+    painter.circle_stroke(center, r * 0.98, Stroke::new(2.4, Color32::from_rgb(214, 186, 140)));
+    let marks = 24;
     for i in 0..marks {
-        let a = angle * 0.35 + (i as f32) * (TAU / marks as f32);
-        let inner = r * 0.88;
-        let outer = r * 0.96;
-        let p0 = polar(center, inner, a);
-        let p1 = polar(center, outer, a);
-        painter.line_segment([p0, p1], Stroke::new(1.6, Color32::from_rgb(190, 160, 110)));
+        let a = angle + (i as f32) * (TAU / marks as f32);
+        let long = i % 6 == 0;
+        let inner = if long { r * 0.86 } else { r * 0.91 };
+        let outer = r * 0.98;
+        painter.line_segment(
+            [polar(center, inner, a), polar(center, outer, a)],
+            Stroke::new(
+                if long { 2.2 } else { 1.4 },
+                if long {
+                    Color32::from_rgb(232, 210, 160)
+                } else {
+                    Color32::from_rgb(170, 140, 100)
+                },
+            ),
+        );
     }
 
-    // Mid thought arc — incomplete circle that leads the spin
-    let arc_alpha = match phase {
-        SpinPhase::Thinking => 220u8,
-        SpinPhase::Resting => 140u8,
-    };
+    let thinking = matches!(phase, SpinPhase::Thinking);
+    let arc_a = if thinking { 255u8 } else { 150u8 };
+
+    // Bold sweeping thought wedge — the readable “spin” signal.
+    let wedge_span = if thinking { PI * 0.55 } else { PI * 0.28 };
     draw_arc(
         painter,
         center,
-        r * 0.72,
-        angle - 0.35,
-        angle + PI * 1.15,
-        Stroke::new(3.0, Color32::from_rgba_unmultiplied(232, 120, 78, arc_alpha)),
-        36,
+        r * 0.74,
+        angle - wedge_span,
+        angle,
+        Stroke::new(5.5, Color32::from_rgba_unmultiplied(232, 110, 70, arc_a)),
+        40,
     );
     draw_arc(
         painter,
         center,
         r * 0.62,
-        -angle * 0.7 + 0.8,
-        -angle * 0.7 + 0.8 + PI * 0.9,
-        Stroke::new(2.0, Color32::from_rgba_unmultiplied(72, 168, 196, arc_alpha)),
-        28,
+        angle + PI * 0.15,
+        angle + PI * 0.15 + wedge_span * 0.85,
+        Stroke::new(3.5, Color32::from_rgba_unmultiplied(72, 168, 196, arc_a)),
+        32,
     );
 
-    // Rising-sun disc (Japan)
-    let sun_r = r * 0.34;
+    // Comet trail behind the lead bead
+    let lead = angle;
+    for k in 1..8 {
+        let fade = 1.0 - (k as f32) / 8.0;
+        let a = lead - (k as f32) * 0.12;
+        let p = polar(center, r * 0.74, a);
+        let alpha = (fade * if thinking { 180.0 } else { 70.0 }) as u8;
+        painter.circle_filled(
+            p,
+            3.0 + fade * 3.0,
+            Color32::from_rgba_unmultiplied(255, 170, 120, alpha),
+        );
+    }
+
+    // Rising-sun core
+    let sun_r = r * 0.36;
     painter.circle_filled(center, sun_r, Color32::from_rgb(224, 78, 64));
-    painter.circle_stroke(center, sun_r, Stroke::new(1.5, Color32::from_rgb(255, 180, 150)));
-
-    // Inner monogram disc
-    painter.circle_filled(center, sun_r * 0.62, Color32::from_rgb(18, 28, 40));
-
-    // JC monogram
-    let font = FontId::proportional(sun_r * 0.85);
+    painter.circle_stroke(center, sun_r, Stroke::new(2.0, Color32::from_rgb(255, 190, 160)));
+    painter.circle_filled(center, sun_r * 0.62, Color32::from_rgb(14, 24, 36));
     painter.text(
         center,
         egui::Align2::CENTER_CENTER,
         "JC",
-        font,
+        FontId::proportional(sun_r * 0.9),
         Color32::from_rgb(248, 241, 230),
     );
 
-    // Orbiting thought beads — three nodes that ride the spin
-    for (i, col) in [
-        Color32::from_rgb(232, 92, 72),
-        Color32::from_rgb(214, 186, 140),
-        Color32::from_rgb(72, 168, 196),
-    ]
-    .into_iter()
-    .enumerate()
-    {
-        let a = angle + (i as f32) * (TAU / 3.0);
-        let p = polar(center, r * 0.72, a);
-        painter.circle_filled(p, 5.5, col);
-        painter.circle_stroke(p, 5.5, Stroke::new(1.0, Color32::from_rgb(250, 246, 238)));
+    // Three orbiting thought beads — large enough to read as motion.
+    let beads = [
+        (0.0, Color32::from_rgb(232, 92, 72), r * 0.74),
+        (TAU / 3.0, Color32::from_rgb(214, 186, 140), r * 0.74),
+        (2.0 * TAU / 3.0, Color32::from_rgb(72, 168, 196), r * 0.74),
+    ];
+    for (offset, col, rad) in beads {
+        let a = angle + offset;
+        let p = polar(center, rad, a);
+        painter.circle_filled(p, 8.0, col);
+        painter.circle_stroke(p, 8.0, Stroke::new(1.6, Color32::from_rgb(250, 246, 238)));
+    }
+
+    // Idle shimmer pulse on the lead bead while resting — still “alive”.
+    if matches!(phase, SpinPhase::Resting) {
+        let pulse = (((now * 3.2).sin() as f32) * 0.5 + 0.5) * 5.0;
+        let p = polar(center, r * 0.74, angle);
+        painter.circle_stroke(
+            p,
+            8.0 + pulse,
+            Stroke::new(1.2, Color32::from_rgba_unmultiplied(255, 200, 150, 120)),
+        );
     }
 }
 
@@ -366,8 +414,8 @@ fn get_central_time() -> String {
 fn main() -> eframe::Result<()> {
     let native_options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
-            .with_inner_size([520.0, 640.0])
-            .with_min_inner_size([360.0, 520.0])
+            .with_inner_size([520.0, 660.0])
+            .with_min_inner_size([380.0, 540.0])
             .with_title("JC Time — Japan & Central"),
         ..Default::default()
     };
