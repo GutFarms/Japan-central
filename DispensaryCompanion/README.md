@@ -29,11 +29,13 @@ run-companion.bat
 - **Empty-state sample feed** — when no live orders exist, Register and Orders show a soft scrolling sample pickup feed (clears when real orders arrive)
 - **Orders** — full history with channel (POS vs pickup) and payment method
 - **Stock & customers** — same inventory / customer tools as before
-- **Privacy** — customer PII is staff-only; lists/receipts mask email/phone/DOB; sync never exports password hashes; import cannot escalate roles; register idle-locks after 5 minutes
-- **Local hard drive storage** — inventory + customers auto-save on every change
-  - Windows: `%LOCALAPPDATA%\NativePure\Companion\` (`store.json`, `inventory.json`, `customers.json`)
-  - `customers.json` backup omits password hashes
-  - macOS/Linux: `~/.nativepure-companion/`
+- **Privacy** — customer PII is staff-only; full reveal is **admin-only**; lists/receipts mask email/phone/DOB
+- **Encrypted store** — `store.enc` (AES-GCM); plaintext `store.json` migrates automatically
+- **PBKDF2 passwords** — upgraded from legacy SHA-256 on next login; sync never exports hashes
+- **Sessions** — staff/admin must sign in after every restart; idle lock after 5 minutes; receipt clipboard clears in 30s
+- **Bootstrap** — fresh installs write a one-time password to `admin-setup.txt` (delete after first login)
+- **Local hard drive** — Windows `%LOCALAPPDATA%\NativePure\Companion\` / macOS-Linux `~/.nativepure-companion/`
+  - `customers.json` backup omits hashes, DOB, notes; phones masked
   - Account → **Open data folder** / **Save now** / **Lock register now**
 
 Customer accounts still get menu browsing, cart, and pickup checkout.
@@ -42,7 +44,7 @@ Customer accounts still get menu browsing, cart, and pickup checkout.
 
 | Role | Login | Password |
 |------|--------|----------|
-| Admin | `admin` or `fidelgutierrez33@gmail.com` | `12345678` |
+| Admin (fresh install) | `admin` | See `admin-setup.txt` in the data folder (must change) |
 | Demo customer | `demo@nativepure.example` | `demo1234` |
 
 ## Requirements
