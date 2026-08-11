@@ -1,14 +1,16 @@
 target/
 
-# Android
+# Native Pure — Android
 **/local.properties
 **/.gradle/
-Dispensary/keystore/*.jks
+NativePure/android/keystore/*.jks
+NativePure/android/app/build/
 
-# Large installers — companion JARs stay local; Android APK is tracked via Git LFS
-Dispensary/app/build/
+# Native Pure — desktop POS
+NativePure/desktop/.gradle/
+NativePure/desktop/build/
+NativePure/desktop/dist/
 
-# Desktop companion
-DispensaryCompanion/.gradle/
-DispensaryCompanion/build/
-DispensaryCompanion/dist/
+# Native Pure — mail server
+NativePure/mail-server/.gradle/
+NativePure/mail-server/build/

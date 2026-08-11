@@ -1,11 +1,11 @@
-name: Build Native Pure Windows companion
+name: Build Native Pure Windows POS
 
 on:
   push:
     branches: [master, "cursor/**"]
     paths:
-      - "DispensaryCompanion/**"
-      - ".github/workflows/dispensary-windows-companion.yml"
+      - "NativePure/desktop/**"
+      - ".github/workflows/nativepure-windows-pos.yml"
     tags: ["nativepure-v*", "nativepure-pos-v*"]
   workflow_dispatch:
     inputs:
@@ -28,7 +28,7 @@ jobs:
           java-version: "21"
 
       - name: Package app image + Compose installers
-        working-directory: DispensaryCompanion
+        working-directory: NativePure/desktop
         run: |
           .\gradlew.bat createDistributable packageExe packageMsi packageUberJarForCurrentOS --no-daemon
 
@@ -41,7 +41,7 @@ jobs:
           }
 
       - name: Build branded POS install wizard
-        working-directory: DispensaryCompanion
+        working-directory: NativePure/desktop
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force -Path dist | Out-Null
@@ -57,7 +57,7 @@ jobs:
           Get-Item "dist\NativePure-POS-Setup.exe" | Format-List Name, Length, LastWriteTime
 
       - name: Stage dist folder
-        working-directory: DispensaryCompanion
+        working-directory: NativePure/desktop
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force -Path dist | Out-Null
@@ -67,7 +67,7 @@ jobs:
           Get-ChildItem dist | Format-Table Name, Length
 
       - name: Optionally Authenticode-sign Windows binaries
-        working-directory: DispensaryCompanion
+        working-directory: NativePure/desktop
         shell: pwsh
         env:
           WINDOWS_CERT_PFX_BASE64: ${{ secrets.WINDOWS_CERT_PFX_BASE64 }}
@@ -97,7 +97,7 @@ jobs:
           "signed" | Set-Content -Encoding ascii dist\SIGNING-STATUS.txt
 
       - name: Write SHA-256 checksums (Get-FileHash compatible)
-        working-directory: DispensaryCompanion
+        working-directory: NativePure/desktop
         shell: pwsh
         run: |
           $names = New-Object System.Collections.Generic.List[string]
@@ -137,14 +137,14 @@ jobs:
         with:
           name: NativePure-Companion-Windows
           path: |
-            DispensaryCompanion/dist/NativePure-POS-Setup.exe
-            DispensaryCompanion/dist/SHA256SUMS
-            DispensaryCompanion/dist/SHA256SUMS.txt
-            DispensaryCompanion/dist/NativePure-POS-SHA256.txt
-            DispensaryCompanion/dist/SIGNING-STATUS.txt
-            DispensaryCompanion/dist/**
-            DispensaryCompanion/build/compose/binaries/main/exe/**
-            DispensaryCompanion/build/compose/binaries/main/msi/**
+            NativePure/desktop/dist/NativePure-POS-Setup.exe
+            NativePure/desktop/dist/SHA256SUMS
+            NativePure/desktop/dist/SHA256SUMS.txt
+            NativePure/desktop/dist/NativePure-POS-SHA256.txt
+            NativePure/desktop/dist/SIGNING-STATUS.txt
+            NativePure/desktop/dist/**
+            NativePure/desktop/build/compose/binaries/main/exe/**
+            NativePure/desktop/build/compose/binaries/main/msi/**
           if-no-files-found: error
 
       - name: Publish GitHub Release (Setup + checksums)
@@ -164,10 +164,10 @@ jobs:
 
             Optional Authenticode: repo secrets `WINDOWS_CERT_PFX_BASE64` + `WINDOWS_CERT_PASSWORD`.
           files: |
-            DispensaryCompanion/dist/NativePure-POS-Setup.exe
-            DispensaryCompanion/dist/SHA256SUMS
-            DispensaryCompanion/dist/SHA256SUMS.txt
-            DispensaryCompanion/dist/NativePure-POS-SHA256.txt
+            NativePure/desktop/dist/NativePure-POS-Setup.exe
+            NativePure/desktop/dist/SHA256SUMS
+            NativePure/desktop/dist/SHA256SUMS.txt
+            NativePure/desktop/dist/NativePure-POS-SHA256.txt
           fail_on_unmatched_files: true
           generate_release_notes: false
           append_body: true
@@ -183,7 +183,7 @@ jobs:
           distribution: temurin
           java-version: "21"
       - name: Package Linux uber JAR
-        working-directory: DispensaryCompanion
+        working-directory: NativePure/desktop
         run: |
           chmod +x gradlew
           ./gradlew packageUberJarForCurrentOS --no-daemon
@@ -198,6 +198,6 @@ jobs:
         with:
           name: NativePure-Companion-linux-jar
           path: |
-            DispensaryCompanion/dist/*.jar
-            DispensaryCompanion/dist/SHA256SUMS
+            NativePure/desktop/dist/*.jar
+            NativePure/desktop/dist/SHA256SUMS
           if-no-files-found: error

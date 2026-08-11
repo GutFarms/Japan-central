@@ -13,5 +13,5 @@ dependencyResolutionManagement {
     }
 }
 
-rootProject.name = "Dispensary"
+rootProject.name = "NativePureAndroid"
 include(":app")

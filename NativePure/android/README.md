@@ -4,7 +4,7 @@ Adult-use dispensary app for browsing the menu, building a pickup bag, scanning 
 
 > **Download APK:** [`dist/NativePure-Dispensary.apk`](./dist/NativePure-Dispensary.apk) — also on [GitHub Releases](https://github.com/GutFarms/Japan-central/releases).  
 > **QR codes:** [`../DOWNLOADS.md`](../DOWNLOADS.md) · [`dist/qr/nativepure-android.png`](./dist/qr/nativepure-android.png)  
-> Steps: [`../DOWNLOAD-DISPENSARY.md`](../DOWNLOAD-DISPENSARY.md).
+> Steps: [`../DOWNLOAD.md`](../DOWNLOAD.md).
 >
 > **Updates:** After install, the app checks GitHub Releases for a newer `update-manifest.json` and can download/install the APK in-app (Account → Check for updates). Requires a public release asset (or network access to that URL). Auto-check also runs daily at 1:00 AM.
 
@@ -28,7 +28,7 @@ Adult-use dispensary app for browsing the menu, building a pickup bag, scanning 
 - **Inventory sync JSON** — export/import between Android and Windows POS (no password hashes)
 - **Store** — hours, address, contact, pickup guidance
 - **Plant-inspired UI** — canopy greens, Fraunces + Nunito Sans, botanical hero/age-gate motion, leaf empty states
-- **Windows desktop POS** — logo install wizard; see [`../DispensaryCompanion/README.md`](../DispensaryCompanion/README.md)
+- **Windows desktop POS** — logo install wizard; see [`../desktop/README.md`](../desktop/README.md)
 ## Stack
 
 - Kotlin + Jetpack Compose (Material 3)
@@ -41,7 +41,7 @@ Adult-use dispensary app for browsing the menu, building a pickup bag, scanning 
 Requirements: JDK 17+, Android SDK 34
 
 ```bash
-cd Dispensary
+cd NativePure/android
 export ANDROID_HOME=$HOME/android-sdk   # or your SDK path
 ./gradlew assembleDebug
 ```
@@ -55,6 +55,6 @@ Release (signed if keystore present):
 # output: app/build/outputs/apk/release/app-release.apk
 ```
 
-Open the `Dispensary` folder in Android Studio to run on an emulator or device.
+Open the `NativePure/android` folder in Android Studio to run on an emulator or device.
 
 Requires **Android 8.0+** (API 26).

@@ -1,4 +1,4 @@
-name: Build downloadable Native Pure Dispensary APK
+name: Build Native Pure Android APK
 
 on:
   push:
@@ -6,8 +6,8 @@ on:
     tags: ["dispensary-v*", "nativepure-v*"]
   pull_request:
     paths:
-      - "Dispensary/**"
-      - ".github/workflows/dispensary-android-release.yml"
+      - "NativePure/android/**"
+      - ".github/workflows/nativepure-android-release.yml"
   workflow_dispatch:
     inputs:
       publish_release:
@@ -23,7 +23,7 @@ jobs:
     runs-on: ubuntu-latest
     defaults:
       run:
-        working-directory: Dispensary
+        working-directory: NativePure/android
 
     steps:
       - name: Checkout
@@ -86,10 +86,10 @@ jobs:
         with:
           name: NativePure-Dispensary-apk
           path: |
-            Dispensary/dist/NativePure-Dispensary.apk
-            Dispensary/dist/Solstice-Dispensary.apk
-            Dispensary/dist/update-manifest.json
-            Dispensary/dist/qr/nativepure-android.png
+            NativePure/android/dist/NativePure-Dispensary.apk
+            NativePure/android/dist/Solstice-Dispensary.apk
+            NativePure/android/dist/update-manifest.json
+            NativePure/android/dist/qr/nativepure-android.png
           if-no-files-found: error
           retention-days: 90
 
@@ -108,15 +108,15 @@ jobs:
 
             Windows POS (`NativePure-POS-Setup.exe` + `SHA256SUMS`) is published by the companion workflow on the same `nativepure-v*` tag when present.
 
-            QR codes & companion links: [DOWNLOADS.md](https://github.com/GutFarms/Japan-central/blob/master/DOWNLOADS.md)
+            QR codes & companion links: [DOWNLOADS.md](https://github.com/GutFarms/Japan-central/blob/master/NativePure/DOWNLOADS.md)
 
             In-app updates read `update-manifest.json` from this release.
 
             Requires Android 8.0+.
           files: |
-            Dispensary/dist/NativePure-Dispensary.apk
-            Dispensary/dist/update-manifest.json
-            Dispensary/dist/qr/nativepure-android.png
+            NativePure/android/dist/NativePure-Dispensary.apk
+            NativePure/android/dist/update-manifest.json
+            NativePure/android/dist/qr/nativepure-android.png
           fail_on_unmatched_files: true
           generate_release_notes: false
         env:

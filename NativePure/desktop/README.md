@@ -4,7 +4,7 @@ Windows / desktop **point of sale** for Native Pure. Staff ring in-store sales, 
 
 ## Download
 
-See [`../DOWNLOAD-DISPENSARY.md`](../DOWNLOAD-DISPENSARY.md).
+See [`../DOWNLOAD.md`](../DOWNLOAD.md).
 
 **Windows Setup (GitHub Releases):**  
 https://github.com/GutFarms/Japan-central/releases/latest/download/NativePure-POS-Setup.exe  
@@ -84,14 +84,14 @@ Customer accounts still get menu browsing, cart, and pickup checkout.
 ## Run from source
 
 ```bash
-cd DispensaryCompanion
+cd NativePure/desktop
 ./gradlew run
 ```
 
 On Windows:
 
 ```bat
-cd DispensaryCompanion
+cd NativePure/desktop
 gradlew.bat run
 ```
 
@@ -100,7 +100,7 @@ gradlew.bat run
 On a Windows machine with JDK 17+ (or via GitHub Actions):
 
 ```bat
-cd DispensaryCompanion
+cd NativePure/desktop
 gradlew.bat packageExe
 gradlew.bat packageMsi
 ```

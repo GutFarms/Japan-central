@@ -12,7 +12,7 @@ Local mail stack for verification emails (register / login / resend).
 ## Run
 
 ```bash
-cd MailServer
+cd NativePure/mail-server
 ./gradlew run
 ```
 
