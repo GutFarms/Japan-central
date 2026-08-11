@@ -16,6 +16,13 @@ pub struct WorkJob {
     pub ntime_hex: String,
 }
 
+#[derive(Clone, Debug)]
+pub struct ShareOutcome {
+    pub accepted: bool,
+    pub id: u64,
+    pub detail: String,
+}
+
 pub struct StratumClient {
     stream: Option<TcpStream>,
     reader: Option<BufReader<TcpStream>>,
@@ -54,6 +61,7 @@ pub struct StratumClient {
     pub last_tx: String,
     /// Recent stratum lines for the UI (newest last).
     pub recent: Vec<String>,
+    share_events: Vec<ShareOutcome>,
 }
 
 impl StratumClient {
@@ -94,6 +102,7 @@ impl StratumClient {
             last_rx: String::new(),
             last_tx: String::new(),
             recent: Vec::new(),
+            share_events: Vec::new(),
         }
     }
 
@@ -171,6 +180,10 @@ impl StratumClient {
 
     pub fn take_recent(&mut self) -> Vec<String> {
         std::mem::take(&mut self.recent)
+    }
+
+    pub fn take_share_events(&mut self) -> Vec<ShareOutcome> {
+        std::mem::take(&mut self.share_events)
     }
 
     pub fn poll(&mut self) -> Result<(), String> {
@@ -413,6 +426,11 @@ impl StratumClient {
                 if ok {
                     self.accepted += 1;
                     self.push_recent(format!("← share ACCEPTED id={id}"));
+                    self.share_events.push(ShareOutcome {
+                        accepted: true,
+                        id,
+                        detail: "accepted".into(),
+                    });
                 } else {
                     self.rejected += 1;
                     let why = v
@@ -420,6 +438,11 @@ impl StratumClient {
                         .map(|e| e.to_string())
                         .unwrap_or_else(|| "false".into());
                     self.push_recent(format!("← share REJECTED id={id} {why}"));
+                    self.share_events.push(ShareOutcome {
+                        accepted: false,
+                        id,
+                        detail: why,
+                    });
                 }
             }
             return Ok(());
@@ -432,6 +455,11 @@ impl StratumClient {
                 .map(|e| e.to_string())
                 .unwrap_or_else(|| "error".into());
             self.push_recent(format!("← share REJECTED id={id} {why}"));
+            self.share_events.push(ShareOutcome {
+                accepted: false,
+                id,
+                detail: why,
+            });
         } else if id == self.authorize_id && !self.authorized && !has_error {
             self.authorized = true;
             self.accepted = 0;
@@ -574,8 +602,17 @@ fn swab256(hash: &mut [u8]) {
     }
 }
 
+/// Expected accepted shares per hour at `hashrate_hs` against pool difficulty.
+/// Difficulty 1 ≈ 2^32 hashes per share (Bitcoin share convention).
+pub fn expected_shares_per_hour(hashrate_hs: f64, difficulty: f64) -> f64 {
+    if hashrate_hs <= 0.0 || difficulty <= 0.0 {
+        return 0.0;
+    }
+    hashrate_hs * 3600.0 / (difficulty * 4_294_967_296.0)
+}
+
 /// Stratum difficulty → 32-byte LE target (supports fractional diff for ESP32 solo pools).
-fn target_from_difficulty(mut diff: f64) -> [u8; 32] {
+pub fn target_from_difficulty(mut diff: f64) -> [u8; 32] {
     if diff <= 0.0 {
         diff = 1e-12;
     }
@@ -626,7 +663,7 @@ pub fn encode_job_parts(job: &WorkJob) -> [String; 3] {
     ]
 }
 
-fn urlenc(s: &str) -> String {
+pub fn urlenc(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     for b in s.bytes() {
         match b {

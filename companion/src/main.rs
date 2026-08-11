@@ -15,6 +15,10 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use flash_update::{find_firmware_image, flash_merged_bin, FirmwareImage};
 use live_bar::{format_change, format_usd, LiveFeed};
+use stratum::{
+    encode_job_cmd, encode_job_parts, expected_shares_per_hour, urlenc, ShareOutcome, StratumClient,
+    WorkJob,
+};
 
 use eframe::egui::{
     self, Align, Color32, FontData, FontDefinitions, FontFamily, FontId, Frame, Layout, Margin,
@@ -23,7 +27,6 @@ use eframe::egui::{
 use eframe::{App, NativeOptions};
 use serde::{Deserialize, Serialize};
 use serialport::SerialPort;
-use stratum::{encode_job_cmd, encode_job_parts, StratumClient, WorkJob};
 
 fn main() -> eframe::Result<()> {
     let options = NativeOptions {
@@ -357,11 +360,28 @@ struct PersistedMine {
     password: String,
     #[serde(default = "default_mhz")]
     cpu_mhz: u8,
+    #[serde(default)]
+    com_port: String,
+    #[serde(default)]
+    auto_connect: bool,
 }
 
 fn default_mhz() -> u8 {
     240
 }
+
+#[derive(Clone)]
+struct ShareRow {
+    time: String,
+    accepted: bool,
+    detail: String,
+}
+
+const POOL_PRESETS: &[(&str, &str)] = &[
+    ("Public Pool", "stratum+tcp://public-pool.io:21496"),
+    ("Public Pool EU", "stratum+tcp://eu.public-pool.io:21496"),
+    ("NerdMiner", "stratum+tcp://pool.nerdminers.org:3333"),
+];
 
 enum NetMsg {
     Ports(Vec<String>),
@@ -384,6 +404,7 @@ enum NetMsg {
         result: Result<String, String>,
         reopen: Option<String>,
     },
+    Share(ShareOutcome),
 }
 
 enum NetCmd {
@@ -406,6 +427,11 @@ enum NetCmd {
         image: String,
         reopen: bool,
     },
+    /// Push live ticker text to the ESP LCD.
+    PushNet {
+        text: String,
+    },
+    RebootBoard,
 }
 
 struct CompanionApp {
@@ -443,6 +469,13 @@ struct CompanionApp {
     update_confirm: bool,
     update_busy: bool,
     update_status: String,
+    auto_connect: bool,
+    auto_connect_attempted: bool,
+    session_started: Option<Instant>,
+    session_hash_start: u64,
+    share_history: VecDeque<ShareRow>,
+    last_net_push: Instant,
+    last_ticker: String,
 }
 
 impl CompanionApp {
@@ -456,6 +489,8 @@ impl CompanionApp {
         let mut edit_worker = String::new();
         let mut edit_password = "x".into();
         let mut target_mhz = 240u8;
+        let mut com_port = String::new();
+        let mut auto_connect = false;
         if let Some(storage) = storage {
             if let Some(raw) = storage.get_string("mine_prefs") {
                 if let Ok(p) = serde_json::from_str::<PersistedMine>(&raw) {
@@ -470,13 +505,15 @@ impl CompanionApp {
                         80 | 160 | 240 => p.cpu_mhz,
                         _ => 240,
                     };
+                    com_port = p.com_port;
+                    auto_connect = p.auto_connect;
                 }
             }
         }
 
         let mut app = Self {
             tab: Tab::Mine,
-            com_port: String::new(),
+            com_port,
             ports: Vec::new(),
             usb_open: false,
             mining: false,
@@ -510,6 +547,13 @@ impl CompanionApp {
             update_confirm: false,
             update_busy: false,
             update_status: String::new(),
+            auto_connect,
+            auto_connect_attempted: false,
+            session_started: None,
+            session_hash_start: 0,
+            share_history: VecDeque::new(),
+            last_net_push: Instant::now() - Duration::from_secs(120),
+            last_ticker: String::new(),
         };
         app.push_log(LogKind::Info, "CYD Companion ready".into());
         if let Some(fw) = &app.firmware {
@@ -605,6 +649,8 @@ impl CompanionApp {
             worker: self.edit_worker.clone(),
             password: self.edit_password.clone(),
             cpu_mhz: self.target_mhz,
+            com_port: self.com_port.clone(),
+            auto_connect: self.auto_connect,
         };
         if let Ok(raw) = serde_json::to_string(&p) {
             storage.set_string("mine_prefs", raw);
@@ -638,6 +684,9 @@ impl CompanionApp {
             password: self.edit_password.clone(),
         });
         self.mining = true;
+        self.session_started = Some(Instant::now());
+        self.session_hash_start = self.status.hashes;
+        self.share_history.clear();
         self.last_ok = "Starting pool on PC → pushing work over USB…".into();
         self.push_log(
             LogKind::Info,
@@ -652,8 +701,81 @@ impl CompanionApp {
     fn stop_mine(&mut self) {
         let _ = self.cmd_tx.send(NetCmd::StopMine);
         self.mining = false;
+        self.session_started = None;
         self.last_ok = "Mining stopped.".into();
         self.push_log(LogKind::Info, "Mining stopped".into());
+    }
+
+    fn push_board_ticker(&mut self, force: bool) {
+        if !self.usb_open || self.update_busy {
+            return;
+        }
+        let tick = self.live.board_ticker();
+        if !force && tick == self.last_ticker && self.last_net_push.elapsed() < Duration::from_secs(45)
+        {
+            return;
+        }
+        if !force && self.last_net_push.elapsed() < Duration::from_secs(40) {
+            return;
+        }
+        self.last_ticker = tick.clone();
+        self.last_net_push = Instant::now();
+        let _ = self.cmd_tx.send(NetCmd::PushNet { text: tick });
+    }
+
+    fn session_elapsed_label(&self) -> String {
+        match self.session_started {
+            Some(t) => format_uptime(t.elapsed().as_secs()),
+            None => "—".into(),
+        }
+    }
+
+    fn accept_rate_label(&self) -> String {
+        let total = self.accepted + self.rejected;
+        if total == 0 {
+            "—".into()
+        } else {
+            format!("{:.0}%", 100.0 * self.accepted as f64 / total as f64)
+        }
+    }
+
+    fn expected_shares_label(&self) -> String {
+        let exp = expected_shares_per_hour(
+            self.status.hashrate_hs,
+            self.stratum_live.difficulty,
+        );
+        if exp <= 0.0 {
+            "—".into()
+        } else if exp >= 10.0 {
+            format!("{exp:.1}/h")
+        } else if exp >= 1.0 {
+            format!("{exp:.2}/h")
+        } else {
+            format!("{exp:.3}/h")
+        }
+    }
+
+    fn session_hashes_label(&self) -> String {
+        if self.session_started.is_none() {
+            return "—".into();
+        }
+        let delta = self.status.hashes.saturating_sub(self.session_hash_start);
+        format_hash_count(delta)
+    }
+
+    fn copy_logs_to_clipboard(&self, ctx: &egui::Context) {
+        let mut out = String::new();
+        for e in &self.logs {
+            let tag = match e.kind {
+                LogKind::Info => "INFO",
+                LogKind::Usb => "USB",
+                LogKind::Stratum => "POOL",
+                LogKind::Warn => "WARN",
+                LogKind::Err => "ERR",
+            };
+            out.push_str(&format!("{} [{}] {}\n", e.time, tag, e.text));
+        }
+        ctx.output_mut(|o| o.copied_text = out);
     }
 
     fn request_board_update(&mut self) {
@@ -940,12 +1062,15 @@ impl CompanionApp {
                         let _ = self.cmd_tx.send(NetCmd::CloseUsb);
                         self.usb_open = false;
                         self.mining = false;
+                        self.session_started = None;
                         self.push_log(LogKind::Usb, "Disconnect requested".into());
                     } else {
                         self.connect_usb();
                     }
                 }
             });
+            ui.add_space(6.0);
+            ui.checkbox(&mut self.auto_connect, "Auto-connect USB on launch");
 
             ui.add_space(16.0);
             ui.label(
@@ -953,6 +1078,16 @@ impl CompanionApp {
                     .color(C_LIME)
                     .font(mono_ui_font(12.0)),
             );
+            ui.horizontal_wrapped(|ui| {
+                ui.label(RichText::new("Presets").color(C_MUTED).size(12.0));
+                for (name, url) in POOL_PRESETS {
+                    if soft_button(ui, name, 118.0).clicked() {
+                        self.edit_stratum = (*url).into();
+                        self.push_log(LogKind::Info, format!("Pool preset → {name}"));
+                    }
+                }
+            });
+            ui.add_space(6.0);
             labeled_edit(ui, "Stratum URL", &mut self.edit_stratum, "stratum+tcp://host:port");
             labeled_edit(
                 ui,
@@ -998,7 +1133,10 @@ impl CompanionApp {
                     &rej.to_string(),
                     if rej > 0 { C_ERR } else { C_MUTED },
                 );
-                metric(ui, "Board shares", &self.status.shares.to_string(), C_TEXT);
+                metric(ui, "Accept %", &self.accept_rate_label(), C_TEXT);
+                metric(ui, "Session", &self.session_elapsed_label(), C_BUBBLE_HI);
+                metric(ui, "Sess hashes", &self.session_hashes_label(), C_TEXT);
+                metric(ui, "Expect", &self.expected_shares_label(), C_LIME_SOFT);
                 metric(
                     ui,
                     "Rate",
@@ -1011,16 +1149,6 @@ impl CompanionApp {
                     &format_hash_count(self.status.hashes),
                     C_BUBBLE_HI,
                 );
-                metric(
-                    ui,
-                    "Nonce",
-                    if self.status.nonce.is_empty() {
-                        "—"
-                    } else {
-                        &self.status.nonce
-                    },
-                    C_TEXT,
-                );
             });
             if !authed {
                 ui.add_space(6.0);
@@ -1029,6 +1157,23 @@ impl CompanionApp {
                         .color(C_DIM)
                         .font(mono_ui_font(11.0)),
                 );
+            }
+            if !self.share_history.is_empty() {
+                ui.add_space(10.0);
+                ui.label(
+                    RichText::new("Recent shares")
+                        .color(C_MUTED)
+                        .font(mono_ui_font(11.0)),
+                );
+                for row in self.share_history.iter().rev().take(6) {
+                    let mark = if row.accepted { "OK" } else { "RJ" };
+                    let color = if row.accepted { C_LIME } else { C_ERR };
+                    ui.label(
+                        RichText::new(format!("{}  {}  {}", row.time, mark, trunc(&row.detail, 48)))
+                            .color(color)
+                            .font(FontId::new(11.0, FontFamily::Monospace)),
+                    );
+                }
             }
             ui.add_space(12.0);
             telemetry_line(
@@ -1063,6 +1208,7 @@ impl CompanionApp {
                     self.target_mhz
                 ),
             );
+            telemetry_line(ui, "Expect shares", &self.expected_shares_label());
             ui.add_space(10.0);
             if !self.last_ok.is_empty() {
                 ui.label(RichText::new(&self.last_ok).color(C_LIME).size(12.0));
@@ -1073,7 +1219,7 @@ impl CompanionApp {
         });
     }
 
-    fn ui_stratum_panel(&self, ui: &mut egui::Ui) {
+    fn ui_stratum_panel(&mut self, ui: &mut egui::Ui) {
         let s = &self.stratum_live;
         soft_panel(ui, "Live stratum", |ui| {
             ui.horizontal_wrapped(|ui| {
@@ -1102,6 +1248,7 @@ impl CompanionApp {
                 mini_stat(ui, "Jobs", &s.jobs.to_string());
                 mini_stat(ui, "Accept", &acc.to_string());
                 mini_stat(ui, "Reject", &rej.to_string());
+                mini_stat(ui, "Expect/h", &self.expected_shares_label());
                 mini_stat(
                     ui,
                     "Job id",
@@ -1111,6 +1258,21 @@ impl CompanionApp {
             ui.add_space(8.0);
             stratum_line(ui, "Last TX → pool", &trunc(&s.last_tx, 150));
             stratum_line(ui, "Last RX ← pool", &trunc(&s.last_rx, 150));
+            ui.add_space(6.0);
+            if soft_button(ui, "Copy stratum snapshot", 180.0).clicked() {
+                let snap = format!(
+                    "endpoint={} phase={} diff={} acc={} rej={} job={}\nTX {}\nRX {}\n",
+                    s.endpoint,
+                    s.phase,
+                    s.difficulty,
+                    acc,
+                    rej,
+                    s.last_job,
+                    s.last_tx,
+                    s.last_rx
+                );
+                ui.ctx().output_mut(|o| o.copied_text = snap);
+            }
         });
     }
 
@@ -1120,6 +1282,10 @@ impl CompanionApp {
                 ui.checkbox(&mut self.log_auto_scroll, "Auto-scroll");
                 if soft_button(ui, "Clear logs", 110.0).clicked() {
                     self.logs.clear();
+                }
+                if soft_button(ui, "Copy logs", 110.0).clicked() {
+                    self.copy_logs_to_clipboard(ui.ctx());
+                    self.last_ok = "Event log copied to clipboard.".into();
                 }
             });
             Frame::none()
@@ -1195,6 +1361,20 @@ impl CompanionApp {
                     self.term_input = "cmp config".into();
                     self.send_term();
                 }
+                if soft_button(ui, "Stop", 82.0).clicked() {
+                    self.term_input = "cmp stop".into();
+                    self.send_term();
+                }
+                if soft_button(ui, "Bench", 82.0).clicked() {
+                    let _ = self.cmd_tx.send(NetCmd::Bench);
+                }
+                if soft_button(ui, "Reboot", 92.0).clicked() {
+                    let _ = self.cmd_tx.send(NetCmd::RebootBoard);
+                    self.push_log(LogKind::Usb, "Board reboot requested".into());
+                }
+                if soft_button(ui, "Push ticker", 110.0).clicked() {
+                    self.push_board_ticker(true);
+                }
             });
             ui.add_space(10.0);
             Frame::none()
@@ -1255,6 +1435,17 @@ impl App for CompanionApp {
                         if let Some(first) = self.ports.first() {
                             self.com_port = first.clone();
                         }
+                    } else if !self.ports.iter().any(|x| x == &self.com_port) {
+                        // Keep remembered port even if not listed yet (driver lag).
+                    }
+                    if self.auto_connect
+                        && !self.auto_connect_attempted
+                        && !self.usb_open
+                        && !self.com_port.is_empty()
+                        && self.ports.iter().any(|x| x == &self.com_port)
+                    {
+                        self.auto_connect_attempted = true;
+                        self.connect_usb();
                     }
                 }
                 NetMsg::Action(Ok(s)) => {
@@ -1351,6 +1542,21 @@ impl App for CompanionApp {
                         }
                     }
                 }
+                NetMsg::Share(ev) => {
+                    let detail = if ev.accepted {
+                        format!("#{id} accepted", id = ev.id)
+                    } else {
+                        format!("#{id} {}", trunc(&ev.detail, 40), id = ev.id)
+                    };
+                    self.share_history.push_back(ShareRow {
+                        time: stamp(),
+                        accepted: ev.accepted,
+                        detail,
+                    });
+                    while self.share_history.len() > 40 {
+                        self.share_history.pop_front();
+                    }
+                }
             }
         }
 
@@ -1361,6 +1567,9 @@ impl App for CompanionApp {
 
         self.update_motion(ctx);
         self.live.poll();
+        if self.usb_open && !self.update_busy {
+            self.push_board_ticker(false);
+        }
         if self.update_busy {
             ctx.request_repaint();
         }
@@ -2119,6 +2328,11 @@ fn mine_worker(cmd_rx: Receiver<NetCmd>, msg_tx: Sender<NetMsg>) {
     let mut recent_jobs: VecDeque<WorkJob> = VecDeque::new();
     let mut last_stats_push = Instant::now() - Duration::from_secs(10);
     let mut last_stratum_ui = Instant::now() - Duration::from_secs(10);
+    let mut mine_endpoint = String::new();
+    let mut mine_worker_name = String::new();
+    let mut mine_password = String::new();
+    let mut reconnect_at: Option<Instant> = None;
+    let mut reconnect_backoff = Duration::from_secs(2);
 
     loop {
         let cmd = if mining || usb.is_some() {
@@ -2207,6 +2421,8 @@ fn mine_worker(cmd_rx: Receiver<NetCmd>, msg_tx: Sender<NetMsg>) {
                 }
                 NetCmd::CloseUsb => {
                     mining = false;
+                    reconnect_at = None;
+                    mine_endpoint.clear();
                     if let Some(mut s) = stratum.take() {
                         s.disconnect();
                     }
@@ -2226,6 +2442,11 @@ fn mine_worker(cmd_rx: Receiver<NetCmd>, msg_tx: Sender<NetMsg>) {
                         let _ = msg_tx.send(NetMsg::Action(Err("USB not open".into())));
                         continue;
                     }
+                    mine_endpoint = endpoint.clone();
+                    mine_worker_name = worker.clone();
+                    mine_password = password.clone();
+                    reconnect_backoff = Duration::from_secs(2);
+                    reconnect_at = None;
                     if let Some(p) = usb.as_mut() {
                         match usb_push_job(p.as_mut(), &mut usb_rx, &warmup_job(), &mut legacy_job, &msg_tx)
                         {
@@ -2255,20 +2476,25 @@ fn mine_worker(cmd_rx: Receiver<NetCmd>, msg_tx: Sender<NetMsg>) {
                             push_stratum_live(&msg_tx, &client);
                             stratum = Some(client);
                             mining = true;
+                            reconnect_backoff = Duration::from_secs(2);
                             let _ = msg_tx.send(NetMsg::Action(Ok(format!(
                                 "Pool connecting {endpoint} — board already hashing"
                             ))));
                         }
                         Err(e) => {
                             mining = true;
+                            stratum = None;
+                            reconnect_at = Some(Instant::now() + reconnect_backoff);
                             let _ = msg_tx.send(NetMsg::Action(Err(format!(
-                                "Pool error (board still hashing locally): {e}"
+                                "Pool error (board still hashing; will retry): {e}"
                             ))));
                         }
                     }
                 }
                 NetCmd::StopMine => {
                     mining = false;
+                    reconnect_at = None;
+                    mine_endpoint.clear();
                     if let Some(mut s) = stratum.take() {
                         s.disconnect();
                         for line in s.take_recent() {
@@ -2388,6 +2614,39 @@ fn mine_worker(cmd_rx: Receiver<NetCmd>, msg_tx: Sender<NetMsg>) {
                         reopen: reopen_port,
                     });
                 }
+                NetCmd::PushNet { text } => {
+                    if let Some(p) = usb.as_mut() {
+                        let cmd = format!("cmp netdata text={}", urlenc(&text));
+                        match usb_cmd(p.as_mut(), &mut usb_rx, &cmd) {
+                            Ok(_) => {
+                                log_msg(
+                                    &msg_tx,
+                                    LogKind::Usb,
+                                    format!("LCD ticker ← {}", trunc(&text, 64)),
+                                );
+                            }
+                            Err(e) => {
+                                log_msg(&msg_tx, LogKind::Warn, format!("netdata: {e}"));
+                            }
+                        }
+                    }
+                }
+                NetCmd::RebootBoard => {
+                    if let Some(p) = usb.as_mut() {
+                        match usb_cmd(p.as_mut(), &mut usb_rx, "cmp reboot") {
+                            Ok(line) => {
+                                let _ = msg_tx.send(NetMsg::Action(Ok(format!(
+                                    "Board reboot queued ({line})"
+                                ))));
+                            }
+                            Err(e) => {
+                                let _ = msg_tx.send(NetMsg::Action(Err(format!("reboot: {e}"))));
+                            }
+                        }
+                    } else {
+                        let _ = msg_tx.send(NetMsg::Action(Err("USB not open".into())));
+                    }
+                }
             }
         }
 
@@ -2397,6 +2656,9 @@ fn mine_worker(cmd_rx: Receiver<NetCmd>, msg_tx: Sender<NetMsg>) {
                 Ok(()) => {
                     for line in client.take_recent() {
                         log_msg(&msg_tx, LogKind::Stratum, line);
+                    }
+                    for ev in client.take_share_events() {
+                        let _ = msg_tx.send(NetMsg::Share(ev));
                     }
                     if let Some(job) = client.take_job() {
                         if let Some(p) = usb.as_mut() {
@@ -2440,25 +2702,83 @@ fn mine_worker(cmd_rx: Receiver<NetCmd>, msg_tx: Sender<NetMsg>) {
                 }
                 Err(e) => {
                     log_msg(&msg_tx, LogKind::Err, format!("Pool: {e}"));
-                    thread::sleep(Duration::from_millis(400));
+                    if let Some(mut s) = stratum.take() {
+                        s.disconnect();
+                    }
+                    if mining && !mine_endpoint.is_empty() {
+                        reconnect_at = Some(Instant::now() + reconnect_backoff);
+                        log_msg(
+                            &msg_tx,
+                            LogKind::Warn,
+                            format!(
+                                "Pool reconnect in {}s…",
+                                reconnect_backoff.as_secs().max(1)
+                            ),
+                        );
+                        reconnect_backoff =
+                            (reconnect_backoff * 2).min(Duration::from_secs(60));
+                    }
+                    thread::sleep(Duration::from_millis(200));
                 }
             }
-            if last_stratum_ui.elapsed() > Duration::from_millis(250) {
-                push_stratum_live(&msg_tx, client);
-                let _ = msg_tx.send(NetMsg::MineStats {
-                    accepted: if client.authorized() {
-                        client.accepted
-                    } else {
-                        0
-                    },
-                    rejected: if client.authorized() {
-                        client.rejected
-                    } else {
-                        0
-                    },
-                    phase: client.phase.clone(),
-                });
-                last_stratum_ui = Instant::now();
+            if let Some(client) = stratum.as_mut() {
+                if last_stratum_ui.elapsed() > Duration::from_millis(250) {
+                    push_stratum_live(&msg_tx, client);
+                    let _ = msg_tx.send(NetMsg::MineStats {
+                        accepted: if client.authorized() {
+                            client.accepted
+                        } else {
+                            0
+                        },
+                        rejected: if client.authorized() {
+                            client.rejected
+                        } else {
+                            0
+                        },
+                        phase: client.phase.clone(),
+                    });
+                    last_stratum_ui = Instant::now();
+                }
+            }
+        } else if mining && !mine_endpoint.is_empty() {
+            let due = reconnect_at
+                .map(|t| Instant::now() >= t)
+                .unwrap_or(true);
+            if due {
+                reconnect_at = None;
+                log_msg(
+                    &msg_tx,
+                    LogKind::Stratum,
+                    format!("Reconnecting pool {mine_endpoint}…"),
+                );
+                let mut client =
+                    StratumClient::new(mine_worker_name.clone(), mine_password.clone());
+                match client.connect(&mine_endpoint) {
+                    Ok(()) => {
+                        for line in client.take_recent() {
+                            log_msg(&msg_tx, LogKind::Stratum, line);
+                        }
+                        push_stratum_live(&msg_tx, &client);
+                        stratum = Some(client);
+                        reconnect_backoff = Duration::from_secs(2);
+                        let _ = msg_tx.send(NetMsg::Action(Ok(format!(
+                            "Pool reconnected {mine_endpoint}"
+                        ))));
+                    }
+                    Err(e) => {
+                        reconnect_at = Some(Instant::now() + reconnect_backoff);
+                        log_msg(
+                            &msg_tx,
+                            LogKind::Warn,
+                            format!(
+                                "Reconnect failed ({e}); retry in {}s",
+                                reconnect_backoff.as_secs().max(1)
+                            ),
+                        );
+                        reconnect_backoff =
+                            (reconnect_backoff * 2).min(Duration::from_secs(60));
+                    }
+                }
             }
         }
 

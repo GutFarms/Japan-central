@@ -73,6 +73,29 @@ impl LiveFeed {
             format!("{}, {}", self.snap.city, self.snap.country)
         }
     }
+
+    /// Short ticker for the ESP LCD (`cmp netdata text=…`).
+    pub fn board_ticker(&self) -> String {
+        let mut parts: Vec<String> = Vec::new();
+        for q in self.snap.quotes.iter().take(3) {
+            parts.push(format!("{} {}", q.symbol, format_usd(q.usd)));
+        }
+        if self.snap.ready && !self.snap.city.is_empty() {
+            parts.push(format!(
+                "{} {:.0}C {}",
+                self.snap.city, self.snap.temp_c, self.snap.weather
+            ));
+        }
+        let t = self.local_now_label();
+        if !t.is_empty() {
+            parts.push(t);
+        }
+        if parts.is_empty() {
+            "usb · companion linked".into()
+        } else {
+            parts.join(" · ")
+        }
+    }
 }
 
 fn live_worker(tx: Sender<LiveMsg>) {
@@ -247,7 +270,7 @@ fn http_get_json<T: for<'de> Deserialize<'de>>(url: &str) -> Result<T, String> {
     let agent = ureq::AgentBuilder::new()
         .timeout_connect(Duration::from_secs(8))
         .timeout_read(Duration::from_secs(12))
-        .user_agent("CYD-Companion/0.8.1")
+        .user_agent("CYD-Companion/0.8.4")
         .build();
     let resp = agent
         .get(url)
