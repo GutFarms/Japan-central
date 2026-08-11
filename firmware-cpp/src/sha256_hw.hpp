@@ -2,7 +2,7 @@
 #include <cstdint>
 #include <cstddef>
 
-// Classic ESP32 hardware SHA-256 mining helpers (ESP-IDF Apache register API).
+// Classic ESP32 hardware SHA-256 mining (ESP-IDF Apache register API).
 
 #if defined(ARDUINO_ARCH_ESP32) && !defined(CONFIG_IDF_TARGET_ESP32S2) && \
     !defined(CONFIG_IDF_TARGET_ESP32S3) && !defined(CONFIG_IDF_TARGET_ESP32C3) && \
@@ -14,17 +14,25 @@
 
 namespace cyd_sha_hw {
 
+enum class Mode : uint8_t {
+  FullHw = 0,     // 3 HW blocks / nonce (always correct)
+  MidHw = 1,      // midstate CONTINUE + 2nd HW SHA (if self-test OK)
+  HwSwSecond = 2  // 2 HW blocks + IRAM SW second SHA (often fastest on classic ESP32)
+};
+
 bool available();
 bool acquire();
 void release();
 bool locked();
 
-// True when midstate→CONTINUE path passed the on-device self-test (faster).
+Mode mode();
+const char* mode_label();  // "HW" / "HW+" / "HW/SW"
 bool midstate_ok();
-void disable_midstate();  // force full-header path (e.g. after a verify miss)
+void disable_midstate();
 
-// hdr_be: 20 big-endian SHA message words from the 80-byte Bitcoin wire header.
-// mid_be: 8 midstate words after hashing hdr_be[0..15] (same format as SW midstate).
+// Tune path on-device (correctness + timed micro-bench). Call once after acquire.
+void calibrate(const uint32_t hdr_be[20], const uint32_t mid_be[8]);
+
 bool hash_nonce(const uint32_t hdr_be[20], const uint32_t mid_be[8], uint32_t nonce_le,
                 uint32_t out_be[8], uint32_t msb_limit);
 
@@ -32,7 +40,6 @@ size_t mine(const uint32_t hdr_be[20], const uint32_t mid_be[8], uint32_t* nonce
             uint32_t stride, uint32_t msb_limit, bool* hit, uint32_t* found_nonce,
             uint32_t found_hash_be[8]);
 
-// Compare midstate path vs full-header path for a few nonces. Enables midstate_ok on pass.
 bool self_test(const uint32_t hdr_be[20], const uint32_t mid_be[8]);
 
 }  // namespace cyd_sha_hw

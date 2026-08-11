@@ -5,6 +5,7 @@
 #include "sha256_miner.hpp"
 
 #include <atomic>
+#include <cstdio>
 #include <cstring>
 #include <esp_system.h>
 #include <esp_task_wdt.h>
@@ -76,9 +77,15 @@ static void fillSnap() {
   g_snap.totalHashes = g_hashCounter.load(std::memory_order_relaxed);
   g_snap.accepted = g_accepted;
   g_snap.rejected = g_rejected;
-  g_snap.pool = g_jobLoaded
-                    ? (g_hwSha ? (cyd_sha_hw::midstate_ok() ? "SHA256-HW+" : "SHA256-HW") : "SHA256")
-                    : "WAIT USB";
+  if (g_jobLoaded && g_hwSha) {
+    char poolBuf[24];
+    snprintf(poolBuf, sizeof(poolBuf), "SHA256-%s", cyd_sha_hw::mode_label());
+    g_snap.pool = poolBuf;
+  } else if (g_jobLoaded) {
+    g_snap.pool = "SHA256";
+  } else {
+    g_snap.pool = "WAIT USB";
+  }
   g_snap.connected = g_jobLoaded;
   g_snap.difficulty = 0;
   g_snap.nonce = g_minerA.nonce();
@@ -266,17 +273,14 @@ void setup() {
 
   delay(80);
   if (g_hwSha) {
-    // Probe midstate with a dummy header so the banner reflects the fast path.
     uint8_t hdr[80];
     memset(hdr, 0xA5, 80);
     uint8_t tgt[32];
     memset(tgt, 0xFF, 32);
     g_minerA.setJob(hdr, tgt, 1);
-    if (cyd_sha_hw::midstate_ok()) {
-      g_ui.showMessage("SHA-256 HW+", "midstate · USB link");
-    } else {
-      g_ui.showMessage("SHA-256 HW", "full-header · USB");
-    }
+    char line[28];
+    snprintf(line, sizeof(line), "%s · USB link", cyd_sha_hw::mode_label());
+    g_ui.showMessage("SHA-256 MAX", line);
   } else {
     g_ui.showMessage("SHA-256", "live kH/s · USB link");
   }
@@ -302,18 +306,19 @@ void loop() {
   }
 
   // Core-0 software midstate assist on a disjoint nonce range (additive H/s).
+  // Bigger batches while mining — LCD paints less often below.
   if (g_mining) {
-    mineLane(g_minerB, 1, g_hwSha ? 256 : 128);
+    mineLane(g_minerB, 1, g_hwSha ? 512 : 128);
   }
 
   uint32_t now = millis();
-  // ~8 fps keeps the activity bar / live pip alive without starving hashing.
-  if (now - g_lastPaint >= 125) {
+  // ~4 fps UI while hashing — less contention with the mine task.
+  if (now - g_lastPaint >= 250) {
     fillSnap();
     g_ui.showMining(g_cfg, g_snap, false);
     g_lastPaint = now;
   }
-  delay(2);
+  delay(1);
 }
 
 extern "C" float cyd_run_bench(uint32_t n) {

@@ -221,9 +221,8 @@ void Sha256Miner::setJob(const uint8_t header[HEADER_LEN], const uint8_t target[
   packTarget(target);
   nonce_ = startNonce;
   prepareMidstate();
-  // Probe midstate→CONTINUE once per job while we hold the SHA engine.
   if (hw_ && cyd_sha_hw::locked()) {
-    (void)cyd_sha_hw::self_test(hdrBe_, midstate_);
+    cyd_sha_hw::calibrate(hdrBe_, midstate_);
   }
 }
 
