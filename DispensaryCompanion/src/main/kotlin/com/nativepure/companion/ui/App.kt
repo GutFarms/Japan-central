@@ -58,6 +58,7 @@ import com.nativepure.companion.data.AccountRole
 import com.nativepure.companion.data.AuthResult
 import com.nativepure.companion.data.CompanionRepository
 import com.nativepure.companion.data.CustomerProfile
+import com.nativepure.companion.data.EmailCodeIssue
 import com.nativepure.companion.data.NavSection
 import com.nativepure.companion.data.OpResult
 import com.nativepure.companion.data.PasswordPolicy
@@ -75,6 +76,7 @@ fun CompanionApp(repository: CompanionRepository) {
     var ageVerified by remember { mutableStateOf(repository.ageVerified) }
     var customer by remember { mutableStateOf(repository.currentCustomer()) }
     var authError by remember { mutableStateOf<String?>(null) }
+    var pendingEmailCode by remember { mutableStateOf(repository.peekIssuedEmailCode()) }
     var message by remember { mutableStateOf<String?>(null) }
     var section by remember { mutableStateOf(NavSection.HOME) }
     var tick by remember { mutableStateOf(0) }
@@ -95,6 +97,7 @@ fun CompanionApp(repository: CompanionRepository) {
                 when (val result = repository.login(email, password)) {
                     is AuthResult.Success -> {
                         customer = result.customer
+                        pendingEmailCode = repository.peekIssuedEmailCode()
                         authError = null
                         section = NavSection.HOME
                     }
@@ -105,12 +108,43 @@ fun CompanionApp(repository: CompanionRepository) {
                 when (val result = repository.register(email, password, name, phone, dob)) {
                     is AuthResult.Success -> {
                         customer = result.customer
+                        pendingEmailCode = repository.peekIssuedEmailCode()
                         authError = null
                     }
                     is AuthResult.Error -> authError = result.message
                 }
             },
             onClearError = { authError = null }
+        )
+        !customer!!.emailVerified -> EmailVerifyPane(
+            email = customer!!.email,
+            issuedCode = pendingEmailCode,
+            error = authError,
+            onVerify = { code ->
+                when (val result = repository.verifyEmailCode(code)) {
+                    is AuthResult.Success -> {
+                        customer = result.customer
+                        pendingEmailCode = null
+                        authError = null
+                    }
+                    is AuthResult.Error -> authError = result.message
+                }
+            },
+            onResend = {
+                when (val result = repository.resendEmailVerificationCode()) {
+                    is AuthResult.Success -> {
+                        pendingEmailCode = repository.peekIssuedEmailCode()
+                        authError = null
+                    }
+                    is AuthResult.Error -> authError = result.message
+                }
+            },
+            onClearError = { authError = null },
+            onLogout = {
+                repository.logout()
+                customer = null
+                pendingEmailCode = null
+            }
         )
         customer!!.mustChangePassword -> ForcePasswordPane(
             error = authError,
@@ -141,6 +175,7 @@ fun CompanionApp(repository: CompanionRepository) {
             onLogout = {
                 repository.logout()
                 customer = null
+                pendingEmailCode = null
                 section = NavSection.HOME
             }
         )
@@ -238,6 +273,56 @@ private fun AuthPane(
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
+            }
+        }
+    }
+}
+
+@Composable
+private fun EmailVerifyPane(
+    email: String,
+    issuedCode: EmailCodeIssue?,
+    error: String?,
+    onVerify: (String) -> Unit,
+    onResend: () -> Unit,
+    onClearError: () -> Unit,
+    onLogout: () -> Unit
+) {
+    var code by remember { mutableStateOf("") }
+    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+        Surface(shape = RoundedCornerShape(18.dp), tonalElevation = 2.dp, modifier = Modifier.width(420.dp)) {
+            Column(Modifier.padding(28.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Text("Verify your email", style = MaterialTheme.typography.headlineMedium)
+                Text(
+                    "Enter the 6-digit code sent to $email",
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                if (issuedCode != null) {
+                    Surface(
+                        color = MaterialTheme.colorScheme.secondaryContainer,
+                        shape = RoundedCornerShape(12.dp)
+                    ) {
+                        Column(Modifier.padding(12.dp)) {
+                            Text("Offline delivery", style = MaterialTheme.typography.titleSmall)
+                            Text(
+                                "Code: ${issuedCode.code}",
+                                style = MaterialTheme.typography.headlineMedium
+                            )
+                        }
+                    }
+                }
+                Field(code, {
+                    code = it.filter { ch -> ch.isDigit() }.take(6)
+                    onClearError()
+                }, "6-digit code")
+                if (error != null) Text(error, color = MaterialTheme.colorScheme.error)
+                Button(
+                    onClick = { onVerify(code) },
+                    enabled = code.length == 6,
+                    modifier = Modifier.fillMaxWidth()
+                ) { Text("Verify email") }
+                TextButton(onClick = onResend) { Text("Resend code") }
+                TextButton(onClick = onLogout) { Text("Log out") }
             }
         }
     }

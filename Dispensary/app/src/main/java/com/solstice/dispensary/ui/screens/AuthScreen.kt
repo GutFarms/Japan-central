@@ -6,9 +6,13 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
@@ -26,6 +30,9 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.FocusDirection
+import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
@@ -57,12 +64,17 @@ fun AuthScreen(
     var dob by remember { mutableStateOf("") }
     var marketing by remember { mutableStateOf(true) }
     val colors = MaterialTheme.colorScheme
+    val focus = LocalFocusManager.current
+    val scroll = rememberScrollState()
 
     BotanicalScreenBackground {
         Column(
             modifier = Modifier
                 .fillMaxSize()
-                .verticalScroll(rememberScrollState())
+                .statusBarsPadding()
+                .navigationBarsPadding()
+                .imePadding()
+                .verticalScroll(scroll)
                 .padding(24.dp),
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
@@ -82,7 +94,7 @@ fun AuthScreen(
             )
             Text(
                 text = if (modeCreate) {
-                    "Join Native Pure to save pickup details and your order history."
+                    "Join Native Pure to save pickup details and your order history. We’ll email a verification code."
                 } else {
                     "Sign in with email, or admin username."
                 },
@@ -93,14 +105,22 @@ fun AuthScreen(
             )
 
             if (modeCreate) {
-                AuthField(fullName, { fullName = it; onClearError() }, "Full name")
+                AuthField(
+                    fullName,
+                    { fullName = it; onClearError() },
+                    "Full name",
+                    imeAction = ImeAction.Next,
+                    onImeAction = { focus.moveFocus(FocusDirection.Down) }
+                )
                 Spacer(Modifier.height(10.dp))
             }
             AuthField(
                 email,
                 { email = it; onClearError() },
                 if (modeCreate) "Email" else "Email or username",
-                keyboard = KeyboardType.Email
+                keyboard = KeyboardType.Email,
+                imeAction = ImeAction.Next,
+                onImeAction = { focus.moveFocus(FocusDirection.Down) }
             )
             Spacer(Modifier.height(10.dp))
             AuthField(
@@ -108,16 +128,37 @@ fun AuthScreen(
                 { password = it; onClearError() },
                 "Password",
                 keyboard = KeyboardType.Password,
-                password = true
+                password = true,
+                imeAction = if (modeCreate) ImeAction.Next else ImeAction.Done,
+                onImeAction = {
+                    if (modeCreate) {
+                        focus.moveFocus(FocusDirection.Down)
+                    } else if (!busy) {
+                        onLogin(email, password)
+                    }
+                }
             )
             if (modeCreate) {
                 Spacer(Modifier.height(10.dp))
-                AuthField(phone, { phone = it; onClearError() }, "Phone (optional)", KeyboardType.Phone)
+                AuthField(
+                    phone,
+                    { phone = it; onClearError() },
+                    "Phone (optional)",
+                    KeyboardType.Phone,
+                    imeAction = ImeAction.Next,
+                    onImeAction = { focus.moveFocus(FocusDirection.Down) }
+                )
                 Spacer(Modifier.height(10.dp))
                 AuthField(
                     dob,
                     { dob = it; onClearError() },
-                    "Date of birth YYYY-MM-DD (optional)"
+                    "Date of birth YYYY-MM-DD (optional)",
+                    imeAction = ImeAction.Done,
+                    onImeAction = {
+                        if (!busy) {
+                            onRegister(email, password, fullName, phone, dob, marketing)
+                        }
+                    }
                 )
                 Spacer(Modifier.height(8.dp))
                 Row(verticalAlignment = Alignment.CenterVertically) {
@@ -199,13 +240,14 @@ fun AuthScreen(
             } else {
                 Spacer(Modifier.height(8.dp))
                 Text(
-                    text = "Password: at least 8 characters, with a letter and a number.",
+                    text = "Password: at least 8 characters, with a letter and a number.\nYou’ll confirm your email with a 6-digit code next.",
                     style = MaterialTheme.typography.bodyMedium,
                     color = colors.onSurfaceVariant,
                     textAlign = TextAlign.Center
                 )
             }
-            Spacer(Modifier.height(24.dp))
+            // Extra space so the focused field can scroll above the keyboard.
+            Spacer(Modifier.height(120.dp))
         }
     }
 }
@@ -216,7 +258,9 @@ private fun AuthField(
     onChange: (String) -> Unit,
     label: String,
     keyboard: KeyboardType = KeyboardType.Text,
-    password: Boolean = false
+    password: Boolean = false,
+    imeAction: ImeAction = ImeAction.Next,
+    onImeAction: () -> Unit = {}
 ) {
     OutlinedTextField(
         value = value,
@@ -224,7 +268,14 @@ private fun AuthField(
         modifier = Modifier.fillMaxWidth(),
         singleLine = true,
         label = { Text(label) },
-        keyboardOptions = KeyboardOptions(keyboardType = keyboard),
+        keyboardOptions = KeyboardOptions(
+            keyboardType = keyboard,
+            imeAction = imeAction
+        ),
+        keyboardActions = KeyboardActions(
+            onNext = { onImeAction() },
+            onDone = { onImeAction() }
+        ),
         visualTransformation = if (password) PasswordVisualTransformation() else VisualTransformation.None
     )
 }

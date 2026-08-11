@@ -125,7 +125,8 @@ data class Customer(
     val role: AccountRole = AccountRole.CUSTOMER,
     val createdByAdminId: String = "",
     val mustChangePassword: Boolean = false,
-    val enabled: Boolean = true
+    val enabled: Boolean = true,
+    val emailVerified: Boolean = false
 )
 
 /** Profile without password fields. */
@@ -143,7 +144,8 @@ data class CustomerProfile(
     val role: AccountRole,
     val createdByAdminId: String = "",
     val mustChangePassword: Boolean = false,
-    val enabled: Boolean = true
+    val enabled: Boolean = true,
+    val emailVerified: Boolean = false
 ) {
     val isAdminLike: Boolean get() = role.canViewSensitiveInfo
 }
@@ -162,7 +164,15 @@ fun Customer.toProfile() = CustomerProfile(
     role = role,
     createdByAdminId = createdByAdminId,
     mustChangePassword = mustChangePassword,
-    enabled = enabled
+    enabled = enabled,
+    emailVerified = emailVerified
+)
+
+/** Result of issuing an email verification code (plaintext shown once for offline delivery). */
+data class EmailCodeIssue(
+    val email: String,
+    val code: String,
+    val expiresAtMs: Long
 )
 
 enum class AutoLockTimeout(val label: String, val millis: Long) {

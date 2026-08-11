@@ -35,6 +35,7 @@ import com.solstice.dispensary.ui.navigation.Routes
 import com.solstice.dispensary.ui.screens.AgeGateScreen
 import com.solstice.dispensary.ui.screens.AppLockScreen
 import com.solstice.dispensary.ui.screens.AuthScreen
+import com.solstice.dispensary.ui.screens.EmailVerificationScreen
 import com.solstice.dispensary.ui.screens.ForcePasswordChangeScreen
 import com.solstice.dispensary.ui.theme.SolsticeTheme
 import com.solstice.dispensary.ui.viewmodel.DispensaryViewModel
@@ -79,6 +80,20 @@ class MainActivity : ComponentActivity() {
                         onLogin = viewModel::login,
                         onRegister = viewModel::register,
                         onClearError = viewModel::clearAuthError
+                    )
+                    return@SolsticeTheme
+                }
+
+                if (viewModel.needsEmailVerification) {
+                    EmailVerificationScreen(
+                        email = viewModel.currentCustomer?.email.orEmpty(),
+                        issuedCode = viewModel.pendingEmailCode,
+                        busy = viewModel.authBusy,
+                        error = viewModel.authError,
+                        onVerify = viewModel::verifyEmailCode,
+                        onResend = viewModel::resendEmailVerificationCode,
+                        onClearError = viewModel::clearAuthError,
+                        onLogout = viewModel::logout
                     )
                     return@SolsticeTheme
                 }

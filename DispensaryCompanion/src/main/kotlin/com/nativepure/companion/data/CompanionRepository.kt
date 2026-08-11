@@ -28,6 +28,13 @@ class CompanionRepository {
     private val failedLogins = ConcurrentHashMap<String, Int>()
     private val lockoutUntil = ConcurrentHashMap<String, Long>()
 
+    private var emailCodeCustomerId: String? = null
+    private var emailCodeSalt: String = ""
+    private var emailCodeHash: String = ""
+    private var emailCodeExpiresAt: Long = 0L
+    private var emailCodeSentAt: Long = 0L
+    private var lastIssuedEmailCode: EmailCodeIssue? = null
+
     init {
         loadOrSeed()
     }
@@ -120,6 +127,9 @@ class CompanionRepository {
         val updated = customer.copy(lastLoginAt = System.currentTimeMillis())
         replaceCustomer(updated)
         sessionCustomerId = updated.id
+        if (!updated.emailVerified) {
+            lastIssuedEmailCode = issueCodeFor(updated)
+        }
         persist()
         return AuthResult.Success(updated.toProfile())
     }
@@ -155,17 +165,59 @@ class CompanionRepository {
             dateOfBirth = dateOfBirth.trim(),
             createdAt = now,
             lastLoginAt = now,
-            role = AccountRole.CUSTOMER
+            role = AccountRole.CUSTOMER,
+            emailVerified = false
         )
         customers.add(customer)
         sessionCustomerId = customer.id
+        lastIssuedEmailCode = issueCodeFor(customer)
         persist()
         return AuthResult.Success(customer.toProfile())
+    }
+
+    fun peekIssuedEmailCode(): EmailCodeIssue? = lastIssuedEmailCode
+
+    fun resendEmailVerificationCode(): AuthResult {
+        val existing = customers.find { it.id == sessionCustomerId }
+            ?: return AuthResult.Error("Not signed in.")
+        if (existing.emailVerified) return AuthResult.Error("Email is already verified.")
+        val waitMs = EMAIL_CODE_RESEND_COOLDOWN_MS - (System.currentTimeMillis() - emailCodeSentAt)
+        if (waitMs > 0) {
+            val secs = ((waitMs + 999) / 1000).coerceAtLeast(1)
+            return AuthResult.Error("Wait ${secs}s before requesting another code.")
+        }
+        lastIssuedEmailCode = issueCodeFor(existing)
+        return AuthResult.Success(existing.toProfile())
+    }
+
+    fun verifyEmailCode(code: String): AuthResult {
+        val existing = customers.find { it.id == sessionCustomerId }
+            ?: return AuthResult.Error("Not signed in.")
+        if (existing.emailVerified) return AuthResult.Success(existing.toProfile())
+        val clean = code.trim().filter { it.isDigit() }
+        if (clean.length != 6) return AuthResult.Error("Enter the 6-digit code from your email.")
+        if (emailCodeCustomerId != existing.id || emailCodeHash.isBlank() || emailCodeSalt.isBlank()) {
+            return AuthResult.Error("No verification code on file. Resend a code.")
+        }
+        if (System.currentTimeMillis() > emailCodeExpiresAt) {
+            clearEmailCode()
+            return AuthResult.Error("That code expired. Resend a code.")
+        }
+        if (!PasswordHasher.matches(clean, emailCodeSalt, emailCodeHash)) {
+            return AuthResult.Error("Incorrect code. Check the email and try again.")
+        }
+        val updated = existing.copy(emailVerified = true)
+        replaceCustomer(updated)
+        clearEmailCode()
+        lastIssuedEmailCode = null
+        persist()
+        return AuthResult.Success(updated.toProfile())
     }
 
     fun logout() {
         sessionCustomerId = null
         cart.clear()
+        lastIssuedEmailCode = null
         persist()
     }
 
@@ -246,6 +298,7 @@ class CompanionRepository {
             role = AccountRole.STAFF,
             createdByAdminId = admin.id,
             mustChangePassword = true,
+            emailVerified = true,
             notes = "Staff sub-account created by ${admin.email}"
         )
         customers.add(staff)
@@ -470,10 +523,17 @@ class CompanionRepository {
             it.email.equals(MAIN_ADMIN_EMAIL, true) || it.username == MAIN_ADMIN_USERNAME
         }
         if (existing != null) {
+            var next = existing
             if (!existing.mustChangePassword &&
                 PasswordHasher.matches(MAIN_ADMIN_PASSWORD, existing.passwordSalt, existing.passwordHash)
             ) {
-                replaceCustomer(existing.copy(mustChangePassword = true))
+                next = next.copy(mustChangePassword = true)
+            }
+            if (!existing.emailVerified) {
+                next = next.copy(emailVerified = true)
+            }
+            if (next != existing) {
+                replaceCustomer(next)
                 persist()
             }
             return
@@ -489,13 +549,21 @@ class CompanionRepository {
                 fullName = "Main Admin",
                 role = AccountRole.ADMIN,
                 notes = "Primary admin account — change password on first login",
-                mustChangePassword = true
+                mustChangePassword = true,
+                emailVerified = true
             )
         )
     }
 
     private fun ensureDemoCustomer() {
-        if (customers.any { it.email.equals(DEMO_EMAIL, true) }) return
+        val existing = customers.find { it.email.equals(DEMO_EMAIL, true) }
+        if (existing != null) {
+            if (!existing.emailVerified) {
+                replaceCustomer(existing.copy(emailVerified = true))
+                persist()
+            }
+            return
+        }
         val salt = PasswordHasher.newSalt()
         customers.add(
             Customer(
@@ -508,9 +576,28 @@ class CompanionRepository {
                 dateOfBirth = "1990-01-01",
                 marketingOptIn = true,
                 role = AccountRole.CUSTOMER,
-                notes = "Seeded demo customer account"
+                notes = "Seeded demo customer account",
+                emailVerified = true
             )
         )
+    }
+
+    private fun issueCodeFor(customer: Customer): EmailCodeIssue {
+        val code = (0..999_999).random().toString().padStart(6, '0')
+        val salt = PasswordHasher.newSalt()
+        emailCodeCustomerId = customer.id
+        emailCodeSalt = salt
+        emailCodeHash = PasswordHasher.hash(code, salt)
+        emailCodeExpiresAt = System.currentTimeMillis() + EMAIL_CODE_TTL_MS
+        emailCodeSentAt = System.currentTimeMillis()
+        return EmailCodeIssue(customer.email, code, emailCodeExpiresAt)
+    }
+
+    private fun clearEmailCode() {
+        emailCodeCustomerId = null
+        emailCodeSalt = ""
+        emailCodeHash = ""
+        emailCodeExpiresAt = 0L
     }
 
     private fun persist() {
@@ -534,5 +621,7 @@ class CompanionRepository {
         const val MAIN_ADMIN_EMAIL = "fidelgutierrez33@gmail.com"
         const val MAIN_ADMIN_PASSWORD = "12345678"
         private const val DEMO_EMAIL = "demo@nativepure.example"
+        private const val EMAIL_CODE_TTL_MS = 15 * 60_000L
+        private const val EMAIL_CODE_RESEND_COOLDOWN_MS = 30_000L
     }
 }

@@ -16,6 +16,7 @@ import com.solstice.dispensary.data.model.CartLine
 import com.solstice.dispensary.data.model.CartSummary
 import com.solstice.dispensary.data.model.Customer
 import com.solstice.dispensary.data.model.CustomerProfile
+import com.solstice.dispensary.data.model.EmailCodeIssue
 import com.solstice.dispensary.data.model.InventoryIntake
 import com.solstice.dispensary.data.model.LabelScanResult
 import com.solstice.dispensary.data.model.OpResult
@@ -36,6 +37,7 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.map
+import java.security.SecureRandom
 import java.util.UUID
 
 @OptIn(ExperimentalCoroutinesApi::class)
@@ -232,8 +234,11 @@ class DispensaryRepository(context: Context) {
             db.productDao().insertAll(SeedCatalog.products)
         }
         ensureMainAdmin()
-        if (db.customerDao().getByEmail(DEMO_CUSTOMER_EMAIL) == null) {
+        val demo = db.customerDao().getByEmail(DEMO_CUSTOMER_EMAIL)
+        if (demo == null) {
             seedDemoCustomer()
+        } else if (!demo.emailVerified) {
+            db.customerDao().update(demo.copy(emailVerified = true))
         }
     }
 
@@ -241,11 +246,18 @@ class DispensaryRepository(context: Context) {
         val existing = db.customerDao().getByEmail(MAIN_ADMIN_EMAIL)
             ?: db.customerDao().getByUsername(MAIN_ADMIN_USERNAME)
         if (existing != null) {
+            var next = existing
             // Force password change if still using the bootstrap default.
             if (!existing.mustChangePassword &&
                 PasswordHasher.matches(MAIN_ADMIN_PASSWORD, existing.passwordSalt, existing.passwordHash)
             ) {
-                db.customerDao().update(existing.copy(mustChangePassword = true))
+                next = next.copy(mustChangePassword = true)
+            }
+            if (!existing.emailVerified) {
+                next = next.copy(emailVerified = true)
+            }
+            if (next != existing) {
+                db.customerDao().update(next)
             }
             return
         }
@@ -262,7 +274,8 @@ class DispensaryRepository(context: Context) {
                 phone = "",
                 notes = "Primary admin account — change password on first login",
                 role = AccountRole.ADMIN,
-                mustChangePassword = true
+                mustChangePassword = true,
+                emailVerified = true
             )
         )
     }
@@ -280,7 +293,8 @@ class DispensaryRepository(context: Context) {
             dateOfBirth = "1990-01-01",
             notes = "Seeded demo customer account",
             marketingOptIn = true,
-            role = AccountRole.CUSTOMER
+            role = AccountRole.CUSTOMER,
+            emailVerified = true
         )
         db.customerDao().insert(customer)
     }
@@ -320,11 +334,13 @@ class DispensaryRepository(context: Context) {
             createdAt = now,
             lastLoginAt = now,
             marketingOptIn = marketingOptIn,
-            role = AccountRole.CUSTOMER
+            role = AccountRole.CUSTOMER,
+            emailVerified = false
         )
         return try {
             db.customerDao().insert(customer)
             setSession(customer.id)
+            lastIssuedEmailCode = storeEmailVerificationCode(customer)
             AuthResult.Success(customer.toProfile())
         } catch (_: Exception) {
             AuthResult.Error("Could not create account. Try a different email.")
@@ -368,7 +384,8 @@ class DispensaryRepository(context: Context) {
             role = AccountRole.STAFF,
             createdByAdminId = admin.id,
             notes = "Staff sub-account created by ${admin.email}",
-            mustChangePassword = true
+            mustChangePassword = true,
+            emailVerified = true
         )
         return try {
             db.customerDao().insert(staff)
@@ -421,7 +438,94 @@ class DispensaryRepository(context: Context) {
         val updated = customer.copy(lastLoginAt = System.currentTimeMillis())
         db.customerDao().update(updated)
         setSession(updated.id)
+        if (!updated.emailVerified) {
+            lastIssuedEmailCode = storeEmailVerificationCode(updated)
+        }
         return AuthResult.Success(updated.toProfile())
+    }
+
+    /**
+     * Issues a fresh 6-digit email verification code for the signed-in customer.
+     * Offline builds cannot SMTP; [lastIssuedEmailCode] holds the plaintext once for UI delivery.
+     */
+    suspend fun resendEmailVerificationCode(): AuthResult {
+        val id = currentCustomerId() ?: return AuthResult.Error("Not signed in.")
+        val existing = db.customerDao().getById(id) ?: return AuthResult.Error("Account not found.")
+        if (existing.emailVerified) {
+            return AuthResult.Error("Email is already verified.")
+        }
+        val lastSent = prefs.getLong(KEY_EMAIL_CODE_SENT_AT, 0L)
+        val waitMs = EMAIL_CODE_RESEND_COOLDOWN_MS - (System.currentTimeMillis() - lastSent)
+        if (waitMs > 0) {
+            val secs = ((waitMs + 999) / 1000).coerceAtLeast(1)
+            return AuthResult.Error("Wait ${secs}s before requesting another code.")
+        }
+        lastIssuedEmailCode = storeEmailVerificationCode(existing)
+        return AuthResult.Success(existing.toProfile())
+    }
+
+    fun peekIssuedEmailCode(): EmailCodeIssue? = lastIssuedEmailCode
+
+    suspend fun verifyEmailCode(code: String): AuthResult {
+        val id = currentCustomerId() ?: return AuthResult.Error("Not signed in.")
+        val existing = db.customerDao().getById(id) ?: return AuthResult.Error("Account not found.")
+        if (existing.emailVerified) {
+            return AuthResult.Success(existing.toProfile())
+        }
+        val clean = code.trim().filter { it.isDigit() }
+        if (clean.length != EMAIL_CODE_LENGTH) {
+            return AuthResult.Error("Enter the $EMAIL_CODE_LENGTH-digit code from your email.")
+        }
+        val expectedCustomer = prefs.getString(KEY_EMAIL_CODE_CUSTOMER, null)
+        val salt = prefs.getString(KEY_EMAIL_CODE_SALT, null)
+        val hash = prefs.getString(KEY_EMAIL_CODE_HASH, null)
+        val expiresAt = prefs.getLong(KEY_EMAIL_CODE_EXPIRES_AT, 0L)
+        if (expectedCustomer != id || salt.isNullOrBlank() || hash.isNullOrBlank()) {
+            return AuthResult.Error("No verification code on file. Tap Resend code.")
+        }
+        if (System.currentTimeMillis() > expiresAt) {
+            clearEmailVerificationCode()
+            return AuthResult.Error("That code expired. Tap Resend code.")
+        }
+        if (!PasswordHasher.matches(clean, salt, hash)) {
+            return AuthResult.Error("Incorrect code. Check the email and try again.")
+        }
+        val updated = existing.copy(emailVerified = true)
+        db.customerDao().update(updated)
+        clearEmailVerificationCode()
+        lastIssuedEmailCode = null
+        return AuthResult.Success(updated.toProfile())
+    }
+
+    @Volatile
+    private var lastIssuedEmailCode: EmailCodeIssue? = null
+
+    private fun storeEmailVerificationCode(customer: Customer): EmailCodeIssue {
+        val code = generateEmailCode()
+        val salt = PasswordHasher.newSalt()
+        val expiresAt = System.currentTimeMillis() + EMAIL_CODE_TTL_MS
+        prefs.edit()
+            .putString(KEY_EMAIL_CODE_CUSTOMER, customer.id)
+            .putString(KEY_EMAIL_CODE_SALT, salt)
+            .putString(KEY_EMAIL_CODE_HASH, PasswordHasher.hash(code, salt))
+            .putLong(KEY_EMAIL_CODE_EXPIRES_AT, expiresAt)
+            .putLong(KEY_EMAIL_CODE_SENT_AT, System.currentTimeMillis())
+            .apply()
+        return EmailCodeIssue(email = customer.email, code = code, expiresAtMs = expiresAt)
+    }
+
+    private fun clearEmailVerificationCode() {
+        prefs.edit()
+            .remove(KEY_EMAIL_CODE_CUSTOMER)
+            .remove(KEY_EMAIL_CODE_SALT)
+            .remove(KEY_EMAIL_CODE_HASH)
+            .remove(KEY_EMAIL_CODE_EXPIRES_AT)
+            .apply()
+    }
+
+    private fun generateEmailCode(): String {
+        val n = SecureRandom().nextInt(1_000_000)
+        return n.toString().padStart(EMAIL_CODE_LENGTH, '0')
     }
 
     suspend fun changePassword(
@@ -489,6 +593,7 @@ class DispensaryRepository(context: Context) {
         prefs.edit().remove(KEY_CUSTOMER_ID).apply()
         sessionCustomerId.value = null
         clearBackgroundMark()
+        lastIssuedEmailCode = null
     }
 
     private fun setSession(customerId: String) {
@@ -750,6 +855,14 @@ class DispensaryRepository(context: Context) {
         private const val KEY_LAST_BACKGROUND_AT = "last_background_at"
         private const val KEY_FAILED_LOGIN_PREFIX = "failed_login_"
         private const val KEY_LOCKOUT_UNTIL_PREFIX = "lockout_until_"
+        private const val KEY_EMAIL_CODE_CUSTOMER = "email_code_customer"
+        private const val KEY_EMAIL_CODE_SALT = "email_code_salt"
+        private const val KEY_EMAIL_CODE_HASH = "email_code_hash"
+        private const val KEY_EMAIL_CODE_EXPIRES_AT = "email_code_expires_at"
+        private const val KEY_EMAIL_CODE_SENT_AT = "email_code_sent_at"
+        private const val EMAIL_CODE_LENGTH = 6
+        private const val EMAIL_CODE_TTL_MS = 15 * 60_000L
+        private const val EMAIL_CODE_RESEND_COOLDOWN_MS = 30_000L
 
         private fun createSecurePrefs(context: Context): SharedPreferences {
             return try {

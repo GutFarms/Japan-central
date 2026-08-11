@@ -1,15 +1,19 @@
 package com.solstice.dispensary.ui.screens
 
 import androidx.compose.foundation.background
-import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
@@ -42,10 +46,14 @@ fun AppLockScreen(
         modifier = Modifier
             .fillMaxSize()
             .background(MaterialTheme.colorScheme.background)
+            .statusBarsPadding()
+            .navigationBarsPadding()
+            .imePadding()
+            .verticalScroll(rememberScrollState())
             .padding(28.dp),
-        verticalArrangement = Arrangement.Center,
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
+        Spacer(Modifier.height(48.dp))
         BrandLogo(size = 72.dp)
         Spacer(Modifier.height(20.dp))
         Text("App locked", style = MaterialTheme.typography.headlineMedium)
@@ -86,6 +94,7 @@ fun AppLockScreen(
         TextButton(onClick = onLogout) {
             Text("Log out instead")
         }
+        Spacer(Modifier.height(120.dp))
     }
 }
 
@@ -104,10 +113,14 @@ fun ForcePasswordChangeScreen(
         modifier = Modifier
             .fillMaxSize()
             .background(MaterialTheme.colorScheme.background)
+            .statusBarsPadding()
+            .navigationBarsPadding()
+            .imePadding()
+            .verticalScroll(rememberScrollState())
             .padding(28.dp),
-        verticalArrangement = Arrangement.Center,
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
+        Spacer(Modifier.height(32.dp))
         BrandLogo(size = 64.dp)
         Spacer(Modifier.height(16.dp))
         Text("Create a new password", style = MaterialTheme.typography.headlineMedium)
@@ -153,5 +166,6 @@ fun ForcePasswordChangeScreen(
         TextButton(onClick = onLogout) {
             Text("Log out")
         }
+        Spacer(Modifier.height(120.dp))
     }
 }

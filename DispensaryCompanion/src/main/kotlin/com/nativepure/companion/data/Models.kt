@@ -72,7 +72,9 @@ data class Customer(
     val role: AccountRole = AccountRole.CUSTOMER,
     val createdByAdminId: String = "",
     val mustChangePassword: Boolean = false,
-    val enabled: Boolean = true
+    val enabled: Boolean = true,
+    /** Existing persisted accounts default verified; new registrations set false. */
+    val emailVerified: Boolean = true
 )
 
 @Serializable
@@ -128,7 +130,8 @@ data class CustomerProfile(
     val marketingOptIn: Boolean,
     val role: AccountRole,
     val mustChangePassword: Boolean = false,
-    val enabled: Boolean = true
+    val enabled: Boolean = true,
+    val emailVerified: Boolean = true
 ) {
     val isAdminLike: Boolean get() = role.canViewSensitiveInfo
 }
@@ -146,7 +149,14 @@ fun Customer.toProfile() = CustomerProfile(
     marketingOptIn = marketingOptIn,
     role = role,
     mustChangePassword = mustChangePassword,
-    enabled = enabled
+    enabled = enabled,
+    emailVerified = emailVerified
+)
+
+data class EmailCodeIssue(
+    val email: String,
+    val code: String,
+    val expiresAtMs: Long
 )
 
 sealed class AuthResult {

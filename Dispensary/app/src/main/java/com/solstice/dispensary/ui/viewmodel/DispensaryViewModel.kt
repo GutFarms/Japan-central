@@ -11,6 +11,7 @@ import com.solstice.dispensary.data.model.AuthResult
 import com.solstice.dispensary.data.model.AutoLockTimeout
 import com.solstice.dispensary.data.model.CartSummary
 import com.solstice.dispensary.data.model.CustomerProfile
+import com.solstice.dispensary.data.model.EmailCodeIssue
 import com.solstice.dispensary.data.model.InventoryIntake
 import com.solstice.dispensary.data.model.LabelScanResult
 import com.solstice.dispensary.data.model.OpResult
@@ -52,6 +53,9 @@ class DispensaryViewModel(
         private set
 
     var authError by mutableStateOf<String?>(null)
+        private set
+
+    var pendingEmailCode by mutableStateOf<EmailCodeIssue?>(null)
         private set
 
     var accountMessage by mutableStateOf<String?>(null)
@@ -126,6 +130,9 @@ class DispensaryViewModel(
     val mustChangePassword: Boolean
         get() = currentCustomer?.mustChangePassword == true
 
+    val needsEmailVerification: Boolean
+        get() = currentCustomer?.emailVerified == false
+
     val canViewSensitiveInfo: Boolean
         get() = currentCustomer?.role?.canViewSensitiveInfo == true
 
@@ -141,6 +148,12 @@ class DispensaryViewModel(
             refreshSecuritySettings()
             if (currentCustomer != null && repository.getSecuritySettings().appLockEnabled) {
                 appLocked = true
+            }
+            if (currentCustomer?.emailVerified == false && pendingEmailCode == null) {
+                when (repository.resendEmailVerificationCode()) {
+                    is AuthResult.Success -> captureIssuedEmailCode()
+                    is AuthResult.Error -> Unit
+                }
             }
         }
     }
@@ -169,6 +182,10 @@ class DispensaryViewModel(
         authError = null
     }
 
+    private fun captureIssuedEmailCode() {
+        pendingEmailCode = repository.peekIssuedEmailCode()
+    }
+
     fun login(email: String, password: String) {
         viewModelScope.launch {
             authBusy = true
@@ -176,6 +193,7 @@ class DispensaryViewModel(
             when (val result = repository.login(email, password)) {
                 is AuthResult.Success -> {
                     currentCustomer = result.customer
+                    captureIssuedEmailCode()
                     refreshSecuritySettings()
                     appLocked = false
                     repository.clearBackgroundMark()
@@ -204,8 +222,39 @@ class DispensaryViewModel(
             ) {
                 is AuthResult.Success -> {
                     currentCustomer = result.customer
+                    captureIssuedEmailCode()
                     refreshSecuritySettings()
                     appLocked = false
+                }
+                is AuthResult.Error -> authError = result.message
+            }
+            authBusy = false
+        }
+    }
+
+    fun verifyEmailCode(code: String) {
+        viewModelScope.launch {
+            authBusy = true
+            authError = null
+            when (val result = repository.verifyEmailCode(code)) {
+                is AuthResult.Success -> {
+                    currentCustomer = result.customer
+                    pendingEmailCode = null
+                }
+                is AuthResult.Error -> authError = result.message
+            }
+            authBusy = false
+        }
+    }
+
+    fun resendEmailVerificationCode() {
+        viewModelScope.launch {
+            authBusy = true
+            authError = null
+            when (val result = repository.resendEmailVerificationCode()) {
+                is AuthResult.Success -> {
+                    currentCustomer = result.customer
+                    captureIssuedEmailCode()
                 }
                 is AuthResult.Error -> authError = result.message
             }
@@ -219,6 +268,7 @@ class DispensaryViewModel(
         accountMessage = null
         appLocked = false
         lockError = null
+        pendingEmailCode = null
     }
 
     fun createStaffSubAccount(email: String, password: String, fullName: String) {

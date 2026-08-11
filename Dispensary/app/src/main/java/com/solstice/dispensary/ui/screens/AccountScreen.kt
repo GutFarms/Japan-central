@@ -9,6 +9,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
@@ -108,7 +109,9 @@ fun AccountScreen(
     val canManageStaff = customer.role.canManageStaff
 
     LazyColumn(
-        modifier = Modifier.fillMaxSize(),
+        modifier = Modifier
+            .fillMaxSize()
+            .imePadding(),
         contentPadding = PaddingValues(20.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
@@ -131,7 +134,10 @@ fun AccountScreen(
                         )
                     }
                     Spacer(Modifier.height(4.dp))
-                    MetaPill(customer.role.label)
+                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        MetaPill(customer.role.label)
+                        MetaPill(if (customer.emailVerified) "Email verified" else "Email pending")
+                    }
                 }
             }
         }
