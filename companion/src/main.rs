@@ -3,6 +3,7 @@
 
 #![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
 
+mod live_bar;
 mod stratum;
 
 use std::collections::VecDeque;
@@ -10,6 +11,8 @@ use std::io::Write;
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+
+use live_bar::{format_change, format_usd, LiveFeed};
 
 use eframe::egui::{
     self, Align, Color32, FontData, FontDefinitions, FontFamily, FontId, Frame, Layout, Margin,
@@ -343,6 +346,7 @@ struct CompanionApp {
     term_input: String,
     term_history: VecDeque<String>,
     term_out: VecDeque<String>,
+    live: LiveFeed,
 }
 
 impl CompanionApp {
@@ -405,6 +409,7 @@ impl CompanionApp {
             term_input: "cmp ping".into(),
             term_history: VecDeque::new(),
             term_out: VecDeque::new(),
+            live: LiveFeed::start(),
         };
         app.push_log(LogKind::Info, "CYD Companion ready".into());
         app
@@ -1099,6 +1104,19 @@ impl App for CompanionApp {
         }
 
         self.update_motion(ctx);
+        self.live.poll();
+
+        egui::TopBottomPanel::bottom("live_ticker_bar")
+            .exact_height(36.0)
+            .frame(
+                Frame::none()
+                    .fill(Color32::from_rgb(8, 14, 16))
+                    .stroke(Stroke::new(1.0_f32, Color32::from_rgb(32, 48, 46)))
+                    .inner_margin(Margin::symmetric(16.0, 0.0)),
+            )
+            .show(ctx, |ui| {
+                ui_live_bar(ui, &self.live);
+            });
 
         egui::CentralPanel::default()
             .frame(Frame::none().fill(C_BG).inner_margin(Margin::same(22.0)))
@@ -1164,6 +1182,82 @@ fn trunc(s: &str, n: usize) -> String {
     } else {
         s.to_string()
     }
+}
+
+fn ui_live_bar(ui: &mut egui::Ui, live: &LiveFeed) {
+    let snap = live.snap();
+    ui.allocate_ui_with_layout(
+        Vec2::new(ui.available_width(), ui.available_height()),
+        Layout::left_to_right(Align::Center),
+        |ui| {
+            // Local place / weather / clock (IP-derived)
+            ui.label(
+                RichText::new(live.place_label())
+                    .color(C_TEXT)
+                    .font(mono_ui_font(12.0)),
+            );
+            ui.add_space(10.0);
+            if snap.ready && !snap.weather.is_empty() {
+                ui.label(
+                    RichText::new(format!("{:.0}°C {}", snap.temp_c, snap.weather))
+                        .color(C_LIME_SOFT)
+                        .font(mono_ui_font(12.0)),
+                );
+                ui.add_space(10.0);
+            }
+            ui.label(
+                RichText::new(live.local_now_label())
+                    .color(C_MUTED)
+                    .font(mono_ui_font(12.0)),
+            );
+
+            ui.add_space(16.0);
+            ui.label(RichText::new("│").color(C_DIM).size(14.0));
+            ui.add_space(16.0);
+
+            // Crypto strip
+            if snap.quotes.is_empty() {
+                ui.label(
+                    RichText::new(if snap.error.is_empty() {
+                        "prices…"
+                    } else {
+                        "prices offline"
+                    })
+                    .color(C_DIM)
+                    .font(mono_ui_font(11.0)),
+                );
+            } else {
+                for (i, q) in snap.quotes.iter().enumerate() {
+                    if i > 0 {
+                        ui.add_space(12.0);
+                    }
+                    let ch_color = if q.change_24h >= 0.0 {
+                        C_LIME
+                    } else {
+                        C_ERR
+                    };
+                    ui.horizontal(|ui| {
+                        ui.spacing_mut().item_spacing.x = 4.0;
+                        ui.label(
+                            RichText::new(&q.symbol)
+                                .color(C_MUTED)
+                                .font(mono_ui_font(11.0)),
+                        );
+                        ui.label(
+                            RichText::new(format_usd(q.usd))
+                                .color(C_TEXT)
+                                .font(mono_ui_font(12.0)),
+                        );
+                        ui.label(
+                            RichText::new(format_change(q.change_24h))
+                                .color(ch_color)
+                                .font(mono_ui_font(11.0)),
+                        );
+                    });
+                }
+            }
+        },
+    );
 }
 
 fn paint_background(ui: &mut egui::Ui, rect: Rect, pulse: f32, mining: bool) {

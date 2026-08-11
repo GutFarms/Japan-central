@@ -1,6 +1,6 @@
 [package]
 name = "cyd-companion"
-version = "0.8.0"
+version = "0.8.1"
 edition = "2021"
 description = "CYD Companion — USB SHA-256 Bitcoin mining control (PC stratum, board hashes)"
 license = "MIT OR Apache-2.0"
@@ -18,6 +18,8 @@ serde_json = { version = "1" }
 serialport = { version = "4.6", default-features = true }
 sha2 = "0.10"
 hex = "0.4"
+ureq = { version = "2.12", default-features = false, features = ["json", "tls"] }
+chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
 
 [profile.release]
 lto = true
