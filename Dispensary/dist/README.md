@@ -1,6 +1,6 @@
 # Native Pure APK (sideload kit)
 
-**Version:** 1.20.0 (versionCode 25)
+**Version:** 1.21.0 (versionCode 26)
 
 Download: **[NativePure-Dispensary.apk](./NativePure-Dispensary.apk)**
 
