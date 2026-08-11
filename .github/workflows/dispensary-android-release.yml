@@ -1,0 +1,121 @@
+name: Build downloadable Native Pure Dispensary APK
+
+on:
+  push:
+    branches: [master, "cursor/**"]
+    tags: ["dispensary-v*", "nativepure-v*"]
+  pull_request:
+    paths:
+      - "Dispensary/**"
+      - ".github/workflows/dispensary-android-release.yml"
+  workflow_dispatch:
+    inputs:
+      publish_release:
+        description: "Publish a GitHub Release with the APK"
+        type: boolean
+        default: true
+
+permissions:
+  contents: write
+
+jobs:
+  android:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: Dispensary
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Grant Gradle permission
+        run: chmod +x gradlew
+
+      - name: Create demo release keystore (sideload builds)
+        run: |
+          mkdir -p keystore
+          if [ ! -f keystore/solstice-release.jks ]; then
+            keytool -genkeypair -v \
+              -keystore keystore/solstice-release.jks \
+              -alias solstice \
+              -keyalg RSA -keysize 2048 -validity 10000 \
+              -storepass solstice123 -keypass solstice123 \
+              -dname "CN=Native Pure, OU=Mobile, O=Native Pure, L=Portland, ST=OR, C=US"
+          fi
+
+      - name: Build release APK
+        run: ./gradlew assembleRelease --no-daemon
+
+      - name: Stage downloadable APK
+        run: |
+          mkdir -p dist
+          cp app/build/outputs/apk/release/app-release.apk dist/NativePure-Dispensary.apk
+          cp app/build/outputs/apk/release/app-release.apk dist/Solstice-Dispensary.apk
+          VERSION_CODE=$(grep -E 'versionCode\s*=' app/build.gradle.kts | head -1 | grep -oE '[0-9]+')
+          VERSION_NAME=$(grep -E 'versionName\s*=' app/build.gradle.kts | head -1 | sed -E 's/.*"([^"]+)".*/\1/')
+          cat > dist/update-manifest.json <<EOF
+          {
+            "versionCode": ${VERSION_CODE},
+            "versionName": "${VERSION_NAME}",
+            "apkUrl": "https://github.com/GutFarms/Japan-central/releases/latest/download/NativePure-Dispensary.apk",
+            "releaseNotes": "Native Pure ${VERSION_NAME} — tap Download in the app to install."
+          }
+          EOF
+          # Keep a repo-local copy used by docs / sideload testing
+          cp dist/update-manifest.json update-manifest.json
+          # Ensure Android download QR is present for release assets
+          mkdir -p dist/qr
+          if [ ! -f dist/qr/nativepure-android.png ] && [ -f ../downloads/qr/nativepure-android.png ]; then
+            cp ../downloads/qr/nativepure-android.png dist/qr/nativepure-android.png
+          fi
+          cat dist/update-manifest.json
+          ls -lh dist/ dist/qr/ || true
+
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: NativePure-Dispensary-apk
+          path: |
+            Dispensary/dist/NativePure-Dispensary.apk
+            Dispensary/dist/Solstice-Dispensary.apk
+            Dispensary/dist/update-manifest.json
+            Dispensary/dist/qr/nativepure-android.png
+          if-no-files-found: error
+          retention-days: 90
+
+      - name: Publish GitHub Release
+        if: startsWith(github.ref, 'refs/tags/') || (github.event_name == 'workflow_dispatch' && inputs.publish_release)
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || format('nativepure-v{0}', github.run_number) }}
+          name: Native Pure Dispensary ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || format('build-{0}', github.run_number) }}
+          body: |
+            Installable Android APK for **Native Pure**.
+
+            1. Download `NativePure-Dispensary.apk` (or scan `nativepure-android.png`)
+            2. On Android: allow install from this source
+            3. Open **Native Pure** → confirm **18+**
+
+            QR codes & companion links: [DOWNLOADS.md](https://github.com/GutFarms/Japan-central/blob/master/DOWNLOADS.md)
+
+            In-app updates read `update-manifest.json` from this release.
+
+            Requires Android 8.0+.
+          files: |
+            Dispensary/dist/NativePure-Dispensary.apk
+            Dispensary/dist/update-manifest.json
+            Dispensary/dist/qr/nativepure-android.png
+          fail_on_unmatched_files: true
+          generate_release_notes: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

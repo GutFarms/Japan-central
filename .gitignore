@@ -1,1 +1,14 @@
 target/
+
+# Android
+**/local.properties
+**/.gradle/
+Dispensary/keystore/*.jks
+
+# Large installers — companion JARs stay local; Android APK is tracked via Git LFS
+Dispensary/app/build/
+
+# Desktop companion
+DispensaryCompanion/.gradle/
+DispensaryCompanion/build/
+DispensaryCompanion/dist/
