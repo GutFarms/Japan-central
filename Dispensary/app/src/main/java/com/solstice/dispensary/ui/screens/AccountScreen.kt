@@ -147,6 +147,35 @@ fun AccountScreen(
                     Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                         MetaPill(customer.role.label)
                         MetaPill(if (customer.emailVerified) "Email verified" else "Email pending")
+                        if (customer.role == AccountRole.CUSTOMER || customer.loyaltyPoints > 0) {
+                            MetaPill("${customer.loyaltyPoints} pts")
+                        }
+                    }
+                }
+            }
+        }
+
+        if (customer.role == AccountRole.CUSTOMER || customer.loyaltyPoints > 0 || customer.lifetimeSpend > 0) {
+            item {
+                Surface(
+                    shape = RoundedCornerShape(14.dp),
+                    color = MaterialTheme.colorScheme.secondaryContainer,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Column(modifier = Modifier.padding(14.dp)) {
+                        SectionHeader(
+                            title = "Loyalty points",
+                            subtitle = "Earn ${com.solstice.dispensary.data.model.LoyaltyPoints.POINTS_PER_DOLLAR} point per $1 spent"
+                        )
+                        Text(
+                            "${customer.loyaltyPoints}",
+                            style = MaterialTheme.typography.displaySmall
+                        )
+                        Text(
+                            "Lifetime spend $${"%.2f".format(customer.lifetimeSpend)}",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSecondaryContainer
+                        )
                     }
                 }
             }
@@ -648,6 +677,12 @@ fun CustomersScreen(
                     }
                     if (customer.notes.isNotBlank()) {
                         Text("Notes: ${customer.notes}", style = MaterialTheme.typography.bodyMedium)
+                    }
+                    if (customer.role == AccountRole.CUSTOMER || customer.loyaltyPoints > 0) {
+                        Text(
+                            "Points: ${customer.loyaltyPoints} · Lifetime spend $${"%.2f".format(customer.lifetimeSpend)}",
+                            style = MaterialTheme.typography.bodyMedium
+                        )
                     }
                     Text(
                         text = "Joined ${dateFormat.format(Date(customer.createdAt))}" +

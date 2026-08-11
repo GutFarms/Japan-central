@@ -73,8 +73,9 @@ data class Customer(
     val createdByAdminId: String = "",
     val mustChangePassword: Boolean = false,
     val enabled: Boolean = true,
-    /** Existing persisted accounts default verified; new registrations set false. */
-    val emailVerified: Boolean = true
+    val emailVerified: Boolean = true,
+    val loyaltyPoints: Int = 0,
+    val lifetimeSpend: Double = 0.0
 )
 
 @Serializable
@@ -87,7 +88,8 @@ data class Order(
     val pickupName: String,
     val notes: String,
     val customerId: String = "",
-    val customerEmail: String = ""
+    val customerEmail: String = "",
+    val pointsEarned: Int = 0
 )
 
 @Serializable
@@ -131,7 +133,9 @@ data class CustomerProfile(
     val role: AccountRole,
     val mustChangePassword: Boolean = false,
     val enabled: Boolean = true,
-    val emailVerified: Boolean = true
+    val emailVerified: Boolean = true,
+    val loyaltyPoints: Int = 0,
+    val lifetimeSpend: Double = 0.0
 ) {
     val isAdminLike: Boolean get() = role.canViewSensitiveInfo
 }
@@ -150,7 +154,9 @@ fun Customer.toProfile() = CustomerProfile(
     role = role,
     mustChangePassword = mustChangePassword,
     enabled = enabled,
-    emailVerified = emailVerified
+    emailVerified = emailVerified,
+    loyaltyPoints = loyaltyPoints,
+    lifetimeSpend = lifetimeSpend
 )
 
 data class EmailCodeIssue(

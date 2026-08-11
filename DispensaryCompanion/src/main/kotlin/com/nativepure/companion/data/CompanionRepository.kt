@@ -486,6 +486,11 @@ class CompanionRepository {
         val summary = cartSummary()
         if (summary.lines.isEmpty()) return null
         val customer = currentCustomer()
+        val pointsEarned = if (customer != null && customer.role == AccountRole.CUSTOMER) {
+            kotlin.math.floor(summary.total).toInt().coerceAtLeast(0)
+        } else {
+            0
+        }
         val order = Order(
             id = UUID.randomUUID().toString().take(8).uppercase(),
             createdAt = System.currentTimeMillis(),
@@ -495,7 +500,8 @@ class CompanionRepository {
             pickupName = pickupName.ifBlank { customer?.fullName ?: "Guest" },
             notes = notes.trim(),
             customerId = customer?.id.orEmpty(),
-            customerEmail = customer?.email.orEmpty()
+            customerEmail = customer?.email.orEmpty(),
+            pointsEarned = pointsEarned
         )
         val lines = summary.lines.map {
             OrderLine(order.id, it.product.id, it.product.name, it.product.price, it.quantity)
@@ -504,6 +510,17 @@ class CompanionRepository {
         orderLines.addAll(lines)
         summary.lines.forEach { line ->
             adjustStockInternal(line.product.id, -line.quantity)
+        }
+        if (customer != null && pointsEarned > 0) {
+            val row = customers.find { it.id == customer.id }
+            if (row != null) {
+                replaceCustomer(
+                    row.copy(
+                        loyaltyPoints = row.loyaltyPoints + pointsEarned,
+                        lifetimeSpend = row.lifetimeSpend + summary.total
+                    )
+                )
+            }
         }
         cart.clear()
         persist()

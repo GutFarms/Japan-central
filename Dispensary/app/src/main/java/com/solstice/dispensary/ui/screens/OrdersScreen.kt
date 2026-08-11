@@ -80,6 +80,13 @@ fun OrdersScreen(orders: List<Order>) {
                         text = "${order.status} · ${order.itemCount} items · ${order.pickupName}",
                         style = MaterialTheme.typography.bodyMedium
                     )
+                    if (order.pointsEarned > 0) {
+                        Text(
+                            text = "+${order.pointsEarned} loyalty points",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.secondary
+                        )
+                    }
                     if (order.customerEmail.isNotBlank()) {
                         Text(
                             text = order.customerEmail,

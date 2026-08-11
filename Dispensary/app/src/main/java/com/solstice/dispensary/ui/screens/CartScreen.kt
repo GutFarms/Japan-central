@@ -28,6 +28,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import com.solstice.dispensary.data.model.CartSummary
+import com.solstice.dispensary.data.model.LoyaltyPoints
 import com.solstice.dispensary.ui.components.ProductSwatch
 import com.solstice.dispensary.ui.components.QuantityStepper
 import com.solstice.dispensary.ui.components.SectionHeader
@@ -148,6 +149,16 @@ fun CartScreen(
                 ) {
                     Text("Total", style = MaterialTheme.typography.titleLarge)
                     Text(money(cart.total), style = MaterialTheme.typography.titleLarge)
+                }
+                val previewPoints = LoyaltyPoints.pointsForSpend(cart.total)
+                if (previewPoints > 0) {
+                    Spacer(Modifier.height(6.dp))
+                    Text(
+                        "You’ll earn ${LoyaltyPoints.earnLabel(previewPoints)} on this order " +
+                            "(${LoyaltyPoints.POINTS_PER_DOLLAR} pt per $1)",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.secondary
+                    )
                 }
             }
 

@@ -706,13 +706,27 @@ private fun CartPane(
         }
         Spacer(Modifier.height(12.dp))
         Text("Subtotal $${"%.2f".format(cart.subtotal)} · Tax $${"%.2f".format(cart.tax)} · Total $${"%.2f".format(cart.total)}")
+        Text(
+            "You’ll earn ${kotlin.math.floor(cart.total).toInt().coerceAtLeast(0)} points on this order (1 pt per $1)",
+            color = MaterialTheme.colorScheme.secondary
+        )
         Field(pickup, { pickup = it }, "Pickup name")
         Field(notes, { notes = it }, "Order notes")
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             Button(onClick = {
                 val order = repository.placePickupOrder(pickup, notes)
                 onRefresh()
-                onMessage(if (order != null) "Order ${order.id} ready for pickup." else "Cart is empty.")
+                onMessage(
+                    if (order != null) {
+                        if (order.pointsEarned > 0) {
+                            "Order ${order.id} ready. +${order.pointsEarned} points!"
+                        } else {
+                            "Order ${order.id} ready for pickup."
+                        }
+                    } else {
+                        "Cart is empty."
+                    }
+                )
             }) { Text("Place pickup order") }
             OutlinedButton(onClick = {
                 repository.clearCart()
@@ -740,6 +754,9 @@ private fun OrdersPane(repository: CompanionRepository) {
                         Text("Order ${order.id}", style = MaterialTheme.typography.titleLarge)
                         Text(order.status)
                         Text("${order.itemCount} items · $${"%.2f".format(order.total)}")
+                        if (order.pointsEarned > 0) {
+                            Text("+${order.pointsEarned} loyalty points", color = MaterialTheme.colorScheme.secondary)
+                        }
                         Text("Pickup: ${order.pickupName}")
                         if (order.customerEmail.isNotBlank()) Text(order.customerEmail)
                         Text(dateFormat.format(Date(order.createdAt)), color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -833,6 +850,9 @@ private fun CustomersPane(repository: CompanionRepository) {
                         if (c.phone.isNotBlank()) Text("Phone: ${c.phone}")
                         if (c.dateOfBirth.isNotBlank()) Text("DOB: ${c.dateOfBirth}")
                         if (c.notes.isNotBlank()) Text("Notes: ${c.notes}")
+                        if (c.loyaltyPoints > 0 || c.lifetimeSpend > 0) {
+                            Text("Points: ${c.loyaltyPoints} · Spent $${"%.2f".format(c.lifetimeSpend)}")
+                        }
                         Text("Joined ${dateFormat.format(Date(c.createdAt))}", color = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
                 }
@@ -891,6 +911,11 @@ private fun AccountPane(
     ) {
         Text("Account", style = MaterialTheme.typography.headlineLarge)
         Text("${customer.email} · ${customer.role.label}", color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Text(
+            "Loyalty: ${customer.loyaltyPoints} pts · Lifetime spend $${"%.2f".format(customer.lifetimeSpend)} " +
+                "(1 pt per $1)",
+            color = MaterialTheme.colorScheme.secondary
+        )
         Field(fullName, { fullName = it }, "Full name")
         Field(phone, { phone = it }, "Phone")
         Field(dob, { dob = it }, "Date of birth")

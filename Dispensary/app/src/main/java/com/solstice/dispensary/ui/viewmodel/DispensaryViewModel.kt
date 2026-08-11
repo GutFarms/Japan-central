@@ -458,7 +458,12 @@ class DispensaryViewModel(
                 checkoutMessage = "Your cart is empty."
             } else {
                 lastPlacedOrder = order
-                checkoutMessage = "Order ${order.id} is ready for pickup."
+                currentCustomer = repository.currentCustomer()
+                checkoutMessage = if (order.pointsEarned > 0) {
+                    "Order ${order.id} is ready for pickup. You earned ${order.pointsEarned} points!"
+                } else {
+                    "Order ${order.id} is ready for pickup."
+                }
             }
         }
     }

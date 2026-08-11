@@ -61,7 +61,8 @@ data class Order(
     val pickupName: String,
     val notes: String,
     val customerId: String = "",
-    val customerEmail: String = ""
+    val customerEmail: String = "",
+    val pointsEarned: Int = 0
 )
 
 @Entity(tableName = "order_lines")
@@ -126,7 +127,11 @@ data class Customer(
     val createdByAdminId: String = "",
     val mustChangePassword: Boolean = false,
     val enabled: Boolean = true,
-    val emailVerified: Boolean = false
+    val emailVerified: Boolean = false,
+    /** Loyalty points earned from order spend (1 point per $1 by default). */
+    val loyaltyPoints: Int = 0,
+    /** Lifetime order total used for points / progress. */
+    val lifetimeSpend: Double = 0.0
 )
 
 /** Profile without password fields. */
@@ -145,7 +150,9 @@ data class CustomerProfile(
     val createdByAdminId: String = "",
     val mustChangePassword: Boolean = false,
     val enabled: Boolean = true,
-    val emailVerified: Boolean = false
+    val emailVerified: Boolean = false,
+    val loyaltyPoints: Int = 0,
+    val lifetimeSpend: Double = 0.0
 ) {
     val isAdminLike: Boolean get() = role.canViewSensitiveInfo
 }
@@ -165,8 +172,21 @@ fun Customer.toProfile() = CustomerProfile(
     createdByAdminId = createdByAdminId,
     mustChangePassword = mustChangePassword,
     enabled = enabled,
-    emailVerified = emailVerified
+    emailVerified = emailVerified,
+    loyaltyPoints = loyaltyPoints,
+    lifetimeSpend = lifetimeSpend
 )
+
+object LoyaltyPoints {
+    /** Points earned per $1.00 of order total (tax included). */
+    const val POINTS_PER_DOLLAR = 1
+
+    fun pointsForSpend(amount: Double): Int =
+        kotlin.math.floor(amount.coerceAtLeast(0.0) * POINTS_PER_DOLLAR).toInt()
+
+    fun earnLabel(points: Int): String =
+        if (points == 1) "1 point" else "$points points"
+}
 
 /** Result of issuing an email verification code (plaintext shown once for offline delivery). */
 data class EmailCodeIssue(

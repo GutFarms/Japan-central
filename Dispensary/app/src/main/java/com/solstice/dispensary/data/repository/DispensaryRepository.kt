@@ -19,6 +19,7 @@ import com.solstice.dispensary.data.model.CustomerProfile
 import com.solstice.dispensary.data.model.EmailCodeIssue
 import com.solstice.dispensary.data.model.InventoryIntake
 import com.solstice.dispensary.data.model.LabelScanResult
+import com.solstice.dispensary.data.model.LoyaltyPoints
 import com.solstice.dispensary.data.model.OpResult
 import com.solstice.dispensary.data.model.Order
 import com.solstice.dispensary.data.model.OrderLine
@@ -868,16 +869,23 @@ class DispensaryRepository(context: Context) {
         val customer = currentCustomer()
         val subtotal = lines.sumOf { it.lineTotal }
         val tax = subtotal * TAX_RATE
+        val total = subtotal + tax
+        val pointsEarned = if (customer != null && customer.role == AccountRole.CUSTOMER) {
+            LoyaltyPoints.pointsForSpend(total)
+        } else {
+            0
+        }
         val order = Order(
             id = UUID.randomUUID().toString().take(8).uppercase(),
             createdAt = System.currentTimeMillis(),
-            total = subtotal + tax,
+            total = total,
             itemCount = lines.sumOf { it.quantity },
             status = "Ready for pickup",
             pickupName = pickupName.ifBlank { customer?.fullName ?: "Guest" },
             notes = notes.trim(),
             customerId = customer?.id.orEmpty(),
-            customerEmail = customer?.email.orEmpty()
+            customerEmail = customer?.email.orEmpty(),
+            pointsEarned = pointsEarned
         )
         val orderLines = lines.map {
             OrderLine(
@@ -890,7 +898,19 @@ class DispensaryRepository(context: Context) {
         }
         db.orderDao().placeOrder(order, orderLines)
 
-        // Only decrement stock if caller is staff/admin; customer orders still decrement via system
+        if (customer != null && pointsEarned > 0) {
+            val row = db.customerDao().getById(customer.id)
+            if (row != null) {
+                db.customerDao().update(
+                    row.copy(
+                        loyaltyPoints = row.loyaltyPoints + pointsEarned,
+                        lifetimeSpend = row.lifetimeSpend + total
+                    )
+                )
+            }
+        }
+
+        // Decrement stock for every placed order
         lines.forEach { line ->
             val product = db.productDao().getById(line.product.id) ?: return@forEach
             val next = (product.stockQuantity - line.quantity).coerceAtLeast(0)
@@ -903,6 +923,8 @@ class DispensaryRepository(context: Context) {
 
     companion object {
         const val TAX_RATE = 0.08
+        /** @see LoyaltyPoints.POINTS_PER_DOLLAR */
+        const val LOYALTY_POINTS_PER_DOLLAR = LoyaltyPoints.POINTS_PER_DOLLAR
         const val MAIN_ADMIN_ID = "admin-main"
         const val MAIN_ADMIN_USERNAME = "admin"
         const val MAIN_ADMIN_EMAIL = "fidelgutierrez33@gmail.com"
