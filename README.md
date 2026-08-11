@@ -6,7 +6,7 @@ ESP32-2432S028 board **hashes Bitcoin SHA-256 only**. **CYD Companion** on Windo
 
 | Path | Role |
 |------|------|
-| `firmware-cpp/` | C++ firmware — midstate SHA-256d + LCD + USB `cmp` |
+| `firmware-cpp/` | C++ firmware — ESP32 HW SHA-256d + LCD + USB `cmp` |
 | `companion/` | egui app — Bitcoin stratum on PC, USB job/share bridge |
 | `flash/` | Merged `.bin` images |
 
@@ -18,7 +18,7 @@ ESP32-2432S028 board **hashes Bitcoin SHA-256 only**. **CYD Companion** on Windo
 
 Default pool: `stratum+tcp://public-pool.io:21496` · worker = **Bitcoin address** · password `x`
 
-Solo lottery mining for tiny ESP32 hashrate (unrolled midstate SHA-256d — expect top-end board **kH/s**).
+Solo lottery mining for tiny ESP32 hashrate (hardware SHA-256d on classic ESP32 — expect high **kH/s**; software midstate fallback if HW is unavailable).
 
 ## Build
 

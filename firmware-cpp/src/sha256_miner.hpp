@@ -1,7 +1,8 @@
 #pragma once
 #include <Arduino.h>
 
-// Peak Bitcoin double-SHA256 hasher: cached midstate + unrolled IRAM transform.
+// Bitcoin double-SHA256 hasher. On classic ESP32 uses the hardware SHA engine;
+// otherwise falls back to unrolled IRAM software midstate.
 class Sha256Miner {
  public:
   static constexpr size_t HEADER_LEN = 80;
@@ -10,6 +11,7 @@ class Sha256Miner {
   Sha256Miner() = default;
   bool begin();
   bool ready() const { return ready_; }
+  bool hardware() const { return hw_; }
 
   void setJob(const uint8_t header[HEADER_LEN], const uint8_t target[HASH_LEN], uint32_t startNonce);
   void updateTarget(const uint8_t target[HASH_LEN]);
@@ -25,19 +27,26 @@ class Sha256Miner {
   uint32_t lastShareNonce() const { return lastShareNonce_; }
   const uint8_t* lastHash() const { return lastHash_; }
 
+  // One miner owns the SHA peripheral (classic ESP32 has a single SHA2-256 engine).
+  static bool acquireHardware();
+  static void releaseHardware();
+
  private:
   bool meetsTargetWords(const uint32_t hash_be[8]) const;
   void prepareMidstate();
   void packTarget(const uint8_t target[HASH_LEN]);
+  bool mineBatchHw(size_t count, uint32_t stride);
+  bool mineBatchSw(size_t count, uint32_t stride);
 
   uint8_t header_[HEADER_LEN]{};
   uint8_t target_[HASH_LEN]{};
-  // Target as LE uint32 words; index 7 is most significant for Bitcoin.
   uint32_t targetLe_[8]{};
   uint32_t midstate_[8]{};
   uint32_t chunk2_[16]{};
+  uint32_t hdrBe_[20]{};  // BE message words for HW SHA
   bool midReady_ = false;
   bool ready_ = false;
+  bool hw_ = false;
   uint32_t nonce_ = 0;
   uint64_t hashes_ = 0;
   uint64_t shares_ = 0;

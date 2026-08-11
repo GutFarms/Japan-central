@@ -1,4 +1,5 @@
 #include "sha256_miner.hpp"
+#include "sha256_hw.hpp"
 #include <cstring>
 
 #if defined(ESP_PLATFORM)
@@ -62,15 +63,14 @@ SHA_INLINE uint32_t bswap32(uint32_t x) {
 #define SIG0(x) (rotr((x), 7) ^ rotr((x), 18) ^ ((x) >> 3))
 #define SIG1(x) (rotr((x), 17) ^ rotr((x), 19) ^ ((x) >> 10))
 
-#define RND(a, b, c, d, e, f, g, h, ki, wi)                 \
-  do {                                                      \
+#define RND(a, b, c, d, e, f, g, h, ki, wi)                         \
+  do {                                                              \
     const uint32_t t1 = (h) + EP1(e) + CH(e, f, g) + (ki) + (wi); \
-    const uint32_t t2 = EP0(a) + MAJ(a, b, c);              \
-    (d) += t1;                                              \
-    (h) = t1 + t2;                                          \
+    const uint32_t t2 = EP0(a) + MAJ(a, b, c);                      \
+    (d) += t1;                                                      \
+    (h) = t1 + t2;                                                  \
   } while (0)
 
-// Fully unrolled SHA-256 compression into `state`.
 SHA_HOT static void sha256_transform(uint32_t state[8], const uint32_t w_in[16]) {
   uint32_t w0 = w_in[0], w1 = w_in[1], w2 = w_in[2], w3 = w_in[3];
   uint32_t w4 = w_in[4], w5 = w_in[5], w6 = w_in[6], w7 = w_in[7];
@@ -136,7 +136,6 @@ SHA_HOT static void sha256_transform(uint32_t state[8], const uint32_t w_in[16])
   SCHED(w0, w1, w2, w3, w4, w5, w6, w7, w8, w9, w10, w11, w12, w13, w14, w15, 16);
   SCHED(w0, w1, w2, w3, w4, w5, w6, w7, w8, w9, w10, w11, w12, w13, w14, w15, 32);
   SCHED(w0, w1, w2, w3, w4, w5, w6, w7, w8, w9, w10, w11, w12, w13, w14, w15, 48);
-
 #undef SCHED
 
   state[0] += a;
@@ -154,7 +153,6 @@ SHA_HOT static void sha256d_mid(const uint32_t mid[8], uint32_t w2[16], uint32_t
   memcpy(st, mid, sizeof(st));
   sha256_transform(st, w2);
 
-  // Second SHA-256 of the 32-byte digest (keep as BE words — no byte store).
   uint32_t w3[16];
   w3[0] = st[0];
   w3[1] = st[1];
@@ -178,11 +176,15 @@ SHA_HOT static void sha256d_mid(const uint32_t mid[8], uint32_t w2[16], uint32_t
 
 }  // namespace
 
+bool Sha256Miner::acquireHardware() { return cyd_sha_hw::acquire(); }
+void Sha256Miner::releaseHardware() { cyd_sha_hw::release(); }
+
 bool Sha256Miner::begin() {
   memset(target_, 0xFF, HASH_LEN);
   target_[31] = 0x00;
   target_[30] = 0xFF;
   packTarget(target_);
+  hw_ = cyd_sha_hw::available();
   ready_ = true;
   return true;
 }
@@ -196,15 +198,17 @@ void Sha256Miner::packTarget(const uint8_t target[HASH_LEN]) {
 }
 
 void Sha256Miner::prepareMidstate() {
+  for (int i = 0; i < 20; i++) hdrBe_[i] = be32(header_ + i * 4);
+
   uint32_t w[16];
-  for (int i = 0; i < 16; i++) w[i] = be32(header_ + i * 4);
+  for (int i = 0; i < 16; i++) w[i] = hdrBe_[i];
   memcpy(midstate_, IV, sizeof(midstate_));
   sha256_transform(midstate_, w);
 
   memset(chunk2_, 0, sizeof(chunk2_));
-  chunk2_[0] = be32(header_ + 64);
-  chunk2_[1] = be32(header_ + 68);
-  chunk2_[2] = be32(header_ + 72);
+  chunk2_[0] = hdrBe_[16];
+  chunk2_[1] = hdrBe_[17];
+  chunk2_[2] = hdrBe_[18];
   chunk2_[3] = 0;
   chunk2_[4] = 0x80000000u;
   chunk2_[15] = 640u;
@@ -222,7 +226,6 @@ void Sha256Miner::setJob(const uint8_t header[HEADER_LEN], const uint8_t target[
 void Sha256Miner::updateTarget(const uint8_t target[HASH_LEN]) { packTarget(target); }
 
 bool Sha256Miner::meetsTargetWords(const uint32_t hash_be[8]) const {
-  // Convert BE digest words to LE uint32s matching stratum target layout.
   for (int i = 7; i >= 0; i--) {
     const uint32_t hv = bswap32(hash_be[i]);
     const uint32_t tv = targetLe_[i];
@@ -238,18 +241,56 @@ void Sha256Miner::hashNonce(uint32_t nonce, uint8_t out[HASH_LEN]) {
   header_[78] = (uint8_t)(nonce >> 16);
   header_[79] = (uint8_t)(nonce >> 24);
 
-  uint32_t w2[16];
-  memcpy(w2, chunk2_, sizeof(w2));
-  w2[3] = nonce_be(nonce);
   uint32_t digest[8];
-  sha256d_mid(midstate_, w2, digest);
+  if (hw_ && cyd_sha_hw::locked()) {
+    (void)cyd_sha_hw::hash_nonce(hdrBe_, nonce, digest, 0xFFFFFFFFu);
+  } else {
+    uint32_t w2[16];
+    memcpy(w2, chunk2_, sizeof(w2));
+    w2[3] = nonce_be(nonce);
+    sha256d_mid(midstate_, w2, digest);
+  }
   for (int i = 0; i < 8; i++) store_be32(out + i * 4, digest[i]);
 }
 
-bool Sha256Miner::mineBatch(size_t count, uint32_t stride) {
-  if (!ready_ || !midReady_) return false;
-  if (stride == 0) stride = 1;
+bool Sha256Miner::mineBatchHw(size_t count, uint32_t stride) {
+  if (!cyd_sha_hw::locked()) return mineBatchSw(count, stride);
 
+  size_t remaining = count;
+  bool anyShare = false;
+  while (remaining > 0) {
+    const uint32_t msb_target = targetLe_[7];
+    uint32_t found = 0;
+    uint32_t digest[8]{};
+    bool hit = false;
+    size_t stepped =
+        cyd_sha_hw::mine(hdrBe_, &nonce_, remaining, stride, msb_target, &hit, &found, digest);
+    hashes_ += stepped;
+    if (stepped == 0) break;
+    remaining = remaining > stepped ? remaining - stepped : 0;
+    if (!hit) break;
+
+    // Re-check with software midstate so a bad HW digest can never become a share.
+    uint32_t w2[16];
+    memcpy(w2, chunk2_, sizeof(w2));
+    w2[3] = nonce_be(found);
+    uint32_t sw[8];
+    sha256d_mid(midstate_, w2, sw);
+    if (memcmp(sw, digest, sizeof(sw)) != 0) {
+      continue;  // HW/SW mismatch — skip, keep mining
+    }
+    if (meetsTargetWords(sw)) {
+      for (int j = 0; j < 8; j++) store_be32(lastHash_ + j * 4, sw[j]);
+      shares_++;
+      lastShareNonce_ = found;
+      anyShare = true;
+      break;
+    }
+  }
+  return anyShare;
+}
+
+bool Sha256Miner::mineBatchSw(size_t count, uint32_t stride) {
   uint32_t w2[16];
   memcpy(w2, chunk2_, sizeof(w2));
 
@@ -263,7 +304,6 @@ bool Sha256Miner::mineBatch(size_t count, uint32_t stride) {
     sha256d_mid(midstate_, w2, digest);
     hashes_++;
 
-    // Fast reject: LE most-significant word (digest word 7, byte-swapped).
     const uint32_t msb = bswap32(digest[7]);
     if (msb <= msb_target && meetsTargetWords(digest)) {
       for (int j = 0; j < 8; j++) store_be32(lastHash_ + j * 4, digest[j]);
@@ -275,4 +315,11 @@ bool Sha256Miner::mineBatch(size_t count, uint32_t stride) {
   }
   nonce_ = n;
   return found;
+}
+
+bool Sha256Miner::mineBatch(size_t count, uint32_t stride) {
+  if (!ready_ || !midReady_) return false;
+  if (stride == 0) stride = 1;
+  if (hw_) return mineBatchHw(count, stride);
+  return mineBatchSw(count, stride);
 }

@@ -15,9 +15,10 @@ static ConfigStore g_store;
 static AppConfig g_cfg;
 static CompanionLink g_cmp;
 static DisplayUi g_ui;
-static Sha256Miner g_minerA;  // core 1
-static Sha256Miner g_minerB;  // core 0 light assist
+static Sha256Miner g_minerA;  // core 1 (HW SHA owner, or primary SW lane)
+static Sha256Miner g_minerB;  // core 0 SW assist (disabled when HW SHA is active)
 static MinerSnapshot g_snap;
+static bool g_hwSha = false;
 static NetFeed g_net;
 static UsbJob g_job;
 
@@ -74,7 +75,7 @@ static void fillSnap() {
   g_snap.totalHashes = g_hashCounter.load(std::memory_order_relaxed);
   g_snap.accepted = g_accepted;
   g_snap.rejected = g_rejected;
-  g_snap.pool = g_jobLoaded ? "SHA256" : "WAIT USB";
+  g_snap.pool = g_jobLoaded ? (g_hwSha ? "SHA256-HW" : "SHA256") : "WAIT USB";
   g_snap.connected = g_jobLoaded;
   g_snap.difficulty = 0;
   g_snap.nonce = g_minerA.nonce();
@@ -103,8 +104,12 @@ static bool applyConfig(AppConfig& updated, bool& reboot) {
 static void onJob(const UsbJob& job) {
   g_job = job;
   uint32_t start = job.startNonce ? job.startNonce : esp_random();
+  // HW SHA is a single shared peripheral — one lane, stride 1.
+  // SW path can still split odd/even nonces across cores.
   g_minerA.setJob(job.header, job.target, start);
-  g_minerB.setJob(job.header, job.target, start + 1);
+  if (!g_hwSha) {
+    g_minerB.setJob(job.header, job.target, start + 1);
+  }
   g_jobLoaded = true;
   g_mining = true;
   // Reset rate window so the next status shows climbing H/s quickly.
@@ -176,7 +181,12 @@ static void mineTaskA(void*) {
       vTaskDelay(pdMS_TO_TICKS(2));
       continue;
     }
-    mineLane(g_minerA, 2, 4096);
+    if (g_hwSha) {
+      // Large batches; HW engine is exclusive to this task.
+      mineLane(g_minerA, 1, 16384);
+    } else {
+      mineLane(g_minerA, 2, 4096);
+    }
     taskYIELD();
     esp_task_wdt_reset();
   }
@@ -197,19 +207,24 @@ static float runBench(uint32_t hashes) {
   if (hashes > 400000) hashes = 400000;
   uint8_t hdr[80];
   memset(hdr, 0x11, 80);
+  // Impossible target so the msb gate almost never trips (full-speed loop).
   uint8_t tgt[32];
-  memset(tgt, 0xFF, 32);
+  memset(tgt, 0x00, 32);
   Sha256Miner bench;
   bench.begin();
+  if (bench.hardware()) {
+    (void)Sha256Miner::acquireHardware();
+  }
   bench.setJob(hdr, tgt, 1);
   uint32_t t0 = micros();
-  uint8_t out[32];
-  for (uint32_t i = 0; i < hashes; i++) {
-    bench.hashNonce(i, out);
-    if ((i & 0x7ff) == 0) {
-      yield();
-      esp_task_wdt_reset();
-    }
+  uint32_t done = 0;
+  while (done < hashes) {
+    uint32_t n = hashes - done;
+    if (n > 4096) n = 4096;
+    (void)bench.mineBatch(n, 1);
+    done += n;
+    yield();
+    esp_task_wdt_reset();
   }
   uint32_t dt = micros() - t0;
   if (dt < 1) dt = 1;
@@ -231,6 +246,10 @@ void setup() {
 
   g_minerA.begin();
   g_minerB.begin();
+  g_hwSha = g_minerA.hardware();
+  if (g_hwSha) {
+    (void)Sha256Miner::acquireHardware();
+  }
 
   // USB below miner, above default loop — enough to answer cmp without freezing LCD.
   xTaskCreatePinnedToCore(usbTask, "usb", 8192, nullptr, 3, &g_usbTask, 0);
@@ -238,7 +257,11 @@ void setup() {
                           1);
 
   delay(80);
-  g_ui.showMessage("SHA-256", "live kH/s · USB link");
+  if (g_hwSha) {
+    g_ui.showMessage("SHA-256 HW", "ESP SHA engine · USB");
+  } else {
+    g_ui.showMessage("SHA-256", "live kH/s · USB link");
+  }
   delay(420);
   g_ui.showWaitingCompanion();
 
@@ -260,7 +283,8 @@ void loop() {
     return;
   }
 
-  if (g_mining) {
+  // Core-0 SW assist only when not using the shared HW SHA peripheral.
+  if (g_mining && !g_hwSha) {
     mineLane(g_minerB, 2, 128);
   }
 
