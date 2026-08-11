@@ -443,17 +443,21 @@ private fun PickupQueueStrip(
     Surface(
         shape = RoundedCornerShape(12.dp),
         tonalElevation = 1.dp,
-        modifier = Modifier.fillMaxWidth().height(160.dp)
+        modifier = Modifier.fillMaxWidth().height(220.dp)
     ) {
-        Column(Modifier.padding(12.dp)) {
+        Column(Modifier.padding(12.dp).fillMaxSize()) {
             Text(
                 "Pickup queue (${queue.size})",
                 style = MaterialTheme.typography.titleLarge
             )
+            Spacer(Modifier.height(6.dp))
             if (queue.isEmpty()) {
-                Text("No open phone/pickup orders.", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                OrderBackgroundFeed(
+                    compact = true,
+                    modifier = Modifier.fillMaxWidth().weight(1f, fill = true)
+                )
             } else {
-                LazyColumn(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                LazyColumn(verticalArrangement = Arrangement.spacedBy(4.dp), modifier = Modifier.weight(1f)) {
                     items(queue, key = { it.id }) { order ->
                         Row(
                             Modifier.fillMaxWidth(),

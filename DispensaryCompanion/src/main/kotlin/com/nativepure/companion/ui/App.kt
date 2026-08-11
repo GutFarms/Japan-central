@@ -902,7 +902,10 @@ private fun OrdersPane(repository: CompanionRepository, onRefresh: () -> Unit, o
         Text("Orders", style = MaterialTheme.typography.headlineLarge)
         Spacer(Modifier.height(12.dp))
         if (orders.isEmpty()) {
-            Text("No orders yet.", color = MaterialTheme.colorScheme.onSurfaceVariant)
+            OrderBackgroundFeed(
+                compact = false,
+                modifier = Modifier.fillMaxWidth().weight(1f, fill = true)
+            )
             return
         }
         LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {

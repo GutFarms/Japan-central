@@ -26,6 +26,7 @@ run-companion.bat
 - **Tender** — cash (with change) or card / other; voids clear the ticket
 - **Loyalty** — look up customer by name, email, or phone; redeem 100 pts = $1; earn 1 pt per $1 paid
 - **Pickup queue** — open phone/pickup orders on the register; hand off when customer arrives
+- **Empty-state sample feed** — when no live orders exist, Register and Orders show a soft scrolling sample pickup feed (clears when real orders arrive)
 - **Orders** — full history with channel (POS vs pickup) and payment method
 - **Stock & customers** — same inventory / customer tools as before
 - **Local hard drive storage** — inventory + customers auto-save on every change
