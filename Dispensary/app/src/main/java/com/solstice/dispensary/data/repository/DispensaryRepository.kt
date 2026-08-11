@@ -316,9 +316,9 @@ class DispensaryRepository(context: Context) {
             if (existing.username.isBlank()) {
                 next = next.copy(username = MAIN_ADMIN_USERNAME)
             }
-            // Force password change if still using the bootstrap default.
+            // Force password change if still using the legacy hardcoded bootstrap.
             if (!existing.mustChangePassword &&
-                PasswordHasher.matches(MAIN_ADMIN_PASSWORD, existing.passwordSalt, existing.passwordHash)
+                PasswordHasher.matches(LEGACY_BOOTSTRAP_PASSWORD, existing.passwordSalt, existing.passwordHash)
             ) {
                 next = next.copy(mustChangePassword = true)
             }
@@ -331,13 +331,14 @@ class DispensaryRepository(context: Context) {
             return
         }
 
+        val bootstrap = resolveBootstrapAdminPassword()
         val salt = PasswordHasher.newSalt()
         db.customerDao().insert(
             Customer(
                 id = MAIN_ADMIN_ID,
                 email = MAIN_ADMIN_EMAIL,
                 username = MAIN_ADMIN_USERNAME,
-                passwordHash = PasswordHasher.hash(MAIN_ADMIN_PASSWORD, salt),
+                passwordHash = PasswordHasher.hash(bootstrap, salt),
                 passwordSalt = salt,
                 fullName = "Main Admin",
                 phone = "",
@@ -348,6 +349,26 @@ class DispensaryRepository(context: Context) {
                 enabled = true
             )
         )
+        prefs.edit().putString(KEY_BOOTSTRAP_ADMIN_PASSWORD, bootstrap).apply()
+    }
+
+    /**
+     * One-time fresh-install admin password (cleared after the admin changes it).
+     * Shown on the sign-in screen so it is never hardcoded in the APK.
+     */
+    fun bootstrapAdminPassword(): String? =
+        prefs.getString(KEY_BOOTSTRAP_ADMIN_PASSWORD, null)?.takeIf { it.isNotBlank() }
+
+    fun clearBootstrapAdminPassword() {
+        prefs.edit().remove(KEY_BOOTSTRAP_ADMIN_PASSWORD).apply()
+    }
+
+    private fun resolveBootstrapAdminPassword(): String {
+        // Instrumentation / debug override (never bake a default into release).
+        System.getProperty("nativepure.android.adminPassword")
+            ?.takeIf { it.isNotBlank() }
+            ?.let { return it }
+        return PasswordHasher.randomBootstrapPassword()
     }
 
     private suspend fun seedDemoCustomer() {
@@ -646,6 +667,7 @@ class DispensaryRepository(context: Context) {
             mustChangePassword = false
         )
         db.customerDao().update(updated)
+        if (updated.id == MAIN_ADMIN_ID) clearBootstrapAdminPassword()
         return AuthResult.Success(updated.toProfile())
     }
 
@@ -672,6 +694,7 @@ class DispensaryRepository(context: Context) {
             mustChangePassword = false
         )
         db.customerDao().update(updated)
+        if (updated.id == MAIN_ADMIN_ID) clearBootstrapAdminPassword()
         return AuthResult.Success(updated.toProfile())
     }
 
@@ -1295,11 +1318,12 @@ class DispensaryRepository(context: Context) {
         const val MAIN_ADMIN_ID = "admin-main"
         const val MAIN_ADMIN_USERNAME = "admin"
         const val MAIN_ADMIN_EMAIL = "fidelgutierrez33@gmail.com"
-        /** Bootstrap only — must be changed on first login. */
-        const val MAIN_ADMIN_PASSWORD = "12345678"
+        /** Legacy installs only — detect & force change; never used for new seeds. */
+        private const val LEGACY_BOOTSTRAP_PASSWORD = "12345678"
         private const val DEMO_CUSTOMER_EMAIL = "demo@nativepure.example"
         private const val KEY_AGE = "age_verified"
         private const val KEY_CUSTOMER_ID = "customer_id"
+        private const val KEY_BOOTSTRAP_ADMIN_PASSWORD = "bootstrap_admin_password"
         private const val KEY_THEME_MODE = "theme_mode"
         private const val KEY_APP_LOCK_ENABLED = "app_lock_enabled"
         private const val KEY_APP_PIN_HASH = "app_pin_hash"

@@ -45,6 +45,7 @@ import com.solstice.dispensary.ui.components.BrandLogo
 fun AuthScreen(
     busy: Boolean,
     error: String?,
+    bootstrapAdminPassword: String? = null,
     onLogin: (email: String, password: String) -> Unit,
     onRegister: (
         email: String,
@@ -103,6 +104,26 @@ fun AuthScreen(
                 textAlign = TextAlign.Center,
                 modifier = Modifier.padding(top = 6.dp, bottom = 18.dp)
             )
+
+            if (!modeCreate && !bootstrapAdminPassword.isNullOrBlank()) {
+                Text(
+                    text = "First-run admin setup",
+                    style = MaterialTheme.typography.titleMedium,
+                    color = colors.onBackground,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(bottom = 4.dp)
+                )
+                Text(
+                    text = "Sign in as admin with this one-time password, then change it immediately:\n$bootstrapAdminPassword",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = colors.onSurfaceVariant,
+                    textAlign = TextAlign.Center,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(bottom = 14.dp)
+                )
+            }
 
             if (modeCreate) {
                 AuthField(

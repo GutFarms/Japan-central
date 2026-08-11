@@ -1321,8 +1321,6 @@ class CompanionRepository {
         const val MAIN_ADMIN_ID = "admin-main"
         const val MAIN_ADMIN_USERNAME = "admin"
         const val MAIN_ADMIN_EMAIL = "fidelgutierrez33@gmail.com"
-        @Deprecated("Use bootstrap password from admin-setup.txt or test property")
-        const val MAIN_ADMIN_PASSWORD = "12345678"
         private const val DEMO_EMAIL = "demo@nativepure.example"
         private const val EMAIL_CODE_TTL_MS = 15 * 60_000L
         private const val EMAIL_CODE_RESEND_COOLDOWN_MS = 30_000L

@@ -3,7 +3,7 @@
 ; Requires Inno Setup 6+.
 
 #define MyAppName "Native Pure POS"
-#define MyAppVersion "1.13.0"
+#define MyAppVersion "1.14.0"
 #define MyAppPublisher "Native Pure"
 #define MyAppExeName "NativePureCompanion.exe"
 #define MyAppURL "https://github.com/GutFarms/Japan-central"
@@ -38,7 +38,7 @@ PrivilegesRequired=admin
 ArchitecturesInstallIn64BitMode=x64compatible
 CloseApplications=yes
 RestartApplications=no
-VersionInfoVersion=1.13.0.0
+VersionInfoVersion=1.14.0.0
 VersionInfoCompany=Native Pure
 VersionInfoDescription=Native Pure dispensary point of sale installer
 VersionInfoProductName=Native Pure POS

@@ -54,12 +54,27 @@ Point-of-sale register for in-store sales, loyalty lookup, cash/card tender, and
 
 ### Windows — install wizard (recommended)
 
-1. Open **[Actions](../../ed)** → **Build Native Pure Windows companion**
-2. Open the latest green run → download **`NativePure-Companion-Windows`**
-3. Run **`NativePure-POS-Setup.exe`** — branded install wizard with the Native Pure logo
+**Stable download (from the latest GitHub Release):**  
+https://github.com/GutFarms/Japan-central/releases/latest/download/NativePure-POS-Setup.exe
+
+**Checksums:**  
+https://github.com/GutFarms/Japan-central/releases/latest/download/SHA256SUMS
+
+Verify in PowerShell:
+
+```powershell
+Get-FileHash .\NativePure-POS-Setup.exe -Algorithm SHA256
+Get-Content .\SHA256SUMS
+```
+
+1. Download **`NativePure-POS-Setup.exe`** (+ `SHA256SUMS`)
+2. Confirm the SHA-256 hash matches
+3. Run the branded install wizard with the Native Pure logo
 4. Choose install folder → Finish → launch from Start menu or desktop shortcut
 
-Also in that artifact (optional): Compose `.exe` / `.msi` packages and a Windows uber JAR.
+Also available from **[Actions](../../actions)** → **Build Native Pure Windows companion** → artifact **`NativePure-Companion-Windows`** (includes MSI/EXE/JAR).
+
+Optional Authenticode signing uses repo secrets `WINDOWS_CERT_PFX_BASE64` + `WINDOWS_CERT_PASSWORD` when configured.
 
 ### Mac / Linux — runnable JAR
 
@@ -99,7 +114,7 @@ See [`DispensaryCompanion/README.md`](./DispensaryCompanion/README.md).
 | Role | Login | Password |
 |------|--------|----------|
 | Admin (desktop fresh install) | `admin` | See `admin-setup.txt` in the POS data folder (must change) |
-| Admin (Android / existing) | `admin` or `fidelgutierrez33@gmail.com` | Temporary bootstrap — change on first login |
+| Admin (Android fresh install) | `admin` | One-time password shown on the sign-in screen (must change) |
 | Demo customer | `demo@nativepure.example` | `demo1234` |
 
 ## Phone ↔ desktop sync

@@ -6,16 +6,25 @@ Windows / desktop **point of sale** for Native Pure. Staff ring in-store sales, 
 
 See [`../DOWNLOAD-DISPENSARY.md`](../DOWNLOAD-DISPENSARY.md).
 
+**Windows Setup (GitHub Releases):**  
+https://github.com/GutFarms/Japan-central/releases/latest/download/NativePure-POS-Setup.exe  
+
+**SHA-256:**  
+https://github.com/GutFarms/Japan-central/releases/latest/download/SHA256SUMS  
+
 GitHub Actions workflow **Build Native Pure Windows companion** uploads:
 
-- **`NativePure-Companion-Windows`** — **`NativePure-POS-Setup.exe`** (logo install wizard) + MSI/EXE/JAR
-- **`NativePure-Companion-linux-jar`** — cross-platform runnable JAR
+- **`NativePure-Companion-Windows`** — **`NativePure-POS-Setup.exe`** (logo install wizard) + `SHA256SUMS` + MSI/EXE/JAR
+- **`NativePure-Companion-linux-jar`** — cross-platform runnable JAR + checksums
+
+On `nativepure-v*` tags (and manual dispatch), the Setup EXE and checksums are also published to GitHub Releases. Optional Authenticode signing uses secrets `WINDOWS_CERT_PFX_BASE64` + `WINDOWS_CERT_PASSWORD`.
 
 ### Windows install wizard
 
-1. Download **`NativePure-POS-Setup.exe`** from the Actions artifact
-2. Run the wizard (Native Pure logo sidebar / welcome screen)
-3. Pick an install folder → Finish → launch from Start menu or desktop
+1. Download **`NativePure-POS-Setup.exe`** and **`SHA256SUMS`**
+2. Verify: `Get-FileHash .\NativePure-POS-Setup.exe -Algorithm SHA256`
+3. Run the wizard (Native Pure logo sidebar / welcome screen)
+4. Pick an install folder → Finish → launch from Start menu or desktop
 
 Rebuild wizard art from the app logo:
 

@@ -12,8 +12,8 @@ Adult-use dispensary app for browsing the menu, building a pickup bag, scanning 
 
 - **18+ age gate** — required before entering the app
 - **Customer accounts** — log in or create an account; customers only see their own profile/orders
-- **Admin & staff** — main admin `admin` / `fidelgutierrez33@gmail.com` (temporary bootstrap password — change on first login); admin can create staff sub-accounts by email; admin/staff can view customer data (full PII reveal is admin-only)
-- **Security** — PBKDF2 passwords, password policy, email verification, login lockout, optional app PIN lock with auto-lock, forced password change for staff temp passwords, cart cleared on logout
+- **Admin & staff** — main admin `admin` / `fidelgutierrez33@gmail.com` (fresh installs show a one-time password on sign-in — change immediately); admin can create staff sub-accounts by email; admin/staff can view customer data (full PII reveal is admin-only)
+- **Security** — PBKDF2 passwords, random bootstrap admin password (not hardcoded), password policy, email verification, login lockout, optional app PIN lock with auto-lock, forced password change for staff temp passwords, cart cleared on logout
 - **Keyboard-safe forms** — auth, verification, password, and account screens scroll above the IME so typed text stays visible
 - **Light / Dark mode** — System, Light, or Dark (Account → Appearance)
 - **Home** — branded welcome, category shortcuts, featured products

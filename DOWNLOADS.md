@@ -33,9 +33,18 @@ Requires Android 8.0+.
 
 ### Windows (easiest)
 
-From GitHub Actions → **Build Native Pure Windows companion** → artifact **`NativePure-Companion-Windows`**:
+**Download:** https://github.com/GutFarms/Japan-central/releases/latest/download/NativePure-POS-Setup.exe  
+
+**Checksums:** https://github.com/GutFarms/Japan-central/releases/latest/download/SHA256SUMS  
+
+```powershell
+Get-FileHash .\NativePure-POS-Setup.exe -Algorithm SHA256
+```
+
+Also from GitHub Actions → **Build Native Pure Windows companion** → artifact **`NativePure-Companion-Windows`**:
 
 - **`NativePure-POS-Setup.exe`** — logo-branded install wizard (recommended)
+- **`SHA256SUMS`** / **`SHA256SUMS.txt`** — integrity hashes for Windows `Get-FileHash`
 - Optional: MSI / Compose EXE / JAR
 
 ### Mac / Linux
@@ -69,5 +78,5 @@ Also copied for sideload kits: [`Dispensary/dist/qr/nativepure-android.png`](./D
 | Role | Login | Password |
 |------|--------|----------|
 | Admin (desktop fresh install) | `admin` | See `admin-setup.txt` in the POS data folder |
-| Admin (Android / existing) | `admin` or `fidelgutierrez33@gmail.com` | Temporary bootstrap — change on first login |
+| Admin (Android fresh install) | `admin` | One-time password shown on sign-in (must change) |
 | Demo | `demo@nativepure.example` | `demo1234` |

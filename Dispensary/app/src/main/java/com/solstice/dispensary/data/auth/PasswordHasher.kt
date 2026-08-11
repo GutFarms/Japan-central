@@ -26,6 +26,14 @@ object PasswordHasher {
         return bytes.toHex()
     }
 
+    /** One-time bootstrap password for a fresh admin install. */
+    fun randomBootstrapPassword(): String {
+        val alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789"
+        return buildString(14) {
+            repeat(14) { append(alphabet[random.nextInt(alphabet.length)]) }
+        }
+    }
+
     fun hash(password: String, salt: String): String {
         val derived = pbkdf2(password, salt, PBKDF2_ITERATIONS)
         return "pbkdf2$$PBKDF2_ITERATIONS$${derived.toHex()}"

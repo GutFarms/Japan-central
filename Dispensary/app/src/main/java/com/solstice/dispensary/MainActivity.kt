@@ -133,6 +133,7 @@ class MainActivity : ComponentActivity() {
                     AuthScreen(
                         busy = viewModel.authBusy,
                         error = viewModel.authError,
+                        bootstrapAdminPassword = viewModel.bootstrapAdminPassword,
                         onLogin = viewModel::login,
                         onRegister = viewModel::register,
                         onClearError = viewModel::clearAuthError

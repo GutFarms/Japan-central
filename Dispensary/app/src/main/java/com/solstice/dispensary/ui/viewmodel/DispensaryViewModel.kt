@@ -64,6 +64,10 @@ class DispensaryViewModel(
     var authError by mutableStateOf<String?>(null)
         private set
 
+    /** Fresh-install one-time admin password (cleared after first password change). */
+    var bootstrapAdminPassword by mutableStateOf(repository.bootstrapAdminPassword())
+        private set
+
     var pendingEmailCode by mutableStateOf<EmailCodeIssue?>(null)
         private set
 
@@ -177,6 +181,8 @@ class DispensaryViewModel(
 
     init {
         viewModelScope.launch {
+            repository.ensureSeeded()
+            bootstrapAdminPassword = repository.bootstrapAdminPassword()
             currentCustomer = repository.currentCustomer()
             refreshSecuritySettings()
             if (currentCustomer != null && repository.getSecuritySettings().appLockEnabled) {
@@ -346,6 +352,7 @@ class DispensaryViewModel(
             when (val result = repository.changePassword(current, newPassword, confirm)) {
                 is AuthResult.Success -> {
                     currentCustomer = result.customer
+                    bootstrapAdminPassword = repository.bootstrapAdminPassword()
                     accountMessage = "Password updated."
                 }
                 is AuthResult.Error -> accountMessage = result.message
@@ -360,6 +367,7 @@ class DispensaryViewModel(
             when (val result = repository.forceChangePassword(newPassword, confirm)) {
                 is AuthResult.Success -> {
                     currentCustomer = result.customer
+                    bootstrapAdminPassword = repository.bootstrapAdminPassword()
                     accountMessage = "Password updated. Your account is now secured."
                 }
                 is AuthResult.Error -> authError = result.message

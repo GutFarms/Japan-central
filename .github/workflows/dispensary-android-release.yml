@@ -106,6 +106,8 @@ jobs:
             2. On Android: allow install from this source
             3. Open **Native Pure** → confirm **18+**
 
+            Windows POS (`NativePure-POS-Setup.exe` + `SHA256SUMS`) is published by the companion workflow on the same `nativepure-v*` tag when present.
+
             QR codes & companion links: [DOWNLOADS.md](https://github.com/GutFarms/Japan-central/blob/master/DOWNLOADS.md)
 
             In-app updates read `update-manifest.json` from this release.
