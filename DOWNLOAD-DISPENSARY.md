@@ -7,7 +7,7 @@ See **[`DOWNLOADS.md`](./DOWNLOADS.md)** for printable QR codes:
 | App | QR |
 |-----|-----|
 | Android APK | [`downloads/qr/nativepure-android.png`](./downloads/qr/nativepure-android.png) |
-| Desktop companion | [`downloads/qr/nativepure-companion.png`](./downloads/qr/nativepure-companion.png) |
+| Desktop POS | [`downloads/qr/nativepure-companion.png`](./downloads/qr/nativepure-companion.png) |
 
 Local HTML poster: [`downloads/index.html`](./downloads/index.html)
 
@@ -48,7 +48,9 @@ cp app/build/outputs/apk/release/app-release.apk dist/NativePure-Dispensary.apk
 
 ---
 
-## Desktop companion (Windows / Mac / Linux)
+## Desktop POS (Windows / Mac / Linux)
+
+Point-of-sale register for in-store sales, loyalty lookup, cash/card tender, and phone pickup handoff.
 
 ### Option A — GitHub Actions (preferred)
 
@@ -97,4 +99,4 @@ See [`DispensaryCompanion/README.md`](./DispensaryCompanion/README.md).
 
 ## Phone ↔ desktop sync
 
-Staff/admin → **Account → Desktop sync**: export/import `nativepure-sync-v1` JSON (products + customers + orders). On the PC companion, imported data is saved to the local hard drive (`%LOCALAPPDATA%\NativePure\Companion\` on Windows).
+Staff/admin → **Account → Desktop sync**: export/import `nativepure-sync-v1` JSON (products + customers + orders). On the PC POS, imported data is saved to the local hard drive (`%LOCALAPPDATA%\NativePure\Companion\` on Windows). Phone pickup orders appear in the Register pickup queue after import.

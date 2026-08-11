@@ -45,6 +45,9 @@ object LocalDataStore {
     }
 
     private fun preferredDirectory(): File {
+        System.getProperty("nativepure.companion.dataDir")?.takeIf { it.isNotBlank() }?.let {
+            return File(it)
+        }
         val localAppData = System.getenv("LOCALAPPDATA")?.takeIf { it.isNotBlank() }
         return if (localAppData != null) {
             // Windows — visible under the user's Local AppData hard-drive folder
@@ -58,6 +61,8 @@ object LocalDataStore {
         File(System.getProperty("user.home"), LEGACY_DIR_NAME)
 
     private fun migrateFromLegacyIfNeeded(preferred: File) {
+        // Isolated/test data dirs must not pull in the developer's real store.
+        if (!System.getProperty("nativepure.companion.dataDir").isNullOrBlank()) return
         val legacy = legacyDirectory()
         if (legacy.absolutePath == preferred.absolutePath) return
         if (!legacy.isDirectory) return

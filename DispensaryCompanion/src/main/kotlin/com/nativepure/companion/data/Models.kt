@@ -146,6 +146,19 @@ data class Customer(
 )
 
 @Serializable
+enum class PaymentMethod(val label: String) {
+    CASH("Cash"),
+    CARD("Card"),
+    OTHER("Other")
+}
+
+@Serializable
+enum class SaleChannel(val label: String) {
+    POS("In-store POS"),
+    PICKUP("Pickup order")
+}
+
+@Serializable
 data class Order(
     val id: String,
     val createdAt: Long,
@@ -158,7 +171,13 @@ data class Order(
     val customerEmail: String = "",
     val pointsEarned: Int = 0,
     val pointsRedeemed: Int = 0,
-    val discount: Double = 0.0
+    val discount: Double = 0.0,
+    val paymentMethod: String = "",
+    val amountTendered: Double = 0.0,
+    val changeDue: Double = 0.0,
+    val channel: String = SaleChannel.PICKUP.name,
+    val cashierId: String = "",
+    val cashierName: String = ""
 )
 
 object OrderStatus {
@@ -168,6 +187,15 @@ object OrderStatus {
 
     val staffActions = listOf(READY, PICKED_UP, CANCELLED)
 }
+
+data class PosSaleRequest(
+    val customerName: String,
+    val paymentMethod: PaymentMethod,
+    val amountTendered: Double,
+    val notes: String = "",
+    val loyaltyCustomerId: String? = null,
+    val redeemPoints: Int = 0
+)
 
 object LoyaltyPoints {
     const val POINTS_PER_DOLLAR = 1
@@ -276,6 +304,7 @@ sealed class OpResult {
 }
 
 enum class NavSection(val label: String) {
+    POS("Register"),
     HOME("Home"),
     MENU("Menu"),
     DEALS("Deals"),

@@ -31,8 +31,8 @@ compose.desktop {
         nativeDistributions {
             targetFormats(TargetFormat.Exe, TargetFormat.Msi, TargetFormat.Deb)
             packageName = "NativePureCompanion"
-            packageVersion = "1.11.0"
-            description = "Native Pure dispensary desktop companion"
+            packageVersion = "1.12.0"
+            description = "Native Pure dispensary point of sale"
             copyright = "© Native Pure"
             vendor = "Native Pure"
             windows {

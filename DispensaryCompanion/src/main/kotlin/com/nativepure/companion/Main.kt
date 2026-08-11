@@ -16,11 +16,11 @@ fun main() = application {
     val state = rememberWindowState(size = DpSize(1180.dp, 760.dp))
     Window(
         onCloseRequest = ::exitApplication,
-        title = "Native Pure — Desktop Companion",
+        title = "Native Pure — Point of Sale",
         state = state,
         icon = painterResource("logo_main.png")
     ) {
-        window.minimumSize = Dimension(960, 640)
+        window.minimumSize = Dimension(1100, 700)
         CompanionTheme {
             CompanionApp(repository = repository)
         }

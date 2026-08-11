@@ -75,13 +75,69 @@ class CompanionRepository {
         customers.filter { it.role == AccountRole.STAFF }.map { it.toProfile() }
 
     fun cartSummary(): CartSummary {
-        val byId = catalogProducts().associateBy { it.id }
+        // Resolve against full catalog so staff POS can ring unpublished draft stock if needed.
+        val byId = products.associateBy { it.id }
         val lines = cart.mapNotNull { item ->
             byId[item.productId]?.let { CartLine(it, item.quantity) }
         }
         val subtotal = lines.sumOf { it.lineTotal }
         val tax = subtotal * TAX_RATE
         return CartSummary(lines, subtotal, tax, subtotal + tax, lines.sumOf { it.quantity })
+    }
+
+    /** Products available on the register: published + in stock, filtered by name/SKU/brand. */
+    fun posSearchProducts(query: String): List<Product> {
+        val q = query.trim().lowercase()
+        val base = products.filter { it.inStock && (it.published || currentCustomer()?.role?.canManageInventory == true) }
+        if (q.isBlank()) {
+            return base.sortedWith(compareBy({ it.category.label }, { it.name }))
+        }
+        return base.filter { product ->
+            product.name.lowercase().contains(q) ||
+                product.brand.lowercase().contains(q) ||
+                product.sku.lowercase().contains(q) ||
+                product.category.label.lowercase().contains(q) ||
+                product.id.lowercase().contains(q)
+        }.sortedBy { it.name }
+    }
+
+    fun findCustomersForPos(query: String): List<CustomerProfile> {
+        val me = currentCustomer() ?: return emptyList()
+        if (!me.role.canViewSensitiveInfo) return emptyList()
+        val q = query.trim().lowercase()
+        if (q.length < 2) return emptyList()
+        return customers
+            .filter { it.role == AccountRole.CUSTOMER && it.enabled }
+            .filter {
+                it.fullName.lowercase().contains(q) ||
+                    it.email.lowercase().contains(q) ||
+                    it.phone.contains(q) ||
+                    it.username.lowercase().contains(q)
+            }
+            .map { it.toProfile() }
+            .take(12)
+    }
+
+    fun openPickupQueue(): List<Order> {
+        val me = currentCustomer() ?: return emptyList()
+        if (!me.role.canViewSensitiveInfo) return emptyList()
+        return orders
+            .filter { it.status == OrderStatus.READY }
+            .sortedBy { it.createdAt }
+    }
+
+    fun todaysPosSales(): List<Order> {
+        val me = currentCustomer() ?: return emptyList()
+        if (!me.role.canViewSensitiveInfo) return emptyList()
+        val startOfDay = java.util.Calendar.getInstance().apply {
+            set(java.util.Calendar.HOUR_OF_DAY, 0)
+            set(java.util.Calendar.MINUTE, 0)
+            set(java.util.Calendar.SECOND, 0)
+            set(java.util.Calendar.MILLISECOND, 0)
+        }.timeInMillis
+        return orders
+            .filter { it.channel == SaleChannel.POS.name && it.createdAt >= startOfDay }
+            .sortedByDescending { it.createdAt }
     }
 
     fun visibleOrders(): List<Order> {
@@ -714,7 +770,10 @@ class CompanionRepository {
             customerEmail = customer?.email.orEmpty(),
             pointsEarned = pointsEarned,
             pointsRedeemed = appliedRedeem,
-            discount = discount
+            discount = discount,
+            channel = SaleChannel.PICKUP.name,
+            cashierId = customer?.id.orEmpty(),
+            cashierName = customer?.fullName.orEmpty()
         )
         val lines = summary.lines.map {
             OrderLine(order.id, it.product.id, it.product.name, it.product.effectivePrice, it.quantity)
@@ -738,6 +797,95 @@ class CompanionRepository {
         return order
     }
 
+    /**
+     * Complete an in-store POS sale from the current cart.
+     * Staff/admin only. Marks the order as picked up immediately (walk-out).
+     */
+    fun completePosSale(request: PosSaleRequest): OpResult {
+        val cashier = currentCustomer() ?: return OpResult.Error("Not signed in.")
+        if (!cashier.role.canViewSensitiveInfo) {
+            return OpResult.Error("Only staff/admin can ring POS sales.")
+        }
+        val summary = cartSummary()
+        if (summary.lines.isEmpty()) return OpResult.Error("Ticket is empty.")
+
+        val loyaltyRow = request.loyaltyCustomerId
+            ?.takeIf { it.isNotBlank() }
+            ?.let { id -> customers.find { it.id == id && it.role == AccountRole.CUSTOMER && it.enabled } }
+
+        val maxRedeem = if (loyaltyRow != null) {
+            LoyaltyPoints.maxRedeemablePoints(loyaltyRow.loyaltyPoints, summary.total)
+        } else {
+            0
+        }
+        val appliedRedeem = request.redeemPoints.coerceIn(0, maxRedeem)
+            .let { it - (it % LoyaltyPoints.REDEEM_POINTS_PER_DOLLAR) }
+        val discount = LoyaltyPoints.discountForPoints(appliedRedeem)
+        val total = (summary.total - discount).coerceAtLeast(0.0)
+        val pointsEarned = if (loyaltyRow != null) LoyaltyPoints.pointsForSpend(total) else 0
+
+        val tendered = when (request.paymentMethod) {
+            PaymentMethod.CASH -> request.amountTendered
+            PaymentMethod.CARD, PaymentMethod.OTHER -> total
+        }
+        if (request.paymentMethod == PaymentMethod.CASH && tendered + 0.001 < total) {
+            return OpResult.Error(
+                "Cash tendered ($${"%.2f".format(tendered)}) is less than total ($${"%.2f".format(total)})."
+            )
+        }
+        val change = if (request.paymentMethod == PaymentMethod.CASH) {
+            (tendered - total).coerceAtLeast(0.0)
+        } else {
+            0.0
+        }
+
+        val guestName = request.customerName.trim().ifBlank {
+            loyaltyRow?.fullName ?: "Walk-in"
+        }
+        val order = Order(
+            id = UUID.randomUUID().toString().take(8).uppercase(),
+            createdAt = System.currentTimeMillis(),
+            total = total,
+            itemCount = summary.itemCount,
+            status = OrderStatus.PICKED_UP,
+            pickupName = guestName,
+            notes = request.notes.trim(),
+            customerId = loyaltyRow?.id.orEmpty(),
+            customerEmail = loyaltyRow?.email.orEmpty(),
+            pointsEarned = pointsEarned,
+            pointsRedeemed = appliedRedeem,
+            discount = discount,
+            paymentMethod = request.paymentMethod.name,
+            amountTendered = tendered,
+            changeDue = change,
+            channel = SaleChannel.POS.name,
+            cashierId = cashier.id,
+            cashierName = cashier.fullName
+        )
+        val lines = summary.lines.map {
+            OrderLine(order.id, it.product.id, it.product.name, it.product.effectivePrice, it.quantity)
+        }
+        orders.add(0, order)
+        orderLines.addAll(lines)
+        summary.lines.forEach { line ->
+            adjustStockInternal(line.product.id, -line.quantity)
+        }
+        if (loyaltyRow != null && (pointsEarned > 0 || appliedRedeem > 0 || total > 0)) {
+            replaceCustomer(
+                loyaltyRow.copy(
+                    loyaltyPoints = (loyaltyRow.loyaltyPoints - appliedRedeem + pointsEarned)
+                        .coerceAtLeast(0),
+                    lifetimeSpend = loyaltyRow.lifetimeSpend + total
+                )
+            )
+        }
+        cart.clear()
+        persist()
+        val receipt = orderReceiptText(order.id).orEmpty()
+        val changeNote = if (change > 0) " Change due $${"%.2f".format(change)}." else ""
+        return OpResult.Success("Sale ${order.id} complete · $${"%.2f".format(total)}$changeNote\n\n$receipt")
+    }
+
     fun updateOrderStatus(orderId: String, status: String): OpResult {
         val me = currentCustomer() ?: return OpResult.Error("Not signed in.")
         if (!me.role.canViewSensitiveInfo) {
@@ -755,11 +903,26 @@ class CompanionRepository {
     fun orderReceiptText(orderId: String): String? {
         val order = orders.find { it.id == orderId } ?: return null
         val lines = orderLines.filter { it.orderId == orderId }
+        val isPos = order.channel == SaleChannel.POS.name
         val sb = StringBuilder()
-        sb.appendLine("Native Pure — Pickup receipt")
+        sb.appendLine(if (isPos) "Native Pure — POS sale receipt" else "Native Pure — Pickup receipt")
         sb.appendLine("Order #${order.id}")
         sb.appendLine("Status: ${order.status}")
-        sb.appendLine("Pickup: ${order.pickupName}")
+        if (isPos) {
+            sb.appendLine("Sold to: ${order.pickupName}")
+            if (order.cashierName.isNotBlank()) sb.appendLine("Cashier: ${order.cashierName}")
+            if (order.paymentMethod.isNotBlank()) {
+                val method = runCatching { PaymentMethod.valueOf(order.paymentMethod).label }
+                    .getOrDefault(order.paymentMethod)
+                sb.appendLine("Tender: $method")
+                if (order.paymentMethod == PaymentMethod.CASH.name) {
+                    sb.appendLine("Cash tendered: $${"%.2f".format(order.amountTendered)}")
+                    if (order.changeDue > 0) sb.appendLine("Change: $${"%.2f".format(order.changeDue)}")
+                }
+            }
+        } else {
+            sb.appendLine("Pickup: ${order.pickupName}")
+        }
         if (order.customerEmail.isNotBlank()) sb.appendLine("Email: ${order.customerEmail}")
         sb.appendLine()
         lines.forEach { line ->
@@ -777,7 +940,7 @@ class CompanionRepository {
         if (order.pointsEarned > 0) sb.appendLine("Points earned: +${order.pointsEarned}")
         if (order.notes.isNotBlank()) sb.appendLine("Notes: ${order.notes}")
         sb.appendLine()
-        sb.appendLine("Bring a valid ID for pickup. 18+ only.")
+        sb.appendLine(if (isPos) "Thank you — 18+ only. Valid ID required." else "Bring a valid ID for pickup. 18+ only.")
         return sb.toString()
     }
 

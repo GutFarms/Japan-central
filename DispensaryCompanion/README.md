@@ -1,6 +1,6 @@
-# Native Pure — Windows Desktop Companion
+# Native Pure — Desktop Point of Sale
 
-Desktop companion for the Native Pure dispensary phone app. Browse the menu, place pickup orders, manage stock, view customers (staff/admin), and manage account security on Windows.
+Windows / desktop **point of sale** for Native Pure. Staff ring in-store sales, look up loyalty customers, take cash or card tender, hand off phone pickup orders, and manage stock — all persisted on the local hard drive.
 
 ## Download
 
@@ -20,19 +20,20 @@ java -jar NativePure-Companion.jar
 run-companion.bat
 ```
 
-## Features
+## POS features (staff / admin)
 
-- **18+ age gate** on first launch
-- **Sign in / register** with the same role model as the Android app (Customer, Staff, Admin)
-- **Menu, cart, pickup checkout** (8% tax estimate)
-- **Orders** — customers see their own; staff/admin see all
-- **Stock management** for staff/admin
-- **Customer database** for staff/admin
-- **Account security** — password policy, change password, login lockout, staff creation
+- **Register** — product search by name / SKU / brand, tap-to-add tiles, live ticket
+- **Tender** — cash (with change) or card / other; voids clear the ticket
+- **Loyalty** — look up customer by name, email, or phone; redeem 100 pts = $1; earn 1 pt per $1 paid
+- **Pickup queue** — open phone/pickup orders on the register; hand off when customer arrives
+- **Orders** — full history with channel (POS vs pickup) and payment method
+- **Stock & customers** — same inventory / customer tools as before
 - **Local hard drive storage** — inventory + customers auto-save on every change
   - Windows: `%LOCALAPPDATA%\NativePure\Companion\` (`store.json`, `inventory.json`, `customers.json`)
   - macOS/Linux: `~/.nativepure-companion/`
   - Account → **Open data folder** / **Save now**
+
+Customer accounts still get menu browsing, cart, and pickup checkout.
 
 ## Default accounts (seeded)
 
@@ -90,4 +91,4 @@ Staff/admin → **Account → Desktop sync**:
 - **Export sync JSON** — `nativepure-sync-v1` (products + customers + orders)
 - **Import sync JSON** — merges into the local hard-drive store (inventory + customers)
 
-Use the same JSON with the Android app Account → Desktop sync section. After import, data is written to the PC data folder above.
+Use the same JSON with the Android app Account → Desktop sync section. Import phone pickup orders onto the POS queue, then hand them off from Register.

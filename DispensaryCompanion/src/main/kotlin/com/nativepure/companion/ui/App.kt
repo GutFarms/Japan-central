@@ -104,7 +104,11 @@ fun CompanionApp(repository: CompanionRepository) {
                         customer = result.customer
                         pendingEmailCode = repository.peekIssuedEmailCode()
                         authError = null
-                        section = NavSection.HOME
+                        section = if (result.customer.role.canViewSensitiveInfo) {
+                            NavSection.POS
+                        } else {
+                            NavSection.HOME
+                        }
                     }
                     is AuthResult.Error -> authError = result.message
                 }
@@ -222,7 +226,7 @@ private fun AgeGate(onVerified: () -> Unit) {
                 colors = ButtonDefaults.buttonColors(containerColor = colors.secondary, contentColor = colors.onSecondary)
             ) { Text("Yes, I am 18+") }
             Text(
-                "Desktop companion for menu, pickup orders, inventory, and account security.",
+                "Desktop point of sale for register sales, pickup handoff, inventory, and account security.",
                 style = MaterialTheme.typography.bodyMedium,
                 color = colors.onSurfaceVariant,
                 textAlign = TextAlign.Center
@@ -249,7 +253,7 @@ private fun AuthPane(
         Surface(shape = RoundedCornerShape(18.dp), tonalElevation = 2.dp, modifier = Modifier.width(440.dp)) {
             Column(Modifier.padding(28.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 BrandMark(72.dp)
-                Text("Native Pure Companion", style = MaterialTheme.typography.headlineMedium)
+                Text("Native Pure POS", style = MaterialTheme.typography.headlineMedium)
                 Text(
                     if (create) "Create a customer account" else "Sign in to continue",
                     color = MaterialTheme.colorScheme.onSurfaceVariant
@@ -390,15 +394,20 @@ private fun MainShell(
     onLogout: () -> Unit
 ) {
     val sections = buildList {
-        add(NavSection.HOME)
-        add(NavSection.MENU)
-        add(NavSection.DEALS)
-        add(NavSection.CART)
-        add(NavSection.ORDERS)
-        if (customer.role.canManageInventory) add(NavSection.INVENTORY)
         if (customer.role.canViewSensitiveInfo) {
+            add(NavSection.POS)
+            add(NavSection.ORDERS)
+            if (customer.role.canManageInventory) add(NavSection.INVENTORY)
             add(NavSection.CUSTOMERS)
             add(NavSection.REQUESTS)
+            add(NavSection.MENU)
+            add(NavSection.DEALS)
+        } else {
+            add(NavSection.HOME)
+            add(NavSection.MENU)
+            add(NavSection.DEALS)
+            add(NavSection.CART)
+            add(NavSection.ORDERS)
         }
         add(NavSection.STORE)
         add(NavSection.ACCOUNT)
@@ -451,6 +460,12 @@ private fun MainShell(
             tick
 
             when (section) {
+                NavSection.POS -> PosPane(
+                    repository = repository,
+                    cashier = customer,
+                    onRefresh = onRefresh,
+                    onMessage = onMessage
+                )
                 NavSection.HOME -> HomePane(
                     repository = repository,
                     customer = customer,
@@ -470,7 +485,7 @@ private fun MainShell(
                     onAdd = {
                         repository.addToCart(it)
                         onRefresh()
-                        onMessage("Added to bag.")
+                        onMessage(if (customer.role.canViewSensitiveInfo) "Added to ticket." else "Added to bag.")
                     }
                 )
                 NavSection.DEALS -> DealsPane(
@@ -478,7 +493,7 @@ private fun MainShell(
                     onAdd = {
                         repository.addToCart(it)
                         onRefresh()
-                        onMessage("Added deal item to bag.")
+                        onMessage(if (customer.role.canViewSensitiveInfo) "Added deal to ticket." else "Added deal item to bag.")
                     }
                 )
                 NavSection.CART -> CartPane(
@@ -896,7 +911,21 @@ private fun OrdersPane(repository: CompanionRepository, onRefresh: () -> Unit, o
                     Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                         Text("Order ${order.id}", style = MaterialTheme.typography.titleLarge)
                         Text(order.status)
+                        if (order.channel.isNotBlank()) {
+                            val channelLabel = when (order.channel) {
+                                "POS" -> "In-store POS"
+                                "PICKUP" -> "Pickup order"
+                                else -> order.channel
+                            }
+                            Text(channelLabel, color = MaterialTheme.colorScheme.secondary)
+                        }
                         Text("${order.itemCount} items · $${"%.2f".format(order.total)}")
+                        if (order.paymentMethod.isNotBlank()) {
+                            Text(
+                                "Paid ${order.paymentMethod.lowercase()}" +
+                                    if (order.changeDue > 0) " · change $${"%.2f".format(order.changeDue)}" else ""
+                            )
+                        }
                         if (order.discount > 0) {
                             Text(
                                 "Redeemed ${order.pointsRedeemed} pts (−$${"%.2f".format(order.discount)})",
