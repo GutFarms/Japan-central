@@ -1,6 +1,6 @@
 {
-  "versionCode": 16,
-  "versionName": "1.12.0",
+  "versionCode": 17,
+  "versionName": "1.13.0",
   "apkUrl": "https://github.com/GutFarms/Japan-central/releases/latest/download/NativePure-Dispensary.apk",
-  "releaseNotes": "Redeem loyalty points at checkout (100 pts = $1). Staff order statuses + share receipt. Request → draft in Stock. Inventory search."
+  "releaseNotes": "Admin/staff can fully edit inventory (name, price, SKU, stock) and add products. Main admin role is always restored."
 }

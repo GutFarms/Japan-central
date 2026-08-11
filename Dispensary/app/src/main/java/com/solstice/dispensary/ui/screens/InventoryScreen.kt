@@ -10,11 +10,13 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.DocumentScanner
 import androidx.compose.material3.Button
@@ -22,6 +24,7 @@ import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
@@ -37,10 +40,12 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import com.solstice.dispensary.data.model.InventoryIntake
 import com.solstice.dispensary.data.model.Product
 import com.solstice.dispensary.data.model.ProductCategory
+import com.solstice.dispensary.data.model.StrainType
 import com.solstice.dispensary.ui.components.MetaPill
 import com.solstice.dispensary.ui.components.ProductSwatch
 import com.solstice.dispensary.ui.components.SectionHeader
@@ -57,7 +62,9 @@ fun InventoryScreen(
     onClearMessage: () -> Unit,
     onOpenScanner: () -> Unit,
     onAdjustStock: (String, Int) -> Unit,
-    onSetPublished: (String, Boolean) -> Unit
+    onSetPublished: (String, Boolean) -> Unit,
+    onSaveProduct: (Product) -> Unit,
+    onCreateDraft: () -> Unit
 ) {
     val snackbar = remember { SnackbarHostState() }
     LaunchedEffect(intakeMessage) {
@@ -70,6 +77,7 @@ fun InventoryScreen(
     var query by remember { mutableStateOf("") }
     var filterCategory by remember { mutableStateOf<ProductCategory?>(null) }
     var filterPublished by remember { mutableStateOf("All") }
+    var editing by remember { mutableStateOf<Product?>(null) }
 
     val filtered = remember(products, query, filterCategory, filterPublished) {
         products.filter { product ->
@@ -104,6 +112,7 @@ fun InventoryScreen(
         LazyColumn(
             modifier = Modifier
                 .fillMaxSize()
+                .imePadding()
                 .padding(padding),
             contentPadding = PaddingValues(20.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp)
@@ -115,19 +124,28 @@ fun InventoryScreen(
                         if (draftCount > 0) " · $draftCount unpublished" else ""
                 )
                 Text(
-                    text = "Drafts stay in Stock until they have a SKU and price, then publish to the customer menu.",
+                    text = "Admin and staff can edit name, price, SKU, and stock. Drafts stay hidden until published.",
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
                 Spacer(Modifier.height(8.dp))
-                Button(
-                    onClick = onOpenScanner,
-                    modifier = Modifier.fillMaxWidth(),
-                    shape = RoundedCornerShape(14.dp)
-                ) {
-                    Icon(Icons.Outlined.DocumentScanner, contentDescription = null)
-                    Spacer(Modifier.width(8.dp))
-                    Text("AI camera scan to add stock")
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Button(
+                        onClick = onCreateDraft,
+                        modifier = Modifier.weight(1f),
+                        shape = RoundedCornerShape(14.dp)
+                    ) {
+                        Text("Add product")
+                    }
+                    OutlinedButton(
+                        onClick = onOpenScanner,
+                        modifier = Modifier.weight(1f),
+                        shape = RoundedCornerShape(14.dp)
+                    ) {
+                        Icon(Icons.Outlined.DocumentScanner, contentDescription = null)
+                        Spacer(Modifier.width(8.dp))
+                        Text("AI scan")
+                    }
                 }
             }
 
@@ -173,6 +191,19 @@ fun InventoryScreen(
                 )
             }
 
+            editing?.let { product ->
+                item {
+                    ProductEditorCard(
+                        product = product,
+                        onCancel = { editing = null },
+                        onSave = { updated ->
+                            onSaveProduct(updated)
+                            editing = null
+                        }
+                    )
+                }
+            }
+
             items(filtered, key = { it.id }) { product ->
                 Surface(
                     shape = RoundedCornerShape(14.dp),
@@ -190,7 +221,7 @@ fun InventoryScreen(
                             ) {
                                 Text(product.name, style = MaterialTheme.typography.titleMedium)
                                 Text(
-                                    text = "${product.brand} · ${product.sku}",
+                                    text = "${product.brand} · ${product.sku.ifBlank { "no SKU" }} · $${"%.2f".format(product.price)}",
                                     style = MaterialTheme.typography.bodyMedium,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant
                                 )
@@ -209,10 +240,15 @@ fun InventoryScreen(
                                 }
                             }
                         }
-                        TextButton(
-                            onClick = { onSetPublished(product.id, !product.published) }
-                        ) {
-                            Text(if (product.published) "Unpublish from menu" else "Publish to customers")
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            TextButton(onClick = { editing = product }) {
+                                Text("Edit")
+                            }
+                            TextButton(
+                                onClick = { onSetPublished(product.id, !product.published) }
+                            ) {
+                                Text(if (product.published) "Unpublish" else "Publish")
+                            }
                         }
                     }
                 }
@@ -242,6 +278,187 @@ fun InventoryScreen(
                             )
                         }
                     }
+                }
+            }
+        }
+    }
+}
+
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun ProductEditorCard(
+    product: Product,
+    onCancel: () -> Unit,
+    onSave: (Product) -> Unit
+) {
+    var name by remember(product.id) { mutableStateOf(product.name) }
+    var brand by remember(product.id) { mutableStateOf(product.brand) }
+    var sku by remember(product.id) { mutableStateOf(product.sku) }
+    var price by remember(product.id) { mutableStateOf(if (product.price > 0) product.price.toString() else "") }
+    var stock by remember(product.id) { mutableStateOf(product.stockQuantity.toString()) }
+    var unit by remember(product.id) { mutableStateOf(product.unitLabel) }
+    var thc by remember(product.id) { mutableStateOf(product.thcPercent.toString()) }
+    var cbd by remember(product.id) { mutableStateOf(product.cbdPercent.toString()) }
+    var description by remember(product.id) { mutableStateOf(product.description) }
+    var effects by remember(product.id) { mutableStateOf(product.effects) }
+    var category by remember(product.id) { mutableStateOf(product.category) }
+    var strain by remember(product.id) { mutableStateOf(product.strainType) }
+    var published by remember(product.id) { mutableStateOf(product.published) }
+    var featured by remember(product.id) { mutableStateOf(product.featured) }
+
+    Surface(
+        shape = RoundedCornerShape(16.dp),
+        color = MaterialTheme.colorScheme.secondaryContainer,
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Column(
+            modifier = Modifier.padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            Text(
+                "Edit product",
+                style = MaterialTheme.typography.titleLarge,
+                color = MaterialTheme.colorScheme.onSecondaryContainer
+            )
+            OutlinedTextField(
+                value = name,
+                onValueChange = { name = it },
+                label = { Text("Name") },
+                modifier = Modifier.fillMaxWidth(),
+                singleLine = true
+            )
+            OutlinedTextField(
+                value = brand,
+                onValueChange = { brand = it },
+                label = { Text("Brand") },
+                modifier = Modifier.fillMaxWidth(),
+                singleLine = true
+            )
+            OutlinedTextField(
+                value = sku,
+                onValueChange = { sku = it },
+                label = { Text("SKU (required to publish)") },
+                modifier = Modifier.fillMaxWidth(),
+                singleLine = true
+            )
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedTextField(
+                    value = price,
+                    onValueChange = { price = it.filter { ch -> ch.isDigit() || ch == '.' } },
+                    label = { Text("Price") },
+                    modifier = Modifier.weight(1f),
+                    singleLine = true,
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal)
+                )
+                OutlinedTextField(
+                    value = stock,
+                    onValueChange = { stock = it.filter { ch -> ch.isDigit() } },
+                    label = { Text("Stock") },
+                    modifier = Modifier.weight(1f),
+                    singleLine = true,
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number)
+                )
+            }
+            OutlinedTextField(
+                value = unit,
+                onValueChange = { unit = it },
+                label = { Text("Unit (e.g. 3.5g, each)") },
+                modifier = Modifier.fillMaxWidth(),
+                singleLine = true
+            )
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedTextField(
+                    value = thc,
+                    onValueChange = { thc = it.filter { ch -> ch.isDigit() || ch == '.' } },
+                    label = { Text("THC %") },
+                    modifier = Modifier.weight(1f),
+                    singleLine = true,
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal)
+                )
+                OutlinedTextField(
+                    value = cbd,
+                    onValueChange = { cbd = it.filter { ch -> ch.isDigit() || ch == '.' } },
+                    label = { Text("CBD %") },
+                    modifier = Modifier.weight(1f),
+                    singleLine = true,
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal)
+                )
+            }
+            Text("Category", style = MaterialTheme.typography.labelLarge)
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                ProductCategory.entries.forEach { cat ->
+                    FilterChip(
+                        selected = category == cat,
+                        onClick = { category = cat },
+                        label = { Text(cat.label) }
+                    )
+                }
+            }
+            Text("Strain", style = MaterialTheme.typography.labelLarge)
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                StrainType.entries.forEach { type ->
+                    FilterChip(
+                        selected = strain == type,
+                        onClick = { strain = type },
+                        label = { Text(type.label) }
+                    )
+                }
+            }
+            OutlinedTextField(
+                value = description,
+                onValueChange = { description = it },
+                label = { Text("Description") },
+                modifier = Modifier.fillMaxWidth(),
+                minLines = 2
+            )
+            OutlinedTextField(
+                value = effects,
+                onValueChange = { effects = it },
+                label = { Text("Effects") },
+                modifier = Modifier.fillMaxWidth(),
+                singleLine = true
+            )
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                FilterChip(
+                    selected = published,
+                    onClick = { published = !published },
+                    label = { Text(if (published) "Published" else "Draft") }
+                )
+                FilterChip(
+                    selected = featured,
+                    onClick = { featured = !featured },
+                    label = { Text(if (featured) "Featured" else "Not featured") }
+                )
+            }
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedButton(onClick = onCancel, modifier = Modifier.weight(1f)) {
+                    Text("Cancel")
+                }
+                Button(
+                    onClick = {
+                        onSave(
+                            product.copy(
+                                name = name,
+                                brand = brand,
+                                sku = sku,
+                                price = price.toDoubleOrNull() ?: 0.0,
+                                stockQuantity = stock.toIntOrNull() ?: 0,
+                                unitLabel = unit,
+                                thcPercent = thc.toDoubleOrNull() ?: 0.0,
+                                cbdPercent = cbd.toDoubleOrNull() ?: 0.0,
+                                description = description,
+                                effects = effects,
+                                category = category,
+                                strainType = strain,
+                                published = published,
+                                featured = featured
+                            )
+                        )
+                    },
+                    modifier = Modifier.weight(1f),
+                    enabled = name.trim().length >= 2
+                ) {
+                    Text("Save changes")
                 }
             }
         }

@@ -524,6 +524,24 @@ class DispensaryViewModel(
         }
     }
 
+    fun saveProduct(product: Product) {
+        viewModelScope.launch {
+            when (val result = repository.saveProduct(product)) {
+                is OpResult.Success -> intakeMessage = result.message
+                is OpResult.Error -> intakeMessage = result.message
+            }
+        }
+    }
+
+    fun createBlankDraftProduct() {
+        viewModelScope.launch {
+            when (val result = repository.createBlankDraftProduct()) {
+                is OpResult.Success -> intakeMessage = result.message
+                is OpResult.Error -> intakeMessage = result.message
+            }
+        }
+    }
+
     fun setStaffEnabled(staffId: String, enabled: Boolean) {
         viewModelScope.launch {
             when (val result = repository.setStaffEnabled(staffId, enabled)) {

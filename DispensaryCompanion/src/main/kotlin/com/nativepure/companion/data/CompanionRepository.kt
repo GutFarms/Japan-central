@@ -459,6 +459,79 @@ class CompanionRepository {
         )
     }
 
+    fun saveProduct(product: Product): OpResult {
+        val me = currentCustomer() ?: return OpResult.Error("Not signed in.")
+        if (!me.role.canManageInventory) {
+            return OpResult.Error("Only admin and staff can edit inventory.")
+        }
+        val name = product.name.trim()
+        if (name.length < 2) return OpResult.Error("Product name is required.")
+        val price = product.price.coerceAtLeast(0.0)
+        val stock = product.stockQuantity.coerceAtLeast(0)
+        val sku = product.sku.trim()
+        if (product.published) {
+            when {
+                sku.isBlank() -> return OpResult.Error("Add a SKU before keeping this product published.")
+                price <= 0.0 -> return OpResult.Error("Set a price greater than \$0 before publishing.")
+            }
+        }
+        val idx = products.indexOfFirst { it.id == product.id }
+        val existing = if (idx >= 0) products[idx] else null
+        val cleaned = product.copy(
+            name = name,
+            brand = product.brand.trim().ifBlank { "Native Pure" },
+            price = price,
+            stockQuantity = stock,
+            inStock = stock > 0,
+            sku = sku,
+            unitLabel = product.unitLabel.trim().ifBlank { "each" },
+            description = product.description.trim(),
+            effects = product.effects.trim().ifBlank { "—" },
+            thcPercent = product.thcPercent.coerceAtLeast(0.0),
+            cbdPercent = product.cbdPercent.coerceAtLeast(0.0),
+            publishedAt = when {
+                product.published && existing?.published != true -> System.currentTimeMillis()
+                product.published -> existing?.publishedAt ?: System.currentTimeMillis()
+                else -> 0L
+            },
+            publishedBy = if (product.published) me.email else ""
+        )
+        if (idx >= 0) products[idx] = cleaned else products.add(cleaned)
+        persist()
+        return OpResult.Success(
+            if (existing == null) "Created “${cleaned.name}”." else "Saved changes to “${cleaned.name}”."
+        )
+    }
+
+    fun createBlankDraftProduct(): OpResult {
+        val me = currentCustomer() ?: return OpResult.Error("Not signed in.")
+        if (!me.role.canManageInventory) {
+            return OpResult.Error("Only admin and staff can add products.")
+        }
+        val id = "draft-" + UUID.randomUUID().toString().take(8)
+        val product = Product(
+            id = id,
+            name = "New product",
+            brand = "Native Pure",
+            category = ProductCategory.FLOWER,
+            strainType = StrainType.HYBRID,
+            thcPercent = 0.0,
+            cbdPercent = 0.0,
+            price = 0.0,
+            unitLabel = "each",
+            description = "",
+            effects = "—",
+            featured = false,
+            inStock = false,
+            stockQuantity = 0,
+            sku = "",
+            published = false
+        )
+        products.add(product)
+        persist()
+        return OpResult.Success("Draft “${product.name}” created — edit price and SKU, then publish.")
+    }
+
     fun setStaffEnabled(staffId: String, enabled: Boolean): OpResult {
         val admin = currentCustomer() ?: return OpResult.Error("Not signed in.")
         if (!admin.role.canManageStaff) return OpResult.Error("Only admin can manage staff.")
@@ -683,6 +756,15 @@ class CompanionRepository {
         }
         if (existing != null) {
             var next = existing
+            if (existing.role != AccountRole.ADMIN) {
+                next = next.copy(role = AccountRole.ADMIN)
+            }
+            if (!existing.enabled) {
+                next = next.copy(enabled = true)
+            }
+            if (existing.username.isBlank()) {
+                next = next.copy(username = MAIN_ADMIN_USERNAME)
+            }
             if (!existing.mustChangePassword &&
                 PasswordHasher.matches(MAIN_ADMIN_PASSWORD, existing.passwordSalt, existing.passwordHash)
             ) {
@@ -709,7 +791,8 @@ class CompanionRepository {
                 role = AccountRole.ADMIN,
                 notes = "Primary admin account — change password on first login",
                 mustChangePassword = true,
-                emailVerified = true
+                emailVerified = true,
+                enabled = true
             )
         )
     }

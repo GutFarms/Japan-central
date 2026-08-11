@@ -66,6 +66,7 @@ import com.nativepure.companion.data.OrderStatus
 import com.nativepure.companion.data.PasswordPolicy
 import com.nativepure.companion.data.Product
 import com.nativepure.companion.data.ProductCategory
+import com.nativepure.companion.data.StrainType
 import java.awt.FileDialog
 import java.awt.Frame
 import java.io.File
@@ -864,6 +865,7 @@ private fun InventoryPane(
 ) {
     var query by remember { mutableStateOf("") }
     var filterPublished by remember { mutableStateOf("All") }
+    var editing by remember { mutableStateOf<Product?>(null) }
     val products = repository.allProducts().sortedWith(
         compareBy<Product> { it.published }.thenBy { it.name }
     )
@@ -883,9 +885,21 @@ private fun InventoryPane(
     Column(Modifier.fillMaxSize()) {
         Text("Stock", style = MaterialTheme.typography.headlineLarge)
         Text(
-            "Customers only see published products. $drafts unpublished draft(s).",
+            "Admin/staff can edit price, SKU, and stock. $drafts unpublished draft(s).",
             color = MaterialTheme.colorScheme.onSurfaceVariant
         )
+        Spacer(Modifier.height(8.dp))
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Button(onClick = {
+                when (val result = repository.createBlankDraftProduct()) {
+                    is OpResult.Success -> {
+                        onMessage(result.message)
+                        onRefresh()
+                    }
+                    is OpResult.Error -> onMessage(result.message)
+                }
+            }) { Text("Add product") }
+        }
         Spacer(Modifier.height(8.dp))
         OutlinedTextField(
             value = query,
@@ -910,6 +924,24 @@ private fun InventoryPane(
         )
         Spacer(Modifier.height(12.dp))
         LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            editing?.let { product ->
+                item {
+                    CompanionProductEditor(
+                        product = product,
+                        onCancel = { editing = null },
+                        onSave = { updated ->
+                            when (val result = repository.saveProduct(updated)) {
+                                is OpResult.Success -> {
+                                    onMessage(result.message)
+                                    editing = null
+                                    onRefresh()
+                                }
+                                is OpResult.Error -> onMessage(result.message)
+                            }
+                        }
+                    )
+                }
+            }
             items(filtered, key = { it.id }) { product ->
                 Surface(shape = RoundedCornerShape(12.dp), tonalElevation = 1.dp, modifier = Modifier.fillMaxWidth()) {
                     Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -917,7 +949,8 @@ private fun InventoryPane(
                             Column(Modifier.weight(1f)) {
                                 Text(product.name, style = MaterialTheme.typography.titleLarge)
                                 Text(
-                                    "${product.sku} · ${product.category.label} · " +
+                                    "${product.sku.ifBlank { "no SKU" }} · $${"%.2f".format(product.price)} · " +
+                                        "${product.category.label} · " +
                                         if (product.published) "Published" else "Draft",
                                     color = MaterialTheme.colorScheme.onSurfaceVariant
                                 )
@@ -933,20 +966,104 @@ private fun InventoryPane(
                                 onRefresh()
                             }) { Text("+") }
                         }
-                        Button(onClick = {
-                            val next = !product.published
-                            when (val result = repository.setPublished(product.id, next)) {
-                                is OpResult.Success -> {
-                                    onRefresh()
-                                    onMessage(result.message)
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            OutlinedButton(onClick = { editing = product }) { Text("Edit") }
+                            Button(onClick = {
+                                val next = !product.published
+                                when (val result = repository.setPublished(product.id, next)) {
+                                    is OpResult.Success -> {
+                                        onRefresh()
+                                        onMessage(result.message)
+                                    }
+                                    is OpResult.Error -> onMessage(result.message)
                                 }
-                                is OpResult.Error -> onMessage(result.message)
+                            }) {
+                                Text(if (product.published) "Unpublish" else "Publish")
                             }
-                        }) {
-                            Text(if (product.published) "Unpublish from menu" else "Publish to customers")
                         }
                     }
                 }
+            }
+        }
+    }
+}
+
+@Composable
+private fun CompanionProductEditor(
+    product: Product,
+    onCancel: () -> Unit,
+    onSave: (Product) -> Unit
+) {
+    var name by remember(product.id) { mutableStateOf(product.name) }
+    var brand by remember(product.id) { mutableStateOf(product.brand) }
+    var sku by remember(product.id) { mutableStateOf(product.sku) }
+    var price by remember(product.id) { mutableStateOf(if (product.price > 0) product.price.toString() else "") }
+    var stock by remember(product.id) { mutableStateOf(product.stockQuantity.toString()) }
+    var unit by remember(product.id) { mutableStateOf(product.unitLabel) }
+    var description by remember(product.id) { mutableStateOf(product.description) }
+    var category by remember(product.id) { mutableStateOf(product.category) }
+    var published by remember(product.id) { mutableStateOf(product.published) }
+
+    Surface(shape = RoundedCornerShape(12.dp), color = MaterialTheme.colorScheme.secondaryContainer) {
+        Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text("Edit product", style = MaterialTheme.typography.titleLarge)
+            Field(name, { name = it }, "Name")
+            Field(brand, { brand = it }, "Brand")
+            Field(sku, { sku = it }, "SKU")
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedTextField(
+                    value = price,
+                    onValueChange = { price = it },
+                    label = { Text("Price") },
+                    modifier = Modifier.weight(1f),
+                    singleLine = true
+                )
+                OutlinedTextField(
+                    value = stock,
+                    onValueChange = { stock = it.filter { ch -> ch.isDigit() } },
+                    label = { Text("Stock") },
+                    modifier = Modifier.weight(1f),
+                    singleLine = true
+                )
+            }
+            Field(unit, { unit = it }, "Unit")
+            Field(description, { description = it }, "Description")
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                ProductCategory.entries.forEach { cat ->
+                    FilterChip(
+                        selected = category == cat,
+                        onClick = { category = cat },
+                        label = { Text(cat.label) }
+                    )
+                }
+            }
+            FilterChip(
+                selected = published,
+                onClick = { published = !published },
+                label = { Text(if (published) "Published" else "Draft") }
+            )
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedButton(onClick = onCancel) { Text("Cancel") }
+                Button(
+                    onClick = {
+                        onSave(
+                            product.copy(
+                                name = name,
+                                brand = brand,
+                                sku = sku,
+                                price = price.toDoubleOrNull() ?: 0.0,
+                                stockQuantity = stock.toIntOrNull() ?: 0,
+                                unitLabel = unit,
+                                description = description,
+                                category = category,
+                                strainType = product.strainType.takeIf { it != StrainType.NONE }
+                                    ?: StrainType.HYBRID,
+                                published = published
+                            )
+                        )
+                    },
+                    enabled = name.trim().length >= 2
+                ) { Text("Save changes") }
             }
         }
     }
