@@ -1404,8 +1404,40 @@ private fun AccountPane(
 
         if (customer.role.canManageInventory) {
             HorizontalDivider(Modifier.padding(vertical = 8.dp))
+            Text("Local hard drive", style = MaterialTheme.typography.headlineMedium)
+            Text(
+                "Inventory and customer records save automatically to this PC:",
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            Text(
+                repository.localDataFolderPath(),
+                style = MaterialTheme.typography.bodyMedium
+            )
+            Text(
+                "Files: store.json · inventory.json · customers.json",
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                style = MaterialTheme.typography.bodyMedium
+            )
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Button(onClick = {
+                    when (val result = repository.saveAllToHardDrive()) {
+                        is OpResult.Success -> onMessage(result.message)
+                        is OpResult.Error -> onMessage(result.message)
+                    }
+                }) { Text("Save now") }
+                OutlinedButton(onClick = {
+                    if (!repository.openLocalDataFolder()) {
+                        onMessage("Could not open folder. Path: ${repository.localDataFolderPath()}")
+                    }
+                }) { Text("Open data folder") }
+            }
+
+            HorizontalDivider(Modifier.padding(vertical = 8.dp))
             Text("Desktop sync", style = MaterialTheme.typography.headlineMedium)
-            Text("Share inventory JSON with the Android app.", color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Text(
+                "Share inventory + customers JSON with the Android app. Import writes into the local hard-drive store.",
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
             Button(onClick = {
                 try {
                     val json = repository.exportSyncJson()
@@ -1415,7 +1447,7 @@ private fun AccountPane(
                     val dir = dialog.directory ?: return@Button
                     val name = dialog.file ?: return@Button
                     File(dir, name).writeText(json)
-                    onMessage("Exported sync file.")
+                    onMessage("Exported sync file (products + customers + orders).")
                 } catch (t: Throwable) {
                     onMessage(t.message ?: "Export failed.")
                 }

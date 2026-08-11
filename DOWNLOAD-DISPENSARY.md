@@ -97,4 +97,4 @@ See [`DispensaryCompanion/README.md`](./DispensaryCompanion/README.md).
 
 ## Phone ↔ desktop sync
 
-Staff/admin → **Account → Desktop sync**: export/import `nativepure-sync-v1` JSON so inventory publish state and stock can be shared as a file.
+Staff/admin → **Account → Desktop sync**: export/import `nativepure-sync-v1` JSON (products + customers + orders). On the PC companion, imported data is saved to the local hard drive (`%LOCALAPPDATA%\NativePure\Companion\` on Windows).

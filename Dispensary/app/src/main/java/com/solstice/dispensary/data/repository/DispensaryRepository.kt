@@ -986,9 +986,10 @@ class DispensaryRepository(context: Context) {
             error("Only staff/admin can export inventory sync.")
         }
         val products = db.productDao().getAll()
+        val customers = db.customerDao().observeAll().first()
         val orders = db.orderDao().observeAll().first()
         val lines = orders.flatMap { db.orderDao().observeLines(it.id).first() }
-        return InventorySync.exportJson(products, orders, lines)
+        return InventorySync.exportJson(products, orders, lines, customers)
     }
 
     suspend fun importSyncJson(json: String): OpResult {
@@ -1000,7 +1001,24 @@ class DispensaryRepository(context: Context) {
         return try {
             val products = InventorySync.parseProducts(json)
             products.forEach { db.productDao().upsert(it) }
-            OpResult.Success("Imported ${products.size} products from sync file.")
+            val customers = InventorySync.parseCustomers(json)
+            var customerCount = 0
+            customers.forEach { incoming ->
+                if (incoming.id == me.id) return@forEach
+                val existing = db.customerDao().getById(incoming.id)
+                    ?: db.customerDao().getByEmail(incoming.email)
+                if (existing == null) {
+                    db.customerDao().upsert(incoming)
+                } else {
+                    db.customerDao().update(
+                        incoming.copy(id = existing.id)
+                    )
+                }
+                customerCount++
+            }
+            OpResult.Success(
+                "Imported ${products.size} products and $customerCount customers from sync file."
+            )
         } catch (t: Throwable) {
             OpResult.Error(t.message ?: "Could not import sync file.")
         }

@@ -14,8 +14,8 @@ class CompanionRepository {
         encodeDefaults = true
     }
 
-    private val storeDir = File(System.getProperty("user.home"), ".nativepure-companion")
-    private val storeFile = File(storeDir, "store.json")
+    private val storeDir: File = LocalDataStore.dataDirectory()
+    private val storeFile: File = LocalDataStore.storeFile()
 
     private var products: MutableList<Product> = mutableListOf()
     private var customers: MutableList<Customer> = mutableListOf()
@@ -39,6 +39,23 @@ class CompanionRepository {
 
     init {
         loadOrSeed()
+    }
+
+    /** Absolute path where inventory + customers are saved on the hard drive. */
+    fun localDataFolderPath(): String = LocalDataStore.dataDirectoryPath()
+
+    fun openLocalDataFolder(): Boolean = LocalDataStore.openInFileManager()
+
+    /** Force rewrite of store + inventory/customer backup files. */
+    fun saveAllToHardDrive(): OpResult {
+        return try {
+            persist()
+            OpResult.Success(
+                "Saved inventory (${products.size}) and customers (${customers.size}) to ${localDataFolderPath()}"
+            )
+        } catch (t: Throwable) {
+            OpResult.Error(t.message ?: "Could not save to hard drive.")
+        }
     }
 
     fun currentCustomer(): CustomerProfile? =
@@ -617,6 +634,7 @@ class CompanionRepository {
                 format = "nativepure-sync-v1",
                 exportedAt = System.currentTimeMillis(),
                 products = products.toList(),
+                customers = customers.toList(),
                 orders = orders.toList(),
                 orderLines = orderLines.toList()
             )
@@ -627,15 +645,42 @@ class CompanionRepository {
         val me = currentCustomer() ?: return OpResult.Error("Not signed in.")
         if (!me.role.canManageInventory) return OpResult.Error("Only staff/admin can import.")
         return try {
-            // Accept full sync object or a products array wrapped by InventorySync from Android.
             val parsed = json.decodeFromString<SyncFile>(raw)
             require(parsed.format == "nativepure-sync-v1") { "Unsupported sync format." }
             parsed.products.forEach { incoming ->
                 val idx = products.indexOfFirst { it.id == incoming.id }
                 if (idx >= 0) products[idx] = incoming else products.add(incoming)
             }
+            var customersMerged = 0
+            parsed.customers.forEach { incoming ->
+                // Never overwrite the signed-in account mid-session with a stale copy.
+                if (incoming.id == me.id) return@forEach
+                val idx = customers.indexOfFirst {
+                    it.id == incoming.id || it.email.equals(incoming.email, ignoreCase = true)
+                }
+                if (idx >= 0) {
+                    customers[idx] = incoming.copy(id = customers[idx].id)
+                } else {
+                    customers.add(incoming)
+                }
+                customersMerged++
+            }
+            parsed.orders.forEach { incoming ->
+                if (orders.none { it.id == incoming.id }) orders.add(incoming)
+            }
+            parsed.orderLines.forEach { incoming ->
+                val exists = orderLines.any {
+                    it.orderId == incoming.orderId &&
+                        it.productId == incoming.productId &&
+                        it.quantity == incoming.quantity &&
+                        it.unitPrice == incoming.unitPrice
+                }
+                if (!exists) orderLines.add(incoming)
+            }
             persist()
-            OpResult.Success("Imported ${parsed.products.size} products.")
+            OpResult.Success(
+                "Imported ${parsed.products.size} products and $customersMerged customers to hard drive."
+            )
         } catch (t: Throwable) {
             OpResult.Error(t.message ?: "Import failed.")
         }
@@ -917,7 +962,17 @@ class CompanionRepository {
             sessionCustomerId = sessionCustomerId,
             ageVerified = ageVerified
         )
-        storeFile.writeText(json.encodeToString(data))
+        val encoded = json.encodeToString(data)
+        LocalDataStore.writeAtomic(storeFile, encoded)
+        // Dedicated hard-drive backups for inventory + customers (easy to find/copy)
+        LocalDataStore.writeAtomic(
+            LocalDataStore.inventoryBackupFile(),
+            json.encodeToString(products.toList())
+        )
+        LocalDataStore.writeAtomic(
+            LocalDataStore.customersBackupFile(),
+            json.encodeToString(customers.toList())
+        )
     }
 
     companion object {

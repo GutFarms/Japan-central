@@ -29,7 +29,10 @@ run-companion.bat
 - **Stock management** for staff/admin
 - **Customer database** for staff/admin
 - **Account security** — password policy, change password, login lockout, staff creation
-- Local data stored under `~/.nativepure-companion/store.json`
+- **Local hard drive storage** — inventory + customers auto-save on every change
+  - Windows: `%LOCALAPPDATA%\NativePure\Companion\` (`store.json`, `inventory.json`, `customers.json`)
+  - macOS/Linux: `~/.nativepure-companion/`
+  - Account → **Open data folder** / **Save now**
 
 ## Default accounts (seeded)
 
@@ -84,7 +87,7 @@ cp build/compose/jars/NativePureCompanion-*-*.jar dist/NativePure-Companion.jar
 
 Staff/admin → **Account → Desktop sync**:
 
-- **Export sync JSON** — writes `nativepure-sync-v1` (products + orders snapshot)
-- **Import sync JSON** — merges products by id (stock, publish state, prices)
+- **Export sync JSON** — `nativepure-sync-v1` (products + customers + orders)
+- **Import sync JSON** — merges into the local hard-drive store (inventory + customers)
 
-Use the same JSON with the Android app Account → Desktop sync section.
+Use the same JSON with the Android app Account → Desktop sync section. After import, data is written to the PC data folder above.

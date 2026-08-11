@@ -1,5 +1,7 @@
 package com.solstice.dispensary.data.sync
 
+import com.solstice.dispensary.data.model.AccountRole
+import com.solstice.dispensary.data.model.Customer
 import com.solstice.dispensary.data.model.Order
 import com.solstice.dispensary.data.model.OrderLine
 import com.solstice.dispensary.data.model.Product
@@ -15,7 +17,8 @@ object InventorySync {
     fun exportJson(
         products: List<Product>,
         orders: List<Order>,
-        orderLines: List<OrderLine>
+        orderLines: List<OrderLine>,
+        customers: List<Customer> = emptyList()
     ): String {
         val root = JSONObject()
         root.put("format", FORMAT)
@@ -58,6 +61,32 @@ object InventorySync {
                 )
             }
         })
+        root.put("customers", JSONArray().also { arr ->
+            customers.forEach { c ->
+                arr.put(
+                    JSONObject()
+                        .put("id", c.id)
+                        .put("email", c.email)
+                        .put("username", c.username)
+                        .put("passwordHash", c.passwordHash)
+                        .put("passwordSalt", c.passwordSalt)
+                        .put("fullName", c.fullName)
+                        .put("phone", c.phone)
+                        .put("dateOfBirth", c.dateOfBirth)
+                        .put("createdAt", c.createdAt)
+                        .put("lastLoginAt", c.lastLoginAt)
+                        .put("notes", c.notes)
+                        .put("marketingOptIn", c.marketingOptIn)
+                        .put("role", c.role.name)
+                        .put("createdByAdminId", c.createdByAdminId)
+                        .put("mustChangePassword", c.mustChangePassword)
+                        .put("enabled", c.enabled)
+                        .put("emailVerified", c.emailVerified)
+                        .put("loyaltyPoints", c.loyaltyPoints)
+                        .put("lifetimeSpend", c.lifetimeSpend)
+                )
+            }
+        })
         root.put("orders", JSONArray().also { arr ->
             orders.forEach { o ->
                 arr.put(
@@ -71,6 +100,9 @@ object InventorySync {
                         .put("notes", o.notes)
                         .put("customerId", o.customerId)
                         .put("customerEmail", o.customerEmail)
+                        .put("pointsEarned", o.pointsEarned)
+                        .put("pointsRedeemed", o.pointsRedeemed)
+                        .put("discount", o.discount)
                 )
             }
         })
@@ -138,6 +170,42 @@ object InventorySync {
         }
     }
 
+    fun parseCustomers(json: String): List<Customer> {
+        val root = JSONObject(json)
+        require(root.optString("format") == FORMAT) { "Unsupported sync file format." }
+        val arr = root.optJSONArray("customers") ?: return emptyList()
+        return buildList {
+            for (i in 0 until arr.length()) {
+                val o = arr.getJSONObject(i)
+                val roleName = o.optString("role", AccountRole.CUSTOMER.name)
+                val role = runCatching { AccountRole.valueOf(roleName) }.getOrDefault(AccountRole.CUSTOMER)
+                add(
+                    Customer(
+                        id = o.getString("id"),
+                        email = o.getString("email"),
+                        username = o.optString("username", ""),
+                        passwordHash = o.getString("passwordHash"),
+                        passwordSalt = o.getString("passwordSalt"),
+                        fullName = o.optString("fullName", ""),
+                        phone = o.optString("phone", ""),
+                        dateOfBirth = o.optString("dateOfBirth", ""),
+                        createdAt = o.optLong("createdAt", System.currentTimeMillis()),
+                        lastLoginAt = o.optLong("lastLoginAt", 0L),
+                        notes = o.optString("notes", ""),
+                        marketingOptIn = o.optBoolean("marketingOptIn", false),
+                        role = role,
+                        createdByAdminId = o.optString("createdByAdminId", ""),
+                        mustChangePassword = o.optBoolean("mustChangePassword", false),
+                        enabled = o.optBoolean("enabled", true),
+                        emailVerified = o.optBoolean("emailVerified", false),
+                        loyaltyPoints = o.optInt("loyaltyPoints", 0),
+                        lifetimeSpend = o.optDouble("lifetimeSpend", 0.0)
+                    )
+                )
+            }
+        }
+    }
+
     fun parseOrders(json: String): Pair<List<Order>, List<OrderLine>> {
         val root = JSONObject(json)
         require(root.optString("format") == FORMAT) { "Unsupported sync file format." }
@@ -155,7 +223,10 @@ object InventorySync {
                         pickupName = o.getString("pickupName"),
                         notes = o.optString("notes", ""),
                         customerId = o.optString("customerId", ""),
-                        customerEmail = o.optString("customerEmail", "")
+                        customerEmail = o.optString("customerEmail", ""),
+                        pointsEarned = o.optInt("pointsEarned", 0),
+                        pointsRedeemed = o.optInt("pointsRedeemed", 0),
+                        discount = o.optDouble("discount", 0.0)
                     )
                 )
             }
