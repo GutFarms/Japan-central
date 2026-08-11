@@ -20,6 +20,7 @@ import com.solstice.dispensary.data.model.OrderLine
 import com.solstice.dispensary.data.model.Product
 import com.solstice.dispensary.data.model.ProductCategory
 import com.solstice.dispensary.data.model.ProductRequest
+import com.solstice.dispensary.data.model.ProductSize
 import com.solstice.dispensary.data.model.RequestBoxStats
 import com.solstice.dispensary.data.model.ThemeMode
 import com.solstice.dispensary.data.repository.DispensaryRepository
@@ -438,16 +439,16 @@ class DispensaryViewModel(
         searchQuery = query
     }
 
-    fun addToCart(productId: String, quantity: Int = 1) {
-        viewModelScope.launch { repository.addToCart(productId, quantity) }
+    fun addToCart(productId: String, quantity: Int = 1, size: ProductSize? = null) {
+        viewModelScope.launch { repository.addToCart(productId, quantity, size) }
     }
 
-    fun setQuantity(productId: String, quantity: Int) {
-        viewModelScope.launch { repository.setCartQuantity(productId, quantity) }
+    fun setQuantity(productId: String, quantity: Int, size: ProductSize? = null) {
+        viewModelScope.launch { repository.setCartQuantity(productId, quantity, size) }
     }
 
-    fun removeFromCart(productId: String) {
-        viewModelScope.launch { repository.removeFromCart(productId) }
+    fun removeFromCart(productId: String, size: ProductSize? = null) {
+        viewModelScope.launch { repository.removeFromCart(productId, size) }
     }
 
     fun clearCart() {

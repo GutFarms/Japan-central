@@ -23,6 +23,33 @@ enum class StrainType(val label: String) {
 }
 
 @Serializable
+enum class ProductSize(val label: String, val grams: Double) {
+    GRAM("1g", 1.0),
+    EIGHTH("3.5g", 3.5),
+    QUARTER("7g", 7.0),
+    OUNCE("1oz", 28.0);
+
+    companion object {
+        const val UNIT_KEY = "UNIT"
+    }
+}
+
+object SizePricing {
+    fun fromEighth(eighthPrice: Double): Map<ProductSize, Double> {
+        val base = eighthPrice.coerceAtLeast(0.0)
+        return mapOf(
+            ProductSize.GRAM to roundMoney(base / 3.5),
+            ProductSize.EIGHTH to roundMoney(base),
+            ProductSize.QUARTER to roundMoney(base * 1.85),
+            ProductSize.OUNCE to roundMoney(base * 6.5)
+        )
+    }
+
+    private fun roundMoney(value: Double): Double =
+        kotlin.math.round(value * 100.0) / 100.0
+}
+
+@Serializable
 enum class AccountRole(val label: String) {
     CUSTOMER("Customer"),
     STAFF("Staff"),
@@ -55,7 +82,16 @@ data class Product(
     val publishedBy: String = "",
     val onDeal: Boolean = false,
     val dealPercent: Int = 0,
-    val dealLabel: String = ""
+    val dealLabel: String = "",
+    val sizeInventoryEnabled: Boolean = false,
+    val stockGram: Int = 0,
+    val priceGram: Double = 0.0,
+    val stockEighth: Int = 0,
+    val priceEighth: Double = 0.0,
+    val stockQuarter: Int = 0,
+    val priceQuarter: Double = 0.0,
+    val stockOunce: Int = 0,
+    val priceOunce: Double = 0.0
 ) {
     val hasActiveDeal: Boolean
         get() = onDeal && dealPercent > 0
@@ -66,6 +102,23 @@ data class Product(
         } else {
             price
         }
+
+    fun displayUnitLabel(): String =
+        if (sizeInventoryEnabled) "1g–1oz" else unitLabel
+
+    fun normalizedSizeInventory(): Product {
+        if (!sizeInventoryEnabled) return copy(inStock = stockQuantity > 0)
+        val total = stockGram + stockEighth + stockQuarter + stockOunce
+        val eighth = if (priceEighth > 0) priceEighth else price
+        val anyPriced = listOf(priceGram, priceEighth, priceQuarter, priceOunce).any { it > 0 }
+        val anyStock = listOf(stockGram, stockEighth, stockQuarter, stockOunce).any { it > 0 }
+        return copy(
+            stockQuantity = total,
+            inStock = anyPriced && anyStock,
+            unitLabel = "1g–1oz",
+            price = if (eighth > 0) eighth else price
+        )
+    }
 }
 
 @Serializable

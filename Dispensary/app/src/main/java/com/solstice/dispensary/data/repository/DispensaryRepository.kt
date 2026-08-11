@@ -27,9 +27,11 @@ import com.solstice.dispensary.data.model.OrderLine
 import com.solstice.dispensary.data.model.OrderStatus
 import com.solstice.dispensary.data.model.Product
 import com.solstice.dispensary.data.model.ProductCategory
+import com.solstice.dispensary.data.model.ProductSize
 import com.solstice.dispensary.data.model.RequestBoxStats
 import com.solstice.dispensary.data.model.ProductRequest
 import com.solstice.dispensary.data.model.SecuritySettings
+import com.solstice.dispensary.data.model.SizePricing
 import com.solstice.dispensary.data.model.StrainType
 import com.solstice.dispensary.data.model.ThemeMode
 import com.solstice.dispensary.data.model.toProfile
@@ -121,7 +123,12 @@ class DispensaryRepository(context: Context) {
     val cartSummary: Flow<CartSummary> = combine(catalog, cartItems) { allProducts, items ->
         val byId = allProducts.associateBy { it.id }
         val lines = items.mapNotNull { item ->
-            byId[item.productId]?.let { CartLine(it, item.quantity) }
+            val product = byId[item.productId] ?: return@mapNotNull null
+            val size = ProductSize.fromKey(item.sizeKey)
+            if (product.sizeInventoryEnabled && size == null && item.sizeKey != ProductSize.UNIT_KEY) {
+                return@mapNotNull null
+            }
+            CartLine(product, item.quantity, size)
         }
         val subtotal = lines.sumOf { it.lineTotal }
         val tax = subtotal * TAX_RATE
@@ -684,28 +691,36 @@ class DispensaryRepository(context: Context) {
         return AuthResult.Success(updated.toProfile())
     }
 
-    suspend fun addToCart(productId: String, quantity: Int = 1) {
+    suspend fun addToCart(productId: String, quantity: Int = 1, size: ProductSize? = null) {
         val product = db.productDao().getById(productId) ?: return
         val me = currentCustomer()
         if (!product.published && me?.role?.canManageInventory != true) return
-        val existing = db.cartDao().get(productId)
+        val resolvedSize = when {
+            product.sizeInventoryEnabled -> size ?: product.offeredSizes().firstOrNull { it.inStock }?.size
+            else -> null
+        }
+        if (product.sizeInventoryEnabled && resolvedSize == null) return
+        if (product.sizeInventoryEnabled && product.stockFor(resolvedSize) <= 0) return
+        val sizeKey = ProductSize.cartKey(resolvedSize)
+        val existing = db.cartDao().get(productId, sizeKey)
         if (existing == null) {
-            db.cartDao().upsert(CartItem(productId, quantity.coerceAtLeast(1)))
+            db.cartDao().upsert(CartItem(productId, sizeKey, quantity.coerceAtLeast(1)))
         } else {
             db.cartDao().upsert(existing.copy(quantity = existing.quantity + quantity))
         }
     }
 
-    suspend fun setCartQuantity(productId: String, quantity: Int) {
+    suspend fun setCartQuantity(productId: String, quantity: Int, size: ProductSize? = null) {
+        val sizeKey = ProductSize.cartKey(size)
         if (quantity <= 0) {
-            db.cartDao().delete(productId)
+            db.cartDao().delete(productId, sizeKey)
         } else {
-            db.cartDao().upsert(CartItem(productId, quantity))
+            db.cartDao().upsert(CartItem(productId, sizeKey, quantity))
         }
     }
 
-    suspend fun removeFromCart(productId: String) {
-        db.cartDao().delete(productId)
+    suspend fun removeFromCart(productId: String, size: ProductSize? = null) {
+        db.cartDao().delete(productId, ProductSize.cartKey(size))
     }
 
     suspend fun clearCart() {
@@ -716,8 +731,16 @@ class DispensaryRepository(context: Context) {
         val me = currentCustomer()
         if (me?.role?.canManageInventory != true) return null
         val product = db.productDao().getById(productId) ?: return null
-        val next = (product.stockQuantity + delta).coerceAtLeast(0)
-        val updated = product.copy(stockQuantity = next, inStock = next > 0)
+        val updated = if (product.sizeInventoryEnabled) {
+            // Quick ± on the inventory list adjusts the 3.5g size by default.
+            product.withSizeStock(
+                ProductSize.EIGHTH,
+                product.stockEighth + delta
+            )
+        } else {
+            val next = (product.stockQuantity + delta).coerceAtLeast(0)
+            product.copy(stockQuantity = next, inStock = next > 0)
+        }
         db.productDao().update(updated)
         return updated
     }
@@ -735,7 +758,9 @@ class DispensaryRepository(context: Context) {
             when {
                 product.sku.isBlank() ->
                     return OpResult.Error("Add a SKU before publishing.")
-                product.price <= 0.0 ->
+                product.sizeInventoryEnabled && product.offeredSizes().isEmpty() ->
+                    return OpResult.Error("Set at least one size price (1g / 3.5g / 7g / oz) before publishing.")
+                !product.sizeInventoryEnabled && product.price <= 0.0 ->
                     return OpResult.Error("Set a price greater than \$0 before publishing.")
                 product.name.isBlank() ->
                     return OpResult.Error("Product needs a name before publishing.")
@@ -768,21 +793,51 @@ class DispensaryRepository(context: Context) {
         val price = product.price.coerceAtLeast(0.0)
         val stock = product.stockQuantity.coerceAtLeast(0)
         val sku = product.sku.trim()
+        val withSizes = if (product.sizeInventoryEnabled) {
+            val prices = if (product.priceEighth <= 0 && price > 0) {
+                SizePricing.fromEighth(price)
+            } else null
+            product.copy(
+                stockGram = product.stockGram.coerceAtLeast(0),
+                stockEighth = product.stockEighth.coerceAtLeast(0),
+                stockQuarter = product.stockQuarter.coerceAtLeast(0),
+                stockOunce = product.stockOunce.coerceAtLeast(0),
+                priceGram = product.priceGram.coerceAtLeast(0.0).let {
+                    if (it <= 0 && prices != null) prices.getValue(ProductSize.GRAM) else it
+                },
+                priceEighth = product.priceEighth.coerceAtLeast(0.0).let {
+                    if (it <= 0 && prices != null) prices.getValue(ProductSize.EIGHTH) else it
+                },
+                priceQuarter = product.priceQuarter.coerceAtLeast(0.0).let {
+                    if (it <= 0 && prices != null) prices.getValue(ProductSize.QUARTER) else it
+                },
+                priceOunce = product.priceOunce.coerceAtLeast(0.0).let {
+                    if (it <= 0 && prices != null) prices.getValue(ProductSize.OUNCE) else it
+                }
+            ).normalizedSizeInventory()
+        } else {
+            product.copy(
+                sizeInventoryEnabled = false,
+                stockQuantity = stock,
+                inStock = stock > 0,
+                price = price,
+                unitLabel = product.unitLabel.trim().ifBlank { "each" }
+            )
+        }
         if (product.published) {
             when {
                 sku.isBlank() -> return OpResult.Error("Add a SKU before keeping this product published.")
-                price <= 0.0 -> return OpResult.Error("Set a price greater than \$0 before publishing.")
+                withSizes.sizeInventoryEnabled && withSizes.offeredSizes().isEmpty() ->
+                    return OpResult.Error("Set at least one size price before publishing.")
+                !withSizes.sizeInventoryEnabled && withSizes.price <= 0.0 ->
+                    return OpResult.Error("Set a price greater than \$0 before publishing.")
             }
         }
         val existing = db.productDao().getById(product.id)
-        val cleaned = product.copy(
+        val cleaned = withSizes.copy(
             name = name,
             brand = product.brand.trim().ifBlank { "Native Pure" },
-            price = price,
-            stockQuantity = stock,
-            inStock = stock > 0,
             sku = sku,
-            unitLabel = product.unitLabel.trim().ifBlank { "each" },
             description = product.description.trim(),
             effects = product.effects.trim().ifBlank { "—" },
             thcPercent = product.thcPercent.coerceAtLeast(0.0),
@@ -809,6 +864,7 @@ class DispensaryRepository(context: Context) {
             return OpResult.Error("Only admin and staff can add products.")
         }
         val id = "draft-" + UUID.randomUUID().toString().take(8)
+        val prices = SizePricing.fromEighth(40.0)
         val product = Product(
             id = id,
             name = "New product",
@@ -817,18 +873,23 @@ class DispensaryRepository(context: Context) {
             strainType = StrainType.HYBRID,
             thcPercent = 0.0,
             cbdPercent = 0.0,
-            price = 0.0,
-            unitLabel = "each",
+            price = 40.0,
+            unitLabel = "1g–1oz",
             description = "",
             effects = "—",
             featured = false,
             inStock = false,
             stockQuantity = 0,
             sku = "",
-            published = false
-        )
+            published = false,
+            sizeInventoryEnabled = true,
+            priceGram = prices.getValue(ProductSize.GRAM),
+            priceEighth = prices.getValue(ProductSize.EIGHTH),
+            priceQuarter = prices.getValue(ProductSize.QUARTER),
+            priceOunce = prices.getValue(ProductSize.OUNCE)
+        ).normalizedSizeInventory()
         db.productDao().upsert(product)
-        return OpResult.Success("Draft “${product.name}” created — edit price and SKU, then publish.")
+        return OpResult.Success("Draft “${product.name}” created — set size stock, then publish.")
     }
 
     suspend fun setStaffEnabled(staffId: String, enabled: Boolean): OpResult {
@@ -966,7 +1027,9 @@ class DispensaryRepository(context: Context) {
             .associateBy { it.id }
         val lines = items.mapNotNull { item ->
             catalog[item.productId]?.let { product ->
-                CartLine(product, item.quantity)
+                val size = ProductSize.fromKey(item.sizeKey)
+                if (product.sizeInventoryEnabled && size == null) return@mapNotNull null
+                CartLine(product, item.quantity, size)
             }
         }
         if (lines.isEmpty()) return null
@@ -1008,8 +1071,10 @@ class DispensaryRepository(context: Context) {
                 orderId = order.id,
                 productId = it.product.id,
                 productName = it.product.name,
-                unitPrice = it.product.effectivePrice,
-                quantity = it.quantity
+                unitPrice = it.unitPrice,
+                quantity = it.quantity,
+                sizeKey = it.sizeKey,
+                sizeLabel = it.unitLabel
             )
         }
         db.orderDao().placeOrder(order, orderLines)
@@ -1026,8 +1091,13 @@ class DispensaryRepository(context: Context) {
 
         lines.forEach { line ->
             val product = db.productDao().getById(line.product.id) ?: return@forEach
-            val next = (product.stockQuantity - line.quantity).coerceAtLeast(0)
-            db.productDao().update(product.copy(stockQuantity = next, inStock = next > 0))
+            val updated = if (product.sizeInventoryEnabled && line.size != null) {
+                product.withSizeStock(line.size, product.stockFor(line.size) - line.quantity)
+            } else {
+                val next = (product.stockQuantity - line.quantity).coerceAtLeast(0)
+                product.copy(stockQuantity = next, inStock = next > 0)
+            }
+            db.productDao().update(updated)
         }
 
         db.cartDao().clear()
@@ -1058,9 +1128,13 @@ class DispensaryRepository(context: Context) {
         sb.appendLine()
         lines.forEach { line ->
             sb.appendLine(
-                "${line.quantity} × ${line.productName} @ $${"%.2f".format(line.unitPrice)} = $${
-                    "%.2f".format(line.unitPrice * line.quantity)
-                }"
+                buildString {
+                    append("${line.quantity} × ${line.productName}")
+                    if (line.sizeLabel.isNotBlank()) append(" (${line.sizeLabel})")
+                    append(" @ $${"%.2f".format(line.unitPrice)} = $${
+                        "%.2f".format(line.unitPrice * line.quantity)
+                    }")
+                }
             )
         }
         sb.appendLine()

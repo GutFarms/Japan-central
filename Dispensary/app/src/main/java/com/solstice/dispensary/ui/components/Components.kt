@@ -139,7 +139,7 @@ fun ProductTile(
                 overflow = TextOverflow.Ellipsis
             )
             Text(
-                text = "${product.brand} · ${product.unitLabel}",
+                text = "${product.brand} · ${product.displayUnitLabel()}",
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
@@ -171,7 +171,11 @@ fun ProductTile(
                 )
             }
             Text(
-                text = money(product.effectivePrice),
+                text = if (product.sizeInventoryEnabled) {
+                    "from ${money(product.effectivePrice)}"
+                } else {
+                    money(product.effectivePrice)
+                },
                 style = MaterialTheme.typography.titleMedium,
                 color = MaterialTheme.colorScheme.primary
             )

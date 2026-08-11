@@ -2,6 +2,8 @@ package com.solstice.dispensary.ui.screens
 
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -15,6 +17,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.ArrowBack
 import androidx.compose.material3.Button
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -26,6 +29,7 @@ import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
@@ -33,6 +37,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.unit.dp
 import com.solstice.dispensary.data.model.Product
+import com.solstice.dispensary.data.model.ProductSize
 import com.solstice.dispensary.data.model.StrainType
 import com.solstice.dispensary.ui.components.MetaPill
 import com.solstice.dispensary.ui.components.ProductSwatch
@@ -40,12 +45,12 @@ import com.solstice.dispensary.ui.components.QuantityStepper
 import com.solstice.dispensary.ui.components.money
 import kotlinx.coroutines.launch
 
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
 fun ProductDetailScreen(
     product: Product?,
     onBack: () -> Unit,
-    onAddToCart: (String, Int) -> Unit
+    onAddToCart: (String, Int, ProductSize?) -> Unit
 ) {
     val snackbar = remember { SnackbarHostState() }
     val scope = rememberCoroutineScope()
@@ -72,6 +77,21 @@ fun ProductDetailScreen(
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
             return@Scaffold
+        }
+
+        val sizeOffers = remember(product) { product.offeredSizes() }
+        var selectedSize by remember(product.id) {
+            mutableStateOf(
+                sizeOffers.firstOrNull { it.inStock }?.size
+                    ?: sizeOffers.firstOrNull()?.size
+            )
+        }
+        val unitPrice = product.effectivePriceFor(selectedSize)
+        val shelfPrice = product.shelfPriceFor(selectedSize)
+        val sizeInStock = if (product.sizeInventoryEnabled) {
+            selectedSize != null && product.stockFor(selectedSize) > 0
+        } else {
+            product.inStock
         }
 
         Column(
@@ -101,8 +121,33 @@ fun ProductDetailScreen(
                 }
                 if (product.thcPercent > 0) MetaPill("THC ${product.thcPercent}%")
                 if (product.cbdPercent > 0) MetaPill("CBD ${product.cbdPercent}%")
-                MetaPill(product.unitLabel)
+                MetaPill(product.displayUnitLabel(selectedSize))
             }
+
+            if (product.sizeInventoryEnabled && sizeOffers.isNotEmpty()) {
+                Spacer(Modifier.height(16.dp))
+                Text("Size", style = MaterialTheme.typography.titleLarge)
+                Spacer(Modifier.height(8.dp))
+                FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    sizeOffers.forEach { offer ->
+                        FilterChip(
+                            selected = selectedSize == offer.size,
+                            onClick = { selectedSize = offer.size },
+                            enabled = offer.inStock || selectedSize == offer.size,
+                            label = {
+                                Text(
+                                    if (offer.inStock) {
+                                        "${offer.size.label} · ${money(product.effectivePriceFor(offer.size))}"
+                                    } else {
+                                        "${offer.size.label} · sold out"
+                                    }
+                                )
+                            }
+                        )
+                    }
+                }
+            }
+
             Spacer(Modifier.height(16.dp))
             if (product.hasActiveDeal) {
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -111,19 +156,19 @@ fun ProductDetailScreen(
                 }
                 Spacer(Modifier.height(8.dp))
                 Text(
-                    text = money(product.price),
+                    text = money(shelfPrice),
                     style = MaterialTheme.typography.titleMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     textDecoration = TextDecoration.LineThrough
                 )
                 Text(
-                    text = money(product.effectivePrice),
+                    text = money(unitPrice),
                     style = MaterialTheme.typography.headlineMedium,
                     color = MaterialTheme.colorScheme.primary
                 )
             } else {
                 Text(
-                    text = money(product.price),
+                    text = money(unitPrice),
                     style = MaterialTheme.typography.headlineMedium,
                     color = MaterialTheme.colorScheme.primary
                 )
@@ -149,18 +194,19 @@ fun ProductDetailScreen(
             Spacer(Modifier.height(16.dp))
             Button(
                 onClick = {
-                    onAddToCart(product.id, quantity)
+                    onAddToCart(product.id, quantity, selectedSize)
                     scope.launch {
-                        snackbar.showSnackbar("Added ${product.name} to bag")
+                        val sizeNote = selectedSize?.let { " (${it.label})" }.orEmpty()
+                        snackbar.showSnackbar("Added ${product.name}$sizeNote to bag")
                     }
                 },
                 modifier = Modifier.fillMaxWidth(),
                 shape = RoundedCornerShape(14.dp),
-                enabled = product.inStock
+                enabled = sizeInStock
             ) {
                 Text(
-                    text = if (product.inStock) {
-                        "Add to bag · ${money(product.effectivePrice * quantity)}"
+                    text = if (sizeInStock) {
+                        "Add to bag · ${money(unitPrice * quantity)}"
                     } else {
                         "Out of stock"
                     },

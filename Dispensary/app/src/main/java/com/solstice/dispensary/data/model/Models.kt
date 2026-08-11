@@ -22,6 +22,48 @@ enum class StrainType(val label: String) {
     NONE("—")
 }
 
+/** Weight sizes offered for flower (and other weight-sold inventory). */
+enum class ProductSize(val label: String, val grams: Double) {
+    GRAM("1g", 1.0),
+    EIGHTH("3.5g", 3.5),
+    QUARTER("7g", 7.0),
+    OUNCE("1oz", 28.0);
+
+    companion object {
+        const val UNIT_KEY = "UNIT"
+
+        fun fromKey(key: String?): ProductSize? =
+            entries.firstOrNull { it.name.equals(key, ignoreCase = true) }
+
+        fun cartKey(size: ProductSize?): String = size?.name ?: UNIT_KEY
+    }
+}
+
+data class SizeOffer(
+    val size: ProductSize,
+    val price: Double,
+    val stock: Int
+) {
+    val inStock: Boolean get() = stock > 0 && price > 0.0
+    val offered: Boolean get() = price > 0.0
+}
+
+object SizePricing {
+    /** Derive 1g / 3.5g / 7g / oz shelf prices from an eighth (3.5g) base. */
+    fun fromEighth(eighthPrice: Double): Map<ProductSize, Double> {
+        val base = eighthPrice.coerceAtLeast(0.0)
+        return mapOf(
+            ProductSize.GRAM to roundMoney(base / 3.5),
+            ProductSize.EIGHTH to roundMoney(base),
+            ProductSize.QUARTER to roundMoney(base * 1.85),
+            ProductSize.OUNCE to roundMoney(base * 6.5)
+        )
+    }
+
+    private fun roundMoney(value: Double): Double =
+        kotlin.math.round(value * 100.0) / 100.0
+}
+
 @Entity(tableName = "products")
 data class Product(
     @PrimaryKey val id: String,
@@ -48,23 +90,95 @@ data class Product(
     /** Percent off shelf price (1–90). */
     val dealPercent: Int = 0,
     /** Short promo label, e.g. "Happy Hour" or "Weekend special". */
-    val dealLabel: String = ""
+    val dealLabel: String = "",
+    /**
+     * When true, customers order by weight size (1g / 3.5g / 7g / oz)
+     * with per-size price + stock. Legacy [price]/[stockQuantity]/[unitLabel] still used
+     * as the default/display baseline (usually the 3.5g eighth).
+     */
+    val sizeInventoryEnabled: Boolean = false,
+    val stockGram: Int = 0,
+    val priceGram: Double = 0.0,
+    val stockEighth: Int = 0,
+    val priceEighth: Double = 0.0,
+    val stockQuarter: Int = 0,
+    val priceQuarter: Double = 0.0,
+    val stockOunce: Int = 0,
+    val priceOunce: Double = 0.0
 ) {
     val hasActiveDeal: Boolean
         get() = onDeal && dealPercent > 0
 
-    /** Price charged to customers (deal applied when active). */
+    /** Price charged to customers (deal applied when active) for the default/unit price. */
     val effectivePrice: Double
-        get() = if (hasActiveDeal) {
-            (price * (100 - dealPercent.coerceIn(1, 90)) / 100.0).coerceAtLeast(0.0)
+        get() = applyDeal(price)
+
+    fun sizeOffer(size: ProductSize): SizeOffer = when (size) {
+        ProductSize.GRAM -> SizeOffer(size, priceGram, stockGram)
+        ProductSize.EIGHTH -> SizeOffer(size, priceEighth, stockEighth)
+        ProductSize.QUARTER -> SizeOffer(size, priceQuarter, stockQuarter)
+        ProductSize.OUNCE -> SizeOffer(size, priceOunce, stockOunce)
+    }
+
+    /** Sizes staff/customers can choose (priced > $0). */
+    fun offeredSizes(): List<SizeOffer> =
+        if (!sizeInventoryEnabled) emptyList()
+        else ProductSize.entries.map(::sizeOffer).filter { it.offered }
+
+    fun shelfPriceFor(size: ProductSize?): Double =
+        if (size != null && sizeInventoryEnabled) sizeOffer(size).price else price
+
+    fun effectivePriceFor(size: ProductSize?): Double = applyDeal(shelfPriceFor(size))
+
+    fun stockFor(size: ProductSize?): Int =
+        if (size != null && sizeInventoryEnabled) sizeOffer(size).stock else stockQuantity
+
+    fun displayUnitLabel(size: ProductSize? = null): String = when {
+        size != null -> size.label
+        sizeInventoryEnabled -> "1g–1oz"
+        else -> unitLabel
+    }
+
+    fun withSizeStock(size: ProductSize, stock: Int): Product {
+        val next = stock.coerceAtLeast(0)
+        return when (size) {
+            ProductSize.GRAM -> copy(stockGram = next)
+            ProductSize.EIGHTH -> copy(stockEighth = next)
+            ProductSize.QUARTER -> copy(stockQuarter = next)
+            ProductSize.OUNCE -> copy(stockOunce = next)
+        }.normalizedSizeInventory()
+    }
+
+    /** Sync aggregate stock / inStock / unit label when size inventory is on. */
+    fun normalizedSizeInventory(): Product {
+        if (!sizeInventoryEnabled) {
+            return copy(inStock = stockQuantity > 0)
+        }
+        val total = stockGram + stockEighth + stockQuarter + stockOunce
+        val eighth = if (priceEighth > 0) priceEighth else price
+        return copy(
+            stockQuantity = total,
+            inStock = offeredSizes().any { it.inStock },
+            unitLabel = "1g–1oz",
+            price = if (eighth > 0) eighth else price
+        )
+    }
+
+    private fun applyDeal(shelf: Double): Double =
+        if (hasActiveDeal) {
+            (shelf * (100 - dealPercent.coerceIn(1, 90)) / 100.0).coerceAtLeast(0.0)
         } else {
-            price
+            shelf
         }
 }
 
-@Entity(tableName = "cart_items")
+@Entity(
+    tableName = "cart_items",
+    primaryKeys = ["productId", "sizeKey"]
+)
 data class CartItem(
-    @PrimaryKey val productId: String,
+    val productId: String,
+    val sizeKey: String = ProductSize.UNIT_KEY,
     val quantity: Int
 )
 
@@ -99,7 +213,9 @@ data class OrderLine(
     val productId: String,
     val productName: String,
     val unitPrice: Double,
-    val quantity: Int
+    val quantity: Int,
+    val sizeKey: String = ProductSize.UNIT_KEY,
+    val sizeLabel: String = ""
 )
 
 @Entity(tableName = "inventory_intakes")
@@ -304,10 +420,14 @@ sealed class OpResult {
 
 data class CartLine(
     val product: Product,
-    val quantity: Int
+    val quantity: Int,
+    val size: ProductSize? = null
 ) {
-    val unitPrice: Double get() = product.effectivePrice
+    val sizeKey: String get() = ProductSize.cartKey(size)
+    val unitLabel: String get() = product.displayUnitLabel(size)
+    val unitPrice: Double get() = product.effectivePriceFor(size)
     val lineTotal: Double get() = unitPrice * quantity
+    val lineKey: String get() = "${product.id}:$sizeKey"
 }
 
 data class CartSummary(

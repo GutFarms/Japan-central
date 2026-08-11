@@ -85,7 +85,7 @@ fun DealsScreen(
                         ) {
                             Text(product.name, style = MaterialTheme.typography.titleMedium)
                             Text(
-                                "${product.brand} · ${product.unitLabel}",
+                                "${product.brand} · ${product.displayUnitLabel()}",
                                 style = MaterialTheme.typography.bodyMedium,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
@@ -98,13 +98,17 @@ fun DealsScreen(
                         }
                         Column(horizontalAlignment = Alignment.End) {
                             Text(
-                                money(product.price),
+                                if (product.sizeInventoryEnabled) "from ${money(product.price)}" else money(product.price),
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 textDecoration = TextDecoration.LineThrough
                             )
                             Text(
-                                money(product.effectivePrice),
+                                if (product.sizeInventoryEnabled) {
+                                    "from ${money(product.effectivePrice)}"
+                                } else {
+                                    money(product.effectivePrice)
+                                },
                                 style = MaterialTheme.typography.titleMedium,
                                 color = MaterialTheme.colorScheme.primary
                             )

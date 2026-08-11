@@ -1,10 +1,41 @@
 package com.nativepure.companion.data
 
 object SeedCatalog {
+    private fun flower(
+        product: Product,
+        stockGram: Int,
+        stockEighth: Int,
+        stockQuarter: Int,
+        stockOunce: Int
+    ): Product {
+        val prices = SizePricing.fromEighth(product.price)
+        return product.copy(
+            sizeInventoryEnabled = true,
+            unitLabel = "1g–1oz",
+            priceGram = prices.getValue(ProductSize.GRAM),
+            priceEighth = prices.getValue(ProductSize.EIGHTH),
+            priceQuarter = prices.getValue(ProductSize.QUARTER),
+            priceOunce = prices.getValue(ProductSize.OUNCE),
+            stockGram = stockGram,
+            stockEighth = stockEighth,
+            stockQuarter = stockQuarter,
+            stockOunce = stockOunce
+        ).normalizedSizeInventory()
+    }
+
     val products = listOf(
-        Product("fl-dusk", "Dusk Bloom", "Solstice Farms", ProductCategory.FLOWER, StrainType.INDICA, 24.5, 0.4, 45.0, "3.5g", "Dense purple-tipped buds with berry and cedar notes. Evening wind-down favorite.", "Relaxed · Sleepy · Calm", featured = true, stockQuantity = 24, sku = "SOL-FL-DUSK", onDeal = true, dealPercent = 15, dealLabel = "Evening special"),
-        Product("fl-citrus", "Citrus Ridge", "Solstice Farms", ProductCategory.FLOWER, StrainType.SATIVA, 21.2, 0.3, 42.0, "3.5g", "Bright zest and pine. Clean daytime energy without the jitters.", "Uplifted · Focused · Creative", featured = true, stockQuantity = 18, sku = "SOL-FL-CITR"),
-        Product("fl-harbor", "Harbor Hybrid", "North Reach", ProductCategory.FLOWER, StrainType.HYBRID, 22.8, 0.5, 48.0, "3.5g", "Balanced body ease with a clear head. Great all-rounder.", "Balanced · Happy · Mellow", stockQuantity = 12, sku = "NR-FL-HARB"),
+        flower(
+            Product("fl-dusk", "Dusk Bloom", "Solstice Farms", ProductCategory.FLOWER, StrainType.INDICA, 24.5, 0.4, 45.0, "3.5g", "Dense purple-tipped buds with berry and cedar notes. Evening wind-down favorite.", "Relaxed · Sleepy · Calm", featured = true, stockQuantity = 24, sku = "SOL-FL-DUSK", onDeal = true, dealPercent = 15, dealLabel = "Evening special"),
+            stockGram = 12, stockEighth = 24, stockQuarter = 10, stockOunce = 4
+        ),
+        flower(
+            Product("fl-citrus", "Citrus Ridge", "Solstice Farms", ProductCategory.FLOWER, StrainType.SATIVA, 21.2, 0.3, 42.0, "3.5g", "Bright zest and pine. Clean daytime energy without the jitters.", "Uplifted · Focused · Creative", featured = true, stockQuantity = 18, sku = "SOL-FL-CITR"),
+            stockGram = 10, stockEighth = 18, stockQuarter = 8, stockOunce = 3
+        ),
+        flower(
+            Product("fl-harbor", "Harbor Hybrid", "North Reach", ProductCategory.FLOWER, StrainType.HYBRID, 22.8, 0.5, 48.0, "3.5g", "Balanced body ease with a clear head. Great all-rounder.", "Balanced · Happy · Mellow", stockQuantity = 12, sku = "NR-FL-HARB"),
+            stockGram = 8, stockEighth = 12, stockQuarter = 6, stockOunce = 2
+        ),
         Product("pr-twilight", "Twilight Pack", "Solstice Farms", ProductCategory.PREROLL, StrainType.INDICA, 23.0, 0.4, 28.0, "5-pack", "Ready-to-light evening pre-rolls packed with Dusk Bloom flower.", "Relaxed · Sleepy", featured = true, stockQuantity = 30, sku = "SOL-PR-TWIL", onDeal = true, dealPercent = 20, dealLabel = "Pre-roll pack deal"),
         Product("pr-spark", "Spark Singles", "North Reach", ProductCategory.PREROLL, StrainType.SATIVA, 20.5, 0.2, 12.0, "1g", "Single sativa pre-roll for a quick lift on the go.", "Energetic · Social", stockQuantity = 40, sku = "NR-PR-SPARK"),
         Product("ed-cocoa", "Midnight Cocoa", "Hearth Kitchen", ProductCategory.EDIBLE, StrainType.HYBRID, 0.0, 0.0, 24.0, "10x10mg", "Dark chocolate squares with a slow, steady onset. Dose clearly marked.", "Relaxed · Euphoric", featured = true, stockQuantity = 22, sku = "HK-ED-COCO", onDeal = true, dealPercent = 10, dealLabel = "Edible of the week"),

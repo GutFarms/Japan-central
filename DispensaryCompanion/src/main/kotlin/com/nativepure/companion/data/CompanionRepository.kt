@@ -434,8 +434,13 @@ class CompanionRepository {
         val idx = products.indexOfFirst { it.id == productId }
         if (idx < 0) return false
         val product = products[idx]
-        val next = (product.stockQuantity + delta).coerceAtLeast(0)
-        products[idx] = product.copy(stockQuantity = next, inStock = next > 0)
+        products[idx] = if (product.sizeInventoryEnabled) {
+            val next = (product.stockEighth + delta).coerceAtLeast(0)
+            product.copy(stockEighth = next).normalizedSizeInventory()
+        } else {
+            val next = (product.stockQuantity + delta).coerceAtLeast(0)
+            product.copy(stockQuantity = next, inStock = next > 0)
+        }
         persist()
         return true
     }
@@ -449,7 +454,12 @@ class CompanionRepository {
         if (published) {
             when {
                 product.sku.isBlank() -> return OpResult.Error("Add a SKU before publishing.")
-                product.price <= 0.0 -> return OpResult.Error("Set a price greater than \$0 before publishing.")
+                product.sizeInventoryEnabled &&
+                    listOf(product.priceGram, product.priceEighth, product.priceQuarter, product.priceOunce)
+                        .none { it > 0 } ->
+                    return OpResult.Error("Set at least one size price before publishing.")
+                !product.sizeInventoryEnabled && product.price <= 0.0 ->
+                    return OpResult.Error("Set a price greater than \$0 before publishing.")
             }
         }
         products[idx] = product.copy(
@@ -473,22 +483,52 @@ class CompanionRepository {
         val price = product.price.coerceAtLeast(0.0)
         val stock = product.stockQuantity.coerceAtLeast(0)
         val sku = product.sku.trim()
+        val withSizes = if (product.sizeInventoryEnabled) {
+            val prices = if (product.priceEighth <= 0 && price > 0) SizePricing.fromEighth(price) else null
+            product.copy(
+                stockGram = product.stockGram.coerceAtLeast(0),
+                stockEighth = product.stockEighth.coerceAtLeast(0),
+                stockQuarter = product.stockQuarter.coerceAtLeast(0),
+                stockOunce = product.stockOunce.coerceAtLeast(0),
+                priceGram = product.priceGram.coerceAtLeast(0.0).let {
+                    if (it <= 0 && prices != null) prices.getValue(ProductSize.GRAM) else it
+                },
+                priceEighth = product.priceEighth.coerceAtLeast(0.0).let {
+                    if (it <= 0 && prices != null) prices.getValue(ProductSize.EIGHTH) else it
+                },
+                priceQuarter = product.priceQuarter.coerceAtLeast(0.0).let {
+                    if (it <= 0 && prices != null) prices.getValue(ProductSize.QUARTER) else it
+                },
+                priceOunce = product.priceOunce.coerceAtLeast(0.0).let {
+                    if (it <= 0 && prices != null) prices.getValue(ProductSize.OUNCE) else it
+                }
+            ).normalizedSizeInventory()
+        } else {
+            product.copy(
+                sizeInventoryEnabled = false,
+                stockQuantity = stock,
+                inStock = stock > 0,
+                price = price,
+                unitLabel = product.unitLabel.trim().ifBlank { "each" }
+            )
+        }
         if (product.published) {
             when {
                 sku.isBlank() -> return OpResult.Error("Add a SKU before keeping this product published.")
-                price <= 0.0 -> return OpResult.Error("Set a price greater than \$0 before publishing.")
+                withSizes.sizeInventoryEnabled &&
+                    listOf(withSizes.priceGram, withSizes.priceEighth, withSizes.priceQuarter, withSizes.priceOunce)
+                        .none { it > 0 } ->
+                    return OpResult.Error("Set at least one size price before publishing.")
+                !withSizes.sizeInventoryEnabled && withSizes.price <= 0.0 ->
+                    return OpResult.Error("Set a price greater than \$0 before publishing.")
             }
         }
         val idx = products.indexOfFirst { it.id == product.id }
         val existing = if (idx >= 0) products[idx] else null
-        val cleaned = product.copy(
+        val cleaned = withSizes.copy(
             name = name,
             brand = product.brand.trim().ifBlank { "Native Pure" },
-            price = price,
-            stockQuantity = stock,
-            inStock = stock > 0,
             sku = sku,
-            unitLabel = product.unitLabel.trim().ifBlank { "each" },
             description = product.description.trim(),
             effects = product.effects.trim().ifBlank { "—" },
             thcPercent = product.thcPercent.coerceAtLeast(0.0),
@@ -700,8 +740,13 @@ class CompanionRepository {
         val idx = products.indexOfFirst { it.id == productId }
         if (idx < 0) return
         val product = products[idx]
-        val next = (product.stockQuantity + delta).coerceAtLeast(0)
-        products[idx] = product.copy(stockQuantity = next, inStock = next > 0)
+        products[idx] = if (product.sizeInventoryEnabled) {
+            val next = (product.stockEighth + delta).coerceAtLeast(0)
+            product.copy(stockEighth = next).normalizedSizeInventory()
+        } else {
+            val next = (product.stockQuantity + delta).coerceAtLeast(0)
+            product.copy(stockQuantity = next, inStock = next > 0)
+        }
     }
 
     private fun recordFailed(raw: String) {

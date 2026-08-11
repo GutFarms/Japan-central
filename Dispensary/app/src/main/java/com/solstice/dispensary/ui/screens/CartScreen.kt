@@ -32,6 +32,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import com.solstice.dispensary.data.model.CartSummary
 import com.solstice.dispensary.data.model.LoyaltyPoints
+import com.solstice.dispensary.data.model.ProductSize
 import com.solstice.dispensary.ui.components.ProductSwatch
 import com.solstice.dispensary.ui.components.QuantityStepper
 import com.solstice.dispensary.ui.components.SectionHeader
@@ -45,8 +46,8 @@ fun CartScreen(
     canRedeemPoints: Boolean = false,
     checkoutMessage: String?,
     onClearMessage: () -> Unit,
-    onSetQuantity: (String, Int) -> Unit,
-    onRemove: (String) -> Unit,
+    onSetQuantity: (String, Int, ProductSize?) -> Unit,
+    onRemove: (String, ProductSize?) -> Unit,
     onClear: () -> Unit,
     onPlaceOrder: (pickupName: String, notes: String, redeemPoints: Int) -> Unit,
     onBrowseMenu: () -> Unit
@@ -101,7 +102,7 @@ fun CartScreen(
                 }
             }
         } else {
-            items(cart.lines, key = { it.product.id }) { line ->
+            items(cart.lines, key = { it.lineKey }) { line ->
                 Surface(
                     shape = RoundedCornerShape(14.dp),
                     color = MaterialTheme.colorScheme.surface,
@@ -125,13 +126,13 @@ fun CartScreen(
                                     if (line.product.hasActiveDeal) {
                                         append(money(line.unitPrice))
                                         append(" (was ")
-                                        append(money(line.product.price))
+                                        append(money(line.product.shelfPriceFor(line.size)))
                                         append(")")
                                     } else {
                                         append(money(line.unitPrice))
                                     }
                                     append(" · ")
-                                    append(line.product.unitLabel)
+                                    append(line.unitLabel)
                                 },
                                 style = MaterialTheme.typography.bodyMedium,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
@@ -139,16 +140,16 @@ fun CartScreen(
                             QuantityStepper(
                                 quantity = line.quantity,
                                 onDecrease = {
-                                    onSetQuantity(line.product.id, line.quantity - 1)
+                                    onSetQuantity(line.product.id, line.quantity - 1, line.size)
                                 },
                                 onIncrease = {
-                                    onSetQuantity(line.product.id, line.quantity + 1)
+                                    onSetQuantity(line.product.id, line.quantity + 1, line.size)
                                 }
                             )
                         }
                         Column(horizontalAlignment = Alignment.End) {
                             Text(money(line.lineTotal), style = MaterialTheme.typography.titleMedium)
-                            TextButton(onClick = { onRemove(line.product.id) }) {
+                            TextButton(onClick = { onRemove(line.product.id, line.size) }) {
                                 Text("Remove")
                             }
                         }

@@ -1,6 +1,6 @@
 {
-  "versionCode": 20,
-  "versionName": "1.15.0",
+  "versionCode": 21,
+  "versionName": "1.16.0",
   "apkUrl": "https://github.com/GutFarms/Japan-central/releases/latest/download/NativePure-Dispensary.apk",
-  "releaseNotes": "Native Pure mail server for verification emails (with offline code fallback)."
+  "releaseNotes": "Native Pure 1.16.0 — order flower by size: 1g, 3.5g, 7g, and 1oz with per-size inventory."
 }

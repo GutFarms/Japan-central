@@ -66,6 +66,8 @@ import com.nativepure.companion.data.OrderStatus
 import com.nativepure.companion.data.PasswordPolicy
 import com.nativepure.companion.data.Product
 import com.nativepure.companion.data.ProductCategory
+import com.nativepure.companion.data.ProductSize
+import com.nativepure.companion.data.SizePricing
 import com.nativepure.companion.data.StrainType
 import java.awt.FileDialog
 import java.awt.Frame
@@ -740,11 +742,11 @@ private fun ProductCard(product: Product, onAdd: (String) -> Unit) {
             Text(product.effects, style = MaterialTheme.typography.bodyMedium)
             if (product.hasActiveDeal) {
                 Text(
-                    "$${ "%.2f".format(product.effectivePrice) } (was $${"%.2f".format(product.price)}) / ${product.unitLabel}",
+                    "$${ "%.2f".format(product.effectivePrice) } (was $${"%.2f".format(product.price)}) / ${product.displayUnitLabel()}",
                     style = MaterialTheme.typography.titleLarge
                 )
             } else {
-                Text("$${ "%.2f".format(product.price) } / ${product.unitLabel}", style = MaterialTheme.typography.titleLarge)
+                Text("$${ "%.2f".format(product.price) } / ${product.displayUnitLabel()}", style = MaterialTheme.typography.titleLarge)
             }
             Text("Stock ${product.stockQuantity}", color = MaterialTheme.colorScheme.onSurfaceVariant)
             Button(
@@ -1091,6 +1093,33 @@ private fun CompanionProductEditor(
         mutableStateOf(if (product.dealPercent > 0) product.dealPercent.toString() else "15")
     }
     var dealLabel by remember(product.id) { mutableStateOf(product.dealLabel) }
+    var sizeInventory by remember(product.id) { mutableStateOf(product.sizeInventoryEnabled) }
+    var priceGram by remember(product.id) {
+        mutableStateOf(if (product.priceGram > 0) product.priceGram.toString() else "")
+    }
+    var stockGram by remember(product.id) { mutableStateOf(product.stockGram.toString()) }
+    var priceEighth by remember(product.id) {
+        mutableStateOf(if (product.priceEighth > 0) product.priceEighth.toString() else "")
+    }
+    var stockEighth by remember(product.id) { mutableStateOf(product.stockEighth.toString()) }
+    var priceQuarter by remember(product.id) {
+        mutableStateOf(if (product.priceQuarter > 0) product.priceQuarter.toString() else "")
+    }
+    var stockQuarter by remember(product.id) { mutableStateOf(product.stockQuarter.toString()) }
+    var priceOunce by remember(product.id) {
+        mutableStateOf(if (product.priceOunce > 0) product.priceOunce.toString() else "")
+    }
+    var stockOunce by remember(product.id) { mutableStateOf(product.stockOunce.toString()) }
+
+    fun fillFromEighth() {
+        val base = priceEighth.toDoubleOrNull() ?: price.toDoubleOrNull() ?: return
+        val prices = SizePricing.fromEighth(base)
+        priceGram = prices.getValue(ProductSize.GRAM).toString()
+        priceEighth = prices.getValue(ProductSize.EIGHTH).toString()
+        priceQuarter = prices.getValue(ProductSize.QUARTER).toString()
+        priceOunce = prices.getValue(ProductSize.OUNCE).toString()
+        price = prices.getValue(ProductSize.EIGHTH).toString()
+    }
 
     Surface(shape = RoundedCornerShape(12.dp), color = MaterialTheme.colorScheme.secondaryContainer) {
         Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -1098,23 +1127,52 @@ private fun CompanionProductEditor(
             Field(name, { name = it }, "Name")
             Field(brand, { brand = it }, "Brand")
             Field(sku, { sku = it }, "SKU")
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                OutlinedTextField(
-                    value = price,
-                    onValueChange = { price = it },
-                    label = { Text("Price") },
-                    modifier = Modifier.weight(1f),
-                    singleLine = true
-                )
-                OutlinedTextField(
-                    value = stock,
-                    onValueChange = { stock = it.filter { ch -> ch.isDigit() } },
-                    label = { Text("Stock") },
-                    modifier = Modifier.weight(1f),
-                    singleLine = true
-                )
+            FilterChip(
+                selected = sizeInventory,
+                onClick = {
+                    sizeInventory = !sizeInventory
+                    if (sizeInventory && priceGram.isBlank() && priceEighth.isBlank()) fillFromEighth()
+                },
+                label = { Text(if (sizeInventory) "Size inventory on" else "Size inventory off") }
+            )
+            if (sizeInventory) {
+                Text("1g / 3.5g / 7g / oz", style = MaterialTheme.typography.labelLarge)
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedTextField(value = priceGram, onValueChange = { priceGram = it }, label = { Text("1g $") }, modifier = Modifier.weight(1f), singleLine = true)
+                    OutlinedTextField(value = stockGram, onValueChange = { stockGram = it.filter(Char::isDigit) }, label = { Text("1g qty") }, modifier = Modifier.weight(1f), singleLine = true)
+                }
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedTextField(value = priceEighth, onValueChange = { priceEighth = it }, label = { Text("3.5g $") }, modifier = Modifier.weight(1f), singleLine = true)
+                    OutlinedTextField(value = stockEighth, onValueChange = { stockEighth = it.filter(Char::isDigit) }, label = { Text("3.5g qty") }, modifier = Modifier.weight(1f), singleLine = true)
+                }
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedTextField(value = priceQuarter, onValueChange = { priceQuarter = it }, label = { Text("7g $") }, modifier = Modifier.weight(1f), singleLine = true)
+                    OutlinedTextField(value = stockQuarter, onValueChange = { stockQuarter = it.filter(Char::isDigit) }, label = { Text("7g qty") }, modifier = Modifier.weight(1f), singleLine = true)
+                }
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedTextField(value = priceOunce, onValueChange = { priceOunce = it }, label = { Text("1oz $") }, modifier = Modifier.weight(1f), singleLine = true)
+                    OutlinedTextField(value = stockOunce, onValueChange = { stockOunce = it.filter(Char::isDigit) }, label = { Text("1oz qty") }, modifier = Modifier.weight(1f), singleLine = true)
+                }
+                TextButton(onClick = { fillFromEighth() }) { Text("Fill prices from 3.5g") }
+            } else {
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedTextField(
+                        value = price,
+                        onValueChange = { price = it },
+                        label = { Text("Price") },
+                        modifier = Modifier.weight(1f),
+                        singleLine = true
+                    )
+                    OutlinedTextField(
+                        value = stock,
+                        onValueChange = { stock = it.filter { ch -> ch.isDigit() } },
+                        label = { Text("Stock") },
+                        modifier = Modifier.weight(1f),
+                        singleLine = true
+                    )
+                }
+                Field(unit, { unit = it }, "Unit")
             }
-            Field(unit, { unit = it }, "Unit")
             Field(description, { description = it }, "Description")
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 ProductCategory.entries.forEach { cat ->
@@ -1144,14 +1202,22 @@ private fun CompanionProductEditor(
                 Button(
                     onClick = {
                         val pct = dealPercent.toIntOrNull() ?: 0
+                        val eighth = priceEighth.toDoubleOrNull() ?: price.toDoubleOrNull() ?: 0.0
                         onSave(
                             product.copy(
                                 name = name,
                                 brand = brand,
                                 sku = sku,
-                                price = price.toDoubleOrNull() ?: 0.0,
-                                stockQuantity = stock.toIntOrNull() ?: 0,
-                                unitLabel = unit,
+                                price = if (sizeInventory) eighth else (price.toDoubleOrNull() ?: 0.0),
+                                stockQuantity = if (sizeInventory) {
+                                    (stockGram.toIntOrNull() ?: 0) +
+                                        (stockEighth.toIntOrNull() ?: 0) +
+                                        (stockQuarter.toIntOrNull() ?: 0) +
+                                        (stockOunce.toIntOrNull() ?: 0)
+                                } else {
+                                    stock.toIntOrNull() ?: 0
+                                },
+                                unitLabel = if (sizeInventory) "1g–1oz" else unit,
                                 description = description,
                                 category = category,
                                 strainType = product.strainType.takeIf { it != StrainType.NONE }
@@ -1159,7 +1225,16 @@ private fun CompanionProductEditor(
                                 published = published,
                                 onDeal = onDeal && pct > 0,
                                 dealPercent = if (onDeal) pct.coerceIn(0, 90) else 0,
-                                dealLabel = dealLabel
+                                dealLabel = dealLabel,
+                                sizeInventoryEnabled = sizeInventory,
+                                priceGram = priceGram.toDoubleOrNull() ?: 0.0,
+                                stockGram = stockGram.toIntOrNull() ?: 0,
+                                priceEighth = if (sizeInventory) eighth else 0.0,
+                                stockEighth = stockEighth.toIntOrNull() ?: 0,
+                                priceQuarter = priceQuarter.toDoubleOrNull() ?: 0.0,
+                                stockQuarter = stockQuarter.toIntOrNull() ?: 0,
+                                priceOunce = priceOunce.toDoubleOrNull() ?: 0.0,
+                                stockOunce = stockOunce.toIntOrNull() ?: 0
                             )
                         )
                     },

@@ -45,6 +45,8 @@ import androidx.compose.ui.unit.dp
 import com.solstice.dispensary.data.model.InventoryIntake
 import com.solstice.dispensary.data.model.Product
 import com.solstice.dispensary.data.model.ProductCategory
+import com.solstice.dispensary.data.model.ProductSize
+import com.solstice.dispensary.data.model.SizePricing
 import com.solstice.dispensary.data.model.StrainType
 import com.solstice.dispensary.ui.components.MetaPill
 import com.solstice.dispensary.ui.components.ProductSwatch
@@ -228,6 +230,11 @@ fun InventoryScreen(
                                 Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                                     MetaPill(product.category.label)
                                     MetaPill("${product.stockQuantity} in stock")
+                                    if (product.sizeInventoryEnabled) {
+                                        MetaPill("1g/3.5g/7g/oz")
+                                    } else {
+                                        MetaPill(product.unitLabel)
+                                    }
                                     MetaPill(if (product.published) "Published" else "Draft")
                                 }
                             }
@@ -310,6 +317,35 @@ private fun ProductEditorCard(
         mutableStateOf(if (product.dealPercent > 0) product.dealPercent.toString() else "15")
     }
     var dealLabel by remember(product.id) { mutableStateOf(product.dealLabel) }
+    var sizeInventory by remember(product.id) { mutableStateOf(product.sizeInventoryEnabled) }
+    var priceGram by remember(product.id) {
+        mutableStateOf(if (product.priceGram > 0) product.priceGram.toString() else "")
+    }
+    var stockGram by remember(product.id) { mutableStateOf(product.stockGram.toString()) }
+    var priceEighth by remember(product.id) {
+        mutableStateOf(if (product.priceEighth > 0) product.priceEighth.toString() else "")
+    }
+    var stockEighth by remember(product.id) { mutableStateOf(product.stockEighth.toString()) }
+    var priceQuarter by remember(product.id) {
+        mutableStateOf(if (product.priceQuarter > 0) product.priceQuarter.toString() else "")
+    }
+    var stockQuarter by remember(product.id) { mutableStateOf(product.stockQuarter.toString()) }
+    var priceOunce by remember(product.id) {
+        mutableStateOf(if (product.priceOunce > 0) product.priceOunce.toString() else "")
+    }
+    var stockOunce by remember(product.id) { mutableStateOf(product.stockOunce.toString()) }
+
+    fun fillSizePricesFromBase() {
+        val base = priceEighth.toDoubleOrNull()
+            ?: price.toDoubleOrNull()
+            ?: return
+        val prices = SizePricing.fromEighth(base)
+        priceGram = prices.getValue(ProductSize.GRAM).toString()
+        priceEighth = prices.getValue(ProductSize.EIGHTH).toString()
+        priceQuarter = prices.getValue(ProductSize.QUARTER).toString()
+        priceOunce = prices.getValue(ProductSize.OUNCE).toString()
+        price = prices.getValue(ProductSize.EIGHTH).toString()
+    }
 
     Surface(
         shape = RoundedCornerShape(16.dp),
@@ -346,31 +382,55 @@ private fun ProductEditorCard(
                 modifier = Modifier.fillMaxWidth(),
                 singleLine = true
             )
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                OutlinedTextField(
-                    value = price,
-                    onValueChange = { price = it.filter { ch -> ch.isDigit() || ch == '.' } },
-                    label = { Text("Price") },
-                    modifier = Modifier.weight(1f),
-                    singleLine = true,
-                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal)
+            FilterChip(
+                selected = sizeInventory,
+                onClick = {
+                    sizeInventory = !sizeInventory
+                    if (sizeInventory && priceGram.isBlank() && priceEighth.isBlank()) {
+                        fillSizePricesFromBase()
+                    }
+                },
+                label = { Text(if (sizeInventory) "Size inventory on (1g / 3.5g / 7g / oz)" else "Size inventory off") }
+            )
+            if (sizeInventory) {
+                Text(
+                    "Price & stock by size",
+                    style = MaterialTheme.typography.labelLarge
                 )
+                SizeStockRow("1g", priceGram, { priceGram = it }, stockGram, { stockGram = it })
+                SizeStockRow("3.5g", priceEighth, { priceEighth = it }, stockEighth, { stockEighth = it })
+                SizeStockRow("7g", priceQuarter, { priceQuarter = it }, stockQuarter, { stockQuarter = it })
+                SizeStockRow("1oz", priceOunce, { priceOunce = it }, stockOunce, { stockOunce = it })
+                TextButton(onClick = { fillSizePricesFromBase() }) {
+                    Text("Fill prices from 3.5g")
+                }
+            } else {
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedTextField(
+                        value = price,
+                        onValueChange = { price = it.filter { ch -> ch.isDigit() || ch == '.' } },
+                        label = { Text("Price") },
+                        modifier = Modifier.weight(1f),
+                        singleLine = true,
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal)
+                    )
+                    OutlinedTextField(
+                        value = stock,
+                        onValueChange = { stock = it.filter { ch -> ch.isDigit() } },
+                        label = { Text("Stock") },
+                        modifier = Modifier.weight(1f),
+                        singleLine = true,
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number)
+                    )
+                }
                 OutlinedTextField(
-                    value = stock,
-                    onValueChange = { stock = it.filter { ch -> ch.isDigit() } },
-                    label = { Text("Stock") },
-                    modifier = Modifier.weight(1f),
-                    singleLine = true,
-                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number)
+                    value = unit,
+                    onValueChange = { unit = it },
+                    label = { Text("Unit (e.g. each, 5-pack)") },
+                    modifier = Modifier.fillMaxWidth(),
+                    singleLine = true
                 )
             }
-            OutlinedTextField(
-                value = unit,
-                onValueChange = { unit = it },
-                label = { Text("Unit (e.g. 3.5g, each)") },
-                modifier = Modifier.fillMaxWidth(),
-                singleLine = true
-            )
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 OutlinedTextField(
                     value = thc,
@@ -464,14 +524,24 @@ private fun ProductEditorCard(
                 Button(
                     onClick = {
                         val pct = dealPercent.toIntOrNull() ?: 0
+                        val eighthPrice = priceEighth.toDoubleOrNull()
+                            ?: price.toDoubleOrNull()
+                            ?: 0.0
                         onSave(
                             product.copy(
                                 name = name,
                                 brand = brand,
                                 sku = sku,
-                                price = price.toDoubleOrNull() ?: 0.0,
-                                stockQuantity = stock.toIntOrNull() ?: 0,
-                                unitLabel = unit,
+                                price = if (sizeInventory) eighthPrice else (price.toDoubleOrNull() ?: 0.0),
+                                stockQuantity = if (sizeInventory) {
+                                    (stockGram.toIntOrNull() ?: 0) +
+                                        (stockEighth.toIntOrNull() ?: 0) +
+                                        (stockQuarter.toIntOrNull() ?: 0) +
+                                        (stockOunce.toIntOrNull() ?: 0)
+                                } else {
+                                    stock.toIntOrNull() ?: 0
+                                },
+                                unitLabel = if (sizeInventory) "1g–1oz" else unit,
                                 thcPercent = thc.toDoubleOrNull() ?: 0.0,
                                 cbdPercent = cbd.toDoubleOrNull() ?: 0.0,
                                 description = description,
@@ -482,7 +552,16 @@ private fun ProductEditorCard(
                                 featured = featured,
                                 onDeal = onDeal && pct > 0,
                                 dealPercent = if (onDeal) pct.coerceIn(0, 90) else 0,
-                                dealLabel = dealLabel
+                                dealLabel = dealLabel,
+                                sizeInventoryEnabled = sizeInventory,
+                                priceGram = priceGram.toDoubleOrNull() ?: 0.0,
+                                stockGram = stockGram.toIntOrNull() ?: 0,
+                                priceEighth = if (sizeInventory) eighthPrice else 0.0,
+                                stockEighth = stockEighth.toIntOrNull() ?: 0,
+                                priceQuarter = priceQuarter.toDoubleOrNull() ?: 0.0,
+                                stockQuarter = stockQuarter.toIntOrNull() ?: 0,
+                                priceOunce = priceOunce.toDoubleOrNull() ?: 0.0,
+                                stockOunce = stockOunce.toIntOrNull() ?: 0
                             )
                         )
                     },
@@ -493,5 +572,34 @@ private fun ProductEditorCard(
                 }
             }
         }
+    }
+}
+
+@Composable
+private fun SizeStockRow(
+    label: String,
+    price: String,
+    onPrice: (String) -> Unit,
+    stock: String,
+    onStock: (String) -> Unit
+) {
+    Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+        Text(label, modifier = Modifier.width(40.dp), style = MaterialTheme.typography.labelLarge)
+        OutlinedTextField(
+            value = price,
+            onValueChange = { onPrice(it.filter { ch -> ch.isDigit() || ch == '.' }) },
+            label = { Text("Price") },
+            modifier = Modifier.weight(1f),
+            singleLine = true,
+            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal)
+        )
+        OutlinedTextField(
+            value = stock,
+            onValueChange = { onStock(it.filter { ch -> ch.isDigit() }) },
+            label = { Text("Qty") },
+            modifier = Modifier.weight(1f),
+            singleLine = true,
+            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number)
+        )
     }
 }

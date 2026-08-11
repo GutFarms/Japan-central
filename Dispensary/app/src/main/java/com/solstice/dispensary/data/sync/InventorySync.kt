@@ -4,6 +4,7 @@ import com.solstice.dispensary.data.model.Order
 import com.solstice.dispensary.data.model.OrderLine
 import com.solstice.dispensary.data.model.Product
 import com.solstice.dispensary.data.model.ProductCategory
+import com.solstice.dispensary.data.model.ProductSize
 import com.solstice.dispensary.data.model.StrainType
 import org.json.JSONArray
 import org.json.JSONObject
@@ -44,6 +45,15 @@ object InventorySync {
                         .put("onDeal", p.onDeal)
                         .put("dealPercent", p.dealPercent)
                         .put("dealLabel", p.dealLabel)
+                        .put("sizeInventoryEnabled", p.sizeInventoryEnabled)
+                        .put("stockGram", p.stockGram)
+                        .put("priceGram", p.priceGram)
+                        .put("stockEighth", p.stockEighth)
+                        .put("priceEighth", p.priceEighth)
+                        .put("stockQuarter", p.stockQuarter)
+                        .put("priceQuarter", p.priceQuarter)
+                        .put("stockOunce", p.stockOunce)
+                        .put("priceOunce", p.priceOunce)
                 )
             }
         })
@@ -72,6 +82,8 @@ object InventorySync {
                         .put("productName", line.productName)
                         .put("unitPrice", line.unitPrice)
                         .put("quantity", line.quantity)
+                        .put("sizeKey", line.sizeKey)
+                        .put("sizeLabel", line.sizeLabel)
                 )
             }
         })
@@ -85,30 +97,40 @@ object InventorySync {
         return buildList {
             for (i in 0 until arr.length()) {
                 val o = arr.getJSONObject(i)
+                val product = Product(
+                    id = o.getString("id"),
+                    name = o.getString("name"),
+                    brand = o.getString("brand"),
+                    category = ProductCategory.valueOf(o.getString("category")),
+                    strainType = StrainType.valueOf(o.getString("strainType")),
+                    thcPercent = o.getDouble("thcPercent"),
+                    cbdPercent = o.getDouble("cbdPercent"),
+                    price = o.getDouble("price"),
+                    unitLabel = o.getString("unitLabel"),
+                    description = o.getString("description"),
+                    effects = o.getString("effects"),
+                    featured = o.optBoolean("featured", false),
+                    inStock = o.optBoolean("inStock", true),
+                    stockQuantity = o.optInt("stockQuantity", 0),
+                    sku = o.optString("sku", ""),
+                    published = o.optBoolean("published", true),
+                    publishedAt = o.optLong("publishedAt", 0L),
+                    publishedBy = o.optString("publishedBy", ""),
+                    onDeal = o.optBoolean("onDeal", false),
+                    dealPercent = o.optInt("dealPercent", 0),
+                    dealLabel = o.optString("dealLabel", ""),
+                    sizeInventoryEnabled = o.optBoolean("sizeInventoryEnabled", false),
+                    stockGram = o.optInt("stockGram", 0),
+                    priceGram = o.optDouble("priceGram", 0.0),
+                    stockEighth = o.optInt("stockEighth", 0),
+                    priceEighth = o.optDouble("priceEighth", 0.0),
+                    stockQuarter = o.optInt("stockQuarter", 0),
+                    priceQuarter = o.optDouble("priceQuarter", 0.0),
+                    stockOunce = o.optInt("stockOunce", 0),
+                    priceOunce = o.optDouble("priceOunce", 0.0)
+                )
                 add(
-                    Product(
-                        id = o.getString("id"),
-                        name = o.getString("name"),
-                        brand = o.getString("brand"),
-                        category = ProductCategory.valueOf(o.getString("category")),
-                        strainType = StrainType.valueOf(o.getString("strainType")),
-                        thcPercent = o.getDouble("thcPercent"),
-                        cbdPercent = o.getDouble("cbdPercent"),
-                        price = o.getDouble("price"),
-                        unitLabel = o.getString("unitLabel"),
-                        description = o.getString("description"),
-                        effects = o.getString("effects"),
-                        featured = o.optBoolean("featured", false),
-                        inStock = o.optBoolean("inStock", true),
-                        stockQuantity = o.optInt("stockQuantity", 0),
-                        sku = o.optString("sku", ""),
-                        published = o.optBoolean("published", true),
-                        publishedAt = o.optLong("publishedAt", 0L),
-                        publishedBy = o.optString("publishedBy", ""),
-                        onDeal = o.optBoolean("onDeal", false),
-                        dealPercent = o.optInt("dealPercent", 0),
-                        dealLabel = o.optString("dealLabel", "")
-                    )
+                    if (product.sizeInventoryEnabled) product.normalizedSizeInventory() else product
                 )
             }
         }
@@ -146,7 +168,9 @@ object InventorySync {
                         productId = o.getString("productId"),
                         productName = o.getString("productName"),
                         unitPrice = o.getDouble("unitPrice"),
-                        quantity = o.getInt("quantity")
+                        quantity = o.getInt("quantity"),
+                        sizeKey = o.optString("sizeKey", ProductSize.UNIT_KEY),
+                        sizeLabel = o.optString("sizeLabel", "")
                     )
                 )
             }

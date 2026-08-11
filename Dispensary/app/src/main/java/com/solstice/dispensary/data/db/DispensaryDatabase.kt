@@ -21,6 +21,8 @@ import com.solstice.dispensary.data.model.OrderLine
 import com.solstice.dispensary.data.model.Product
 import com.solstice.dispensary.data.model.ProductCategory
 import com.solstice.dispensary.data.model.ProductRequest
+import com.solstice.dispensary.data.model.ProductSize
+import com.solstice.dispensary.data.model.SizePricing
 import com.solstice.dispensary.data.model.StrainType
 
 class Converters {
@@ -53,7 +55,7 @@ class Converters {
         Customer::class,
         ProductRequest::class
     ],
-    version = 12,
+    version = 13,
     exportSchema = false
 )
 @TypeConverters(Converters::class)
@@ -85,6 +87,25 @@ abstract class DispensaryDatabase : RoomDatabase() {
 }
 
 object SeedCatalog {
+    private fun flowerSizes(eighthPrice: Double, stockGram: Int, stockEighth: Int, stockQuarter: Int, stockOunce: Int): Product.() -> Product {
+        val prices = SizePricing.fromEighth(eighthPrice)
+        return {
+            copy(
+                sizeInventoryEnabled = true,
+                unitLabel = "1g–1oz",
+                price = eighthPrice,
+                priceGram = prices.getValue(ProductSize.GRAM),
+                priceEighth = prices.getValue(ProductSize.EIGHTH),
+                priceQuarter = prices.getValue(ProductSize.QUARTER),
+                priceOunce = prices.getValue(ProductSize.OUNCE),
+                stockGram = stockGram,
+                stockEighth = stockEighth,
+                stockQuarter = stockQuarter,
+                stockOunce = stockOunce
+            ).normalizedSizeInventory()
+        }
+    }
+
     val products = listOf(
         Product(
             id = "fl-dusk",
@@ -104,7 +125,7 @@ object SeedCatalog {
             onDeal = true,
             dealPercent = 15,
             dealLabel = "Evening special"
-        ),
+        ).let(flowerSizes(45.0, stockGram = 12, stockEighth = 24, stockQuarter = 10, stockOunce = 4)),
         Product(
             id = "fl-citrus",
             name = "Citrus Ridge",
@@ -120,7 +141,7 @@ object SeedCatalog {
             featured = true,
             stockQuantity = 18,
             sku = "SOL-FL-CITR"
-        ),
+        ).let(flowerSizes(42.0, stockGram = 10, stockEighth = 18, stockQuarter = 8, stockOunce = 3)),
         Product(
             id = "fl-harbor",
             name = "Harbor Hybrid",
@@ -135,7 +156,7 @@ object SeedCatalog {
             effects = "Balanced · Happy · Mellow",
             stockQuantity = 12,
             sku = "NR-FL-HARB"
-        ),
+        ).let(flowerSizes(48.0, stockGram = 8, stockEighth = 12, stockQuarter = 6, stockOunce = 2)),
         Product(
             id = "pr-twilight",
             name = "Twilight Pack",
