@@ -12,8 +12,8 @@ android {
         applicationId = "com.solstice.dispensary"
         minSdk = 26
         targetSdk = 34
-        versionCode = 23
-        versionName = "1.18.0"
+        versionCode = 24
+        versionName = "1.19.0"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
         // Emulator → host machine mail server. Override with -PmailApiBaseUrl=...
@@ -103,6 +103,7 @@ dependencies {
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-play-services:1.8.1")
 
     implementation("androidx.work:work-runtime-ktx:2.9.0")
+    implementation("com.google.zxing:core:3.5.3")
 
     val cameraVersion = "1.3.4"
     implementation("androidx.camera:camera-core:$cameraVersion")

@@ -1,0 +1,131 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Native Pure — Download</title>
+  <style>
+    :root {
+      --ink: #1c2420;
+      --muted: #5c6b63;
+      --sage: #3d5c4a;
+      --paper: #f4f7f5;
+      --card: #ffffff;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: "Segoe UI", system-ui, sans-serif;
+      color: var(--ink);
+      background:
+        radial-gradient(ellipse at top, #dce8e1 0%, var(--paper) 55%);
+      min-height: 100vh;
+      padding: 32px 16px 48px;
+    }
+    main {
+      max-width: 880px;
+      margin: 0 auto;
+    }
+    h1 {
+      font-size: clamp(1.8rem, 4vw, 2.4rem);
+      letter-spacing: -0.02em;
+      margin: 0 0 8px;
+    }
+    .lede {
+      color: var(--muted);
+      font-size: 1.05rem;
+      margin: 0 0 28px;
+      max-width: 40rem;
+    }
+    .grid {
+      display: grid;
+      gap: 20px;
+      grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+    }
+    .card {
+      background: var(--card);
+      border-radius: 18px;
+      padding: 22px;
+      box-shadow: 0 10px 30px rgba(28, 36, 32, 0.08);
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      text-align: center;
+      gap: 10px;
+    }
+    .card h2 {
+      margin: 0;
+      font-size: 1.25rem;
+      color: var(--sage);
+    }
+    .card p {
+      margin: 0;
+      color: var(--muted);
+      font-size: 0.95rem;
+      line-height: 1.45;
+    }
+    .card img {
+      width: 220px;
+      height: 220px;
+      image-rendering: pixelated;
+      background: #fff;
+      border-radius: 12px;
+      border: 1px solid #e2ebe6;
+      padding: 8px;
+    }
+    a.btn {
+      display: inline-block;
+      margin-top: 6px;
+      padding: 10px 16px;
+      border-radius: 999px;
+      background: var(--sage);
+      color: #fff;
+      text-decoration: none;
+      font-weight: 600;
+      font-size: 0.95rem;
+    }
+    a.btn.secondary {
+      background: transparent;
+      color: var(--sage);
+      border: 1.5px solid var(--sage);
+    }
+    footer {
+      margin-top: 28px;
+      color: var(--muted);
+      font-size: 0.9rem;
+      text-align: center;
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>Native Pure downloads</h1>
+    <p class="lede">
+      Scan a QR code to get the phone app or desktop companion.
+      Phone installs need “Allow from this source” once.
+    </p>
+    <div class="grid">
+      <section class="card">
+        <h2>Android app</h2>
+        <p>Latest APK from GitHub Releases. Android 8.0+.</p>
+        <img src="./qr/nativepure-android.png" alt="QR code to download Native Pure Android APK" />
+        <a class="btn" href="https://github.com/GutFarms/Japan-central/releases/latest/download/NativePure-Dispensary.apk">
+          Download APK
+        </a>
+      </section>
+      <section class="card">
+        <h2>Desktop companion</h2>
+        <p>Windows EXE/MSI or cross-platform JAR (JDK 17+).</p>
+        <img src="./qr/nativepure-companion.png" alt="QR code for companion download instructions" />
+        <a class="btn secondary" href="https://github.com/GutFarms/Japan-central/blob/master/DOWNLOAD-DISPENSARY.md#desktop-companion-windows--mac--linux">
+          Companion instructions
+        </a>
+      </section>
+    </div>
+    <footer>
+      Prefer markdown? See
+      <a href="https://github.com/GutFarms/Japan-central/blob/master/DOWNLOADS.md">DOWNLOADS.md</a>
+    </footer>
+  </main>
+</body>
+</html>

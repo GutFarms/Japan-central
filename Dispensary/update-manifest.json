@@ -1,6 +1,6 @@
 {
-  "versionCode": 23,
-  "versionName": "1.18.0",
+  "versionCode": 24,
+  "versionName": "1.19.0",
   "apkUrl": "https://github.com/GutFarms/Japan-central/releases/latest/download/NativePure-Dispensary.apk",
-  "releaseNotes": "Native Pure 1.18.0 — auto-updates daily at 1:00 AM from GitHub Releases."
+  "releaseNotes": "Native Pure 1.19.0 — download QR codes (Account → Share downloads)."
 }

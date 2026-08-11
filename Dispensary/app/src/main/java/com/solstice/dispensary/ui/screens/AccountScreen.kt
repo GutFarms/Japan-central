@@ -21,6 +21,7 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -42,8 +43,10 @@ import com.solstice.dispensary.data.model.CustomerProfile
 import com.solstice.dispensary.data.model.SecuritySettings
 import com.solstice.dispensary.data.model.ThemeMode
 import com.solstice.dispensary.data.update.UpdateUiState
+import com.solstice.dispensary.ui.components.AppDownloadLinks
 import com.solstice.dispensary.ui.components.AppUpdateWizard
 import com.solstice.dispensary.ui.components.BrandLogo
+import com.solstice.dispensary.ui.components.DownloadQrDialog
 import com.solstice.dispensary.ui.components.MetaPill
 import com.solstice.dispensary.ui.components.SectionHeader
 import com.solstice.dispensary.BuildConfig
@@ -114,6 +117,8 @@ fun AccountScreen(
     var newPin by remember { mutableStateOf("") }
     var confirmPin by remember { mutableStateOf("") }
     var disablePassword by remember { mutableStateOf("") }
+    var showAndroidQr by remember { mutableStateOf(false) }
+    var showCompanionQr by remember { mutableStateOf(false) }
     val dateFormat = remember { SimpleDateFormat("MMM d, yyyy", Locale.US) }
     val isAdminLike = customer.isAdminLike
     val canManageStaff = customer.role.canManageStaff
@@ -585,6 +590,28 @@ fun AccountScreen(
 
         item {
             SectionHeader(
+                title = "Share downloads",
+                subtitle = "Show a QR code so phones or desktops can install Native Pure"
+            )
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Button(
+                    onClick = { showAndroidQr = true },
+                    shape = RoundedCornerShape(12.dp)
+                ) {
+                    Text("Android APK QR")
+                }
+                OutlinedButton(
+                    onClick = { showCompanionQr = true },
+                    shape = RoundedCornerShape(12.dp)
+                ) {
+                    Text("Companion QR")
+                }
+            }
+            Spacer(Modifier.height(8.dp))
+        }
+
+        item {
+            SectionHeader(
                 title = "App updates",
                 subtitle = "Installed ${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE}) · auto-checks GitHub daily at 1:00 AM"
             )
@@ -612,6 +639,23 @@ fun AccountScreen(
                 Text("Log out")
             }
         }
+    }
+
+    if (showAndroidQr) {
+        DownloadQrDialog(
+            title = "Download Native Pure",
+            subtitle = "Scan with a phone camera to download the Android APK",
+            url = AppDownloadLinks.ANDROID_APK,
+            onDismiss = { showAndroidQr = false }
+        )
+    }
+    if (showCompanionQr) {
+        DownloadQrDialog(
+            title = "Desktop companion",
+            subtitle = "Scan for Windows / Mac / Linux download instructions",
+            url = AppDownloadLinks.COMPANION_DOCS,
+            onDismiss = { showCompanionQr = false }
+        )
     }
 }
 

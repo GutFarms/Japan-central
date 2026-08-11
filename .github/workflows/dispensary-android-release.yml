@@ -73,8 +73,13 @@ jobs:
           EOF
           # Keep a repo-local copy used by docs / sideload testing
           cp dist/update-manifest.json update-manifest.json
+          # Ensure Android download QR is present for release assets
+          mkdir -p dist/qr
+          if [ ! -f dist/qr/nativepure-android.png ] && [ -f ../downloads/qr/nativepure-android.png ]; then
+            cp ../downloads/qr/nativepure-android.png dist/qr/nativepure-android.png
+          fi
           cat dist/update-manifest.json
-          ls -lh dist/
+          ls -lh dist/ dist/qr/ || true
 
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
@@ -84,6 +89,7 @@ jobs:
             Dispensary/dist/NativePure-Dispensary.apk
             Dispensary/dist/Solstice-Dispensary.apk
             Dispensary/dist/update-manifest.json
+            Dispensary/dist/qr/nativepure-android.png
           if-no-files-found: error
           retention-days: 90
 
@@ -96,9 +102,11 @@ jobs:
           body: |
             Installable Android APK for **Native Pure**.
 
-            1. Download `NativePure-Dispensary.apk`
+            1. Download `NativePure-Dispensary.apk` (or scan `nativepure-android.png`)
             2. On Android: allow install from this source
             3. Open **Native Pure** → confirm **18+**
+
+            QR codes & companion links: [DOWNLOADS.md](https://github.com/GutFarms/Japan-central/blob/master/DOWNLOADS.md)
 
             In-app updates read `update-manifest.json` from this release.
 
@@ -106,6 +114,7 @@ jobs:
           files: |
             Dispensary/dist/NativePure-Dispensary.apk
             Dispensary/dist/update-manifest.json
+            Dispensary/dist/qr/nativepure-android.png
           fail_on_unmatched_files: true
           generate_release_notes: false
         env:

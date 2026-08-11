@@ -1,17 +1,33 @@
 # Download Native Pure
 
+## QR codes (scan to download)
+
+See **[`DOWNLOADS.md`](./DOWNLOADS.md)** for printable QR codes:
+
+| App | QR |
+|-----|-----|
+| Android APK | [`downloads/qr/nativepure-android.png`](./downloads/qr/nativepure-android.png) |
+| Desktop companion | [`downloads/qr/nativepure-companion.png`](./downloads/qr/nativepure-companion.png) |
+
+Local HTML poster: [`downloads/index.html`](./downloads/index.html)
+
+---
+
 ## Android APK (download)
+
+**Scan or open the latest release APK:**  
+https://github.com/GutFarms/Japan-central/releases/latest/download/NativePure-Dispensary.apk
 
 **Direct file (this branch):**  
 [`Dispensary/dist/NativePure-Dispensary.apk`](./Dispensary/dist/NativePure-Dispensary.apk)
 
-**GitHub Releases (preferred permanent link):**  
+**GitHub Releases:**  
 https://github.com/GutFarms/Japan-central/releases  
 → download **`NativePure-Dispensary.apk`**
 
 ### Install on phone
 
-1. Download the APK to your Android device
+1. Download the APK to your Android device (or scan the Android QR)
 2. **Settings → Apps → Special access → Install unknown apps** → allow your browser/Files
 3. Open the APK → install → open **Native Pure** → confirm **18+**
 
@@ -36,7 +52,7 @@ cp app/build/outputs/apk/release/app-release.apk dist/NativePure-Dispensary.apk
 
 ### Option A — GitHub Actions (preferred)
 
-1. Open **[Actions](../../actions)** → **Build Native Pure Windows companion**
+1. Open **[Actions](../../ed)** → **Build Native Pure Windows companion**
 2. Download either:
    - **`NativePure-Companion-Windows`** — `.exe` / `.msi` installers + Windows JAR
    - **`NativePure-Companion-linux-jar`** — runnable uber JAR (any OS with JDK 17+)
