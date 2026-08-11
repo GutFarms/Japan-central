@@ -1,6 +1,6 @@
 {
-  "versionCode": 24,
-  "versionName": "1.19.0",
+  "versionCode": 25,
+  "versionName": "1.20.0",
   "apkUrl": "https://github.com/GutFarms/Japan-central/releases/latest/download/NativePure-Dispensary.apk",
-  "releaseNotes": "Native Pure 1.19.0 — download QR codes (Account → Share downloads)."
+  "releaseNotes": "Native Pure 1.20.0 — privacy hardening, PBKDF2 passwords, masked customer PII, staff session security."
 }
