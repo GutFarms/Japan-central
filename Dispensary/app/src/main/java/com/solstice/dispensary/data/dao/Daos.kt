@@ -14,6 +14,7 @@ import com.solstice.dispensary.data.model.Order
 import com.solstice.dispensary.data.model.OrderLine
 import com.solstice.dispensary.data.model.Product
 import com.solstice.dispensary.data.model.ProductCategory
+import com.solstice.dispensary.data.model.ProductRequest
 import kotlinx.coroutines.flow.Flow
 
 @Dao
@@ -125,6 +126,27 @@ interface InventoryDao {
 
     @Insert
     suspend fun insert(intake: InventoryIntake)
+}
+
+@Dao
+interface ProductRequestDao {
+    @Query("SELECT * FROM product_requests ORDER BY createdAt DESC")
+    fun observeAll(): Flow<List<ProductRequest>>
+
+    @Query("SELECT * FROM product_requests WHERE customerId = :customerId ORDER BY createdAt DESC")
+    fun observeForCustomer(customerId: String): Flow<List<ProductRequest>>
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insert(request: ProductRequest)
+
+    @Query("UPDATE product_requests SET status = :status WHERE id = :id")
+    suspend fun setStatus(id: String, status: String)
+
+    @Query("SELECT COUNT(*) FROM product_requests")
+    suspend fun count(): Int
+
+    @Query("SELECT COUNT(DISTINCT customerId) FROM product_requests")
+    suspend fun countDistinctCustomers(): Int
 }
 
 @Dao

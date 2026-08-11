@@ -39,14 +39,17 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.unit.dp
 import com.solstice.dispensary.data.model.Product
 import com.solstice.dispensary.data.model.ProductCategory
+import com.solstice.dispensary.data.model.ProductRequest
+import com.solstice.dispensary.data.model.RequestBoxStats
 import com.solstice.dispensary.data.update.UpdateUiState
-import com.solstice.dispensary.ui.components.AppUpdateBanner
+import com.solstice.dispensary.ui.components.AppUpdateWizard
 import com.solstice.dispensary.ui.components.BotanicalScreenBackground
 import com.solstice.dispensary.ui.components.BrandLogo
 import com.solstice.dispensary.ui.components.HeroBackdrop
 import com.solstice.dispensary.ui.components.LeafEmptyState
 import com.solstice.dispensary.ui.components.ProductTile
 import com.solstice.dispensary.ui.components.SectionHeader
+import com.solstice.dispensary.ui.screens.RequestBoxCard
 import com.solstice.dispensary.ui.theme.Amber
 import com.solstice.dispensary.ui.theme.CanopyLight
 import com.solstice.dispensary.ui.theme.Charcoal
@@ -59,10 +62,17 @@ fun HomeScreen(
     showInventory: Boolean = false,
     updateState: UpdateUiState = UpdateUiState.Idle,
     needsInstallPermission: Boolean = false,
+    requestStats: RequestBoxStats = RequestBoxStats(0, 0, 0, 0f),
+    productRequests: List<ProductRequest> = emptyList(),
+    isStaff: Boolean = false,
+    requestMessage: String? = null,
     onDownloadUpdate: () -> Unit = {},
     onInstallUpdate: () -> Unit = {},
     onDismissUpdate: () -> Unit = {},
     onOpenInstallPermission: () -> Unit = {},
+    onSubmitRequest: (String, String) -> Unit = { _, _ -> },
+    onMarkRequestDone: (String) -> Unit = {},
+    onOpenRequests: () -> Unit = {},
     onOpenMenu: () -> Unit,
     onOpenProduct: (String) -> Unit,
     onOpenCart: () -> Unit,
@@ -86,7 +96,7 @@ fun HomeScreen(
             contentPadding = PaddingValues(bottom = 28.dp)
         ) {
             item {
-                AppUpdateBanner(
+                AppUpdateWizard(
                     state = updateState,
                     onDownload = onDownloadUpdate,
                     onInstall = onInstallUpdate,
@@ -179,6 +189,20 @@ fun HomeScreen(
                             }
                         }
                     }
+                }
+            }
+
+            item {
+                Column(modifier = Modifier.padding(horizontal = 20.dp, vertical = 8.dp)) {
+                    RequestBoxCard(
+                        stats = requestStats,
+                        myRequests = productRequests,
+                        isStaff = isStaff,
+                        message = requestMessage,
+                        onSubmit = onSubmitRequest,
+                        onMarkDone = onMarkRequestDone,
+                        onOpenAll = if (isStaff) onOpenRequests else null
+                    )
                 }
             }
 

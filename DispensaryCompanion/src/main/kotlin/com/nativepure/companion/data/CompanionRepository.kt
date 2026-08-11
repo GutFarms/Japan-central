@@ -21,6 +21,7 @@ class CompanionRepository {
     private var orders: MutableList<Order> = mutableListOf()
     private var orderLines: MutableList<OrderLine> = mutableListOf()
     private var cart: MutableList<CartItem> = mutableListOf()
+    private var productRequests: MutableList<ProductRequest> = mutableListOf()
     private var sessionCustomerId: String? = null
     var ageVerified: Boolean = false
         private set
@@ -212,6 +213,56 @@ class CompanionRepository {
         lastIssuedEmailCode = null
         persist()
         return AuthResult.Success(updated.toProfile())
+    }
+
+    fun visibleProductRequests(): List<ProductRequest> {
+        val me = currentCustomer() ?: return emptyList()
+        return if (me.role.canViewSensitiveInfo) {
+            productRequests.sortedByDescending { it.createdAt }
+        } else {
+            productRequests.filter { it.customerId == me.id }.sortedByDescending { it.createdAt }
+        }
+    }
+
+    fun requestBoxStats(): RequestBoxStats {
+        val customerCount = customers.count { it.role == AccountRole.CUSTOMER }
+        val unique = productRequests.map { it.customerId }.toSet().size
+        val pct = if (customerCount <= 0) 0f else unique * 100f / customerCount
+        return RequestBoxStats(
+            totalRequests = productRequests.size,
+            uniqueRequesters = unique,
+            totalCustomers = customerCount,
+            requesterToCustomerPercent = pct
+        )
+    }
+
+    fun submitProductRequest(productName: String, notes: String): OpResult {
+        val me = currentCustomer() ?: return OpResult.Error("Not signed in.")
+        val name = productName.trim()
+        if (name.length < 2) return OpResult.Error("Tell us what product you’re looking for.")
+        productRequests.add(
+            0,
+            ProductRequest(
+                id = "req-" + UUID.randomUUID().toString().take(8),
+                customerId = me.id,
+                customerName = me.fullName,
+                customerEmail = me.email,
+                productName = name,
+                notes = notes.trim()
+            )
+        )
+        persist()
+        return OpResult.Success("Request sent for “$name”.")
+    }
+
+    fun markRequestFulfilled(id: String): OpResult {
+        val me = currentCustomer() ?: return OpResult.Error("Not signed in.")
+        if (!me.role.canViewSensitiveInfo) return OpResult.Error("Staff/admin only.")
+        val idx = productRequests.indexOfFirst { it.id == id }
+        if (idx < 0) return OpResult.Error("Request not found.")
+        productRequests[idx] = productRequests[idx].copy(status = "Fulfilled")
+        persist()
+        return OpResult.Success("Marked fulfilled.")
     }
 
     fun logout() {
@@ -492,6 +543,7 @@ class CompanionRepository {
                 orders = data.orders.toMutableList()
                 orderLines = data.orderLines.toMutableList()
                 cart = data.cart.toMutableList()
+                productRequests = data.productRequests.toMutableList()
                 sessionCustomerId = data.sessionCustomerId
                 ageVerified = data.ageVerified
             }.onFailure { seedFresh() }
@@ -511,6 +563,7 @@ class CompanionRepository {
         orders = mutableListOf()
         orderLines = mutableListOf()
         cart = mutableListOf()
+        productRequests = mutableListOf()
         sessionCustomerId = null
         ageVerified = false
         ensureMainAdmin()
@@ -608,6 +661,7 @@ class CompanionRepository {
             orders = orders.toList(),
             orderLines = orderLines.toList(),
             cart = cart.toList(),
+            productRequests = productRequests.toList(),
             sessionCustomerId = sessionCustomerId,
             ageVerified = ageVerified
         )

@@ -12,8 +12,8 @@ android {
         applicationId = "com.solstice.dispensary"
         minSdk = 26
         targetSdk = 34
-        versionCode = 13
-        versionName = "1.9.0"
+        versionCode = 14
+        versionName = "1.10.0"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 

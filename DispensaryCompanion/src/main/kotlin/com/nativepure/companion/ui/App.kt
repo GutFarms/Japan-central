@@ -371,7 +371,10 @@ private fun MainShell(
         add(NavSection.CART)
         add(NavSection.ORDERS)
         if (customer.role.canManageInventory) add(NavSection.INVENTORY)
-        if (customer.role.canViewSensitiveInfo) add(NavSection.CUSTOMERS)
+        if (customer.role.canViewSensitiveInfo) {
+            add(NavSection.CUSTOMERS)
+            add(NavSection.REQUESTS)
+        }
         add(NavSection.STORE)
         add(NavSection.ACCOUNT)
     }
@@ -424,6 +427,8 @@ private fun MainShell(
 
             when (section) {
                 NavSection.HOME -> HomePane(
+                    repository = repository,
+                    customer = customer,
                     featured = repository.featuredProducts(),
                     cartCount = repository.cartSummary().itemCount,
                     onOpenMenu = { onSection(NavSection.MENU) },
@@ -431,7 +436,9 @@ private fun MainShell(
                         repository.addToCart(it)
                         onRefresh()
                         onMessage("Added to bag.")
-                    }
+                    },
+                    onRefresh = onRefresh,
+                    onMessage = onMessage
                 )
                 NavSection.MENU -> MenuPane(
                     products = repository.catalogProducts(),
@@ -450,6 +457,7 @@ private fun MainShell(
                 NavSection.ORDERS -> OrdersPane(repository)
                 NavSection.INVENTORY -> InventoryPane(repository, onRefresh, onMessage)
                 NavSection.CUSTOMERS -> CustomersPane(repository)
+                NavSection.REQUESTS -> RequestsPane(repository, onRefresh, onMessage)
                 NavSection.STORE -> StorePane()
                 NavSection.ACCOUNT -> AccountPane(
                     repository = repository,
@@ -465,12 +473,21 @@ private fun MainShell(
 
 @Composable
 private fun HomePane(
+    repository: CompanionRepository,
+    customer: CustomerProfile,
     featured: List<Product>,
     cartCount: Int,
     onOpenMenu: () -> Unit,
-    onAdd: (String) -> Unit
+    onAdd: (String) -> Unit,
+    onRefresh: () -> Unit,
+    onMessage: (String?) -> Unit
 ) {
-    Column(Modifier.fillMaxSize()) {
+    var requestName by remember { mutableStateOf("") }
+    var requestNotes by remember { mutableStateOf("") }
+    val stats = repository.requestBoxStats()
+    val requests = repository.visibleProductRequests().take(5)
+
+    Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(4.dp)) {
         Text("Native Pure", style = MaterialTheme.typography.headlineLarge)
         Text(
             "Desktop companion for browsing the menu, placing pickup orders, and managing stock.",
@@ -481,6 +498,39 @@ private fun HomePane(
             Button(onClick = onOpenMenu, shape = RoundedCornerShape(10.dp)) { Text("Browse menu") }
             Text("$cartCount in bag", modifier = Modifier.align(Alignment.CenterVertically))
         }
+        Spacer(Modifier.height(16.dp))
+        Surface(shape = RoundedCornerShape(14.dp), tonalElevation = 1.dp, modifier = Modifier.fillMaxWidth()) {
+            Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text("Request box", style = MaterialTheme.typography.headlineMedium)
+                Text(
+                    "${stats.requesterToCustomerPercent.toInt()}% customer ratio · " +
+                        "${stats.uniqueRequesters}/${stats.totalCustomers} customers · " +
+                        "${stats.totalRequests} requests"
+                )
+                if (!customer.role.canViewSensitiveInfo) {
+                    Field(requestName, { requestName = it }, "What are you looking for?")
+                    Field(requestNotes, { requestNotes = it }, "Notes (optional)")
+                    Button(
+                        onClick = {
+                            when (val result = repository.submitProductRequest(requestName, requestNotes)) {
+                                is OpResult.Success -> {
+                                    requestName = ""
+                                    requestNotes = ""
+                                    onMessage(result.message)
+                                    onRefresh()
+                                }
+                                is OpResult.Error -> onMessage(result.message)
+                            }
+                        },
+                        enabled = requestName.trim().length >= 2
+                    ) { Text("Send request") }
+                }
+                requests.forEach { req ->
+                    Text("• ${req.productName} (${req.status})" +
+                        if (customer.role.canViewSensitiveInfo) " — ${req.customerName}" else "")
+                }
+            }
+        }
         Spacer(Modifier.height(20.dp))
         Text("Featured", style = MaterialTheme.typography.headlineMedium)
         Spacer(Modifier.height(10.dp))
@@ -488,10 +538,53 @@ private fun HomePane(
             columns = GridCells.Adaptive(220.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp),
             horizontalArrangement = Arrangement.spacedBy(12.dp),
-            modifier = Modifier.fillMaxSize()
+            modifier = Modifier.height(420.dp)
         ) {
             items(featured, key = { it.id }) { product ->
                 ProductCard(product, onAdd)
+            }
+        }
+    }
+}
+
+@Composable
+private fun RequestsPane(
+    repository: CompanionRepository,
+    onRefresh: () -> Unit,
+    onMessage: (String?) -> Unit
+) {
+    val stats = repository.requestBoxStats()
+    val requests = repository.visibleProductRequests()
+    Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState())) {
+        Text("Request box", style = MaterialTheme.typography.headlineLarge)
+        Text(
+            "${stats.requesterToCustomerPercent.toInt()}% of customers have requested · " +
+                "${stats.uniqueRequesters} / ${stats.totalCustomers}"
+        )
+        Spacer(Modifier.height(12.dp))
+        requests.forEach { req ->
+            Surface(
+                shape = RoundedCornerShape(12.dp),
+                tonalElevation = 1.dp,
+                modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp)
+            ) {
+                Column(Modifier.padding(12.dp)) {
+                    Text(req.productName, style = MaterialTheme.typography.titleLarge)
+                    Text("${req.customerName} · ${req.customerEmail}")
+                    if (req.notes.isNotBlank()) Text(req.notes)
+                    Text("Status: ${req.status}")
+                    if (req.status == "Open") {
+                        TextButton(onClick = {
+                            when (val result = repository.markRequestFulfilled(req.id)) {
+                                is OpResult.Success -> {
+                                    onMessage(result.message)
+                                    onRefresh()
+                                }
+                                is OpResult.Error -> onMessage(result.message)
+                            }
+                        }) { Text("Mark fulfilled") }
+                    }
+                }
             }
         }
     }

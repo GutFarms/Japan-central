@@ -27,6 +27,7 @@ import com.solstice.dispensary.ui.screens.InventoryScreen
 import com.solstice.dispensary.ui.screens.MenuScreen
 import com.solstice.dispensary.ui.screens.OrdersScreen
 import com.solstice.dispensary.ui.screens.ProductDetailScreen
+import com.solstice.dispensary.ui.screens.RequestsScreen
 import com.solstice.dispensary.ui.screens.StoreScreen
 import com.solstice.dispensary.ui.viewmodel.DispensaryViewModel
 
@@ -40,6 +41,7 @@ object Routes {
     const val SCANNER = "inventory/scan"
     const val ACCOUNT = "account"
     const val CUSTOMERS = "customers"
+    const val REQUESTS = "requests"
     const val PRODUCT = "product/{productId}"
 
     fun product(id: String) = "product/$id"
@@ -59,6 +61,8 @@ fun DispensaryNavHost(
     val inventory by viewModel.inventory.collectAsState()
     val intakes by viewModel.intakes.collectAsState()
     val customers by viewModel.customers.collectAsState()
+    val productRequests by viewModel.productRequests.collectAsState()
+    val requestStats by viewModel.requestBoxStats.collectAsState()
     var canInstall by remember { mutableStateOf(ApkInstaller.canInstallPackages(context)) }
 
     LaunchedEffect(Unit) {
@@ -92,10 +96,17 @@ fun DispensaryNavHost(
                 showInventory = viewModel.canManageInventory,
                 updateState = viewModel.updateState,
                 needsInstallPermission = !canInstall,
+                requestStats = requestStats,
+                productRequests = productRequests,
+                isStaff = viewModel.canViewSensitiveInfo,
+                requestMessage = viewModel.requestMessage,
                 onDownloadUpdate = viewModel::downloadAppUpdate,
                 onInstallUpdate = { installDownloadedUpdate() },
                 onDismissUpdate = viewModel::dismissAppUpdate,
                 onOpenInstallPermission = { openInstallPermission() },
+                onSubmitRequest = viewModel::submitProductRequest,
+                onMarkRequestDone = viewModel::markProductRequestFulfilled,
+                onOpenRequests = { navController.navigate(Routes.REQUESTS) },
                 onOpenMenu = { navController.navigate(Routes.MENU) },
                 onOpenProduct = { id -> navController.navigate(Routes.product(id)) },
                 onOpenCart = { navController.navigate(Routes.CART) },
@@ -228,6 +239,21 @@ fun DispensaryNavHost(
                 onOpenCustomers = { navController.navigate(Routes.CUSTOMERS) },
                 onOpenOrders = { navController.navigate(Routes.ORDERS) }
             )
+        }
+        composable(Routes.REQUESTS) {
+            if (!viewModel.canViewSensitiveInfo) {
+                Text(
+                    "Request box details are only available to admin and staff.",
+                    modifier = Modifier.padding(20.dp)
+                )
+            } else {
+                RequestsScreen(
+                    requests = productRequests,
+                    stats = requestStats,
+                    onBack = { navController.popBackStack() },
+                    onMarkDone = viewModel::markProductRequestFulfilled
+                )
+            }
         }
         composable(Routes.CUSTOMERS) {
             CustomersScreen(

@@ -19,6 +19,8 @@ import com.solstice.dispensary.data.model.Order
 import com.solstice.dispensary.data.model.OrderLine
 import com.solstice.dispensary.data.model.Product
 import com.solstice.dispensary.data.model.ProductCategory
+import com.solstice.dispensary.data.model.ProductRequest
+import com.solstice.dispensary.data.model.RequestBoxStats
 import com.solstice.dispensary.data.model.ThemeMode
 import com.solstice.dispensary.data.repository.DispensaryRepository
 import com.solstice.dispensary.data.update.AppUpdateChecker
@@ -136,7 +138,20 @@ class DispensaryViewModel(
     val staffAccounts: StateFlow<List<CustomerProfile>> = repository.staffAccounts
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
 
+    val productRequests: StateFlow<List<ProductRequest>> = repository.productRequests
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+
+    val requestBoxStats: StateFlow<RequestBoxStats> = repository.requestBoxStats
+        .stateIn(
+            viewModelScope,
+            SharingStarted.WhileSubscribed(5_000),
+            RequestBoxStats(0, 0, 0, 0f)
+        )
+
     var lastSyncExport by mutableStateOf<String?>(null)
+        private set
+
+    var requestMessage by mutableStateOf<String?>(null)
         private set
 
     val isLoggedIn: Boolean get() = currentCustomer != null
@@ -558,6 +573,28 @@ class DispensaryViewModel(
         if (updateState is UpdateUiState.UpToDate || updateState is UpdateUiState.Error) {
             updateState = UpdateUiState.Idle
         }
+    }
+
+    fun submitProductRequest(productName: String, notes: String) {
+        viewModelScope.launch {
+            when (val result = repository.submitProductRequest(productName, notes)) {
+                is OpResult.Success -> requestMessage = result.message
+                is OpResult.Error -> requestMessage = result.message
+            }
+        }
+    }
+
+    fun markProductRequestFulfilled(requestId: String) {
+        viewModelScope.launch {
+            when (val result = repository.setProductRequestStatus(requestId, "Fulfilled")) {
+                is OpResult.Success -> requestMessage = result.message
+                is OpResult.Error -> requestMessage = result.message
+            }
+        }
+    }
+
+    fun clearRequestMessage() {
+        requestMessage = null
     }
 
     fun importSync(json: String) {

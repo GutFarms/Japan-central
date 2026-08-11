@@ -11,6 +11,7 @@ import com.solstice.dispensary.data.dao.CustomerDao
 import com.solstice.dispensary.data.dao.InventoryDao
 import com.solstice.dispensary.data.dao.OrderDao
 import com.solstice.dispensary.data.dao.ProductDao
+import com.solstice.dispensary.data.dao.ProductRequestDao
 import com.solstice.dispensary.data.model.AccountRole
 import com.solstice.dispensary.data.model.CartItem
 import com.solstice.dispensary.data.model.Customer
@@ -19,6 +20,7 @@ import com.solstice.dispensary.data.model.Order
 import com.solstice.dispensary.data.model.OrderLine
 import com.solstice.dispensary.data.model.Product
 import com.solstice.dispensary.data.model.ProductCategory
+import com.solstice.dispensary.data.model.ProductRequest
 import com.solstice.dispensary.data.model.StrainType
 
 class Converters {
@@ -48,9 +50,10 @@ class Converters {
         Order::class,
         OrderLine::class,
         InventoryIntake::class,
-        Customer::class
+        Customer::class,
+        ProductRequest::class
     ],
-    version = 8,
+    version = 9,
     exportSchema = false
 )
 @TypeConverters(Converters::class)
@@ -60,6 +63,7 @@ abstract class DispensaryDatabase : RoomDatabase() {
     abstract fun orderDao(): OrderDao
     abstract fun inventoryDao(): InventoryDao
     abstract fun customerDao(): CustomerDao
+    abstract fun productRequestDao(): ProductRequestDao
 
     companion object {
         @Volatile

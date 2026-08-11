@@ -175,6 +175,36 @@ data class EmailCodeIssue(
     val expiresAtMs: Long
 )
 
+@Entity(
+    tableName = "product_requests",
+    indices = [Index(value = ["customerId"]), Index(value = ["createdAt"])]
+)
+data class ProductRequest(
+    @PrimaryKey val id: String,
+    val createdAt: Long = System.currentTimeMillis(),
+    val customerId: String,
+    val customerName: String,
+    val customerEmail: String,
+    val productName: String,
+    val notes: String = "",
+    val status: String = "Open"
+)
+
+data class RequestBoxStats(
+    val totalRequests: Int,
+    val uniqueRequesters: Int,
+    val totalCustomers: Int,
+    /** Unique requesters ÷ customer accounts × 100. */
+    val requesterToCustomerPercent: Float
+) {
+    val ratioLabel: String
+        get() = if (totalCustomers <= 0) {
+            "No customers yet"
+        } else {
+            String.format("%.0f%% of customers have sent a request", requesterToCustomerPercent)
+        }
+}
+
 enum class AutoLockTimeout(val label: String, val millis: Long) {
     IMMEDIATE("Immediately", 0L),
     ONE_MINUTE("1 minute", 60_000L),

@@ -137,6 +137,7 @@ class MainActivity : ComponentActivity() {
                 val hideBottomBar = current.startsWith("product/") ||
                     current == Routes.SCANNER ||
                     current == Routes.CUSTOMERS ||
+                    current == Routes.REQUESTS ||
                     current == Routes.ORDERS ||
                     current == Routes.STORE
 

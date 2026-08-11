@@ -42,7 +42,7 @@ import com.solstice.dispensary.data.model.CustomerProfile
 import com.solstice.dispensary.data.model.SecuritySettings
 import com.solstice.dispensary.data.model.ThemeMode
 import com.solstice.dispensary.data.update.UpdateUiState
-import com.solstice.dispensary.ui.components.AppUpdateBanner
+import com.solstice.dispensary.ui.components.AppUpdateWizard
 import com.solstice.dispensary.ui.components.BrandLogo
 import com.solstice.dispensary.ui.components.MetaPill
 import com.solstice.dispensary.ui.components.SectionHeader
@@ -559,34 +559,18 @@ fun AccountScreen(
                 title = "App updates",
                 subtitle = "Installed ${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE})"
             )
-            AppUpdateBanner(
+            AppUpdateWizard(
                 state = updateState,
+                onCheck = onCheckUpdate,
                 onDownload = onDownloadUpdate,
                 onInstall = onInstallUpdate,
                 onDismiss = onDismissUpdate,
                 onOpenInstallPermission = onOpenInstallPermission,
                 needsInstallPermission = needsInstallPermission,
-                compact = true
+                compact = true,
+                showIdleCheck = true
             )
-            when (updateState) {
-                UpdateUiState.Checking -> Text("Checking for updates…")
-                UpdateUiState.UpToDate -> Text("You’re on the latest version.")
-                is UpdateUiState.Error -> Text(
-                    updateState.message,
-                    color = MaterialTheme.colorScheme.error
-                )
-                else -> Unit
-            }
             Spacer(Modifier.height(8.dp))
-            Button(
-                onClick = onCheckUpdate,
-                enabled = updateState !is UpdateUiState.Checking &&
-                    updateState !is UpdateUiState.Downloading,
-                modifier = Modifier.fillMaxWidth(),
-                shape = RoundedCornerShape(12.dp)
-            ) {
-                Text("Check for updates")
-            }
         }
 
         item {

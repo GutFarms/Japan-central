@@ -176,9 +176,29 @@ enum class NavSection(val label: String) {
     ORDERS("Orders"),
     INVENTORY("Stock"),
     CUSTOMERS("Customers"),
+    REQUESTS("Requests"),
     STORE("Store"),
     ACCOUNT("Account")
 }
+
+@Serializable
+data class ProductRequest(
+    val id: String,
+    val createdAt: Long = System.currentTimeMillis(),
+    val customerId: String,
+    val customerName: String,
+    val customerEmail: String,
+    val productName: String,
+    val notes: String = "",
+    val status: String = "Open"
+)
+
+data class RequestBoxStats(
+    val totalRequests: Int,
+    val uniqueRequesters: Int,
+    val totalCustomers: Int,
+    val requesterToCustomerPercent: Float
+)
 
 @Serializable
 data class SyncFile(
@@ -196,6 +216,7 @@ data class PersistedStore(
     val orders: List<Order> = emptyList(),
     val orderLines: List<OrderLine> = emptyList(),
     val cart: List<CartItem> = emptyList(),
+    val productRequests: List<ProductRequest> = emptyList(),
     val sessionCustomerId: String? = null,
     val ageVerified: Boolean = false
 )

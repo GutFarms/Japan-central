@@ -24,6 +24,8 @@ import com.solstice.dispensary.data.model.Order
 import com.solstice.dispensary.data.model.OrderLine
 import com.solstice.dispensary.data.model.Product
 import com.solstice.dispensary.data.model.ProductCategory
+import com.solstice.dispensary.data.model.RequestBoxStats
+import com.solstice.dispensary.data.model.ProductRequest
 import com.solstice.dispensary.data.model.SecuritySettings
 import com.solstice.dispensary.data.model.ThemeMode
 import com.solstice.dispensary.data.model.toProfile
@@ -63,6 +65,39 @@ class DispensaryRepository(context: Context) {
     val staffAccounts: Flow<List<CustomerProfile>> =
         db.customerDao().observeByRole(AccountRole.STAFF)
             .map { list -> list.map { it.toProfile() } }
+
+    val productRequests: Flow<List<ProductRequest>> =
+        sessionCustomerId.flatMapLatest { id ->
+            if (id.isNullOrBlank()) {
+                flowOf(emptyList())
+            } else {
+                val me = db.customerDao().getById(id)
+                if (me?.role?.canViewSensitiveInfo == true) {
+                    db.productRequestDao().observeAll()
+                } else {
+                    db.productRequestDao().observeForCustomer(id)
+                }
+            }
+        }
+
+    val requestBoxStats: Flow<RequestBoxStats> = combine(
+        db.productRequestDao().observeAll(),
+        db.customerDao().observeByRole(AccountRole.CUSTOMER)
+    ) { requests, customers ->
+        val unique = requests.map { it.customerId }.toSet().size
+        val totalCustomers = customers.size
+        val pct = if (totalCustomers <= 0) {
+            0f
+        } else {
+            unique * 100f / totalCustomers.toFloat()
+        }
+        RequestBoxStats(
+            totalRequests = requests.size,
+            uniqueRequesters = unique,
+            totalCustomers = totalCustomers,
+            requesterToCustomerPercent = pct
+        )
+    }
 
     /** Admins/staff see all orders; customers only see their own. */
     val visibleOrders: Flow<List<Order>> = sessionCustomerId.flatMapLatest { id ->
@@ -720,6 +755,35 @@ class DispensaryRepository(context: Context) {
             )
         )
         return OpResult.Success("Password reset for ${staff.email}. They must change it on next login.")
+    }
+
+    suspend fun submitProductRequest(productName: String, notes: String): OpResult {
+        val me = currentCustomer() ?: return OpResult.Error("Not signed in.")
+        val name = productName.trim()
+        if (name.length < 2) {
+            return OpResult.Error("Tell us what product you’re looking for.")
+        }
+        val request = ProductRequest(
+            id = "req-" + UUID.randomUUID().toString().take(8),
+            customerId = me.id,
+            customerName = me.fullName,
+            customerEmail = me.email,
+            productName = name,
+            notes = notes.trim(),
+            status = "Open"
+        )
+        db.productRequestDao().insert(request)
+        return OpResult.Success("Request sent for “$name”. Staff will see it in the request box.")
+    }
+
+    suspend fun setProductRequestStatus(requestId: String, status: String): OpResult {
+        val me = currentCustomer() ?: return OpResult.Error("Not signed in.")
+        if (!me.role.canViewSensitiveInfo) {
+            return OpResult.Error("Only staff/admin can update request status.")
+        }
+        val clean = status.trim().ifBlank { "Open" }
+        db.productRequestDao().setStatus(requestId, clean)
+        return OpResult.Success("Request marked $clean.")
     }
 
     suspend fun exportSyncJson(): String {
