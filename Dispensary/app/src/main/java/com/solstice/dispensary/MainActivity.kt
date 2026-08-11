@@ -10,6 +10,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Home
 import androidx.compose.material.icons.outlined.Inventory2
 import androidx.compose.material.icons.outlined.LocalMall
+import androidx.compose.material.icons.outlined.LocalOffer
 import androidx.compose.material.icons.outlined.Person
 import androidx.compose.material.icons.outlined.ShoppingBag
 import androidx.compose.material3.BadgedBox
@@ -127,6 +128,7 @@ class MainActivity : ComponentActivity() {
                 val destinations = buildList {
                     add(NavItem(Routes.HOME, "Home", Icons.Outlined.Home))
                     add(NavItem(Routes.MENU, "Menu", Icons.Outlined.LocalMall))
+                    add(NavItem(Routes.DEALS, "Deals", Icons.Outlined.LocalOffer))
                     add(NavItem(Routes.CART, "Bag", Icons.Outlined.ShoppingBag))
                     if (viewModel.canManageInventory) {
                         add(NavItem(Routes.INVENTORY, "Stock", Icons.Outlined.Inventory2))

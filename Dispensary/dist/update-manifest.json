@@ -1,6 +1,6 @@
 {
-  "versionCode": 17,
-  "versionName": "1.13.0",
+  "versionCode": 18,
+  "versionName": "1.14.0",
   "apkUrl": "https://github.com/GutFarms/Japan-central/releases/latest/download/NativePure-Dispensary.apk",
-  "releaseNotes": "Admin/staff can fully edit inventory (name, price, SKU, stock) and add products. Main admin role is always restored."
+  "releaseNotes": "New Deals tab with sale prices at checkout. Staff can mark products On Deals from Stock."
 }

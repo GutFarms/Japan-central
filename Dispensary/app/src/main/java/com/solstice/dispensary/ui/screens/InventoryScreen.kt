@@ -305,6 +305,11 @@ private fun ProductEditorCard(
     var strain by remember(product.id) { mutableStateOf(product.strainType) }
     var published by remember(product.id) { mutableStateOf(product.published) }
     var featured by remember(product.id) { mutableStateOf(product.featured) }
+    var onDeal by remember(product.id) { mutableStateOf(product.onDeal) }
+    var dealPercent by remember(product.id) {
+        mutableStateOf(if (product.dealPercent > 0) product.dealPercent.toString() else "15")
+    }
+    var dealLabel by remember(product.id) { mutableStateOf(product.dealLabel) }
 
     Surface(
         shape = RoundedCornerShape(16.dp),
@@ -429,6 +434,28 @@ private fun ProductEditorCard(
                     onClick = { featured = !featured },
                     label = { Text(if (featured) "Featured" else "Not featured") }
                 )
+                FilterChip(
+                    selected = onDeal,
+                    onClick = { onDeal = !onDeal },
+                    label = { Text(if (onDeal) "On Deals tab" else "No deal") }
+                )
+            }
+            if (onDeal) {
+                OutlinedTextField(
+                    value = dealPercent,
+                    onValueChange = { dealPercent = it.filter { ch -> ch.isDigit() }.take(2) },
+                    label = { Text("Deal % off (1–90)") },
+                    modifier = Modifier.fillMaxWidth(),
+                    singleLine = true,
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number)
+                )
+                OutlinedTextField(
+                    value = dealLabel,
+                    onValueChange = { dealLabel = it },
+                    label = { Text("Deal label (e.g. Happy Hour)") },
+                    modifier = Modifier.fillMaxWidth(),
+                    singleLine = true
+                )
             }
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 OutlinedButton(onClick = onCancel, modifier = Modifier.weight(1f)) {
@@ -436,6 +463,7 @@ private fun ProductEditorCard(
                 }
                 Button(
                     onClick = {
+                        val pct = dealPercent.toIntOrNull() ?: 0
                         onSave(
                             product.copy(
                                 name = name,
@@ -451,7 +479,10 @@ private fun ProductEditorCard(
                                 category = category,
                                 strainType = strain,
                                 published = published,
-                                featured = featured
+                                featured = featured,
+                                onDeal = onDeal && pct > 0,
+                                dealPercent = if (onDeal) pct.coerceIn(0, 90) else 0,
+                                dealLabel = dealLabel
                             )
                         )
                     },

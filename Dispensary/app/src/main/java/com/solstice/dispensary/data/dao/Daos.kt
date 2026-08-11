@@ -49,6 +49,12 @@ interface ProductDao {
     @Query("SELECT * FROM products WHERE featured = 1 ORDER BY name ASC")
     fun observeFeatured(): Flow<List<Product>>
 
+    @Query(
+        "SELECT * FROM products WHERE published = 1 AND onDeal = 1 AND dealPercent > 0 " +
+            "ORDER BY dealPercent DESC, name ASC"
+    )
+    fun observePublishedDeals(): Flow<List<Product>>
+
     @Query("SELECT COUNT(*) FROM products")
     suspend fun count(): Int
 

@@ -30,6 +30,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.unit.dp
 import com.solstice.dispensary.data.model.Product
 import com.solstice.dispensary.data.model.StrainType
@@ -103,11 +104,30 @@ fun ProductDetailScreen(
                 MetaPill(product.unitLabel)
             }
             Spacer(Modifier.height(16.dp))
-            Text(
-                text = money(product.price),
-                style = MaterialTheme.typography.headlineMedium,
-                color = MaterialTheme.colorScheme.primary
-            )
+            if (product.hasActiveDeal) {
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    MetaPill(product.dealLabel.ifBlank { "Deal" })
+                    MetaPill("−${product.dealPercent}%")
+                }
+                Spacer(Modifier.height(8.dp))
+                Text(
+                    text = money(product.price),
+                    style = MaterialTheme.typography.titleMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    textDecoration = TextDecoration.LineThrough
+                )
+                Text(
+                    text = money(product.effectivePrice),
+                    style = MaterialTheme.typography.headlineMedium,
+                    color = MaterialTheme.colorScheme.primary
+                )
+            } else {
+                Text(
+                    text = money(product.price),
+                    style = MaterialTheme.typography.headlineMedium,
+                    color = MaterialTheme.colorScheme.primary
+                )
+            }
             Spacer(Modifier.height(16.dp))
             Text("About", style = MaterialTheme.typography.titleLarge)
             Spacer(Modifier.height(6.dp))
@@ -139,8 +159,11 @@ fun ProductDetailScreen(
                 enabled = product.inStock
             ) {
                 Text(
-                    text = if (product.inStock) "Add to bag · ${money(product.price * quantity)}"
-                    else "Out of stock",
+                    text = if (product.inStock) {
+                        "Add to bag · ${money(product.effectivePrice * quantity)}"
+                    } else {
+                        "Out of stock"
+                    },
                     modifier = Modifier.padding(vertical = 4.dp)
                 )
             }

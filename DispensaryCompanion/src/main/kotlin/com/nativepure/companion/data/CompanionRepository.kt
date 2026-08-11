@@ -50,6 +50,9 @@ class CompanionRepository {
     fun featuredProducts(): List<Product> =
         catalogProducts().filter { it.featured }
 
+    fun dealProducts(): List<Product> =
+        catalogProducts().filter { it.hasActiveDeal }.sortedByDescending { it.dealPercent }
+
     fun staffAccounts(): List<CustomerProfile> =
         customers.filter { it.role == AccountRole.STAFF }.map { it.toProfile() }
 
@@ -489,6 +492,9 @@ class CompanionRepository {
             effects = product.effects.trim().ifBlank { "—" },
             thcPercent = product.thcPercent.coerceAtLeast(0.0),
             cbdPercent = product.cbdPercent.coerceAtLeast(0.0),
+            onDeal = product.onDeal && product.dealPercent > 0,
+            dealPercent = if (product.onDeal) product.dealPercent.coerceIn(0, 90) else 0,
+            dealLabel = product.dealLabel.trim(),
             publishedAt = when {
                 product.published && existing?.published != true -> System.currentTimeMillis()
                 product.published -> existing?.publishedAt ?: System.currentTimeMillis()
@@ -625,7 +631,7 @@ class CompanionRepository {
             discount = discount
         )
         val lines = summary.lines.map {
-            OrderLine(order.id, it.product.id, it.product.name, it.product.price, it.quantity)
+            OrderLine(order.id, it.product.id, it.product.name, it.product.effectivePrice, it.quantity)
         }
         orders.add(0, order)
         orderLines.addAll(lines)

@@ -52,8 +52,21 @@ data class Product(
     val sku: String = "",
     val published: Boolean = true,
     val publishedAt: Long = 0L,
-    val publishedBy: String = ""
-)
+    val publishedBy: String = "",
+    val onDeal: Boolean = false,
+    val dealPercent: Int = 0,
+    val dealLabel: String = ""
+) {
+    val hasActiveDeal: Boolean
+        get() = onDeal && dealPercent > 0
+
+    val effectivePrice: Double
+        get() = if (hasActiveDeal) {
+            (price * (100 - dealPercent.coerceIn(1, 90)) / 100.0).coerceAtLeast(0.0)
+        } else {
+            price
+        }
+}
 
 @Serializable
 data class Customer(
@@ -138,7 +151,8 @@ data class CartItem(
 )
 
 data class CartLine(val product: Product, val quantity: Int) {
-    val lineTotal: Double get() = product.price * quantity
+    val unitPrice: Double get() = product.effectivePrice
+    val lineTotal: Double get() = unitPrice * quantity
 }
 
 data class CartSummary(
@@ -208,6 +222,7 @@ sealed class OpResult {
 enum class NavSection(val label: String) {
     HOME("Home"),
     MENU("Menu"),
+    DEALS("Deals"),
     CART("Cart"),
     ORDERS("Orders"),
     INVENTORY("Stock"),

@@ -371,6 +371,7 @@ private fun MainShell(
     val sections = buildList {
         add(NavSection.HOME)
         add(NavSection.MENU)
+        add(NavSection.DEALS)
         add(NavSection.CART)
         add(NavSection.ORDERS)
         if (customer.role.canManageInventory) add(NavSection.INVENTORY)
@@ -449,6 +450,14 @@ private fun MainShell(
                         repository.addToCart(it)
                         onRefresh()
                         onMessage("Added to bag.")
+                    }
+                )
+                NavSection.DEALS -> DealsPane(
+                    products = repository.dealProducts(),
+                    onAdd = {
+                        repository.addToCart(it)
+                        onRefresh()
+                        onMessage("Added deal item to bag.")
                     }
                 )
                 NavSection.CART -> CartPane(
@@ -651,6 +660,49 @@ private fun MenuPane(products: List<Product>, onAdd: (String) -> Unit) {
 }
 
 @Composable
+private fun DealsPane(products: List<Product>, onAdd: (String) -> Unit) {
+    Column(Modifier.fillMaxSize()) {
+        Text("Deals", style = MaterialTheme.typography.headlineLarge)
+        Text(
+            if (products.isEmpty()) "No active promos right now."
+            else "${products.size} active deals — savings apply at checkout.",
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+        Spacer(Modifier.height(12.dp))
+        if (products.isEmpty()) {
+            Text("Staff can mark products On Deals from Stock → Edit.")
+            return
+        }
+        LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            items(products, key = { it.id }) { product ->
+                Surface(shape = RoundedCornerShape(12.dp), tonalElevation = 1.dp, modifier = Modifier.fillMaxWidth()) {
+                    Row(
+                        Modifier.padding(14.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                            Text(product.name, style = MaterialTheme.typography.titleLarge)
+                            Text(
+                                product.dealLabel.ifBlank { "${product.dealPercent}% off" },
+                                color = MaterialTheme.colorScheme.secondary
+                            )
+                            Text(
+                                "$${ "%.2f".format(product.price) } → $${"%.2f".format(product.effectivePrice)}",
+                                style = MaterialTheme.typography.titleMedium
+                            )
+                        }
+                        Button(
+                            onClick = { onAdd(product.id) },
+                            enabled = product.stockQuantity > 0
+                        ) { Text("Add") }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
 private fun ProductCard(product: Product, onAdd: (String) -> Unit) {
     Surface(shape = RoundedCornerShape(14.dp), tonalElevation = 1.dp, modifier = Modifier.fillMaxWidth()) {
         Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
@@ -660,13 +712,25 @@ private fun ProductCard(product: Product, onAdd: (String) -> Unit) {
             if (!product.published) {
                 Text("Draft — not visible to customers", color = MaterialTheme.colorScheme.error)
             }
+            if (product.hasActiveDeal) {
+                Text(
+                    "${product.dealLabel.ifBlank { "Deal" }} · −${product.dealPercent}%",
+                    color = MaterialTheme.colorScheme.secondary
+                )
+            }
             Text(product.effects, style = MaterialTheme.typography.bodyMedium)
-            Text("$${ "%.2f".format(product.price) } / ${product.unitLabel}", style = MaterialTheme.typography.titleLarge)
+            if (product.hasActiveDeal) {
+                Text(
+                    "$${ "%.2f".format(product.effectivePrice) } (was $${"%.2f".format(product.price)}) / ${product.unitLabel}",
+                    style = MaterialTheme.typography.titleLarge
+                )
+            } else {
+                Text("$${ "%.2f".format(product.price) } / ${product.unitLabel}", style = MaterialTheme.typography.titleLarge)
+            }
             Text("Stock ${product.stockQuantity}", color = MaterialTheme.colorScheme.onSurfaceVariant)
             Button(
                 onClick = { onAdd(product.id) },
-                enabled = product.stockQuantity > 0,
-                shape = RoundedCornerShape(10.dp)
+                enabled = product.stockQuantity > 0
             ) { Text("Add to bag") }
         }
     }
@@ -1003,6 +1067,11 @@ private fun CompanionProductEditor(
     var description by remember(product.id) { mutableStateOf(product.description) }
     var category by remember(product.id) { mutableStateOf(product.category) }
     var published by remember(product.id) { mutableStateOf(product.published) }
+    var onDeal by remember(product.id) { mutableStateOf(product.onDeal) }
+    var dealPercent by remember(product.id) {
+        mutableStateOf(if (product.dealPercent > 0) product.dealPercent.toString() else "15")
+    }
+    var dealLabel by remember(product.id) { mutableStateOf(product.dealLabel) }
 
     Surface(shape = RoundedCornerShape(12.dp), color = MaterialTheme.colorScheme.secondaryContainer) {
         Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -1042,10 +1111,20 @@ private fun CompanionProductEditor(
                 onClick = { published = !published },
                 label = { Text(if (published) "Published" else "Draft") }
             )
+            FilterChip(
+                selected = onDeal,
+                onClick = { onDeal = !onDeal },
+                label = { Text(if (onDeal) "On Deals tab" else "No deal") }
+            )
+            if (onDeal) {
+                Field(dealPercent, { dealPercent = it.filter { ch -> ch.isDigit() }.take(2) }, "Deal % off")
+                Field(dealLabel, { dealLabel = it }, "Deal label")
+            }
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 OutlinedButton(onClick = onCancel) { Text("Cancel") }
                 Button(
                     onClick = {
+                        val pct = dealPercent.toIntOrNull() ?: 0
                         onSave(
                             product.copy(
                                 name = name,
@@ -1058,7 +1137,10 @@ private fun CompanionProductEditor(
                                 category = category,
                                 strainType = product.strainType.takeIf { it != StrainType.NONE }
                                     ?: StrainType.HYBRID,
-                                published = published
+                                published = published,
+                                onDeal = onDeal && pct > 0,
+                                dealPercent = if (onDeal) pct.coerceIn(0, 90) else 0,
+                                dealLabel = dealLabel
                             )
                         )
                     },

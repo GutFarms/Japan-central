@@ -60,6 +60,7 @@ class DispensaryRepository(context: Context) {
     val catalog: Flow<List<Product>> = db.productDao().observePublished()
 
     val featured: Flow<List<Product>> = db.productDao().observeFeaturedPublished()
+    val deals: Flow<List<Product>> = db.productDao().observePublishedDeals()
     val cartItems: Flow<List<CartItem>> = db.cartDao().observeAll()
     val intakes: Flow<List<InventoryIntake>> = db.inventoryDao().observeAll()
     val customers: Flow<List<CustomerProfile>> = db.customerDao().observeAll()
@@ -773,6 +774,9 @@ class DispensaryRepository(context: Context) {
             effects = product.effects.trim().ifBlank { "—" },
             thcPercent = product.thcPercent.coerceAtLeast(0.0),
             cbdPercent = product.cbdPercent.coerceAtLeast(0.0),
+            onDeal = product.onDeal && product.dealPercent > 0,
+            dealPercent = if (product.onDeal) product.dealPercent.coerceIn(0, 90) else 0,
+            dealLabel = product.dealLabel.trim(),
             publishedAt = when {
                 product.published && existing?.published != true -> System.currentTimeMillis()
                 product.published -> existing?.publishedAt ?: System.currentTimeMillis()
@@ -991,7 +995,7 @@ class DispensaryRepository(context: Context) {
                 orderId = order.id,
                 productId = it.product.id,
                 productName = it.product.name,
-                unitPrice = it.product.price,
+                unitPrice = it.product.effectivePrice,
                 quantity = it.quantity
             )
         }

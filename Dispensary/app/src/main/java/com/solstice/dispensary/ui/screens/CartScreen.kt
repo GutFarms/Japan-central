@@ -121,7 +121,18 @@ fun CartScreen(
                         ) {
                             Text(line.product.name, style = MaterialTheme.typography.titleMedium)
                             Text(
-                                text = "${money(line.product.price)} · ${line.product.unitLabel}",
+                                text = buildString {
+                                    if (line.product.hasActiveDeal) {
+                                        append(money(line.unitPrice))
+                                        append(" (was ")
+                                        append(money(line.product.price))
+                                        append(")")
+                                    } else {
+                                        append(money(line.unitPrice))
+                                    }
+                                    append(" · ")
+                                    append(line.product.unitLabel)
+                                },
                                 style = MaterialTheme.typography.bodyMedium,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )

@@ -53,7 +53,7 @@ class Converters {
         Customer::class,
         ProductRequest::class
     ],
-    version = 11,
+    version = 12,
     exportSchema = false
 )
 @TypeConverters(Converters::class)
@@ -100,7 +100,10 @@ object SeedCatalog {
             effects = "Relaxed · Sleepy · Calm",
             featured = true,
             stockQuantity = 24,
-            sku = "SOL-FL-DUSK"
+            sku = "SOL-FL-DUSK",
+            onDeal = true,
+            dealPercent = 15,
+            dealLabel = "Evening special"
         ),
         Product(
             id = "fl-citrus",
@@ -147,7 +150,10 @@ object SeedCatalog {
             effects = "Relaxed · Sleepy",
             featured = true,
             stockQuantity = 30,
-            sku = "SOL-PR-TWIL"
+            sku = "SOL-PR-TWIL",
+            onDeal = true,
+            dealPercent = 20,
+            dealLabel = "Pre-roll pack deal"
         ),
         Product(
             id = "pr-spark",
@@ -178,7 +184,10 @@ object SeedCatalog {
             effects = "Relaxed · Euphoric",
             featured = true,
             stockQuantity = 22,
-            sku = "HK-ED-COCO"
+            sku = "HK-ED-COCO",
+            onDeal = true,
+            dealPercent = 10,
+            dealLabel = "Edible of the week"
         ),
         Product(
             id = "ed-gummy",
@@ -255,7 +264,10 @@ object SeedCatalog {
             effects = "Balanced · Smooth",
             featured = true,
             stockQuantity = 14,
-            sku = "SOL-VP-SAGE"
+            sku = "SOL-VP-SAGE",
+            onDeal = true,
+            dealPercent = 25,
+            dealLabel = "Cart clearance"
         ),
         Product(
             id = "vp-disp",

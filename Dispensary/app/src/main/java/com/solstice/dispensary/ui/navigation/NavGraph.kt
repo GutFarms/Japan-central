@@ -21,6 +21,7 @@ import com.solstice.dispensary.data.update.ApkInstaller
 import com.solstice.dispensary.ui.screens.AccountScreen
 import com.solstice.dispensary.ui.screens.CartScreen
 import com.solstice.dispensary.ui.screens.CustomersScreen
+import com.solstice.dispensary.ui.screens.DealsScreen
 import com.solstice.dispensary.ui.screens.HomeScreen
 import com.solstice.dispensary.ui.screens.InventoryScannerScreen
 import com.solstice.dispensary.ui.screens.InventoryScreen
@@ -34,6 +35,7 @@ import com.solstice.dispensary.ui.viewmodel.DispensaryViewModel
 object Routes {
     const val HOME = "home"
     const val MENU = "menu"
+    const val DEALS = "deals"
     const val CART = "cart"
     const val ORDERS = "orders"
     const val STORE = "store"
@@ -55,6 +57,7 @@ fun DispensaryNavHost(
 ) {
     val context = LocalContext.current
     val featured by viewModel.featured.collectAsState()
+    val deals by viewModel.deals.collectAsState()
     val cart by viewModel.cart.collectAsState()
     val orders by viewModel.orders.collectAsState()
     val products by viewModel.products.collectAsState()
@@ -130,6 +133,12 @@ fun DispensaryNavHost(
                 searchQuery = viewModel.searchQuery,
                 onSearchChange = viewModel::setSearch,
                 onSelectCategory = viewModel::setCategory,
+                onOpenProduct = { id -> navController.navigate(Routes.product(id)) }
+            )
+        }
+        composable(Routes.DEALS) {
+            DealsScreen(
+                deals = deals,
                 onOpenProduct = { id -> navController.navigate(Routes.product(id)) }
             )
         }

@@ -122,6 +122,9 @@ class DispensaryViewModel(
     val featured: StateFlow<List<Product>> = repository.featured
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
 
+    val deals: StateFlow<List<Product>> = repository.deals
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+
     val cart: StateFlow<CartSummary> = repository.cartSummary
         .stateIn(
             viewModelScope,

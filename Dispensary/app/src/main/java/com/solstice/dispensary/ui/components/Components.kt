@@ -32,6 +32,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
@@ -147,6 +148,11 @@ fun ProductTile(
                 if (!product.published) {
                     MetaPill("Draft")
                 }
+                if (product.hasActiveDeal) {
+                    MetaPill(
+                        product.dealLabel.ifBlank { "${product.dealPercent}% off" }
+                    )
+                }
                 if (product.strainType != StrainType.NONE) {
                     MetaPill(product.strainType.label)
                 }
@@ -155,11 +161,21 @@ fun ProductTile(
                 }
             }
         }
-        Text(
-            text = money(product.price),
-            style = MaterialTheme.typography.titleMedium,
-            color = MaterialTheme.colorScheme.primary
-        )
+        Column(horizontalAlignment = Alignment.End) {
+            if (product.hasActiveDeal) {
+                Text(
+                    text = money(product.price),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    textDecoration = TextDecoration.LineThrough
+                )
+            }
+            Text(
+                text = money(product.effectivePrice),
+                style = MaterialTheme.typography.titleMedium,
+                color = MaterialTheme.colorScheme.primary
+            )
+        }
     }
 }
 

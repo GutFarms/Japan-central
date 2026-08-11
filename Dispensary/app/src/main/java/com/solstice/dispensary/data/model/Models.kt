@@ -42,8 +42,25 @@ data class Product(
     /** When false, product is draft inventory — not shown on the customer menu. */
     val published: Boolean = true,
     val publishedAt: Long = 0L,
-    val publishedBy: String = ""
-)
+    val publishedBy: String = "",
+    /** When true and dealPercent > 0, product appears on Deals and sells at a discount. */
+    val onDeal: Boolean = false,
+    /** Percent off shelf price (1–90). */
+    val dealPercent: Int = 0,
+    /** Short promo label, e.g. "Happy Hour" or "Weekend special". */
+    val dealLabel: String = ""
+) {
+    val hasActiveDeal: Boolean
+        get() = onDeal && dealPercent > 0
+
+    /** Price charged to customers (deal applied when active). */
+    val effectivePrice: Double
+        get() = if (hasActiveDeal) {
+            (price * (100 - dealPercent.coerceIn(1, 90)) / 100.0).coerceAtLeast(0.0)
+        } else {
+            price
+        }
+}
 
 @Entity(tableName = "cart_items")
 data class CartItem(
@@ -286,7 +303,8 @@ data class CartLine(
     val product: Product,
     val quantity: Int
 ) {
-    val lineTotal: Double get() = product.price * quantity
+    val unitPrice: Double get() = product.effectivePrice
+    val lineTotal: Double get() = unitPrice * quantity
 }
 
 data class CartSummary(

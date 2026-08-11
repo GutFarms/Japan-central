@@ -41,6 +41,9 @@ object InventorySync {
                         .put("published", p.published)
                         .put("publishedAt", p.publishedAt)
                         .put("publishedBy", p.publishedBy)
+                        .put("onDeal", p.onDeal)
+                        .put("dealPercent", p.dealPercent)
+                        .put("dealLabel", p.dealLabel)
                 )
             }
         })
@@ -101,7 +104,10 @@ object InventorySync {
                         sku = o.optString("sku", ""),
                         published = o.optBoolean("published", true),
                         publishedAt = o.optLong("publishedAt", 0L),
-                        publishedBy = o.optString("publishedBy", "")
+                        publishedBy = o.optString("publishedBy", ""),
+                        onDeal = o.optBoolean("onDeal", false),
+                        dealPercent = o.optInt("dealPercent", 0),
+                        dealLabel = o.optString("dealLabel", "")
                     )
                 )
             }
