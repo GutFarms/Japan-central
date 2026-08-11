@@ -18,6 +18,7 @@ dependencies {
     implementation(compose.materialIconsExtended)
     implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.6.3")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-swing:1.8.1")
+    testImplementation("junit:junit:4.13.2")
 }
 
 kotlin {
@@ -30,7 +31,7 @@ compose.desktop {
         nativeDistributions {
             targetFormats(TargetFormat.Exe, TargetFormat.Msi, TargetFormat.Deb)
             packageName = "NativePureCompanion"
-            packageVersion = "1.8.0"
+            packageVersion = "1.9.0"
             description = "Native Pure dispensary desktop companion"
             copyright = "© Native Pure"
             vendor = "Native Pure"

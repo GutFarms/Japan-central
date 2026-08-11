@@ -451,19 +451,49 @@ class DispensaryViewModel(
         viewModelScope.launch { repository.clearCart() }
     }
 
-    fun placeOrder(pickupName: String, notes: String) {
+    fun placeOrder(pickupName: String, notes: String, redeemPoints: Int = 0) {
         viewModelScope.launch {
-            val order = repository.placePickupOrder(pickupName, notes)
+            val order = repository.placePickupOrder(pickupName, notes, redeemPoints)
             if (order == null) {
-                checkoutMessage = "Your cart is empty."
+                checkoutMessage = "Your bag is empty."
             } else {
                 lastPlacedOrder = order
                 currentCustomer = repository.currentCustomer()
-                checkoutMessage = if (order.pointsEarned > 0) {
-                    "Order ${order.id} is ready for pickup. You earned ${order.pointsEarned} points!"
-                } else {
-                    "Order ${order.id} is ready for pickup."
+                checkoutMessage = buildString {
+                    append("Order ${order.id} is ready for pickup.")
+                    if (order.discount > 0) {
+                        append(" Saved $${"%.2f".format(order.discount)} with ${order.pointsRedeemed} points.")
+                    }
+                    if (order.pointsEarned > 0) {
+                        append(" You earned ${order.pointsEarned} points!")
+                    }
                 }
+            }
+        }
+    }
+
+    fun updateOrderStatus(orderId: String, status: String) {
+        viewModelScope.launch {
+            when (val result = repository.updateOrderStatus(orderId, status)) {
+                is OpResult.Success -> accountMessage = result.message
+                is OpResult.Error -> accountMessage = result.message
+            }
+        }
+    }
+
+    fun shareOrderReceipt(orderId: String, onReady: (String) -> Unit) {
+        viewModelScope.launch {
+            val text = repository.orderReceiptText(orderId)
+            if (text != null) onReady(text)
+            else accountMessage = "Could not build receipt."
+        }
+    }
+
+    fun createDraftFromRequest(requestId: String) {
+        viewModelScope.launch {
+            when (val result = repository.createDraftFromRequest(requestId)) {
+                is OpResult.Success -> requestMessage = result.message
+                is OpResult.Error -> requestMessage = result.message
             }
         }
     }

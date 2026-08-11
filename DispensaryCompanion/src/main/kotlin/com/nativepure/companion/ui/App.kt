@@ -59,8 +59,10 @@ import com.nativepure.companion.data.AuthResult
 import com.nativepure.companion.data.CompanionRepository
 import com.nativepure.companion.data.CustomerProfile
 import com.nativepure.companion.data.EmailCodeIssue
+import com.nativepure.companion.data.LoyaltyPoints
 import com.nativepure.companion.data.NavSection
 import com.nativepure.companion.data.OpResult
+import com.nativepure.companion.data.OrderStatus
 import com.nativepure.companion.data.PasswordPolicy
 import com.nativepure.companion.data.Product
 import com.nativepure.companion.data.ProductCategory
@@ -454,7 +456,7 @@ private fun MainShell(
                     onRefresh = onRefresh,
                     onMessage = onMessage
                 )
-                NavSection.ORDERS -> OrdersPane(repository)
+                NavSection.ORDERS -> OrdersPane(repository, onRefresh, onMessage)
                 NavSection.INVENTORY -> InventoryPane(repository, onRefresh, onMessage)
                 NavSection.CUSTOMERS -> CustomersPane(repository)
                 NavSection.REQUESTS -> RequestsPane(repository, onRefresh, onMessage)
@@ -573,16 +575,29 @@ private fun RequestsPane(
                     Text("${req.customerName} · ${req.customerEmail}")
                     if (req.notes.isNotBlank()) Text(req.notes)
                     Text("Status: ${req.status}")
-                    if (req.status == "Open") {
-                        TextButton(onClick = {
-                            when (val result = repository.markRequestFulfilled(req.id)) {
-                                is OpResult.Success -> {
-                                    onMessage(result.message)
-                                    onRefresh()
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        if (req.status == "Open") {
+                            TextButton(onClick = {
+                                when (val result = repository.markRequestFulfilled(req.id)) {
+                                    is OpResult.Success -> {
+                                        onMessage(result.message)
+                                        onRefresh()
+                                    }
+                                    is OpResult.Error -> onMessage(result.message)
                                 }
-                                is OpResult.Error -> onMessage(result.message)
-                            }
-                        }) { Text("Mark fulfilled") }
+                            }) { Text("Mark fulfilled") }
+                        }
+                        if (req.status != "Declined") {
+                            TextButton(onClick = {
+                                when (val result = repository.createDraftFromRequest(req.id)) {
+                                    is OpResult.Success -> {
+                                        onMessage(result.message)
+                                        onRefresh()
+                                    }
+                                    is OpResult.Error -> onMessage(result.message)
+                                }
+                            }) { Text("Create draft in Stock") }
+                        }
                     }
                 }
             }
@@ -665,7 +680,20 @@ private fun CartPane(
 ) {
     var pickup by remember { mutableStateOf(defaultName) }
     var notes by remember { mutableStateOf("") }
+    var redeemPoints by remember { mutableStateOf(0) }
     val cart = repository.cartSummary()
+    val customer = repository.currentCustomer()
+    val canRedeem = customer?.role == AccountRole.CUSTOMER
+    val maxRedeem = if (canRedeem) {
+        LoyaltyPoints.maxRedeemablePoints(customer!!.loyaltyPoints, cart.total)
+    } else {
+        0
+    }
+    val safeRedeem = redeemPoints.coerceAtMost(maxRedeem).let { it - (it % LoyaltyPoints.REDEEM_POINTS_PER_DOLLAR) }
+    val discount = LoyaltyPoints.discountForPoints(safeRedeem)
+    val payable = (cart.total - discount).coerceAtLeast(0.0)
+    val earnPreview = LoyaltyPoints.pointsForSpend(payable)
+
     Column(Modifier.fillMaxSize()) {
         Text("Cart & pickup", style = MaterialTheme.typography.headlineLarge)
         Spacer(Modifier.height(12.dp))
@@ -706,22 +734,50 @@ private fun CartPane(
         }
         Spacer(Modifier.height(12.dp))
         Text("Subtotal $${"%.2f".format(cart.subtotal)} · Tax $${"%.2f".format(cart.tax)} · Total $${"%.2f".format(cart.total)}")
+        if (canRedeem && customer != null) {
+            Text(
+                "You have ${customer.loyaltyPoints} points · redeem 100 pts = $1 off",
+                color = MaterialTheme.colorScheme.secondary
+            )
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                FilterChip(
+                    selected = safeRedeem == 0,
+                    onClick = { redeemPoints = 0 },
+                    label = { Text("No redeem") }
+                )
+                listOf(100, 200, 500, maxRedeem).distinct().filter { it in 100..maxRedeem }.forEach { pts ->
+                    FilterChip(
+                        selected = safeRedeem == pts,
+                        onClick = { redeemPoints = pts },
+                        label = { Text("$pts pts") }
+                    )
+                }
+            }
+            if (discount > 0) {
+                Text("Discount −$${"%.2f".format(discount)} · Pay $${"%.2f".format(payable)}")
+            }
+        }
         Text(
-            "You’ll earn ${kotlin.math.floor(cart.total).toInt().coerceAtLeast(0)} points on this order (1 pt per $1)",
+            "You’ll earn $earnPreview points on this order (1 pt per $1 paid)",
             color = MaterialTheme.colorScheme.secondary
         )
         Field(pickup, { pickup = it }, "Pickup name")
         Field(notes, { notes = it }, "Order notes")
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             Button(onClick = {
-                val order = repository.placePickupOrder(pickup, notes)
+                val order = repository.placePickupOrder(pickup, notes, safeRedeem)
                 onRefresh()
+                redeemPoints = 0
                 onMessage(
                     if (order != null) {
-                        if (order.pointsEarned > 0) {
-                            "Order ${order.id} ready. +${order.pointsEarned} points!"
-                        } else {
-                            "Order ${order.id} ready for pickup."
+                        buildString {
+                            append("Order ${order.id} ready for pickup.")
+                            if (order.discount > 0) {
+                                append(" Saved $${"%.2f".format(order.discount)}.")
+                            }
+                            if (order.pointsEarned > 0) {
+                                append(" +${order.pointsEarned} points!")
+                            }
                         }
                     } else {
                         "Cart is empty."
@@ -737,8 +793,9 @@ private fun CartPane(
 }
 
 @Composable
-private fun OrdersPane(repository: CompanionRepository) {
+private fun OrdersPane(repository: CompanionRepository, onRefresh: () -> Unit, onMessage: (String?) -> Unit) {
     val orders = repository.visibleOrders()
+    val canManage = repository.currentCustomer()?.role?.canViewSensitiveInfo == true
     val dateFormat = remember { SimpleDateFormat("MMM d, yyyy h:mm a", Locale.US) }
     Column(Modifier.fillMaxSize()) {
         Text("Orders", style = MaterialTheme.typography.headlineLarge)
@@ -754,6 +811,12 @@ private fun OrdersPane(repository: CompanionRepository) {
                         Text("Order ${order.id}", style = MaterialTheme.typography.titleLarge)
                         Text(order.status)
                         Text("${order.itemCount} items · $${"%.2f".format(order.total)}")
+                        if (order.discount > 0) {
+                            Text(
+                                "Redeemed ${order.pointsRedeemed} pts (−$${"%.2f".format(order.discount)})",
+                                color = MaterialTheme.colorScheme.secondary
+                            )
+                        }
                         if (order.pointsEarned > 0) {
                             Text("+${order.pointsEarned} loyalty points", color = MaterialTheme.colorScheme.secondary)
                         }
@@ -762,6 +825,29 @@ private fun OrdersPane(repository: CompanionRepository) {
                         Text(dateFormat.format(Date(order.createdAt)), color = MaterialTheme.colorScheme.onSurfaceVariant)
                         repository.orderLinesFor(order.id).forEach { line ->
                             Text("• ${line.quantity} × ${line.productName}")
+                        }
+                        TextButton(onClick = {
+                            val text = repository.orderReceiptText(order.id)
+                            onMessage(text ?: "Could not build receipt.")
+                        }) { Text("Show receipt") }
+                        if (canManage) {
+                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                OrderStatus.staffActions.forEach { status ->
+                                    FilterChip(
+                                        selected = order.status == status,
+                                        onClick = {
+                                            when (val result = repository.updateOrderStatus(order.id, status)) {
+                                                is OpResult.Success -> {
+                                                    onMessage(result.message)
+                                                    onRefresh()
+                                                }
+                                                is OpResult.Error -> onMessage(result.message)
+                                            }
+                                        },
+                                        label = { Text(status) }
+                                    )
+                                }
+                            }
                         }
                     }
                 }
@@ -776,9 +862,23 @@ private fun InventoryPane(
     onRefresh: () -> Unit,
     onMessage: (String?) -> Unit
 ) {
+    var query by remember { mutableStateOf("") }
+    var filterPublished by remember { mutableStateOf("All") }
     val products = repository.allProducts().sortedWith(
         compareBy<Product> { it.published }.thenBy { it.name }
     )
+    val filtered = products.filter { product ->
+        val matchesQuery = query.isBlank() ||
+            product.name.contains(query, true) ||
+            product.brand.contains(query, true) ||
+            product.sku.contains(query, true)
+        val matchesPublished = when (filterPublished) {
+            "Live" -> product.published
+            "Draft" -> !product.published
+            else -> true
+        }
+        matchesQuery && matchesPublished
+    }
     val drafts = products.count { !it.published }
     Column(Modifier.fillMaxSize()) {
         Text("Stock", style = MaterialTheme.typography.headlineLarge)
@@ -786,9 +886,31 @@ private fun InventoryPane(
             "Customers only see published products. $drafts unpublished draft(s).",
             color = MaterialTheme.colorScheme.onSurfaceVariant
         )
+        Spacer(Modifier.height(8.dp))
+        OutlinedTextField(
+            value = query,
+            onValueChange = { query = it },
+            label = { Text("Search name, brand, or SKU") },
+            modifier = Modifier.fillMaxWidth(),
+            singleLine = true
+        )
+        Spacer(Modifier.height(8.dp))
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            listOf("All", "Live", "Draft").forEach { status ->
+                FilterChip(
+                    selected = filterPublished == status,
+                    onClick = { filterPublished = status },
+                    label = { Text(status) }
+                )
+            }
+        }
+        Text(
+            "Showing ${filtered.size} of ${products.size}",
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
         Spacer(Modifier.height(12.dp))
         LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            items(products, key = { it.id }) { product ->
+            items(filtered, key = { it.id }) { product ->
                 Surface(shape = RoundedCornerShape(12.dp), tonalElevation = 1.dp, modifier = Modifier.fillMaxWidth()) {
                     Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                         Row(verticalAlignment = Alignment.CenterVertically) {

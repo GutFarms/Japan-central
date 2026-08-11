@@ -23,11 +23,13 @@ import com.solstice.dispensary.data.model.LoyaltyPoints
 import com.solstice.dispensary.data.model.OpResult
 import com.solstice.dispensary.data.model.Order
 import com.solstice.dispensary.data.model.OrderLine
+import com.solstice.dispensary.data.model.OrderStatus
 import com.solstice.dispensary.data.model.Product
 import com.solstice.dispensary.data.model.ProductCategory
 import com.solstice.dispensary.data.model.RequestBoxStats
 import com.solstice.dispensary.data.model.ProductRequest
 import com.solstice.dispensary.data.model.SecuritySettings
+import com.solstice.dispensary.data.model.StrainType
 import com.solstice.dispensary.data.model.ThemeMode
 import com.solstice.dispensary.data.model.toProfile
 import com.solstice.dispensary.data.sync.InventorySync
@@ -852,7 +854,11 @@ class DispensaryRepository(context: Context) {
         return intake
     }
 
-    suspend fun placePickupOrder(pickupName: String, notes: String): Order? {
+    suspend fun placePickupOrder(
+        pickupName: String,
+        notes: String,
+        redeemPoints: Int = 0
+    ): Order? {
         val items = db.cartDao().getAll()
         if (items.isEmpty()) return null
 
@@ -866,26 +872,37 @@ class DispensaryRepository(context: Context) {
         }
         if (lines.isEmpty()) return null
 
-        val customer = currentCustomer()
+        val customerProfile = currentCustomer()
+        val customerRow = customerProfile?.id?.let { db.customerDao().getById(it) }
         val subtotal = lines.sumOf { it.lineTotal }
-        val tax = subtotal * TAX_RATE
-        val total = subtotal + tax
-        val pointsEarned = if (customer != null && customer.role == AccountRole.CUSTOMER) {
-            LoyaltyPoints.pointsForSpend(total)
+        val tax = LoyaltyPoints.taxOn(subtotal, TAX_RATE)
+        val gross = subtotal + tax
+
+        val canRedeem = customerRow != null && customerRow.role == AccountRole.CUSTOMER
+        val maxRedeem = if (canRedeem) {
+            LoyaltyPoints.maxRedeemablePoints(customerRow.loyaltyPoints, gross)
         } else {
             0
         }
+        val appliedRedeem = redeemPoints.coerceIn(0, maxRedeem)
+            .let { it - (it % LoyaltyPoints.REDEEM_POINTS_PER_DOLLAR) }
+        val discount = LoyaltyPoints.discountForPoints(appliedRedeem)
+        val total = (gross - discount).coerceAtLeast(0.0)
+
+        val pointsEarned = if (canRedeem) LoyaltyPoints.pointsForSpend(total) else 0
         val order = Order(
             id = UUID.randomUUID().toString().take(8).uppercase(),
             createdAt = System.currentTimeMillis(),
             total = total,
             itemCount = lines.sumOf { it.quantity },
-            status = "Ready for pickup",
-            pickupName = pickupName.ifBlank { customer?.fullName ?: "Guest" },
+            status = OrderStatus.READY,
+            pickupName = pickupName.ifBlank { customerProfile?.fullName ?: "Guest" },
             notes = notes.trim(),
-            customerId = customer?.id.orEmpty(),
-            customerEmail = customer?.email.orEmpty(),
-            pointsEarned = pointsEarned
+            customerId = customerProfile?.id.orEmpty(),
+            customerEmail = customerProfile?.email.orEmpty(),
+            pointsEarned = pointsEarned,
+            pointsRedeemed = appliedRedeem,
+            discount = discount
         )
         val orderLines = lines.map {
             OrderLine(
@@ -898,19 +915,16 @@ class DispensaryRepository(context: Context) {
         }
         db.orderDao().placeOrder(order, orderLines)
 
-        if (customer != null && pointsEarned > 0) {
-            val row = db.customerDao().getById(customer.id)
-            if (row != null) {
-                db.customerDao().update(
-                    row.copy(
-                        loyaltyPoints = row.loyaltyPoints + pointsEarned,
-                        lifetimeSpend = row.lifetimeSpend + total
-                    )
+        if (customerRow != null && (pointsEarned > 0 || appliedRedeem > 0)) {
+            db.customerDao().update(
+                customerRow.copy(
+                    loyaltyPoints = (customerRow.loyaltyPoints - appliedRedeem + pointsEarned)
+                        .coerceAtLeast(0),
+                    lifetimeSpend = customerRow.lifetimeSpend + total
                 )
-            }
+            )
         }
 
-        // Decrement stock for every placed order
         lines.forEach { line ->
             val product = db.productDao().getById(line.product.id) ?: return@forEach
             val next = (product.stockQuantity - line.quantity).coerceAtLeast(0)
@@ -919,6 +933,89 @@ class DispensaryRepository(context: Context) {
 
         db.cartDao().clear()
         return order
+    }
+
+    suspend fun updateOrderStatus(orderId: String, status: String): OpResult {
+        val me = currentCustomer() ?: return OpResult.Error("Not signed in.")
+        if (!me.role.canViewSensitiveInfo) {
+            return OpResult.Error("Only staff/admin can update order status.")
+        }
+        val order = db.orderDao().getById(orderId) ?: return OpResult.Error("Order not found.")
+        val clean = status.trim()
+        if (clean !in OrderStatus.staffActions) {
+            return OpResult.Error("Unknown status.")
+        }
+        db.orderDao().update(order.copy(status = clean))
+        return OpResult.Success("Order ${order.id} marked $clean.")
+    }
+
+    fun formatOrderReceipt(order: Order, lines: List<OrderLine>): String {
+        val sb = StringBuilder()
+        sb.appendLine("Native Pure — Pickup receipt")
+        sb.appendLine("Order #${order.id}")
+        sb.appendLine("Status: ${order.status}")
+        sb.appendLine("Pickup: ${order.pickupName}")
+        if (order.customerEmail.isNotBlank()) sb.appendLine("Email: ${order.customerEmail}")
+        sb.appendLine()
+        lines.forEach { line ->
+            sb.appendLine(
+                "${line.quantity} × ${line.productName} @ $${"%.2f".format(line.unitPrice)} = $${
+                    "%.2f".format(line.unitPrice * line.quantity)
+                }"
+            )
+        }
+        sb.appendLine()
+        if (order.discount > 0) {
+            sb.appendLine("Points redeemed: ${order.pointsRedeemed} (−$${"%.2f".format(order.discount)})")
+        }
+        sb.appendLine("Total paid: $${"%.2f".format(order.total)}")
+        if (order.pointsEarned > 0) sb.appendLine("Points earned: +${order.pointsEarned}")
+        if (order.notes.isNotBlank()) sb.appendLine("Notes: ${order.notes}")
+        sb.appendLine()
+        sb.appendLine("Bring a valid ID for pickup. 18+ only.")
+        return sb.toString()
+    }
+
+    suspend fun orderReceiptText(orderId: String): String? {
+        val order = db.orderDao().getById(orderId) ?: return null
+        val lines = db.orderDao().getLines(orderId)
+        return formatOrderReceipt(order, lines)
+    }
+
+    suspend fun createDraftFromRequest(requestId: String): OpResult {
+        val me = currentCustomer() ?: return OpResult.Error("Not signed in.")
+        if (!me.role.canManageInventory) {
+            return OpResult.Error("Only staff/admin can create drafts from requests.")
+        }
+        val request = db.productRequestDao().getById(requestId)
+            ?: return OpResult.Error("Request not found.")
+        val id = "reqprod-" + UUID.randomUUID().toString().take(6)
+        val product = Product(
+            id = id,
+            name = request.productName.trim(),
+            brand = "Customer request",
+            category = ProductCategory.ACCESSORY,
+            strainType = StrainType.NONE,
+            thcPercent = 0.0,
+            cbdPercent = 0.0,
+            price = 0.0,
+            unitLabel = "each",
+            description = buildString {
+                append("Draft from request by ${request.customerName}.")
+                if (request.notes.isNotBlank()) append(" Notes: ${request.notes}")
+            },
+            effects = "—",
+            featured = false,
+            inStock = false,
+            stockQuantity = 0,
+            sku = "",
+            published = false
+        )
+        db.productDao().upsert(product)
+        db.productRequestDao().setStatus(requestId, "Fulfilled")
+        return OpResult.Success(
+            "Created draft “${product.name}” in Stock (unpublished). Request marked fulfilled."
+        )
     }
 
     companion object {

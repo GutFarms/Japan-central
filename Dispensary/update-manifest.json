@@ -1,6 +1,6 @@
 {
-  "versionCode": 15,
-  "versionName": "1.11.0",
+  "versionCode": 16,
+  "versionName": "1.12.0",
   "apkUrl": "https://github.com/GutFarms/Japan-central/releases/latest/download/NativePure-Dispensary.apk",
-  "releaseNotes": "Loyalty points: earn 1 point per $1 spent on pickup orders."
+  "releaseNotes": "Redeem loyalty points at checkout (100 pts = $1). Staff order statuses + share receipt. Request → draft in Stock. Inventory search."
 }

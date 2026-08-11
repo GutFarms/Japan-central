@@ -106,11 +106,20 @@ interface OrderDao {
     @Query("SELECT * FROM order_lines WHERE orderId = :orderId")
     fun observeLines(orderId: String): Flow<List<OrderLine>>
 
+    @Query("SELECT * FROM orders WHERE id = :id LIMIT 1")
+    suspend fun getById(id: String): Order?
+
+    @Query("SELECT * FROM order_lines WHERE orderId = :orderId")
+    suspend fun getLines(orderId: String): List<OrderLine>
+
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertOrder(order: Order)
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertLines(lines: List<OrderLine>)
+
+    @Update
+    suspend fun update(order: Order)
 
     @Transaction
     suspend fun placeOrder(order: Order, lines: List<OrderLine>) {
@@ -138,6 +147,9 @@ interface ProductRequestDao {
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insert(request: ProductRequest)
+
+    @Query("SELECT * FROM product_requests WHERE id = :id LIMIT 1")
+    suspend fun getById(id: String): ProductRequest?
 
     @Query("UPDATE product_requests SET status = :status WHERE id = :id")
     suspend fun setStatus(id: String, status: String)

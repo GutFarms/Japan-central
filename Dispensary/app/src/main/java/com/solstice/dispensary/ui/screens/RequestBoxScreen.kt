@@ -167,7 +167,8 @@ fun RequestsScreen(
     requests: List<ProductRequest>,
     stats: RequestBoxStats,
     onBack: () -> Unit,
-    onMarkDone: (String) -> Unit
+    onMarkDone: (String) -> Unit,
+    onCreateDraft: (String) -> Unit = {}
 ) {
     val dateFormat = remember { SimpleDateFormat("MMM d · h:mm a", Locale.US) }
     LazyColumn(
@@ -214,7 +215,8 @@ fun RequestsScreen(
                 request = req,
                 showCustomer = true,
                 detailTime = dateFormat.format(Date(req.createdAt)),
-                onMarkDone = if (req.status == "Open") {{ onMarkDone(req.id) }} else null
+                onMarkDone = if (req.status == "Open") {{ onMarkDone(req.id) }} else null,
+                onCreateDraft = if (req.status != "Declined") {{ onCreateDraft(req.id) }} else null
             )
         }
     }
@@ -225,7 +227,8 @@ private fun RequestRow(
     request: ProductRequest,
     showCustomer: Boolean,
     detailTime: String? = null,
-    onMarkDone: (() -> Unit)?
+    onMarkDone: (() -> Unit)?,
+    onCreateDraft: (() -> Unit)? = null
 ) {
     Surface(
         shape = RoundedCornerShape(12.dp),
@@ -258,8 +261,13 @@ private fun RequestRow(
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
             }
-            if (onMarkDone != null) {
-                TextButton(onClick = onMarkDone) { Text("Mark fulfilled") }
+            Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                if (onMarkDone != null) {
+                    TextButton(onClick = onMarkDone) { Text("Mark fulfilled") }
+                }
+                if (onCreateDraft != null) {
+                    TextButton(onClick = onCreateDraft) { Text("Create draft in Stock") }
+                }
             }
         }
     }

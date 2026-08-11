@@ -89,8 +89,38 @@ data class Order(
     val notes: String,
     val customerId: String = "",
     val customerEmail: String = "",
-    val pointsEarned: Int = 0
+    val pointsEarned: Int = 0,
+    val pointsRedeemed: Int = 0,
+    val discount: Double = 0.0
 )
+
+object OrderStatus {
+    const val READY = "Ready for pickup"
+    const val PICKED_UP = "Picked up"
+    const val CANCELLED = "Cancelled"
+
+    val staffActions = listOf(READY, PICKED_UP, CANCELLED)
+}
+
+object LoyaltyPoints {
+    const val POINTS_PER_DOLLAR = 1
+    const val REDEEM_POINTS_PER_DOLLAR = 100
+
+    fun pointsForSpend(amount: Double): Int =
+        kotlin.math.floor(amount.coerceAtLeast(0.0) * POINTS_PER_DOLLAR).toInt()
+
+    fun discountForPoints(points: Int): Double =
+        (points.coerceAtLeast(0) / REDEEM_POINTS_PER_DOLLAR.toDouble())
+
+    fun maxRedeemablePoints(availablePoints: Int, grossTotal: Double): Int {
+        if (availablePoints < REDEEM_POINTS_PER_DOLLAR || grossTotal <= 0) return 0
+        val maxByBalance = availablePoints - (availablePoints % REDEEM_POINTS_PER_DOLLAR)
+        val maxByTotal = kotlin.math.floor(grossTotal).toInt() * REDEEM_POINTS_PER_DOLLAR
+        return minOf(maxByBalance, maxByTotal).coerceAtLeast(0)
+    }
+
+    fun taxOn(subtotal: Double, rate: Double = 0.08): Double = subtotal * rate
+}
 
 @Serializable
 data class OrderLine(

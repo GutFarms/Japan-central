@@ -2,6 +2,8 @@ package com.solstice.dispensary.ui.screens
 
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -16,9 +18,11 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.DocumentScanner
 import androidx.compose.material3.Button
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
@@ -27,12 +31,16 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import com.solstice.dispensary.data.model.InventoryIntake
 import com.solstice.dispensary.data.model.Product
+import com.solstice.dispensary.data.model.ProductCategory
 import com.solstice.dispensary.ui.components.MetaPill
 import com.solstice.dispensary.ui.components.ProductSwatch
 import com.solstice.dispensary.ui.components.SectionHeader
@@ -40,6 +48,7 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun InventoryScreen(
     products: List<Product>,
@@ -55,6 +64,28 @@ fun InventoryScreen(
         if (intakeMessage != null) {
             snackbar.showSnackbar(intakeMessage)
             onClearMessage()
+        }
+    }
+
+    var query by remember { mutableStateOf("") }
+    var filterCategory by remember { mutableStateOf<ProductCategory?>(null) }
+    var filterPublished by remember { mutableStateOf("All") }
+
+    val filtered = remember(products, query, filterCategory, filterPublished) {
+        products.filter { product ->
+            val q = query.trim()
+            val matchesQuery = q.isEmpty() ||
+                product.name.contains(q, ignoreCase = true) ||
+                product.brand.contains(q, ignoreCase = true) ||
+                product.sku.contains(q, ignoreCase = true) ||
+                product.category.label.contains(q, ignoreCase = true)
+            val matchesCategory = filterCategory == null || product.category == filterCategory
+            val matchesPublished = when (filterPublished) {
+                "Live" -> product.published
+                "Draft" -> !product.published
+                else -> true
+            }
+            matchesQuery && matchesCategory && matchesPublished
         }
     }
 
@@ -102,9 +133,47 @@ fun InventoryScreen(
 
             item {
                 Text("Stock levels", style = MaterialTheme.typography.titleLarge)
+                Spacer(Modifier.height(8.dp))
+                OutlinedTextField(
+                    value = query,
+                    onValueChange = { query = it },
+                    label = { Text("Search name, brand, or SKU") },
+                    modifier = Modifier.fillMaxWidth(),
+                    singleLine = true,
+                    shape = RoundedCornerShape(14.dp)
+                )
+                Spacer(Modifier.height(8.dp))
+                FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    FilterChip(
+                        selected = filterCategory == null,
+                        onClick = { filterCategory = null },
+                        label = { Text("All categories") }
+                    )
+                    ProductCategory.entries.forEach { cat ->
+                        FilterChip(
+                            selected = filterCategory == cat,
+                            onClick = { filterCategory = cat },
+                            label = { Text(cat.label) }
+                        )
+                    }
+                }
+                FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    listOf("All", "Live", "Draft").forEach { status ->
+                        FilterChip(
+                            selected = filterPublished == status,
+                            onClick = { filterPublished = status },
+                            label = { Text(status) }
+                        )
+                    }
+                }
+                Text(
+                    text = "Showing ${filtered.size} of ${products.size}",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
             }
 
-            items(products, key = { it.id }) { product ->
+            items(filtered, key = { it.id }) { product ->
                 Surface(
                     shape = RoundedCornerShape(14.dp),
                     color = MaterialTheme.colorScheme.surface,

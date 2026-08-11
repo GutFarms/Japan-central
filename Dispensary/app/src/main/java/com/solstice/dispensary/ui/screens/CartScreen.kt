@@ -7,11 +7,13 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Button
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
@@ -21,6 +23,7 @@ import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -38,27 +41,42 @@ import com.solstice.dispensary.ui.components.money
 fun CartScreen(
     cart: CartSummary,
     defaultPickupName: String = "",
+    loyaltyPoints: Int = 0,
+    canRedeemPoints: Boolean = false,
     checkoutMessage: String?,
     onClearMessage: () -> Unit,
     onSetQuantity: (String, Int) -> Unit,
     onRemove: (String) -> Unit,
     onClear: () -> Unit,
-    onPlaceOrder: (String, String) -> Unit,
+    onPlaceOrder: (pickupName: String, notes: String, redeemPoints: Int) -> Unit,
     onBrowseMenu: () -> Unit
 ) {
     var name by remember(defaultPickupName) { mutableStateOf(defaultPickupName) }
     var notes by remember { mutableStateOf("") }
+    var redeemPoints by remember { mutableIntStateOf(0) }
+
+    val maxRedeem = remember(loyaltyPoints, cart.total) {
+        if (canRedeemPoints) LoyaltyPoints.maxRedeemablePoints(loyaltyPoints, cart.total) else 0
+    }
+    val discount = LoyaltyPoints.discountForPoints(redeemPoints)
+    val payable = (cart.total - discount).coerceAtLeast(0.0)
+    val earnPreview = LoyaltyPoints.pointsForSpend(payable)
 
     LaunchedEffect(checkoutMessage) {
         if (checkoutMessage != null) {
             name = defaultPickupName
             notes = ""
+            redeemPoints = 0
         }
+    }
+    LaunchedEffect(maxRedeem) {
+        if (redeemPoints > maxRedeem) redeemPoints = maxRedeem
     }
 
     LazyColumn(
         modifier = Modifier
             .fillMaxSize()
+            .imePadding()
             .padding(horizontal = 20.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
@@ -143,22 +161,76 @@ fun CartScreen(
                     Text("Tax (8%)", style = MaterialTheme.typography.bodyMedium)
                     Text(money(cart.tax), style = MaterialTheme.typography.bodyMedium)
                 }
+                if (discount > 0) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Text("Points discount", style = MaterialTheme.typography.bodyMedium)
+                        Text("−${money(discount)}", color = MaterialTheme.colorScheme.secondary)
+                    }
+                }
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.SpaceBetween
                 ) {
-                    Text("Total", style = MaterialTheme.typography.titleLarge)
-                    Text(money(cart.total), style = MaterialTheme.typography.titleLarge)
+                    Text("Total due", style = MaterialTheme.typography.titleLarge)
+                    Text(money(payable), style = MaterialTheme.typography.titleLarge)
                 }
-                val previewPoints = LoyaltyPoints.pointsForSpend(cart.total)
-                if (previewPoints > 0) {
+                if (earnPreview > 0) {
                     Spacer(Modifier.height(6.dp))
                     Text(
-                        "You’ll earn ${LoyaltyPoints.earnLabel(previewPoints)} on this order " +
-                            "(${LoyaltyPoints.POINTS_PER_DOLLAR} pt per $1)",
+                        "You’ll earn ${LoyaltyPoints.earnLabel(earnPreview)} on what you pay",
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.secondary
                     )
+                }
+            }
+
+            if (canRedeemPoints && maxRedeem >= LoyaltyPoints.REDEEM_POINTS_PER_DOLLAR) {
+                item {
+                    Surface(
+                        shape = RoundedCornerShape(14.dp),
+                        color = MaterialTheme.colorScheme.secondaryContainer,
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Column(
+                            modifier = Modifier.padding(14.dp),
+                            verticalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            Text(
+                                "Redeem points",
+                                style = MaterialTheme.typography.titleMedium
+                            )
+                            Text(
+                                "You have $loyaltyPoints pts · " +
+                                    "${LoyaltyPoints.REDEEM_POINTS_PER_DOLLAR} pts = $1 off",
+                                style = MaterialTheme.typography.bodyMedium
+                            )
+                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                FilterChip(
+                                    selected = redeemPoints == 0,
+                                    onClick = { redeemPoints = 0 },
+                                    label = { Text("None") }
+                                )
+                                val step = LoyaltyPoints.REDEEM_POINTS_PER_DOLLAR
+                                listOf(step, step * 2, step * 5, maxRedeem)
+                                    .distinct()
+                                    .filter { it in step..maxRedeem }
+                                    .forEach { pts ->
+                                        FilterChip(
+                                            selected = redeemPoints == pts,
+                                            onClick = { redeemPoints = pts },
+                                            label = {
+                                                Text(
+                                                    "${pts} pts (−$${"%.0f".format(LoyaltyPoints.discountForPoints(pts))})"
+                                                )
+                                            }
+                                        )
+                                    }
+                            }
+                        }
+                    }
                 }
             }
 
@@ -179,7 +251,7 @@ fun CartScreen(
                 )
                 Spacer(Modifier.height(12.dp))
                 Button(
-                    onClick = { onPlaceOrder(name, notes) },
+                    onClick = { onPlaceOrder(name, notes, redeemPoints) },
                     modifier = Modifier.fillMaxWidth(),
                     shape = RoundedCornerShape(14.dp)
                 ) {

@@ -265,6 +265,45 @@ class CompanionRepository {
         return OpResult.Success("Marked fulfilled.")
     }
 
+    fun createDraftFromRequest(requestId: String): OpResult {
+        val me = currentCustomer() ?: return OpResult.Error("Not signed in.")
+        if (!me.role.canManageInventory) {
+            return OpResult.Error("Only staff/admin can create drafts from requests.")
+        }
+        val idx = productRequests.indexOfFirst { it.id == requestId }
+        if (idx < 0) return OpResult.Error("Request not found.")
+        val request = productRequests[idx]
+        val id = "reqprod-" + UUID.randomUUID().toString().take(6)
+        products.add(
+            Product(
+                id = id,
+                name = request.productName.trim(),
+                brand = "Customer request",
+                category = ProductCategory.ACCESSORY,
+                strainType = StrainType.NONE,
+                thcPercent = 0.0,
+                cbdPercent = 0.0,
+                price = 0.0,
+                unitLabel = "each",
+                description = buildString {
+                    append("Draft from request by ${request.customerName}.")
+                    if (request.notes.isNotBlank()) append(" Notes: ${request.notes}")
+                },
+                effects = "—",
+                featured = false,
+                inStock = false,
+                stockQuantity = 0,
+                sku = "",
+                published = false
+            )
+        )
+        productRequests[idx] = request.copy(status = "Fulfilled")
+        persist()
+        return OpResult.Success(
+            "Created draft “${request.productName}” in Stock (unpublished). Request marked fulfilled."
+        )
+    }
+
     fun logout() {
         sessionCustomerId = null
         cart.clear()
@@ -482,26 +521,35 @@ class CompanionRepository {
         }
     }
 
-    fun placePickupOrder(pickupName: String, notes: String): Order? {
+    fun placePickupOrder(pickupName: String, notes: String, redeemPoints: Int = 0): Order? {
         val summary = cartSummary()
         if (summary.lines.isEmpty()) return null
         val customer = currentCustomer()
-        val pointsEarned = if (customer != null && customer.role == AccountRole.CUSTOMER) {
-            kotlin.math.floor(summary.total).toInt().coerceAtLeast(0)
+        val customerRow = customer?.id?.let { id -> customers.find { it.id == id } }
+        val canRedeem = customerRow != null && customerRow.role == AccountRole.CUSTOMER
+        val maxRedeem = if (canRedeem) {
+            LoyaltyPoints.maxRedeemablePoints(customerRow.loyaltyPoints, summary.total)
         } else {
             0
         }
+        val appliedRedeem = redeemPoints.coerceIn(0, maxRedeem)
+            .let { it - (it % LoyaltyPoints.REDEEM_POINTS_PER_DOLLAR) }
+        val discount = LoyaltyPoints.discountForPoints(appliedRedeem)
+        val total = (summary.total - discount).coerceAtLeast(0.0)
+        val pointsEarned = if (canRedeem) LoyaltyPoints.pointsForSpend(total) else 0
         val order = Order(
             id = UUID.randomUUID().toString().take(8).uppercase(),
             createdAt = System.currentTimeMillis(),
-            total = summary.total,
+            total = total,
             itemCount = summary.itemCount,
-            status = "Ready for pickup",
+            status = OrderStatus.READY,
             pickupName = pickupName.ifBlank { customer?.fullName ?: "Guest" },
             notes = notes.trim(),
             customerId = customer?.id.orEmpty(),
             customerEmail = customer?.email.orEmpty(),
-            pointsEarned = pointsEarned
+            pointsEarned = pointsEarned,
+            pointsRedeemed = appliedRedeem,
+            discount = discount
         )
         val lines = summary.lines.map {
             OrderLine(order.id, it.product.id, it.product.name, it.product.price, it.quantity)
@@ -511,20 +559,61 @@ class CompanionRepository {
         summary.lines.forEach { line ->
             adjustStockInternal(line.product.id, -line.quantity)
         }
-        if (customer != null && pointsEarned > 0) {
-            val row = customers.find { it.id == customer.id }
-            if (row != null) {
-                replaceCustomer(
-                    row.copy(
-                        loyaltyPoints = row.loyaltyPoints + pointsEarned,
-                        lifetimeSpend = row.lifetimeSpend + summary.total
-                    )
+        if (customerRow != null && (pointsEarned > 0 || appliedRedeem > 0)) {
+            replaceCustomer(
+                customerRow.copy(
+                    loyaltyPoints = (customerRow.loyaltyPoints - appliedRedeem + pointsEarned)
+                        .coerceAtLeast(0),
+                    lifetimeSpend = customerRow.lifetimeSpend + total
                 )
-            }
+            )
         }
         cart.clear()
         persist()
         return order
+    }
+
+    fun updateOrderStatus(orderId: String, status: String): OpResult {
+        val me = currentCustomer() ?: return OpResult.Error("Not signed in.")
+        if (!me.role.canViewSensitiveInfo) {
+            return OpResult.Error("Only staff/admin can update order status.")
+        }
+        val idx = orders.indexOfFirst { it.id == orderId }
+        if (idx < 0) return OpResult.Error("Order not found.")
+        val clean = status.trim()
+        if (clean !in OrderStatus.staffActions) return OpResult.Error("Unknown status.")
+        orders[idx] = orders[idx].copy(status = clean)
+        persist()
+        return OpResult.Success("Order $orderId marked $clean.")
+    }
+
+    fun orderReceiptText(orderId: String): String? {
+        val order = orders.find { it.id == orderId } ?: return null
+        val lines = orderLines.filter { it.orderId == orderId }
+        val sb = StringBuilder()
+        sb.appendLine("Native Pure — Pickup receipt")
+        sb.appendLine("Order #${order.id}")
+        sb.appendLine("Status: ${order.status}")
+        sb.appendLine("Pickup: ${order.pickupName}")
+        if (order.customerEmail.isNotBlank()) sb.appendLine("Email: ${order.customerEmail}")
+        sb.appendLine()
+        lines.forEach { line ->
+            sb.appendLine(
+                "${line.quantity} × ${line.productName} @ $${"%.2f".format(line.unitPrice)} = $${
+                    "%.2f".format(line.unitPrice * line.quantity)
+                }"
+            )
+        }
+        sb.appendLine()
+        if (order.discount > 0) {
+            sb.appendLine("Points redeemed: ${order.pointsRedeemed} (−$${"%.2f".format(order.discount)})")
+        }
+        sb.appendLine("Total paid: $${"%.2f".format(order.total)}")
+        if (order.pointsEarned > 0) sb.appendLine("Points earned: +${order.pointsEarned}")
+        if (order.notes.isNotBlank()) sb.appendLine("Notes: ${order.notes}")
+        sb.appendLine()
+        sb.appendLine("Bring a valid ID for pickup. 18+ only.")
+        return sb.toString()
     }
 
     private fun adjustStockInternal(productId: String, delta: Int) {

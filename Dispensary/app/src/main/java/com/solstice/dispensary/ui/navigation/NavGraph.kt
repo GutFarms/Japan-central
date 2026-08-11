@@ -134,9 +134,12 @@ fun DispensaryNavHost(
             )
         }
         composable(Routes.CART) {
+            val customer = viewModel.currentCustomer
             CartScreen(
                 cart = cart,
-                defaultPickupName = viewModel.currentCustomer?.fullName.orEmpty(),
+                defaultPickupName = customer?.fullName.orEmpty(),
+                loyaltyPoints = customer?.loyaltyPoints ?: 0,
+                canRedeemPoints = customer?.role?.canViewSensitiveInfo == false,
                 checkoutMessage = viewModel.checkoutMessage,
                 onClearMessage = viewModel::clearCheckoutMessage,
                 onSetQuantity = viewModel::setQuantity,
@@ -147,7 +150,23 @@ fun DispensaryNavHost(
             )
         }
         composable(Routes.ORDERS) {
-            OrdersScreen(orders = orders)
+            OrdersScreen(
+                orders = orders,
+                canManageOrders = viewModel.canViewSensitiveInfo,
+                onUpdateStatus = viewModel::updateOrderStatus,
+                onShareReceipt = { orderId ->
+                    viewModel.shareOrderReceipt(orderId) { text ->
+                        val send = android.content.Intent(android.content.Intent.ACTION_SEND).apply {
+                            type = "text/plain"
+                            putExtra(android.content.Intent.EXTRA_SUBJECT, "Native Pure receipt")
+                            putExtra(android.content.Intent.EXTRA_TEXT, text)
+                        }
+                        context.startActivity(
+                            android.content.Intent.createChooser(send, "Share receipt")
+                        )
+                    }
+                }
+            )
         }
         composable(Routes.STORE) {
             StoreScreen(
@@ -251,7 +270,8 @@ fun DispensaryNavHost(
                     requests = productRequests,
                     stats = requestStats,
                     onBack = { navController.popBackStack() },
-                    onMarkDone = viewModel::markProductRequestFulfilled
+                    onMarkDone = viewModel::markProductRequestFulfilled,
+                    onCreateDraft = viewModel::createDraftFromRequest
                 )
             }
         }
