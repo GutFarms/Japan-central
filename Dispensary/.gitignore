@@ -9,6 +9,7 @@
 .externalNativeBuild
 .cxx
 *.apk
+!dist/NativePure-Dispensary.apk
 *.ap_
 *.aab
 *.dex

@@ -9,6 +9,14 @@ on:
       - "Dispensary/**"
       - ".github/workflows/dispensary-android-release.yml"
   workflow_dispatch:
+    inputs:
+      publish_release:
+        description: "Publish a GitHub Release with the APK"
+        type: boolean
+        default: true
+
+permissions:
+  contents: write
 
 jobs:
   android:
@@ -63,3 +71,24 @@ jobs:
             Dispensary/dist/NativePure-Dispensary.apk
             Dispensary/dist/Solstice-Dispensary.apk
           if-no-files-found: error
+          retention-days: 90
+
+      - name: Publish GitHub Release
+        if: startsWith(github.ref, 'refs/tags/') || (github.event_name == 'workflow_dispatch' && inputs.publish_release)
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || format('nativepure-v{0}', github.run_number) }}
+          name: Native Pure Dispensary ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || format('build-{0}', github.run_number) }}
+          body: |
+            Installable Android APK for **Native Pure**.
+
+            1. Download `NativePure-Dispensary.apk`
+            2. On Android: allow install from this source
+            3. Open **Native Pure** → confirm **18+**
+
+            Requires Android 8.0+.
+          files: Dispensary/dist/NativePure-Dispensary.apk
+          fail_on_unmatched_files: true
+          generate_release_notes: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

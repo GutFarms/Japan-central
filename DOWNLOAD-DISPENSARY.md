@@ -1,25 +1,26 @@
 # Download Native Pure
 
-Ready-to-install builds for the phone app and desktop companion.
+## Android APK (download)
 
-## Android APK
+**Direct file (this branch):**  
+[`Dispensary/dist/NativePure-Dispensary.apk`](./Dispensary/dist/NativePure-Dispensary.apk)
 
-**File:** `NativePure-Dispensary.apk` (also mirrored as `Solstice-Dispensary.apk`)
+**GitHub Releases (preferred permanent link):**  
+https://github.com/GutFarms/Japan-central/releases  
+→ download **`NativePure-Dispensary.apk`**
 
-### Option A — GitHub Actions (always current)
+### Install on phone
 
-1. Open **[Actions](../../actions)** → workflow **Build downloadable Native Pure Dispensary APK**
-2. Open the latest green run → download artifact **`NativePure-Dispensary-apk`**
-3. On the phone: allow install from that source (**Settings → Apps → Special access → Install unknown apps**)
-4. Install the APK → open **Native Pure** → confirm **18+**
+1. Download the APK to your Android device
+2. **Settings → Apps → Special access → Install unknown apps** → allow your browser/Files
+3. Open the APK → install → open **Native Pure** → confirm **18+**
 
 Requires **Android 8.0+**.
 
-### Option B — From this repo
+### Also from Actions
 
-If present: [`Dispensary/dist/Solstice-Dispensary.apk`](./Dispensary/dist/Solstice-Dispensary.apk)
-
-Prefer Option A when the file is missing or outdated (GitHub warns on files over 50MB).
+1. **[Actions](../../actions)** → **Build downloadable Native Pure Dispensary APK**
+2. Latest green run → artifact **`NativePure-Dispensary-apk`**
 
 ### Build yourself
 
