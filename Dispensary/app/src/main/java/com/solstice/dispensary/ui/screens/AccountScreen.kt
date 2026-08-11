@@ -41,9 +41,12 @@ import com.solstice.dispensary.data.model.AutoLockTimeout
 import com.solstice.dispensary.data.model.CustomerProfile
 import com.solstice.dispensary.data.model.SecuritySettings
 import com.solstice.dispensary.data.model.ThemeMode
+import com.solstice.dispensary.data.update.UpdateUiState
+import com.solstice.dispensary.ui.components.AppUpdateBanner
 import com.solstice.dispensary.ui.components.BrandLogo
 import com.solstice.dispensary.ui.components.MetaPill
 import com.solstice.dispensary.ui.components.SectionHeader
+import com.solstice.dispensary.BuildConfig
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -57,6 +60,8 @@ fun AccountScreen(
     securitySettings: SecuritySettings,
     message: String?,
     syncExportJson: String?,
+    updateState: UpdateUiState = UpdateUiState.Idle,
+    needsInstallPermission: Boolean = false,
     onClearMessage: () -> Unit,
     onSaveProfile: (String, String, String, String, Boolean) -> Unit,
     onThemeModeChange: (ThemeMode) -> Unit,
@@ -71,6 +76,11 @@ fun AccountScreen(
     onShareSync: (String) -> Unit,
     onImportSync: (String) -> Unit,
     onClearSyncExport: () -> Unit,
+    onCheckUpdate: () -> Unit = {},
+    onDownloadUpdate: () -> Unit = {},
+    onInstallUpdate: () -> Unit = {},
+    onDismissUpdate: () -> Unit = {},
+    onOpenInstallPermission: () -> Unit = {},
     onLogout: () -> Unit,
     onOpenCustomers: () -> Unit,
     onOpenOrders: () -> Unit
@@ -541,6 +551,41 @@ fun AccountScreen(
                 ) {
                     Text("Import sync JSON")
                 }
+            }
+        }
+
+        item {
+            SectionHeader(
+                title = "App updates",
+                subtitle = "Installed ${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE})"
+            )
+            AppUpdateBanner(
+                state = updateState,
+                onDownload = onDownloadUpdate,
+                onInstall = onInstallUpdate,
+                onDismiss = onDismissUpdate,
+                onOpenInstallPermission = onOpenInstallPermission,
+                needsInstallPermission = needsInstallPermission,
+                compact = true
+            )
+            when (updateState) {
+                UpdateUiState.Checking -> Text("Checking for updates…")
+                UpdateUiState.UpToDate -> Text("You’re on the latest version.")
+                is UpdateUiState.Error -> Text(
+                    updateState.message,
+                    color = MaterialTheme.colorScheme.error
+                )
+                else -> Unit
+            }
+            Spacer(Modifier.height(8.dp))
+            Button(
+                onClick = onCheckUpdate,
+                enabled = updateState !is UpdateUiState.Checking &&
+                    updateState !is UpdateUiState.Downloading,
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(12.dp)
+            ) {
+                Text("Check for updates")
             }
         }
 

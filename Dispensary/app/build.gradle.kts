@@ -12,8 +12,8 @@ android {
         applicationId = "com.solstice.dispensary"
         minSdk = 26
         targetSdk = 34
-        versionCode = 12
-        versionName = "1.8.0"
+        versionCode = 13
+        versionName = "1.9.0"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
@@ -57,6 +57,7 @@ android {
 
     buildFeatures {
         compose = true
+        buildConfig = true
     }
 
     composeOptions {

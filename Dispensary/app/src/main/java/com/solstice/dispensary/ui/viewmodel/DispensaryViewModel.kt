@@ -21,6 +21,10 @@ import com.solstice.dispensary.data.model.Product
 import com.solstice.dispensary.data.model.ProductCategory
 import com.solstice.dispensary.data.model.ThemeMode
 import com.solstice.dispensary.data.repository.DispensaryRepository
+import com.solstice.dispensary.data.update.AppUpdateChecker
+import com.solstice.dispensary.data.update.AppUpdateInfo
+import com.solstice.dispensary.data.update.UpdateCheckResult
+import com.solstice.dispensary.data.update.UpdateUiState
 import com.solstice.dispensary.scan.LabelAiScanner
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -29,10 +33,12 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
+import java.io.File
 
 @OptIn(ExperimentalCoroutinesApi::class)
 class DispensaryViewModel(
-    private val repository: DispensaryRepository
+    private val repository: DispensaryRepository,
+    private val updateChecker: AppUpdateChecker
 ) : ViewModel() {
 
     private val scanner = LabelAiScanner()
@@ -57,6 +63,14 @@ class DispensaryViewModel(
 
     var pendingEmailCode by mutableStateOf<EmailCodeIssue?>(null)
         private set
+
+    var updateState by mutableStateOf<UpdateUiState>(UpdateUiState.Idle)
+        private set
+
+    var downloadedApk by mutableStateOf<File?>(null)
+        private set
+
+    private var autoUpdateChecked = false
 
     var accountMessage by mutableStateOf<String?>(null)
         private set
@@ -494,6 +508,58 @@ class DispensaryViewModel(
         lastSyncExport = null
     }
 
+    fun checkForAppUpdate(force: Boolean = false) {
+        viewModelScope.launch {
+            updateState = UpdateUiState.Checking
+            when (val result = updateChecker.checkForUpdate(force)) {
+                is UpdateCheckResult.Available ->
+                    updateState = UpdateUiState.Available(result.info)
+                UpdateCheckResult.UpToDate ->
+                    updateState = UpdateUiState.UpToDate
+                is UpdateCheckResult.Failed ->
+                    updateState = UpdateUiState.Error(result.message)
+            }
+        }
+    }
+
+    fun autoCheckForAppUpdate() {
+        if (autoUpdateChecked) return
+        autoUpdateChecked = true
+        checkForAppUpdate(force = false)
+    }
+
+    fun dismissAppUpdate() {
+        val available = updateState as? UpdateUiState.Available ?: return
+        updateChecker.dismiss(available.info)
+        updateState = UpdateUiState.Idle
+    }
+
+    fun downloadAppUpdate() {
+        val info = when (val state = updateState) {
+            is UpdateUiState.Available -> state.info
+            is UpdateUiState.ReadyToInstall -> state.info
+            else -> return
+        }
+        viewModelScope.launch {
+            updateState = UpdateUiState.Downloading(null)
+            try {
+                val file = updateChecker.downloadApk(info) { progress ->
+                    updateState = UpdateUiState.Downloading(progress)
+                }
+                downloadedApk = file
+                updateState = UpdateUiState.ReadyToInstall(info)
+            } catch (t: Throwable) {
+                updateState = UpdateUiState.Error(t.message ?: "Download failed.")
+            }
+        }
+    }
+
+    fun clearUpdateMessage() {
+        if (updateState is UpdateUiState.UpToDate || updateState is UpdateUiState.Error) {
+            updateState = UpdateUiState.Idle
+        }
+    }
+
     fun importSync(json: String) {
         viewModelScope.launch {
             when (val result = repository.importSyncJson(json)) {
@@ -539,12 +605,13 @@ class DispensaryViewModel(
 }
 
 class DispensaryViewModelFactory(
-    private val repository: DispensaryRepository
+    private val repository: DispensaryRepository,
+    private val updateChecker: AppUpdateChecker
 ) : ViewModelProvider.Factory {
     @Suppress("UNCHECKED_CAST")
     override fun <T : ViewModel> create(modelClass: Class<T>): T {
         if (modelClass.isAssignableFrom(DispensaryViewModel::class.java)) {
-            return DispensaryViewModel(repository) as T
+            return DispensaryViewModel(repository, updateChecker) as T
         }
         throw IllegalArgumentException("Unknown ViewModel: ${modelClass.name}")
     }

@@ -3,6 +3,8 @@
 Adult-use dispensary app for browsing the menu, building a pickup bag, scanning inventory, and checking store info.
 
 > **Download APK:** [`dist/NativePure-Dispensary.apk`](./dist/NativePure-Dispensary.apk) — also on [GitHub Releases](https://github.com/GutFarms/Japan-central/releases). Steps: [`../DOWNLOAD-DISPENSARY.md`](../DOWNLOAD-DISPENSARY.md).
+>
+> **Updates:** After install, the app checks GitHub Releases for a newer `update-manifest.json` and can download/install the APK in-app (Account → Check for updates). Requires a public release asset (or network access to that URL).
 
 ## Features
 

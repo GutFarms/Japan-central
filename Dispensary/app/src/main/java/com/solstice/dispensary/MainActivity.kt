@@ -48,7 +48,7 @@ class MainActivity : ComponentActivity() {
         val app = application as DispensaryApplication
         setContent {
             val viewModel: DispensaryViewModel = viewModel(
-                factory = DispensaryViewModelFactory(app.repository)
+                factory = DispensaryViewModelFactory(app.repository, app.updateChecker)
             )
 
             val lifecycleOwner = LocalLifecycleOwner.current

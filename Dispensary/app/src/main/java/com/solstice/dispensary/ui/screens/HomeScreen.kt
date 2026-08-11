@@ -39,6 +39,8 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.unit.dp
 import com.solstice.dispensary.data.model.Product
 import com.solstice.dispensary.data.model.ProductCategory
+import com.solstice.dispensary.data.update.UpdateUiState
+import com.solstice.dispensary.ui.components.AppUpdateBanner
 import com.solstice.dispensary.ui.components.BotanicalScreenBackground
 import com.solstice.dispensary.ui.components.BrandLogo
 import com.solstice.dispensary.ui.components.HeroBackdrop
@@ -55,6 +57,12 @@ fun HomeScreen(
     featured: List<Product>,
     cartCount: Int,
     showInventory: Boolean = false,
+    updateState: UpdateUiState = UpdateUiState.Idle,
+    needsInstallPermission: Boolean = false,
+    onDownloadUpdate: () -> Unit = {},
+    onInstallUpdate: () -> Unit = {},
+    onDismissUpdate: () -> Unit = {},
+    onOpenInstallPermission: () -> Unit = {},
     onOpenMenu: () -> Unit,
     onOpenProduct: (String) -> Unit,
     onOpenCart: () -> Unit,
@@ -77,6 +85,16 @@ fun HomeScreen(
                 .alpha(fade),
             contentPadding = PaddingValues(bottom = 28.dp)
         ) {
+            item {
+                AppUpdateBanner(
+                    state = updateState,
+                    onDownload = onDownloadUpdate,
+                    onInstall = onInstallUpdate,
+                    onDismiss = onDismissUpdate,
+                    onOpenInstallPermission = onOpenInstallPermission,
+                    needsInstallPermission = needsInstallPermission
+                )
+            }
             item {
                 HeroBackdrop {
                     Column {

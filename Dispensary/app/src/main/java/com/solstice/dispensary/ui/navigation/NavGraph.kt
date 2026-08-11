@@ -3,15 +3,21 @@ package com.solstice.dispensary.ui.navigation
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.navigation.NavHostController
 import androidx.navigation.NavType
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.navArgument
+import com.solstice.dispensary.data.update.ApkInstaller
 import com.solstice.dispensary.ui.screens.AccountScreen
 import com.solstice.dispensary.ui.screens.CartScreen
 import com.solstice.dispensary.ui.screens.CustomersScreen
@@ -45,6 +51,7 @@ fun DispensaryNavHost(
     viewModel: DispensaryViewModel,
     modifier: Modifier = Modifier
 ) {
+    val context = LocalContext.current
     val featured by viewModel.featured.collectAsState()
     val cart by viewModel.cart.collectAsState()
     val orders by viewModel.orders.collectAsState()
@@ -52,6 +59,26 @@ fun DispensaryNavHost(
     val inventory by viewModel.inventory.collectAsState()
     val intakes by viewModel.intakes.collectAsState()
     val customers by viewModel.customers.collectAsState()
+    var canInstall by remember { mutableStateOf(ApkInstaller.canInstallPackages(context)) }
+
+    LaunchedEffect(Unit) {
+        viewModel.autoCheckForAppUpdate()
+    }
+
+    fun openInstallPermission() {
+        context.startActivity(ApkInstaller.installPermissionSettingsIntent(context))
+        canInstall = ApkInstaller.canInstallPackages(context)
+    }
+
+    fun installDownloadedUpdate() {
+        canInstall = ApkInstaller.canInstallPackages(context)
+        if (!canInstall) {
+            openInstallPermission()
+            return
+        }
+        val apk = viewModel.downloadedApk ?: return
+        context.startActivity(ApkInstaller.installApk(context, apk))
+    }
 
     NavHost(
         navController = navController,
@@ -63,6 +90,12 @@ fun DispensaryNavHost(
                 featured = featured,
                 cartCount = cart.itemCount,
                 showInventory = viewModel.canManageInventory,
+                updateState = viewModel.updateState,
+                needsInstallPermission = !canInstall,
+                onDownloadUpdate = viewModel::downloadAppUpdate,
+                onInstallUpdate = { installDownloadedUpdate() },
+                onDismissUpdate = viewModel::dismissAppUpdate,
+                onOpenInstallPermission = { openInstallPermission() },
                 onOpenMenu = { navController.navigate(Routes.MENU) },
                 onOpenProduct = { id -> navController.navigate(Routes.product(id)) },
                 onOpenCart = { navController.navigate(Routes.CART) },
@@ -163,6 +196,8 @@ fun DispensaryNavHost(
                 securitySettings = viewModel.securitySettings,
                 message = viewModel.accountMessage,
                 syncExportJson = viewModel.lastSyncExport,
+                updateState = viewModel.updateState,
+                needsInstallPermission = !canInstall,
                 onClearMessage = viewModel::clearAccountMessage,
                 onSaveProfile = viewModel::saveProfile,
                 onThemeModeChange = viewModel::updateThemeMode,
@@ -184,6 +219,11 @@ fun DispensaryNavHost(
                 },
                 onImportSync = viewModel::importSync,
                 onClearSyncExport = viewModel::clearSyncExport,
+                onCheckUpdate = { viewModel.checkForAppUpdate(force = true) },
+                onDownloadUpdate = viewModel::downloadAppUpdate,
+                onInstallUpdate = { installDownloadedUpdate() },
+                onDismissUpdate = viewModel::dismissAppUpdate,
+                onOpenInstallPermission = { openInstallPermission() },
                 onLogout = viewModel::logout,
                 onOpenCustomers = { navController.navigate(Routes.CUSTOMERS) },
                 onOpenOrders = { navController.navigate(Routes.ORDERS) }

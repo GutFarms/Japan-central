@@ -61,6 +61,19 @@ jobs:
           mkdir -p dist
           cp app/build/outputs/apk/release/app-release.apk dist/NativePure-Dispensary.apk
           cp app/build/outputs/apk/release/app-release.apk dist/Solstice-Dispensary.apk
+          VERSION_CODE=$(grep -E 'versionCode\s*=' app/build.gradle.kts | head -1 | grep -oE '[0-9]+')
+          VERSION_NAME=$(grep -E 'versionName\s*=' app/build.gradle.kts | head -1 | sed -E 's/.*"([^"]+)".*/\1/')
+          cat > dist/update-manifest.json <<EOF
+          {
+            "versionCode": ${VERSION_CODE},
+            "versionName": "${VERSION_NAME}",
+            "apkUrl": "https://github.com/GutFarms/Japan-central/releases/latest/download/NativePure-Dispensary.apk",
+            "releaseNotes": "Native Pure ${VERSION_NAME} — tap Download in the app to install."
+          }
+          EOF
+          # Keep a repo-local copy used by docs / sideload testing
+          cp dist/update-manifest.json update-manifest.json
+          cat dist/update-manifest.json
           ls -lh dist/
 
       - name: Upload APK artifact
@@ -70,6 +83,7 @@ jobs:
           path: |
             Dispensary/dist/NativePure-Dispensary.apk
             Dispensary/dist/Solstice-Dispensary.apk
+            Dispensary/dist/update-manifest.json
           if-no-files-found: error
           retention-days: 90
 
@@ -86,8 +100,12 @@ jobs:
             2. On Android: allow install from this source
             3. Open **Native Pure** → confirm **18+**
 
+            In-app updates read `update-manifest.json` from this release.
+
             Requires Android 8.0+.
-          files: Dispensary/dist/NativePure-Dispensary.apk
+          files: |
+            Dispensary/dist/NativePure-Dispensary.apk
+            Dispensary/dist/update-manifest.json
           fail_on_unmatched_files: true
           generate_release_notes: false
         env:
