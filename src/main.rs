@@ -5,9 +5,12 @@ use egui::{
 };
 use std::f32::consts::{PI, TAU};
 
-/// Contemplative spin: ease through one turn (~1s), then rest a beat.
+/// Contemplative spin: ease one bead-step (~1s), then rest a beat.
+/// Each thought advances by a third-turn so the hold pose walks forward
+/// (a full 360° return-to-home reads as a snap-back).
 const SPIN_DURATION: f32 = 1.0;
 const REST_DURATION: f32 = 0.9;
+const SPIN_STEP: f32 = TAU / 3.0;
 
 struct ClockApp {
     japan_time: String,
@@ -51,12 +54,12 @@ impl ClockApp {
                 let t = (elapsed / SPIN_DURATION).clamp(0.0, 1.0);
                 let eased = ease_in_out_cubic(t);
                 if t >= 1.0 {
-                    self.turns = (self.turns + TAU) % TAU;
+                    self.turns = (self.turns + SPIN_STEP) % TAU;
                     self.phase = SpinPhase::Resting;
                     self.phase_t0 = now;
                     return self.turns;
                 }
-                self.turns + eased * TAU
+                self.turns + eased * SPIN_STEP
             }
             SpinPhase::Resting => {
                 if elapsed >= REST_DURATION {
