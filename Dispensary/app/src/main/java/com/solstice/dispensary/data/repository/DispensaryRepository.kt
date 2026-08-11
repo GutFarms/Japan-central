@@ -68,8 +68,18 @@ class DispensaryRepository(context: Context) {
     val deals: Flow<List<Product>> = db.productDao().observePublishedDeals()
     val cartItems: Flow<List<CartItem>> = db.cartDao().observeAll()
     val intakes: Flow<List<InventoryIntake>> = db.inventoryDao().observeAll()
-    val customers: Flow<List<CustomerProfile>> = db.customerDao().observeAll()
-        .map { list -> list.map { it.toProfile() } }
+    val customers: Flow<List<CustomerProfile>> = combine(
+        sessionCustomerId,
+        db.customerDao().observeAll()
+    ) { id, all ->
+        if (id.isNullOrBlank()) return@combine emptyList()
+        val me = all.find { it.id == id }
+        if (me?.role?.canViewSensitiveInfo == true) {
+            all.map { it.toProfile() }
+        } else {
+            emptyList()
+        }
+    }
 
     val staffAccounts: Flow<List<CustomerProfile>> =
         db.customerDao().observeByRole(AccountRole.STAFF)
@@ -349,10 +359,10 @@ class DispensaryRepository(context: Context) {
             passwordHash = PasswordHasher.hash("demo1234", salt),
             passwordSalt = salt,
             fullName = "Demo Customer",
-            phone = "(505) 555-0142",
-            dateOfBirth = "1990-01-01",
-            notes = "Seeded demo customer account",
-            marketingOptIn = true,
+            phone = "",
+            dateOfBirth = "",
+            notes = "",
+            marketingOptIn = false,
             role = AccountRole.CUSTOMER,
             emailVerified = true
         )
@@ -1008,16 +1018,31 @@ class DispensaryRepository(context: Context) {
                 val existing = db.customerDao().getById(incoming.id)
                     ?: db.customerDao().getByEmail(incoming.email)
                 if (existing == null) {
-                    db.customerDao().upsert(incoming)
+                    // New loyalty profile from sync — unusable password until staff resets.
+                    db.customerDao().upsert(incoming.copy(role = AccountRole.CUSTOMER))
                 } else {
+                    // Preserve credentials and role; merge PII / loyalty only.
                     db.customerDao().update(
-                        incoming.copy(id = existing.id)
+                        existing.copy(
+                            email = incoming.email.trim().lowercase().ifBlank { existing.email },
+                            username = incoming.username.ifBlank { existing.username },
+                            fullName = incoming.fullName.trim().ifBlank { existing.fullName },
+                            phone = incoming.phone,
+                            dateOfBirth = incoming.dateOfBirth,
+                            notes = incoming.notes,
+                            marketingOptIn = incoming.marketingOptIn,
+                            enabled = incoming.enabled,
+                            emailVerified = incoming.emailVerified || existing.emailVerified,
+                            loyaltyPoints = incoming.loyaltyPoints.coerceAtLeast(0),
+                            lifetimeSpend = incoming.lifetimeSpend.coerceAtLeast(0.0),
+                            lastLoginAt = maxOf(existing.lastLoginAt, incoming.lastLoginAt)
+                        )
                     )
                 }
                 customerCount++
             }
             OpResult.Success(
-                "Imported ${products.size} products and $customerCount customers from sync file."
+                "Imported ${products.size} products and $customerCount customers (no passwords) from sync file."
             )
         } catch (t: Throwable) {
             OpResult.Error(t.message ?: "Could not import sync file.")
@@ -1173,7 +1198,9 @@ class DispensaryRepository(context: Context) {
         sb.appendLine("Order #${order.id}")
         sb.appendLine("Status: ${order.status}")
         sb.appendLine("Pickup: ${order.pickupName}")
-        if (order.customerEmail.isNotBlank()) sb.appendLine("Email: ${order.customerEmail}")
+        if (order.customerEmail.isNotBlank()) {
+            sb.appendLine("Email: ${maskEmail(order.customerEmail)}")
+        }
         sb.appendLine()
         lines.forEach { line ->
             sb.appendLine(
@@ -1192,10 +1219,16 @@ class DispensaryRepository(context: Context) {
         }
         sb.appendLine("Total paid: $${"%.2f".format(order.total)}")
         if (order.pointsEarned > 0) sb.appendLine("Points earned: +${order.pointsEarned}")
-        if (order.notes.isNotBlank()) sb.appendLine("Notes: ${order.notes}")
         sb.appendLine()
         sb.appendLine("Bring a valid ID for pickup. 18+ only.")
         return sb.toString()
+    }
+
+    private fun maskEmail(email: String): String {
+        val clean = email.trim()
+        val at = clean.indexOf('@')
+        if (at <= 0) return "•••"
+        return "${clean.take(1)}•••@${clean.substring(at + 1)}"
     }
 
     suspend fun orderReceiptText(orderId: String): String? {

@@ -29,10 +29,12 @@ run-companion.bat
 - **Empty-state sample feed** — when no live orders exist, Register and Orders show a soft scrolling sample pickup feed (clears when real orders arrive)
 - **Orders** — full history with channel (POS vs pickup) and payment method
 - **Stock & customers** — same inventory / customer tools as before
+- **Privacy** — customer PII is staff-only; lists/receipts mask email/phone/DOB; sync never exports password hashes; import cannot escalate roles; register idle-locks after 5 minutes
 - **Local hard drive storage** — inventory + customers auto-save on every change
   - Windows: `%LOCALAPPDATA%\NativePure\Companion\` (`store.json`, `inventory.json`, `customers.json`)
+  - `customers.json` backup omits password hashes
   - macOS/Linux: `~/.nativepure-companion/`
-  - Account → **Open data folder** / **Save now**
+  - Account → **Open data folder** / **Save now** / **Lock register now**
 
 Customer accounts still get menu browsing, cart, and pickup checkout.
 

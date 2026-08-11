@@ -12,6 +12,13 @@ object PasswordHasher {
         return bytes.toHex()
     }
 
+    /** Random unusable password material for sync-imported loyalty profiles. */
+    fun randomUnusableSecret(): String {
+        val bytes = ByteArray(32)
+        random.nextBytes(bytes)
+        return bytes.toHex()
+    }
+
     fun hash(password: String, salt: String): String {
         val digest = MessageDigest.getInstance("SHA-256")
         var current = "$salt:$password".toByteArray(Charsets.UTF_8)
@@ -19,8 +26,13 @@ object PasswordHasher {
         return current.toHex()
     }
 
-    fun matches(password: String, salt: String, expectedHash: String): Boolean =
-        hash(password, salt) == expectedHash
+    fun matches(password: String, salt: String, expectedHash: String): Boolean {
+        val actual = hash(password, salt)
+        return MessageDigest.isEqual(
+            actual.toByteArray(Charsets.UTF_8),
+            expectedHash.toByteArray(Charsets.UTF_8)
+        )
+    }
 
     private fun ByteArray.toHex(): String =
         joinToString("") { "%02x".format(it) }

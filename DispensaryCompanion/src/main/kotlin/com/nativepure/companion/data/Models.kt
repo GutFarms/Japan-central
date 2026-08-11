@@ -341,7 +341,8 @@ data class SyncFile(
     val format: String = "nativepure-sync-v1",
     val exportedAt: Long = 0L,
     val products: List<Product> = emptyList(),
-    val customers: List<Customer> = emptyList(),
+    /** Customers without password hashes — credentials never leave the device via sync. */
+    val customers: List<SyncCustomer> = emptyList(),
     val orders: List<Order> = emptyList(),
     val orderLines: List<OrderLine> = emptyList()
 )

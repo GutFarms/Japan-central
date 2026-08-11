@@ -296,12 +296,15 @@ class DispensaryViewModel(
     }
 
     fun logout() {
-        repository.logout()
-        currentCustomer = null
-        accountMessage = null
-        appLocked = false
-        lockError = null
-        pendingEmailCode = null
+        viewModelScope.launch {
+            repository.clearCart()
+            repository.logout()
+            currentCustomer = null
+            accountMessage = null
+            appLocked = false
+            lockError = null
+            pendingEmailCode = null
+        }
     }
 
     fun createStaffSubAccount(email: String, password: String, fullName: String) {

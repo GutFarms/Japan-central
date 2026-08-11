@@ -49,6 +49,7 @@ import com.nativepure.companion.data.OpResult
 import com.nativepure.companion.data.OrderStatus
 import com.nativepure.companion.data.PaymentMethod
 import com.nativepure.companion.data.PosSaleRequest
+import com.nativepure.companion.data.Privacy
 import com.nativepure.companion.data.Product
 import java.awt.Toolkit
 import java.awt.datatransfer.StringSelection
@@ -241,7 +242,7 @@ fun PosPane(
                             Column(Modifier.weight(1f)) {
                                 Text(loyaltyCustomer!!.fullName, style = MaterialTheme.typography.titleLarge)
                                 Text(
-                                    "${loyaltyCustomer!!.email} · ${loyaltyCustomer!!.loyaltyPoints} pts",
+                                    "${Privacy.maskEmail(loyaltyCustomer!!.email)} · ${loyaltyCustomer!!.loyaltyPoints} pts",
                                     color = MaterialTheme.colorScheme.secondary
                                 )
                             }
@@ -282,7 +283,7 @@ fun PosPane(
                                 walkInName = hit.fullName
                                 customerQuery = ""
                             }) {
-                                Text("${hit.fullName} · ${hit.loyaltyPoints} pts")
+                                Text("${hit.fullName} · ${Privacy.maskEmail(hit.email)} · ${hit.loyaltyPoints} pts")
                             }
                         }
                         OutlinedTextField(

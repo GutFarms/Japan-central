@@ -666,10 +666,28 @@ fun CustomersScreen(
     onBack: () -> Unit
 ) {
     val dateFormat = remember { SimpleDateFormat("MMM d, yyyy", Locale.US) }
+    var revealIds by remember { mutableStateOf(setOf<String>()) }
     val visible = if (showSensitive) {
         customers
     } else {
         emptyList()
+    }
+
+    fun maskEmail(email: String): String {
+        val at = email.indexOf('@')
+        if (at <= 0) return "•••"
+        return "${email.take(1)}•••@${email.substring(at + 1)}"
+    }
+
+    fun maskPhone(phone: String): String {
+        val digits = phone.filter { it.isDigit() }
+        if (digits.length < 4) return "•••"
+        return "•••-•••-${digits.takeLast(4)}"
+    }
+
+    fun maskDob(dob: String): String {
+        val year = Regex("""(19|20)\d{2}""").find(dob)?.value
+        return if (year != null) "••••-$year" else "••••-••••"
     }
 
     LazyColumn(
@@ -682,7 +700,7 @@ fun CustomersScreen(
             SectionHeader(
                 title = "Customers",
                 subtitle = if (showSensitive) {
-                    "${visible.size} accounts · sensitive fields visible"
+                    "${visible.size} accounts · personal details masked until revealed"
                 } else {
                     "Access denied"
                 }
@@ -700,6 +718,7 @@ fun CustomersScreen(
         }
 
         items(visible, key = { it.id }) { customer ->
+            val revealed = customer.id in revealIds
             Surface(
                 shape = RoundedCornerShape(14.dp),
                 tonalElevation = 1.dp,
@@ -714,17 +733,26 @@ fun CustomersScreen(
                         Text(customer.fullName, style = MaterialTheme.typography.titleLarge)
                         MetaPill(customer.role.label)
                     }
-                    Text(customer.email, style = MaterialTheme.typography.bodyMedium)
-                    if (customer.username.isNotBlank()) {
+                    Text(
+                        if (revealed) customer.email else maskEmail(customer.email),
+                        style = MaterialTheme.typography.bodyMedium
+                    )
+                    if (customer.username.isNotBlank() && revealed) {
                         Text("Username: ${customer.username}", style = MaterialTheme.typography.bodyMedium)
                     }
                     if (customer.phone.isNotBlank()) {
-                        Text("Phone: ${customer.phone}", style = MaterialTheme.typography.bodyMedium)
+                        Text(
+                            "Phone: ${if (revealed) customer.phone else maskPhone(customer.phone)}",
+                            style = MaterialTheme.typography.bodyMedium
+                        )
                     }
                     if (customer.dateOfBirth.isNotBlank()) {
-                        Text("DOB: ${customer.dateOfBirth}", style = MaterialTheme.typography.bodyMedium)
+                        Text(
+                            "DOB: ${if (revealed) customer.dateOfBirth else maskDob(customer.dateOfBirth)}",
+                            style = MaterialTheme.typography.bodyMedium
+                        )
                     }
-                    if (customer.notes.isNotBlank()) {
+                    if (revealed && customer.notes.isNotBlank()) {
                         Text("Notes: ${customer.notes}", style = MaterialTheme.typography.bodyMedium)
                     }
                     if (customer.role == AccountRole.CUSTOMER || customer.loyaltyPoints > 0) {
@@ -735,7 +763,7 @@ fun CustomersScreen(
                     }
                     Text(
                         text = "Joined ${dateFormat.format(Date(customer.createdAt))}" +
-                            if (customer.lastLoginAt > 0) {
+                            if (customer.lastLoginAt > 0 && revealed) {
                                 " · Last login ${dateFormat.format(Date(customer.lastLoginAt))}"
                             } else {
                                 ""
@@ -743,19 +771,19 @@ fun CustomersScreen(
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
-                    if (customer.marketingOptIn) {
-                        Text(
-                            "Marketing opt-in",
-                            style = MaterialTheme.typography.labelLarge,
-                            color = MaterialTheme.colorScheme.primary
-                        )
-                    }
                     if (!customer.enabled) {
                         Text(
                             "Account disabled",
                             style = MaterialTheme.typography.labelLarge,
                             color = MaterialTheme.colorScheme.error
                         )
+                    }
+                    TextButton(
+                        onClick = {
+                            revealIds = if (revealed) revealIds - customer.id else revealIds + customer.id
+                        }
+                    ) {
+                        Text(if (revealed) "Hide personal details" else "Reveal personal details")
                     }
                 }
             }

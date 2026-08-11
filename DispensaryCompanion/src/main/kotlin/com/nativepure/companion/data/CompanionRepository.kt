@@ -29,6 +29,8 @@ class CompanionRepository {
 
     private val failedLogins = ConcurrentHashMap<String, Int>()
     private val lockoutUntil = ConcurrentHashMap<String, Long>()
+    private var lastActivityAtMs: Long = System.currentTimeMillis()
+    private var sessionLocked: Boolean = false
 
     private var emailCodeCustomerId: String? = null
     private var emailCodeSalt: String = ""
@@ -36,9 +38,11 @@ class CompanionRepository {
     private var emailCodeExpiresAt: Long = 0L
     private var emailCodeSentAt: Long = 0L
     private var lastIssuedEmailCode: EmailCodeIssue? = null
+    private var emailCodeVerifyAttempts: Int = 0
 
     init {
         loadOrSeed()
+        touchActivity()
     }
 
     /** Absolute path where inventory + customers are saved on the hard drive. */
@@ -56,6 +60,38 @@ class CompanionRepository {
         } catch (t: Throwable) {
             OpResult.Error(t.message ?: "Could not save to hard drive.")
         }
+    }
+
+    fun touchActivity() {
+        lastActivityAtMs = System.currentTimeMillis()
+        if (!sessionLocked) return
+    }
+
+    fun isSessionLocked(): Boolean {
+        val me = sessionCustomerId ?: return false
+        if (customers.none { it.id == me }) return false
+        if (sessionLocked) return true
+        if (System.currentTimeMillis() - lastActivityAtMs >= Privacy.IDLE_LOCK_MS) {
+            sessionLocked = true
+            return true
+        }
+        return false
+    }
+
+    fun unlockSession(password: String): AuthResult {
+        val id = sessionCustomerId ?: return AuthResult.Error("Not signed in.")
+        val customer = customers.find { it.id == id } ?: return AuthResult.Error("Not signed in.")
+        if (!PasswordHasher.matches(password, customer.passwordSalt, customer.passwordHash)) {
+            recordFailed(customer.email)
+            return AuthResult.Error("Incorrect password.")
+        }
+        sessionLocked = false
+        touchActivity()
+        return AuthResult.Success(customer.toProfile())
+    }
+
+    fun lockSessionNow() {
+        if (sessionCustomerId != null) sessionLocked = true
     }
 
     fun currentCustomer(): CustomerProfile? =
@@ -182,7 +218,7 @@ class CompanionRepository {
 
         if (customer == null) {
             recordFailed(raw)
-            return AuthResult.Error("No account found for that email or username.")
+            return AuthResult.Error("Invalid email/username or password.")
         }
 
         if (!customer.enabled) {
@@ -195,8 +231,7 @@ class CompanionRepository {
             return if (until > System.currentTimeMillis()) {
                 AuthResult.Error("Too many failed attempts. Account locked for 5 minutes.")
             } else {
-                val left = PasswordPolicy.MAX_FAILED_ATTEMPTS - (failedLogins[raw.lowercase()] ?: 0)
-                AuthResult.Error("Incorrect password. ${left.coerceAtLeast(0)} attempts left before lockout.")
+                AuthResult.Error("Invalid email/username or password.")
             }
         }
 
@@ -205,6 +240,8 @@ class CompanionRepository {
         val updated = customer.copy(lastLoginAt = System.currentTimeMillis())
         replaceCustomer(updated)
         sessionCustomerId = updated.id
+        sessionLocked = false
+        touchActivity()
         if (!updated.emailVerified) {
             lastIssuedEmailCode = issueCodeFor(updated)
         }
@@ -253,7 +290,15 @@ class CompanionRepository {
         return AuthResult.Success(customer.toProfile())
     }
 
-    fun peekIssuedEmailCode(): EmailCodeIssue? = lastIssuedEmailCode
+    fun peekIssuedEmailCode(): EmailCodeIssue? {
+        val issued = lastIssuedEmailCode ?: return null
+        // Never surface the plaintext code in UI once mail delivery succeeded.
+        return if (issued.deliveredByMail) {
+            issued.copy(code = "")
+        } else {
+            issued
+        }
+    }
 
     fun resendEmailVerificationCode(): AuthResult {
         val existing = customers.find { it.id == sessionCustomerId }
@@ -281,7 +326,13 @@ class CompanionRepository {
             clearEmailCode()
             return AuthResult.Error("That code expired. Resend a code.")
         }
+        if (emailCodeVerifyAttempts >= 5) {
+            clearEmailCode()
+            lastIssuedEmailCode = null
+            return AuthResult.Error("Too many incorrect codes. Resend a new code.")
+        }
         if (!PasswordHasher.matches(clean, emailCodeSalt, emailCodeHash)) {
+            emailCodeVerifyAttempts++
             return AuthResult.Error("Incorrect code. Check the email and try again.")
         }
         val updated = existing.copy(emailVerified = true)
@@ -383,8 +434,10 @@ class CompanionRepository {
 
     fun logout() {
         sessionCustomerId = null
+        sessionLocked = false
         cart.clear()
         lastIssuedEmailCode = null
+        clearEmailCode()
         persist()
     }
 
@@ -685,12 +738,13 @@ class CompanionRepository {
     fun exportSyncJson(): String {
         val me = currentCustomer()
         require(me?.role?.canManageInventory == true) { "Only staff/admin can export." }
+        // Never export password hashes/salts — credentials stay on each device.
         return json.encodeToString(
             SyncFile(
                 format = "nativepure-sync-v1",
                 exportedAt = System.currentTimeMillis(),
                 products = products.toList(),
-                customers = customers.toList(),
+                customers = customers.map { it.toSyncCustomer() },
                 orders = orders.toList(),
                 orderLines = orderLines.toList()
             )
@@ -715,9 +769,47 @@ class CompanionRepository {
                     it.id == incoming.id || it.email.equals(incoming.email, ignoreCase = true)
                 }
                 if (idx >= 0) {
-                    customers[idx] = incoming.copy(id = customers[idx].id)
+                    val existing = customers[idx]
+                    // Preserve credentials and role — sync cannot escalate privileges or steal passwords.
+                    customers[idx] = existing.copy(
+                        email = incoming.email.trim().lowercase().ifBlank { existing.email },
+                        username = incoming.username.ifBlank { existing.username },
+                        fullName = incoming.fullName.trim().ifBlank { existing.fullName },
+                        phone = incoming.phone,
+                        dateOfBirth = incoming.dateOfBirth,
+                        notes = incoming.notes,
+                        marketingOptIn = incoming.marketingOptIn,
+                        enabled = incoming.enabled,
+                        emailVerified = incoming.emailVerified || existing.emailVerified,
+                        loyaltyPoints = incoming.loyaltyPoints.coerceAtLeast(0),
+                        lifetimeSpend = incoming.lifetimeSpend.coerceAtLeast(0.0),
+                        lastLoginAt = maxOf(existing.lastLoginAt, incoming.lastLoginAt)
+                    )
                 } else {
-                    customers.add(incoming)
+                    val salt = PasswordHasher.newSalt()
+                    customers.add(
+                        Customer(
+                            id = incoming.id.ifBlank { "cust-" + UUID.randomUUID().toString().take(8) },
+                            email = incoming.email.trim().lowercase(),
+                            username = incoming.username,
+                            passwordHash = PasswordHasher.hash(PasswordHasher.randomUnusableSecret(), salt),
+                            passwordSalt = salt,
+                            fullName = incoming.fullName.trim().ifBlank { incoming.email.substringBefore("@") },
+                            phone = incoming.phone,
+                            dateOfBirth = incoming.dateOfBirth,
+                            createdAt = if (incoming.createdAt > 0) incoming.createdAt else System.currentTimeMillis(),
+                            lastLoginAt = incoming.lastLoginAt,
+                            notes = incoming.notes,
+                            marketingOptIn = incoming.marketingOptIn,
+                            role = AccountRole.CUSTOMER, // never import elevated roles
+                            createdByAdminId = "",
+                            mustChangePassword = true,
+                            enabled = incoming.enabled,
+                            emailVerified = incoming.emailVerified,
+                            loyaltyPoints = incoming.loyaltyPoints.coerceAtLeast(0),
+                            lifetimeSpend = incoming.lifetimeSpend.coerceAtLeast(0.0)
+                        )
+                    )
                 }
                 customersMerged++
             }
@@ -735,7 +827,7 @@ class CompanionRepository {
             }
             persist()
             OpResult.Success(
-                "Imported ${parsed.products.size} products and $customersMerged customers to hard drive."
+                "Imported ${parsed.products.size} products and $customersMerged customers (no passwords) to hard drive."
             )
         } catch (t: Throwable) {
             OpResult.Error(t.message ?: "Import failed.")
@@ -901,7 +993,9 @@ class CompanionRepository {
     }
 
     fun orderReceiptText(orderId: String): String? {
+        val me = currentCustomer() ?: return null
         val order = orders.find { it.id == orderId } ?: return null
+        if (!me.role.canViewSensitiveInfo && order.customerId != me.id) return null
         val lines = orderLines.filter { it.orderId == orderId }
         val isPos = order.channel == SaleChannel.POS.name
         val sb = StringBuilder()
@@ -923,7 +1017,10 @@ class CompanionRepository {
         } else {
             sb.appendLine("Pickup: ${order.pickupName}")
         }
-        if (order.customerEmail.isNotBlank()) sb.appendLine("Email: ${order.customerEmail}")
+        // Mask email on printable/shareable receipts to limit PII exposure.
+        if (order.customerEmail.isNotBlank()) {
+            sb.appendLine("Email: ${Privacy.maskEmail(order.customerEmail)}")
+        }
         sb.appendLine()
         lines.forEach { line ->
             sb.appendLine(
@@ -938,7 +1035,7 @@ class CompanionRepository {
         }
         sb.appendLine("Total paid: $${"%.2f".format(order.total)}")
         if (order.pointsEarned > 0) sb.appendLine("Points earned: +${order.pointsEarned}")
-        if (order.notes.isNotBlank()) sb.appendLine("Notes: ${order.notes}")
+        // Staff notes stay on-device in the order record; omit from shared receipt text.
         sb.appendLine()
         sb.appendLine(if (isPos) "Thank you — 18+ only. Valid ID required." else "Bring a valid ID for pickup. 18+ only.")
         return sb.toString()
@@ -1074,24 +1171,26 @@ class CompanionRepository {
                 passwordHash = PasswordHasher.hash("demo1234", salt),
                 passwordSalt = salt,
                 fullName = "Demo Customer",
-                phone = "(505) 555-0142",
-                dateOfBirth = "1990-01-01",
-                marketingOptIn = true,
+                phone = "",
+                dateOfBirth = "",
+                marketingOptIn = false,
                 role = AccountRole.CUSTOMER,
-                notes = "Seeded demo customer account",
+                notes = "",
                 emailVerified = true
             )
         )
     }
 
     private fun issueCodeFor(customer: Customer): EmailCodeIssue {
-        val code = (0..999_999).random().toString().padStart(6, '0')
+        val secure = java.security.SecureRandom()
+        val code = secure.nextInt(1_000_000).toString().padStart(6, '0')
         val salt = PasswordHasher.newSalt()
         emailCodeCustomerId = customer.id
         emailCodeSalt = salt
         emailCodeHash = PasswordHasher.hash(code, salt)
         emailCodeExpiresAt = System.currentTimeMillis() + EMAIL_CODE_TTL_MS
         emailCodeSentAt = System.currentTimeMillis()
+        emailCodeVerifyAttempts = 0
         val mail = MailApiClient.sendVerificationCodeBlocking(
             email = customer.email,
             code = code,
@@ -1111,6 +1210,7 @@ class CompanionRepository {
         emailCodeSalt = ""
         emailCodeHash = ""
         emailCodeExpiresAt = 0L
+        emailCodeVerifyAttempts = 0
     }
 
     private fun persist() {
@@ -1127,14 +1227,14 @@ class CompanionRepository {
         )
         val encoded = json.encodeToString(data)
         LocalDataStore.writeAtomic(storeFile, encoded)
-        // Dedicated hard-drive backups for inventory + customers (easy to find/copy)
         LocalDataStore.writeAtomic(
             LocalDataStore.inventoryBackupFile(),
             json.encodeToString(products.toList())
         )
+        // Customer backup omits password hashes — copyable file for ops without credential leak.
         LocalDataStore.writeAtomic(
             LocalDataStore.customersBackupFile(),
-            json.encodeToString(customers.toList())
+            json.encodeToString(customers.map { Privacy.redactedCustomerForBackup(it) })
         )
     }
 

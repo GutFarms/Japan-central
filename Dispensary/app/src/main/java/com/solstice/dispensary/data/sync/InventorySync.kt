@@ -1,5 +1,6 @@
 package com.solstice.dispensary.data.sync
 
+import com.solstice.dispensary.data.auth.PasswordHasher
 import com.solstice.dispensary.data.model.AccountRole
 import com.solstice.dispensary.data.model.Customer
 import com.solstice.dispensary.data.model.Order
@@ -63,13 +64,12 @@ object InventorySync {
         })
         root.put("customers", JSONArray().also { arr ->
             customers.forEach { c ->
+                // Never export password hashes/salts — credentials stay on-device.
                 arr.put(
                     JSONObject()
                         .put("id", c.id)
                         .put("email", c.email)
                         .put("username", c.username)
-                        .put("passwordHash", c.passwordHash)
-                        .put("passwordSalt", c.passwordSalt)
                         .put("fullName", c.fullName)
                         .put("phone", c.phone)
                         .put("dateOfBirth", c.dateOfBirth)
@@ -177,15 +177,16 @@ object InventorySync {
         return buildList {
             for (i in 0 until arr.length()) {
                 val o = arr.getJSONObject(i)
-                val roleName = o.optString("role", AccountRole.CUSTOMER.name)
-                val role = runCatching { AccountRole.valueOf(roleName) }.getOrDefault(AccountRole.CUSTOMER)
+                // Ignore any legacy passwordHash/passwordSalt — credentials never trusted from sync.
+                val salt = PasswordHasher.newSalt()
+                val hash = PasswordHasher.hash(PasswordHasher.randomUnusableSecret(), salt)
                 add(
                     Customer(
                         id = o.getString("id"),
                         email = o.getString("email"),
                         username = o.optString("username", ""),
-                        passwordHash = o.getString("passwordHash"),
-                        passwordSalt = o.getString("passwordSalt"),
+                        passwordHash = hash,
+                        passwordSalt = salt,
                         fullName = o.optString("fullName", ""),
                         phone = o.optString("phone", ""),
                         dateOfBirth = o.optString("dateOfBirth", ""),
@@ -193,9 +194,9 @@ object InventorySync {
                         lastLoginAt = o.optLong("lastLoginAt", 0L),
                         notes = o.optString("notes", ""),
                         marketingOptIn = o.optBoolean("marketingOptIn", false),
-                        role = role,
-                        createdByAdminId = o.optString("createdByAdminId", ""),
-                        mustChangePassword = o.optBoolean("mustChangePassword", false),
+                        role = AccountRole.CUSTOMER, // never escalate from sync
+                        createdByAdminId = "",
+                        mustChangePassword = true,
                         enabled = o.optBoolean("enabled", true),
                         emailVerified = o.optBoolean("emailVerified", false),
                         loyaltyPoints = o.optInt("loyaltyPoints", 0),

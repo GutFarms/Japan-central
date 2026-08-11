@@ -64,6 +64,7 @@ import com.nativepure.companion.data.NavSection
 import com.nativepure.companion.data.OpResult
 import com.nativepure.companion.data.OrderStatus
 import com.nativepure.companion.data.PasswordPolicy
+import com.nativepure.companion.data.Privacy
 import com.nativepure.companion.data.Product
 import com.nativepure.companion.data.ProductCategory
 import com.nativepure.companion.data.ProductSize
@@ -85,10 +86,23 @@ fun CompanionApp(repository: CompanionRepository) {
     var message by remember { mutableStateOf<String?>(null) }
     var section by remember { mutableStateOf(NavSection.HOME) }
     var tick by remember { mutableStateOf(0) }
+    var sessionLocked by remember { mutableStateOf(repository.isSessionLocked()) }
+    var lockError by remember { mutableStateOf<String?>(null) }
 
     fun refresh() {
         customer = repository.currentCustomer()
+        sessionLocked = repository.isSessionLocked()
         tick++
+    }
+
+    // Poll idle lock while signed in.
+    androidx.compose.runtime.LaunchedEffect(customer?.id) {
+        while (customer != null) {
+            kotlinx.coroutines.delay(15_000)
+            if (repository.isSessionLocked()) {
+                sessionLocked = true
+            }
+        }
     }
 
     when {
@@ -104,6 +118,7 @@ fun CompanionApp(repository: CompanionRepository) {
                         customer = result.customer
                         pendingEmailCode = repository.peekIssuedEmailCode()
                         authError = null
+                        sessionLocked = false
                         section = if (result.customer.role.canViewSensitiveInfo) {
                             NavSection.POS
                         } else {
@@ -126,7 +141,7 @@ fun CompanionApp(repository: CompanionRepository) {
             onClearError = { authError = null }
         )
         !customer!!.emailVerified -> EmailVerifyPane(
-            email = customer!!.email,
+            email = Privacy.maskEmail(customer!!.email),
             issuedCode = pendingEmailCode,
             error = authError,
             onVerify = { code ->
@@ -172,22 +187,81 @@ fun CompanionApp(repository: CompanionRepository) {
                 customer = null
             }
         )
+        sessionLocked -> SessionLockPane(
+            name = customer!!.fullName,
+            error = lockError,
+            onUnlock = { password ->
+                when (val result = repository.unlockSession(password)) {
+                    is AuthResult.Success -> {
+                        sessionLocked = false
+                        lockError = null
+                        customer = result.customer
+                    }
+                    is AuthResult.Error -> lockError = result.message
+                }
+            },
+            onLogout = {
+                repository.logout()
+                customer = null
+                sessionLocked = false
+                lockError = null
+            }
+        )
         else -> MainShell(
             repository = repository,
             customer = customer!!,
             section = section,
             message = message,
             tick = tick,
-            onSection = { section = it },
+            onSection = {
+                repository.touchActivity()
+                section = it
+            },
             onMessage = { message = it },
-            onRefresh = { refresh() },
+            onRefresh = {
+                repository.touchActivity()
+                refresh()
+            },
             onLogout = {
                 repository.logout()
                 customer = null
                 pendingEmailCode = null
                 section = NavSection.HOME
+            },
+            onLock = {
+                repository.lockSessionNow()
+                sessionLocked = true
             }
         )
+    }
+}
+
+@Composable
+private fun SessionLockPane(
+    name: String,
+    error: String?,
+    onUnlock: (String) -> Unit,
+    onLogout: () -> Unit
+) {
+    var password by remember { mutableStateOf("") }
+    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+        Surface(shape = RoundedCornerShape(18.dp), tonalElevation = 2.dp, modifier = Modifier.width(420.dp)) {
+            Column(Modifier.padding(28.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Text("Session locked", style = MaterialTheme.typography.headlineMedium)
+                Text(
+                    "Idle lock protects customer personal information on this register. Re-enter the password for $name.",
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Field(password, { password = it }, "Password", password = true)
+                if (error != null) Text(error, color = MaterialTheme.colorScheme.error)
+                Button(
+                    onClick = { onUnlock(password) },
+                    enabled = password.isNotBlank(),
+                    modifier = Modifier.fillMaxWidth()
+                ) { Text("Unlock") }
+                TextButton(onClick = onLogout) { Text("Log out") }
+            }
+        }
     }
 }
 
@@ -324,17 +398,19 @@ private fun EmailVerifyPane(
                                 )
                             } else {
                                 Text(
-                                    "Mail server offline — code shown here",
+                                    "Mail server offline — temporary code shown on this secure register only",
                                     style = MaterialTheme.typography.titleSmall
                                 )
                                 Text(
                                     issuedCode.mailError?.let { "($it)" } ?: "",
                                     color = MaterialTheme.colorScheme.onSecondaryContainer
                                 )
-                                Text(
-                                    "Code: ${issuedCode.code}",
-                                    style = MaterialTheme.typography.headlineMedium
-                                )
+                                if (issuedCode.code.isNotBlank()) {
+                                    Text(
+                                        "Code: ${issuedCode.code}",
+                                        style = MaterialTheme.typography.headlineMedium
+                                    )
+                                }
                             }
                         }
                     }
@@ -391,7 +467,8 @@ private fun MainShell(
     onSection: (NavSection) -> Unit,
     onMessage: (String?) -> Unit,
     onRefresh: () -> Unit,
-    onLogout: () -> Unit
+    onLogout: () -> Unit,
+    onLock: () -> Unit
 ) {
     val sections = buildList {
         if (customer.role.canViewSensitiveInfo) {
@@ -512,7 +589,8 @@ private fun MainShell(
                     customer = customer,
                     onRefresh = onRefresh,
                     onMessage = onMessage,
-                    onLogout = onLogout
+                    onLogout = onLogout,
+                    onLock = onLock
                 )
             }
         }
@@ -618,7 +696,7 @@ private fun RequestsPane(
             ) {
                 Column(Modifier.padding(12.dp)) {
                     Text(req.productName, style = MaterialTheme.typography.titleLarge)
-                    Text("${req.customerName} · ${req.customerEmail}")
+                    Text("${req.customerName} · ${Privacy.maskEmail(req.customerEmail)}")
                     if (req.notes.isNotBlank()) Text(req.notes)
                     Text("Status: ${req.status}")
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -939,7 +1017,9 @@ private fun OrdersPane(repository: CompanionRepository, onRefresh: () -> Unit, o
                             Text("+${order.pointsEarned} loyalty points", color = MaterialTheme.colorScheme.secondary)
                         }
                         Text("Pickup: ${order.pickupName}")
-                        if (order.customerEmail.isNotBlank()) Text(order.customerEmail)
+                        if (order.customerEmail.isNotBlank()) {
+                            Text(Privacy.maskEmail(order.customerEmail))
+                        }
                         Text(dateFormat.format(Date(order.createdAt)), color = MaterialTheme.colorScheme.onSurfaceVariant)
                         repository.orderLinesFor(order.id).forEach { line ->
                             Text("• ${line.quantity} × ${line.productName}")
@@ -1281,26 +1361,40 @@ private fun CompanionProductEditor(
 private fun CustomersPane(repository: CompanionRepository) {
     val customers = repository.allCustomers()
     val dateFormat = remember { SimpleDateFormat("MMM d, yyyy", Locale.US) }
+    var revealIds by remember { mutableStateOf(setOf<String>()) }
     Column(Modifier.fillMaxSize()) {
         Text("Customers", style = MaterialTheme.typography.headlineLarge)
-        Text("${customers.size} accounts", color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Text(
+            "${customers.size} accounts · personal details masked until revealed",
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
         Spacer(Modifier.height(12.dp))
         LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
             items(customers, key = { it.id }) { c ->
+                val revealed = c.id in revealIds
                 Surface(shape = RoundedCornerShape(12.dp), tonalElevation = 1.dp, modifier = Modifier.fillMaxWidth()) {
                     Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(3.dp)) {
                         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                             Text(c.fullName, style = MaterialTheme.typography.titleLarge)
                             Text(c.role.label, color = MaterialTheme.colorScheme.primary)
                         }
-                        Text(c.email)
-                        if (c.phone.isNotBlank()) Text("Phone: ${c.phone}")
-                        if (c.dateOfBirth.isNotBlank()) Text("DOB: ${c.dateOfBirth}")
-                        if (c.notes.isNotBlank()) Text("Notes: ${c.notes}")
+                        Text(if (revealed) c.email else Privacy.maskEmail(c.email))
+                        if (c.phone.isNotBlank()) {
+                            Text("Phone: ${if (revealed) c.phone else Privacy.maskPhone(c.phone)}")
+                        }
+                        if (c.dateOfBirth.isNotBlank()) {
+                            Text("DOB: ${if (revealed) c.dateOfBirth else Privacy.maskDob(c.dateOfBirth)}")
+                        }
+                        if (revealed && c.notes.isNotBlank()) Text("Notes: ${c.notes}")
                         if (c.loyaltyPoints > 0 || c.lifetimeSpend > 0) {
                             Text("Points: ${c.loyaltyPoints} · Spent $${"%.2f".format(c.lifetimeSpend)}")
                         }
                         Text("Joined ${dateFormat.format(Date(c.createdAt))}", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        TextButton(onClick = {
+                            revealIds = if (revealed) revealIds - c.id else revealIds + c.id
+                        }) {
+                            Text(if (revealed) "Hide personal details" else "Reveal personal details")
+                        }
                     }
                 }
             }
@@ -1339,7 +1433,8 @@ private fun AccountPane(
     customer: CustomerProfile,
     onRefresh: () -> Unit,
     onMessage: (String?) -> Unit,
-    onLogout: () -> Unit
+    onLogout: () -> Unit,
+    onLock: () -> Unit
 ) {
     var fullName by remember(customer.id) { mutableStateOf(customer.fullName) }
     var phone by remember(customer.id) { mutableStateOf(customer.phone) }
@@ -1378,7 +1473,14 @@ private fun AccountPane(
         }) { Text("Save profile") }
 
         HorizontalDivider(Modifier.padding(vertical = 8.dp))
-        Text("Security", style = MaterialTheme.typography.headlineMedium)
+        Text("Privacy & security", style = MaterialTheme.typography.headlineMedium)
+        Text(
+            "Customer personal information is staff-only, masked in lists and receipts, " +
+                "and never exported as password hashes. Sync cannot raise account roles. " +
+                "This register auto-locks after 5 minutes idle.",
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            style = MaterialTheme.typography.bodyMedium
+        )
         Text(PasswordPolicy.requirementsLabel, color = MaterialTheme.colorScheme.onSurfaceVariant)
         Field(currentPw, { currentPw = it }, "Current password", password = true)
         Field(newPw, { newPw = it }, "New password", password = true)
@@ -1398,6 +1500,10 @@ private fun AccountPane(
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             style = MaterialTheme.typography.bodyMedium
         )
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            OutlinedButton(onClick = onLock) { Text("Lock register now") }
+            OutlinedButton(onClick = onLogout) { Text("Log out") }
+        }
 
         if (customer.role.canManageStaff) {
             HorizontalDivider(Modifier.padding(vertical = 8.dp))
@@ -1467,7 +1573,7 @@ private fun AccountPane(
             HorizontalDivider(Modifier.padding(vertical = 8.dp))
             Text("Desktop sync", style = MaterialTheme.typography.headlineMedium)
             Text(
-                "Share inventory + customers JSON with the Android app. Import writes into the local hard-drive store.",
+                "Share inventory + customers JSON with the Android app. Customer passwords are never included. Import writes into the local hard-drive store.",
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
             Button(onClick = {
