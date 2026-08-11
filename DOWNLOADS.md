@@ -1,3 +1,6 @@
 # Moved
 
-Native Pure downloads now live at **[`NativePure/DOWNLOADS.md`](./NativePure/DOWNLOADS.md)**.
+Native Pure downloads now live in **[GutFarms/native](https://github.com/GutFarms/native)**:
+
+- [DOWNLOADS.md](https://github.com/GutFarms/native/blob/master/DOWNLOADS.md)
+- Releases: https://github.com/GutFarms/native/releases

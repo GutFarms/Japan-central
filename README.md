@@ -1,14 +1,7 @@
 # Japan-central
 
-Monorepo workspace. The **Native Pure** dispensary + POS product lives in its own project path:
+**Native Pure** (dispensary phone app + desktop POS) was split out of this repository.
 
-→ **[`NativePure/`](./NativePure/)**
+→ **https://github.com/GutFarms/native**
 
-| Path | Description |
-|------|-------------|
-| [`NativePure/android`](./NativePure/android) | Phone app |
-| [`NativePure/desktop`](./NativePure/desktop) | Point of sale |
-| [`NativePure/mail-server`](./NativePure/mail-server) | Verification mail server |
-| [`NativePure/DOWNLOADS.md`](./NativePure/DOWNLOADS.md) | Downloads & QR codes |
-
-The root `src/` + `Cargo.toml` tree is the original Rust sample and is unrelated to Native Pure.
+The remaining tree here is the original Rust sample (`src/`, `Cargo.toml`).
