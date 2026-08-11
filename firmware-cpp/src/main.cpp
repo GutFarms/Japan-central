@@ -93,6 +93,7 @@ static void fillSnap() {
   g_snap.hashFocus = true;
   g_snap.netTicker = g_net.ticker;
   g_snap.jobId = g_job.jobId;
+  g_snap.shaMode = g_hwSha ? String(cyd_sha_hw::mode_label()) : String("SW");
   g_snap.fullV = true;
   g_snap.benchHs = cyd_last_bench_hs();
 }

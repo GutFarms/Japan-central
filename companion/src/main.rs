@@ -13,7 +13,9 @@ use std::sync::mpsc::{self, Receiver, Sender};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use flash_update::{find_firmware_image, flash_merged_bin, FirmwareImage};
+use flash_update::{
+    fetch_latest_firmware, find_firmware_image, flash_merged_bin, update_needed, FirmwareImage,
+};
 use live_bar::{format_change, format_usd, LiveFeed};
 use stratum::{
     encode_job_cmd, encode_job_parts, expected_shares_per_hour, urlenc, ShareOutcome, StratumClient,
@@ -336,6 +338,8 @@ struct StatusJson {
     link: String,
     #[serde(default)]
     job: String,
+    #[serde(default)]
+    sha_mode: String,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -364,6 +368,8 @@ struct PersistedMine {
     com_port: String,
     #[serde(default)]
     auto_connect: bool,
+    #[serde(default)]
+    wizard_done: bool,
 }
 
 fn default_mhz() -> u8 {
@@ -375,6 +381,7 @@ struct ShareRow {
     time: String,
     accepted: bool,
     detail: String,
+    latency_ms: Option<u64>,
 }
 
 const POOL_PRESETS: &[(&str, &str)] = &[
@@ -405,6 +412,7 @@ enum NetMsg {
         reopen: Option<String>,
     },
     Share(ShareOutcome),
+    FirmwareFetched(Result<FirmwareImage, String>),
 }
 
 enum NetCmd {
@@ -432,6 +440,7 @@ enum NetCmd {
         text: String,
     },
     RebootBoard,
+    FetchFirmware,
 }
 
 struct CompanionApp {
@@ -476,6 +485,12 @@ struct CompanionApp {
     share_history: VecDeque<ShareRow>,
     last_net_push: Instant,
     last_ticker: String,
+    session_accepted: u32,
+    session_rejected: u32,
+    last_share_latency_ms: Option<u64>,
+    /// None = wizard dismissed; Some(0..3) = step.
+    wizard_step: Option<u8>,
+    fetch_busy: bool,
 }
 
 impl CompanionApp {
@@ -491,6 +506,7 @@ impl CompanionApp {
         let mut target_mhz = 240u8;
         let mut com_port = String::new();
         let mut auto_connect = false;
+        let mut wizard_done = false;
         if let Some(storage) = storage {
             if let Some(raw) = storage.get_string("mine_prefs") {
                 if let Ok(p) = serde_json::from_str::<PersistedMine>(&raw) {
@@ -507,6 +523,7 @@ impl CompanionApp {
                     };
                     com_port = p.com_port;
                     auto_connect = p.auto_connect;
+                    wizard_done = p.wizard_done;
                 }
             }
         }
@@ -554,6 +571,11 @@ impl CompanionApp {
             share_history: VecDeque::new(),
             last_net_push: Instant::now() - Duration::from_secs(120),
             last_ticker: String::new(),
+            session_accepted: 0,
+            session_rejected: 0,
+            last_share_latency_ms: None,
+            wizard_step: if wizard_done { None } else { Some(0) },
+            fetch_busy: false,
         };
         app.push_log(LogKind::Info, "CYD Companion ready".into());
         if let Some(fw) = &app.firmware {
@@ -651,6 +673,7 @@ impl CompanionApp {
             cpu_mhz: self.target_mhz,
             com_port: self.com_port.clone(),
             auto_connect: self.auto_connect,
+            wizard_done: self.wizard_step.is_none(),
         };
         if let Ok(raw) = serde_json::to_string(&p) {
             storage.set_string("mine_prefs", raw);
@@ -686,6 +709,9 @@ impl CompanionApp {
         self.mining = true;
         self.session_started = Some(Instant::now());
         self.session_hash_start = self.status.hashes;
+        self.session_accepted = 0;
+        self.session_rejected = 0;
+        self.last_share_latency_ms = None;
         self.share_history.clear();
         self.last_ok = "Starting pool on PC → pushing work over USB…".into();
         self.push_log(
@@ -731,11 +757,14 @@ impl CompanionApp {
     }
 
     fn accept_rate_label(&self) -> String {
-        let total = self.accepted + self.rejected;
+        let total = self.session_accepted + self.session_rejected;
         if total == 0 {
             "—".into()
         } else {
-            format!("{:.0}%", 100.0 * self.accepted as f64 / total as f64)
+            format!(
+                "{:.0}%",
+                100.0 * self.session_accepted as f64 / total as f64
+            )
         }
     }
 
@@ -752,6 +781,63 @@ impl CompanionApp {
             format!("{exp:.2}/h")
         } else {
             format!("{exp:.3}/h")
+        }
+    }
+
+    fn luck_label(&self) -> String {
+        let Some(started) = self.session_started else {
+            return "—".into();
+        };
+        let hours = (started.elapsed().as_secs_f64() / 3600.0).max(1.0 / 3600.0);
+        let expected = expected_shares_per_hour(
+            self.status.hashrate_hs,
+            self.stratum_live.difficulty,
+        ) * hours;
+        if expected < 0.01 && self.session_accepted == 0 {
+            return "—".into();
+        }
+        format!(
+            "{:.2} exp · {} ok",
+            expected, self.session_accepted
+        )
+    }
+
+    fn sha_mode_label(&self) -> &str {
+        if !self.status.sha_mode.is_empty() {
+            &self.status.sha_mode
+        } else if self.status.pool.contains("HW") {
+            // Fallback parse from pool string like SHA256-HW+
+            if let Some(rest) = self.status.pool.strip_prefix("SHA256-") {
+                return rest;
+            }
+            "—"
+        } else {
+            "—"
+        }
+    }
+
+    fn firmware_status_label(&self) -> (String, Color32) {
+        let board = if self.fw_label.is_empty() || self.fw_label == "—" {
+            String::new()
+        } else {
+            self.fw_label.clone()
+        };
+        let bundled = self
+            .firmware
+            .as_ref()
+            .map(|f| f.version.clone())
+            .unwrap_or_default();
+        match update_needed(&board, &bundled) {
+            Some(true) => (
+                format!("Update available · board {board} → kit {bundled}"),
+                C_WARN,
+            ),
+            Some(false) => (format!("Firmware up to date · {board}"), C_LIME),
+            None if !bundled.is_empty() => (
+                format!("Bundled {bundled} · connect board to compare"),
+                C_MUTED,
+            ),
+            None => ("Firmware status unknown".into(), C_MUTED),
         }
     }
 
@@ -782,7 +868,7 @@ impl CompanionApp {
         self.firmware = find_firmware_image().ok().or_else(|| self.firmware.clone());
         if self.firmware.is_none() {
             self.last_error =
-                "Firmware image not found. Install CYD Miner kit so Firmware\\ sits next to the app."
+                "Firmware image not found. Use Fetch latest or install the Miner kit."
                     .into();
             self.push_log(LogKind::Err, self.last_error.clone());
             return;
@@ -791,7 +877,18 @@ impl CompanionApp {
             self.last_error = "Select a COM / serial port before updating.".into();
             return;
         }
+        // Soft-block when already matching — still allow force via confirm dialog.
         self.update_confirm = true;
+    }
+
+    fn start_firmware_fetch(&mut self) {
+        if self.fetch_busy {
+            return;
+        }
+        self.fetch_busy = true;
+        self.update_status = "Fetching latest firmware…".into();
+        self.push_log(LogKind::Info, "Fetching latest firmware…".into());
+        let _ = self.cmd_tx.send(NetCmd::FetchFirmware);
     }
 
     fn begin_board_update(&mut self) {
@@ -900,8 +997,9 @@ impl CompanionApp {
                         ui.label(
                             RichText::new(if self.board_hashing() {
                                 format!(
-                                    "Board live at {} — nonce {} · {}",
+                                    "Board measured {} · path {} · nonce {} · {}",
                                     format_hashrate(self.status.hashrate_hs),
+                                    self.sha_mode_label(),
                                     if self.status.nonce.is_empty() {
                                         "—"
                                     } else {
@@ -930,14 +1028,27 @@ impl CompanionApp {
                                     .font(display_font(72.0)),
                             );
                             ui.vertical(|ui| {
-                                ui.add_space(28.0);
+                                ui.add_space(22.0);
                                 ui.label(
                                     RichText::new(rate_unit)
                                         .color(C_LIME)
                                         .font(display_font(26.0)),
                                 );
+                                ui.label(
+                                    RichText::new("board measured")
+                                        .color(C_DIM)
+                                        .font(mono_ui_font(10.0)),
+                                );
                             });
                         });
+                        ui.label(
+                            RichText::new(format!(
+                                "SHA path {} · classic ESP32 ceiling is typically ~0.7–0.8 MH/s, not 1 MH/s marketing",
+                                self.sha_mode_label()
+                            ))
+                            .color(C_DIM)
+                            .font(mono_ui_font(11.0)),
+                        );
                         ui.add_space(10.0);
                         sparkline(ui, &self.hashrate_history, self.pulse);
                         ui.add_space(8.0);
@@ -1015,11 +1126,31 @@ impl CompanionApp {
                         if soft_button(ui, update_label, 210.0).clicked() && !self.update_busy {
                             self.request_board_update();
                         }
+                        ui.add_space(6.0);
+                        let fetch_label = if self.fetch_busy {
+                            "Fetching…"
+                        } else {
+                            "Fetch latest FW"
+                        };
+                        if soft_button(ui, fetch_label, 210.0).clicked() && !self.fetch_busy {
+                            self.start_firmware_fetch();
+                        }
+                        let (fw_status, fw_color) = self.firmware_status_label();
+                        ui.add_space(6.0);
+                        ui.label(
+                            RichText::new(fw_status)
+                                .color(fw_color)
+                                .font(mono_ui_font(10.0)),
+                        );
                         if !self.update_status.is_empty() {
                             ui.add_space(6.0);
                             ui.label(
                                 RichText::new(&self.update_status)
-                                    .color(if self.update_busy { C_WARN } else { C_MUTED })
+                                    .color(if self.update_busy || self.fetch_busy {
+                                        C_WARN
+                                    } else {
+                                        C_MUTED
+                                    })
                                     .font(mono_ui_font(11.0)),
                             );
                         }
@@ -1119,10 +1250,11 @@ impl CompanionApp {
     fn ui_telemetry_rail(&self, ui: &mut egui::Ui) {
         soft_panel(ui, "Board telemetry", |ui| {
             let authed = self.stratum_live.authorized;
-            let (acc, rej) = if authed {
+            let (acc, rej) = if self.session_started.is_some() {
+                (self.session_accepted, self.session_rejected)
+            } else if authed {
                 (self.accepted, self.rejected)
             } else {
-                // Hide handshake / pre-auth noise (often shows a couple rejects).
                 (0, 0)
             };
             ui.horizontal_wrapped(|ui| {
@@ -1135,8 +1267,19 @@ impl CompanionApp {
                 );
                 metric(ui, "Accept %", &self.accept_rate_label(), C_TEXT);
                 metric(ui, "Session", &self.session_elapsed_label(), C_BUBBLE_HI);
-                metric(ui, "Sess hashes", &self.session_hashes_label(), C_TEXT);
-                metric(ui, "Expect", &self.expected_shares_label(), C_LIME_SOFT);
+                metric(ui, "Luck", &self.luck_label(), C_LIME_SOFT);
+                metric(ui, "Sess H", &self.session_hashes_label(), C_TEXT);
+                metric(ui, "Expect/h", &self.expected_shares_label(), C_TEXT);
+                metric(ui, "SHA", self.sha_mode_label(), C_LIME);
+                metric(
+                    ui,
+                    "Reply",
+                    &self
+                        .last_share_latency_ms
+                        .map(|ms| format!("{ms} ms"))
+                        .unwrap_or_else(|| "—".into()),
+                    C_MUTED,
+                );
                 metric(
                     ui,
                     "Rate",
@@ -1168,10 +1311,20 @@ impl CompanionApp {
                 for row in self.share_history.iter().rev().take(6) {
                     let mark = if row.accepted { "OK" } else { "RJ" };
                     let color = if row.accepted { C_LIME } else { C_ERR };
+                    let lat = row
+                        .latency_ms
+                        .map(|ms| format!(" · {ms}ms"))
+                        .unwrap_or_default();
                     ui.label(
-                        RichText::new(format!("{}  {}  {}", row.time, mark, trunc(&row.detail, 48)))
-                            .color(color)
-                            .font(FontId::new(11.0, FontFamily::Monospace)),
+                        RichText::new(format!(
+                            "{}  {}  {}{}",
+                            row.time,
+                            mark,
+                            trunc(&row.detail, 40),
+                            lat
+                        ))
+                        .color(color)
+                        .font(FontId::new(11.0, FontFamily::Monospace)),
                     );
                 }
             }
@@ -1543,18 +1696,66 @@ impl App for CompanionApp {
                     }
                 }
                 NetMsg::Share(ev) => {
-                    let detail = if ev.accepted {
-                        format!("#{id} accepted", id = ev.id)
+                    if ev.accepted {
+                        self.session_accepted = self.session_accepted.saturating_add(1);
                     } else {
-                        format!("#{id} {}", trunc(&ev.detail, 40), id = ev.id)
+                        self.session_rejected = self.session_rejected.saturating_add(1);
+                    }
+                    if let Some(ms) = ev.latency_ms {
+                        self.last_share_latency_ms = Some(ms);
+                    }
+                    let detail = if ev.accepted {
+                        match ev.latency_ms {
+                            Some(ms) => format!(
+                                "{} · #{id} · {ms} ms",
+                                if ev.nonce.is_empty() { "ok" } else { &ev.nonce },
+                                id = ev.id
+                            ),
+                            None => format!(
+                                "{} · #{id}",
+                                if ev.nonce.is_empty() { "ok" } else { &ev.nonce },
+                                id = ev.id
+                            ),
+                        }
+                    } else {
+                        format!(
+                            "{} · {}",
+                            if ev.nonce.is_empty() {
+                                format!("#{id}", id = ev.id)
+                            } else {
+                                ev.nonce.clone()
+                            },
+                            trunc(&ev.detail, 36)
+                        )
                     };
                     self.share_history.push_back(ShareRow {
                         time: stamp(),
                         accepted: ev.accepted,
                         detail,
+                        latency_ms: ev.latency_ms,
                     });
                     while self.share_history.len() > 40 {
                         self.share_history.pop_front();
+                    }
+                }
+                NetMsg::FirmwareFetched(result) => {
+                    self.fetch_busy = false;
+                    match result {
+                        Ok(fw) => {
+                            self.update_status = format!(
+                                "Fetched {} ({} KB)",
+                                fw.version,
+                                fw.bytes / 1024
+                            );
+                            self.last_ok = self.update_status.clone();
+                            self.push_log(LogKind::Info, self.update_status.clone());
+                            self.firmware = Some(fw);
+                        }
+                        Err(e) => {
+                            self.update_status = e.clone();
+                            self.last_error = e.clone();
+                            self.push_log(LogKind::Err, e);
+                        }
                     }
                 }
             }
@@ -1570,8 +1771,141 @@ impl App for CompanionApp {
         if self.usb_open && !self.update_busy {
             self.push_board_ticker(false);
         }
-        if self.update_busy {
+        if self.update_busy || self.fetch_busy {
             ctx.request_repaint();
+        }
+
+        if let Some(step) = self.wizard_step {
+            egui::Window::new("Welcome · CYD setup")
+                .collapsible(false)
+                .resizable(false)
+                .anchor(egui::Align2::CENTER_CENTER, [0.0, -20.0])
+                .show(ctx, |ui| {
+                    ui.set_min_width(460.0);
+                    let title = match step {
+                        0 => "1 · USB driver",
+                        1 => "2 · Select COM & connect",
+                        2 => "3 · Firmware on the board",
+                        _ => "4 · Pool worker",
+                    };
+                    ui.label(RichText::new(title).color(C_LIME).font(display_font(28.0)));
+                    ui.add_space(8.0);
+                    match step {
+                        0 => {
+                            ui.label(
+                                RichText::new(
+                                    "Most CYD boards use a CH340 USB-serial chip. If Windows shows an unknown device, install a CH340 driver, then plug the board with USB-C.",
+                                )
+                                .color(C_TEXT)
+                                .size(14.0),
+                            );
+                        }
+                        1 => {
+                            ui.label(
+                                RichText::new("Pick the COM port for your board, then Connect.")
+                                    .color(C_TEXT)
+                                    .size(14.0),
+                            );
+                            ui.add_space(8.0);
+                            ui.horizontal(|ui| {
+                                egui::ComboBox::from_id_source("wiz_com")
+                                    .width(200.0)
+                                    .selected_text(if self.com_port.is_empty() {
+                                        "Select port"
+                                    } else {
+                                        &self.com_port
+                                    })
+                                    .show_ui(ui, |ui| {
+                                        for p in &self.ports {
+                                            ui.selectable_value(&mut self.com_port, p.clone(), p);
+                                        }
+                                    });
+                                if soft_button(ui, "Refresh", 90.0).clicked() {
+                                    let _ = self.cmd_tx.send(NetCmd::ListPorts);
+                                }
+                                if soft_button(
+                                    ui,
+                                    if self.usb_open { "Connected" } else { "Connect" },
+                                    110.0,
+                                )
+                                .clicked()
+                                    && !self.usb_open
+                                {
+                                    self.connect_usb();
+                                }
+                            });
+                            ui.label(
+                                RichText::new(if self.usb_open {
+                                    "USB linked — continue."
+                                } else {
+                                    "Waiting for USB…"
+                                })
+                                .color(if self.usb_open { C_LIME } else { C_MUTED })
+                                .size(13.0),
+                            );
+                        }
+                        2 => {
+                            let (st, col) = self.firmware_status_label();
+                            ui.label(RichText::new(st).color(col).size(14.0));
+                            ui.add_space(8.0);
+                            ui.label(
+                                RichText::new(
+                                    "Flash the bundled image once (or when Update available). Hold BOOT + tap RESET if download mode fails.",
+                                )
+                                .color(C_MUTED)
+                                .size(13.0),
+                            );
+                            ui.add_space(8.0);
+                            ui.horizontal(|ui| {
+                                if soft_button(ui, "Update board", 130.0).clicked() {
+                                    self.request_board_update();
+                                }
+                                if soft_button(ui, "Fetch latest FW", 140.0).clicked() {
+                                    self.start_firmware_fetch();
+                                }
+                            });
+                        }
+                        _ => {
+                            ui.label(
+                                RichText::new(
+                                    "Paste your Bitcoin address as the worker name, then Start mining from the Mine tab.",
+                                )
+                                .color(C_TEXT)
+                                .size(14.0),
+                            );
+                            ui.add_space(8.0);
+                            labeled_edit(
+                                ui,
+                                "Worker / BTC address",
+                                &mut self.edit_worker,
+                                "bc1… / 1… / 3…",
+                            );
+                            labeled_edit(
+                                ui,
+                                "Stratum",
+                                &mut self.edit_stratum,
+                                "stratum+tcp://…",
+                            );
+                        }
+                    }
+                    ui.add_space(16.0);
+                    ui.horizontal(|ui| {
+                        if step > 0 && soft_button(ui, "Back", 90.0).clicked() {
+                            self.wizard_step = Some(step - 1);
+                        }
+                        let next_label = if step >= 3 { "Finish" } else { "Next" };
+                        if cta_button(ui, next_label, true, 120.0).clicked() {
+                            if step >= 3 {
+                                self.wizard_step = None;
+                            } else {
+                                self.wizard_step = Some(step + 1);
+                            }
+                        }
+                        if soft_button(ui, "Skip setup", 110.0).clicked() {
+                            self.wizard_step = None;
+                        }
+                    });
+                });
         }
 
         if self.update_confirm {
@@ -1580,21 +1914,19 @@ impl App for CompanionApp {
                 .resizable(false)
                 .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
                 .show(ctx, |ui| {
-                    ui.set_min_width(420.0);
-                    ui.label(
-                        RichText::new("Push the bundled firmware image to the ESP over USB.")
-                            .color(C_TEXT)
-                            .size(14.0),
-                    );
+                    ui.set_min_width(440.0);
+                    let (st, col) = self.firmware_status_label();
+                    ui.label(RichText::new(st).color(col).size(14.0));
                     ui.add_space(8.0);
                     if let Some(fw) = &self.firmware {
+                        let ver = if fw.version.is_empty() {
+                            "unknown".into()
+                        } else {
+                            fw.version.clone()
+                        };
                         ui.label(
                             RichText::new(format!(
-                                "Image · {} ({} KB)",
-                                fw.path
-                                    .file_name()
-                                    .and_then(|s| s.to_str())
-                                    .unwrap_or("merged.bin"),
+                                "Image · {ver} · {} KB",
                                 fw.bytes / 1024
                             ))
                             .color(C_LIME)
@@ -1609,7 +1941,12 @@ impl App for CompanionApp {
                     ui.add_space(6.0);
                     ui.label(
                         RichText::new(format!(
-                            "Port · {}  ·  write @ 0x0 (ESP32 · DIO · 4MB · 40MHz)",
+                            "Board fw · {}  ·  Port · {}  ·  @ 0x0",
+                            if self.fw_label.is_empty() {
+                                "—"
+                            } else {
+                                &self.fw_label
+                            },
                             self.com_port
                         ))
                         .color(C_MUTED)
@@ -1618,14 +1955,27 @@ impl App for CompanionApp {
                     ui.add_space(8.0);
                     ui.label(
                         RichText::new(
-                            "Mining will stop and USB will disconnect for the flash. If it fails, hold BOOT, tap RESET, release BOOT, then retry.",
+                            "Mining stops and USB disconnects for the flash. Hold BOOT, tap RESET, release BOOT if it fails.",
                         )
                         .color(C_MUTED)
                         .size(13.0),
                     );
                     ui.add_space(14.0);
                     ui.horizontal(|ui| {
-                        if cta_button(ui, "Flash now", true, 140.0).clicked() {
+                        let up_to_date = update_needed(
+                            &self.fw_label,
+                            &self
+                                .firmware
+                                .as_ref()
+                                .map(|f| f.version.clone())
+                                .unwrap_or_default(),
+                        ) == Some(false);
+                        let flash_label = if up_to_date {
+                            "Flash anyway"
+                        } else {
+                            "Flash now"
+                        };
+                        if cta_button(ui, flash_label, true, 140.0).clicked() {
                             self.begin_board_update();
                         }
                         if soft_button(ui, "Cancel", 100.0).clicked() {
@@ -2647,6 +2997,14 @@ fn mine_worker(cmd_rx: Receiver<NetCmd>, msg_tx: Sender<NetMsg>) {
                         let _ = msg_tx.send(NetMsg::Action(Err("USB not open".into())));
                     }
                 }
+                NetCmd::FetchFirmware => {
+                    let tx = msg_tx.clone();
+                    let progress = move |line: String| {
+                        log_msg(&tx, LogKind::Info, line);
+                    };
+                    let result = fetch_latest_firmware(&progress);
+                    let _ = msg_tx.send(NetMsg::FirmwareFetched(result));
+                }
             }
         }
 
@@ -2871,6 +3229,13 @@ fn harvest_shares(
                     let _ = msg_tx.send(NetMsg::Action(Ok(format!(
                         "Share submitted {nonce} job={job}"
                     ))));
+                }
+                Err(e) if e.contains("duplicate share") => {
+                    log_msg(
+                        msg_tx,
+                        LogKind::Warn,
+                        format!("Duplicate share skipped {nonce} job={job}"),
+                    );
                 }
                 Err(e) => {
                     let _ = msg_tx.send(NetMsg::Action(Err(format!("Share submit: {e}"))));

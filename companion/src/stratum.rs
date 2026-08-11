@@ -2,10 +2,10 @@
 
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
-use std::collections::HashSet;
+use std::collections::{HashMap, VecDeque};
 use std::io::{BufRead, BufReader, Write};
 use std::net::{TcpStream, ToSocketAddrs};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 #[derive(Clone, Debug)]
 pub struct WorkJob {
@@ -21,6 +21,9 @@ pub struct ShareOutcome {
     pub accepted: bool,
     pub id: u64,
     pub detail: String,
+    pub latency_ms: Option<u64>,
+    pub nonce: String,
+    pub job_id: String,
 }
 
 pub struct StratumClient {
@@ -49,7 +52,11 @@ pub struct StratumClient {
     active_ntime_hex: String,
     pending_job: Option<WorkJob>,
     /// Share submit ids waiting for a pool reply (ignore other RPC noise).
-    pending_shares: HashSet<u64>,
+    pending_shares: HashMap<u64, Instant>,
+    /// job|en2|nonce recently submitted — drop board duplicates across reconnect.
+    recent_submit_keys: VecDeque<(String, Instant)>,
+    /// Map submit id → share key for latency / outcome detail.
+    pending_share_meta: HashMap<u64, (String, String)>, // id → (key, nonce)
     pub accepted: u32,
     pub rejected: u32,
     pub phase: String,
@@ -91,7 +98,9 @@ impl StratumClient {
             active_en2_hex: String::new(),
             active_ntime_hex: String::new(),
             pending_job: None,
-            pending_shares: HashSet::new(),
+            pending_shares: HashMap::new(),
+            recent_submit_keys: VecDeque::new(),
+            pending_share_meta: HashMap::new(),
             accepted: 0,
             rejected: 0,
             phase: "off".into(),
@@ -130,6 +139,8 @@ impl StratumClient {
         self.authorized = false;
         self.pending_job = None;
         self.pending_shares.clear();
+        self.pending_share_meta.clear();
+        // Keep recent_submit_keys across reconnect so duplicate board shares are dropped.
         self.accepted = 0;
         self.rejected = 0;
         self.phase = "tcp".into();
@@ -144,6 +155,7 @@ impl StratumClient {
         self.authorized = false;
         self.pending_job = None;
         self.pending_shares.clear();
+        self.pending_share_meta.clear();
         self.accepted = 0;
         self.rejected = 0;
         self.phase = "off".into();
@@ -242,20 +254,51 @@ impl StratumClient {
         if !self.authorized {
             return Err("not authorized".into());
         }
+        let key = format!("{job_id}|{en2}|{nonce_hex}");
+        self.prune_submit_keys();
+        if self
+            .recent_submit_keys
+            .iter()
+            .any(|(k, _)| k == &key)
+        {
+            return Err(format!("duplicate share dropped {nonce_hex}"));
+        }
         let id = self.msg_id;
         self.msg_id += 1;
-        self.pending_shares.insert(id);
+        self.pending_shares.insert(id, Instant::now());
+        self.pending_share_meta
+            .insert(id, (key.clone(), nonce_hex.to_string()));
         let msg = json!({
             "id": id,
             "method": "mining.submit",
             "params": [self.worker, job_id, en2, ntime, nonce_hex]
         });
         match self.send_json(&msg) {
-            Ok(()) => Ok(()),
+            Ok(()) => {
+                self.recent_submit_keys
+                    .push_back((key, Instant::now()));
+                Ok(())
+            }
             Err(e) => {
                 self.pending_shares.remove(&id);
+                self.pending_share_meta.remove(&id);
                 Err(e)
             }
+        }
+    }
+
+    fn prune_submit_keys(&mut self) {
+        let cutoff = Instant::now() - Duration::from_secs(600);
+        while self
+            .recent_submit_keys
+            .front()
+            .map(|(_, t)| *t < cutoff)
+            .unwrap_or(false)
+        {
+            self.recent_submit_keys.pop_front();
+        }
+        while self.recent_submit_keys.len() > 256 {
+            self.recent_submit_keys.pop_front();
         }
     }
 
@@ -411,10 +454,11 @@ impl StratumClient {
                 self.authorized = ok;
                 self.phase = if ok { "idle".into() } else { "err".into() };
                 if ok {
-                    // Fresh session counters — ignore handshake / pre-auth noise.
+                    // Fresh connection counters — ignore handshake / pre-auth noise.
                     self.accepted = 0;
                     self.rejected = 0;
                     self.pending_shares.clear();
+                    self.pending_share_meta.clear();
                     self.push_recent("← authorized (share counters reset)".into());
                 } else {
                     return Err("authorize failed".into());
@@ -422,14 +466,30 @@ impl StratumClient {
                 return Ok(());
             }
             // Only count replies that belong to a mining.submit we sent.
-            if self.pending_shares.remove(&id) {
+            if let Some(started) = self.pending_shares.remove(&id) {
+                let latency_ms = Some(started.elapsed().as_millis() as u64);
+                let (job_id, nonce) = self
+                    .pending_share_meta
+                    .remove(&id)
+                    .map(|(k, n)| {
+                        let job = k.split('|').next().unwrap_or("").to_string();
+                        (job, n)
+                    })
+                    .unwrap_or_default();
                 if ok {
                     self.accepted += 1;
-                    self.push_recent(format!("← share ACCEPTED id={id}"));
+                    let detail = match latency_ms {
+                        Some(ms) => format!("accepted · {ms} ms"),
+                        None => "accepted".into(),
+                    };
+                    self.push_recent(format!("← share ACCEPTED id={id} {detail}"));
                     self.share_events.push(ShareOutcome {
                         accepted: true,
                         id,
-                        detail: "accepted".into(),
+                        detail,
+                        latency_ms,
+                        nonce,
+                        job_id,
                     });
                 } else {
                     self.rejected += 1;
@@ -442,29 +502,47 @@ impl StratumClient {
                         accepted: false,
                         id,
                         detail: why,
+                        latency_ms,
+                        nonce,
+                        job_id,
                     });
                 }
             }
             return Ok(());
         }
 
-        if has_error && self.pending_shares.remove(&id) {
-            self.rejected += 1;
-            let why = v
-                .get("error")
-                .map(|e| e.to_string())
-                .unwrap_or_else(|| "error".into());
-            self.push_recent(format!("← share REJECTED id={id} {why}"));
-            self.share_events.push(ShareOutcome {
-                accepted: false,
-                id,
-                detail: why,
-            });
+        if has_error {
+            if let Some(started) = self.pending_shares.remove(&id) {
+                let latency_ms = Some(started.elapsed().as_millis() as u64);
+                let (job_id, nonce) = self
+                    .pending_share_meta
+                    .remove(&id)
+                    .map(|(k, n)| {
+                        let job = k.split('|').next().unwrap_or("").to_string();
+                        (job, n)
+                    })
+                    .unwrap_or_default();
+                self.rejected += 1;
+                let why = v
+                    .get("error")
+                    .map(|e| e.to_string())
+                    .unwrap_or_else(|| "error".into());
+                self.push_recent(format!("← share REJECTED id={id} {why}"));
+                self.share_events.push(ShareOutcome {
+                    accepted: false,
+                    id,
+                    detail: why,
+                    latency_ms,
+                    nonce,
+                    job_id,
+                });
+            }
         } else if id == self.authorize_id && !self.authorized && !has_error {
             self.authorized = true;
             self.accepted = 0;
             self.rejected = 0;
             self.pending_shares.clear();
+            self.pending_share_meta.clear();
             self.phase = "idle".into();
             self.push_recent("← authorized (share counters reset)".into());
         }

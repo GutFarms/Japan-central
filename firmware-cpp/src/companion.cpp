@@ -278,6 +278,7 @@ void CompanionLink::replyStatus(const AppConfig& cfg, const MinerSnapshot& snap)
   doc["hash_focus"] = snap.hashFocus;
   doc["net_ticker"] = snap.netTicker;
   doc["job"] = snap.jobId;
+  doc["sha_mode"] = snap.shaMode.length() ? snap.shaMode : "—";
   doc["full_v"] = snap.fullV;
   doc["bench_hs"] = snap.benchHs;
   char nonceHex[9];
@@ -292,7 +293,7 @@ void CompanionLink::replyConfig(const AppConfig& cfg) {
   JsonDocument doc;
   doc["cpu_mhz"] = cfg.cpuMhz;
   doc["hash_focus"] = cfg.hashFocus;
-  doc["fw"] = "0.8.4-sha256";
+  doc["fw"] = "0.8.5-sha256";
   doc["mode"] = "usb-sha256";
   doc["configured"] = true;
   Serial.print("CMPCONFIG ");

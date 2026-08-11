@@ -6,7 +6,7 @@
 
 !define PRODUCT_NAME "CYD Miner"
 !define PRODUCT_PUBLISHER "GutFarms"
-!define PRODUCT_VERSION "0.8.4"
+!define PRODUCT_VERSION "0.8.5"
 !define PRODUCT_WEB "https://github.com/GutFarms/Japan-central"
 
 Name "${PRODUCT_NAME} ${PRODUCT_VERSION}"
@@ -52,6 +52,7 @@ Section "CYD Companion (required)" SecApp
   File "..\dist\cyd-miner-kit\Firmware\esp32-2432s028-sha256-miner-merged.bin"
   File "..\dist\cyd-miner-kit\Firmware\SHA256SUMS.txt"
   File "..\dist\cyd-miner-kit\Firmware\FLASH.md"
+  File "..\dist\cyd-miner-kit\Firmware\VERSION.txt"
 
   SetOutPath "$INSTDIR\Tools"
   File "..\dist\cyd-miner-kit\Tools\espflash.exe"
@@ -105,6 +106,7 @@ Section "Uninstall"
   Delete "$INSTDIR\Firmware\esp32-2432s028-sha256-miner-merged.bin"
   Delete "$INSTDIR\Firmware\SHA256SUMS.txt"
   Delete "$INSTDIR\Firmware\FLASH.md"
+  Delete "$INSTDIR\Firmware\VERSION.txt"
   RMDir "$INSTDIR\Firmware"
   Delete "$INSTDIR\Tools\espflash.exe"
   RMDir "$INSTDIR\Tools"

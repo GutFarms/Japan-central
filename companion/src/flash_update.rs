@@ -12,6 +12,7 @@ pub const MERGED_BIN_NAME: &str = "esp32-2432s028-sha256-miner-merged.bin";
 pub struct FirmwareImage {
     pub path: PathBuf,
     pub bytes: u64,
+    pub version: String,
 }
 
 /// Resolve the merged firmware image shipped next to the Companion exe / kit.
@@ -51,7 +52,12 @@ pub fn find_firmware_image() -> Result<FirmwareImage, String> {
                 .map(|m| m.len())
                 .unwrap_or(0);
             if bytes > 64_000 {
-                return Ok(FirmwareImage { path, bytes });
+                let version = read_nearby_fw_version(&path);
+                return Ok(FirmwareImage {
+                    path,
+                    bytes,
+                    version,
+                });
             }
         }
     }
@@ -59,6 +65,178 @@ pub fn find_firmware_image() -> Result<FirmwareImage, String> {
     Err(format!(
         "Firmware image not found ({MERGED_BIN_NAME}). Use CYD Miner Setup / Portable kit so Firmware\\ sits next to the app."
     ))
+}
+
+pub fn normalize_fw_version(raw: &str) -> String {
+    raw.trim()
+        .trim_start_matches('v')
+        .trim_start_matches('V')
+        .to_ascii_lowercase()
+}
+
+pub fn read_nearby_fw_version(bin_path: &Path) -> String {
+    if let Some(dir) = bin_path.parent() {
+        for name in ["VERSION.txt", "version.txt", "FW_VERSION.txt"] {
+            let p = dir.join(name);
+            if let Ok(txt) = std::fs::read_to_string(&p) {
+                for line in txt.lines() {
+                    let t = line.trim();
+                    if t.is_empty() || t.starts_with('#') {
+                        continue;
+                    }
+                    // Prefer a line that looks like a fw tag.
+                    if t.contains("sha256") || t.contains('.') {
+                        // "Firmware: 0.8.5-sha256" or bare version
+                        if let Some(rest) = t.split(':').nth(1) {
+                            return normalize_fw_version(rest);
+                        }
+                        return normalize_fw_version(t);
+                    }
+                }
+            }
+        }
+    }
+    String::new()
+}
+
+/// Compare board `cmp config` fw string vs bundled image version.
+pub fn update_needed(board_fw: &str, bundled: &str) -> Option<bool> {
+    let a = normalize_fw_version(board_fw);
+    let b = normalize_fw_version(bundled);
+    if a.is_empty() || b.is_empty() {
+        return None;
+    }
+    Some(a != b)
+}
+
+/// Download latest merged.bin (GitHub release asset, else raw repo flash/).
+pub fn fetch_latest_firmware(
+    progress: &dyn Fn(String),
+) -> Result<FirmwareImage, String> {
+    let dest_dir = firmware_writable_dir()?;
+    std::fs::create_dir_all(&dest_dir).map_err(|e| format!("mkdir Firmware: {e}"))?;
+    let dest = dest_dir.join(MERGED_BIN_NAME);
+    let ver_path = dest_dir.join("VERSION.txt");
+
+    progress("Checking GitHub releases for firmware…".into());
+    if let Ok((url, ver)) = find_release_firmware_url() {
+        progress(format!("Downloading release firmware {ver}…"));
+        download_to(&url, &dest, progress)?;
+        let _ = std::fs::write(&ver_path, format!("{ver}\n"));
+        let bytes = std::fs::metadata(&dest).map(|m| m.len()).unwrap_or(0);
+        return Ok(FirmwareImage {
+            path: dest,
+            bytes,
+            version: normalize_fw_version(&ver),
+        });
+    }
+
+    progress("No release asset — trying repository flash/ image…".into());
+    let raw_urls = [
+        "https://raw.githubusercontent.com/GutFarms/Japan-central/master/flash/esp32-2432s028-sha256-miner-merged.bin",
+        "https://raw.githubusercontent.com/GutFarms/Japan-central/main/flash/esp32-2432s028-sha256-miner-merged.bin",
+    ];
+    let mut last = String::new();
+    for url in raw_urls {
+        progress(format!("GET {url}"));
+        match download_to(url, &dest, progress) {
+            Ok(()) => {
+                let ver = "repo-flash".to_string();
+                let _ = std::fs::write(&ver_path, format!("{ver}\n"));
+                let bytes = std::fs::metadata(&dest).map(|m| m.len()).unwrap_or(0);
+                if bytes > 64_000 {
+                    return Ok(FirmwareImage {
+                        path: dest,
+                        bytes,
+                        version: ver,
+                    });
+                }
+                last = format!("download too small ({bytes} bytes)");
+            }
+            Err(e) => last = e,
+        }
+    }
+    Err(format!(
+        "Could not fetch firmware ({last}). Place {MERGED_BIN_NAME} in Firmware\\ manually."
+    ))
+}
+
+fn firmware_writable_dir() -> Result<PathBuf, String> {
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(dir) = exe.parent() {
+            return Ok(dir.join("Firmware"));
+        }
+    }
+    std::env::current_dir()
+        .map(|d| d.join("Firmware"))
+        .map_err(|e| e.to_string())
+}
+
+fn find_release_firmware_url() -> Result<(String, String), String> {
+    #[derive(serde::Deserialize)]
+    struct Asset {
+        name: String,
+        browser_download_url: String,
+    }
+    #[derive(serde::Deserialize)]
+    struct Release {
+        tag_name: String,
+        assets: Vec<Asset>,
+    }
+    let agent = ureq::AgentBuilder::new()
+        .timeout_connect(std::time::Duration::from_secs(8))
+        .timeout_read(std::time::Duration::from_secs(20))
+        .user_agent("CYD-Companion/0.8.5")
+        .build();
+    let releases: Vec<Release> = agent
+        .get("https://api.github.com/repos/GutFarms/Japan-central/releases?per_page=8")
+        .call()
+        .map_err(|e| format!("releases api: {e}"))?
+        .into_json()
+        .map_err(|e| format!("releases json: {e}"))?;
+    for rel in releases {
+        for a in rel.assets {
+            let n = a.name.to_ascii_lowercase();
+            if n.contains("merged") && n.ends_with(".bin") && n.contains("2432") {
+                let ver = if rel.tag_name.is_empty() {
+                    a.name.clone()
+                } else {
+                    rel.tag_name.clone()
+                };
+                return Ok((a.browser_download_url, ver));
+            }
+        }
+    }
+    Err("no matching release asset".into())
+}
+
+fn download_to(url: &str, dest: &Path, progress: &dyn Fn(String)) -> Result<(), String> {
+    let agent = ureq::AgentBuilder::new()
+        .timeout_connect(std::time::Duration::from_secs(10))
+        .timeout_read(std::time::Duration::from_secs(120))
+        .user_agent("CYD-Companion/0.8.5")
+        .build();
+    let resp = agent.get(url).call().map_err(|e| format!("http: {e}"))?;
+    let mut reader = resp.into_reader();
+    let tmp = dest.with_extension("bin.part");
+    let mut file = std::fs::File::create(&tmp).map_err(|e| format!("create: {e}"))?;
+    let mut buf = [0u8; 64 * 1024];
+    let mut total = 0u64;
+    loop {
+        let n = std::io::Read::read(&mut reader, &mut buf).map_err(|e| format!("read: {e}"))?;
+        if n == 0 {
+            break;
+        }
+        std::io::Write::write_all(&mut file, &buf[..n]).map_err(|e| format!("write: {e}"))?;
+        total += n as u64;
+        if total % (512 * 1024) < n as u64 {
+            progress(format!("Downloaded {} KB…", total / 1024));
+        }
+    }
+    drop(file);
+    std::fs::rename(&tmp, dest).map_err(|e| format!("rename: {e}"))?;
+    progress(format!("Saved {} ({} KB)", dest.display(), total / 1024));
+    Ok(())
 }
 
 fn find_tool(names: &[&str]) -> Option<PathBuf> {

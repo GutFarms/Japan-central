@@ -35,13 +35,12 @@ Also available:
 
 `Update board` stops mining, frees the COM port, flashes `Firmware\esp32-2432s028-sha256-miner-merged.bin` with bundled `Tools\espflash.exe`, then reconnects. If flash fails: hold **BOOT**, tap **RESET**, release **BOOT**, then retry.
 
-### Companion extras (0.8.4+)
-- Pool presets + remember COM / auto-connect
-- Auto pool reconnect while mining
-- Session HUD (elapsed, accept %, expected shares/h)
-- Recent share accept/reject strip
-- Live crypto/weather ticker pushed to the ESP LCD
-- Debug chips: Stop / Bench / Reboot / Push ticker · Copy logs
+## Companion extras (0.8.5+)
+- First-run setup wizard
+- Version-aware **Update board** + **Fetch latest FW**
+- Pool auto-reconnect, share dedupe, accept/reject latency
+- Session luck (expected vs accepted) + SHA path (HW / HW+ / HW/SW)
+- LCD ticker, pool presets, COM auto-connect, copy logs
 
 ## Recommended pool (ESP32-friendly)
 

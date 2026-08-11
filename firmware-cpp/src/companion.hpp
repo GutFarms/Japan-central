@@ -17,6 +17,7 @@ struct MinerSnapshot {
   bool hashFocus = true;
   String netTicker;
   String jobId;
+  String shaMode;  // HW / HW+ / HW/SW / SW
   float benchHs = 0;
   bool fullV = false;
 };
