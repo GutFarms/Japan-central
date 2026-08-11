@@ -3,12 +3,13 @@
 #include <cstring>
 
 void DisplayUi::begin() {
-  cBg_ = to565(6, 10, 12);
-  cPanel_ = to565(12, 20, 22);
+  // Match Companion palette (basic).
+  cBg_ = to565(5, 8, 10);
+  cPanel_ = to565(14, 22, 24);
   cLime_ = to565(198, 255, 64);
-  cLimeDim_ = to565(110, 160, 48);
-  cText_ = to565(232, 242, 236);
-  cMuted_ = to565(120, 142, 136);
+  cLimeDim_ = to565(130, 210, 52);
+  cText_ = to565(235, 244, 238);
+  cMuted_ = to565(134, 154, 148);
   cWarn_ = to565(255, 196, 91);
   cErr_ = to565(255, 108, 91);
   cInk_ = to565(8, 14, 12);
@@ -23,12 +24,7 @@ void DisplayUi::begin() {
 
 void DisplayUi::drawTopRule(bool live) {
   tft_.fillRect(0, 0, 320, 3, cLime_);
-  if (live) {
-    // Soft secondary glow strip under the rule.
-    tft_.fillRect(0, 3, 320, 2, cLimeDim_);
-  } else {
-    tft_.fillRect(0, 3, 320, 2, cBg_);
-  }
+  tft_.fillRect(0, 3, 320, 1, live ? cLimeDim_ : cBg_);
 }
 
 void DisplayUi::showSplash() {
@@ -36,56 +32,52 @@ void DisplayUi::showSplash() {
   tft_.fillScreen(cBg_);
   drawTopRule(false);
 
-  // Left accent plane — brand presence, not a card.
-  tft_.fillRect(0, 28, 8, 184, cLime_);
-  tft_.fillRect(8, 28, 4, 184, cLimeDim_);
+  tft_.fillRect(0, 24, 6, 192, cLime_);
 
   tft_.setTextDatum(TL_DATUM);
   tft_.setTextColor(cLime_, cBg_);
-  tft_.drawString("CYD", 28, 56, 4);
-  tft_.setTextColor(cText_, cBg_);
-  tft_.drawString("SHA-256", 28, 108, 4);
+  tft_.drawString("CYD", 24, 48, 4);
   tft_.setTextColor(cMuted_, cBg_);
-  tft_.drawString("USB Bitcoin miner", 28, 156, 2);
-  tft_.drawString("pool lives on the PC", 28, 180, 2);
+  tft_.drawString("Companion", 24, 100, 2);
+  tft_.setTextColor(cText_, cBg_);
+  tft_.drawString("SHA-256", 24, 132, 4);
+  tft_.setTextColor(cMuted_, cBg_);
+  tft_.drawString("USB miner · pool on PC", 24, 188, 2);
 }
 
 void DisplayUi::drawWaitAnim(uint8_t frame) {
-  // Breathing USB activity dots + sweep bar.
-  const int y = 188;
-  tft_.fillRect(28, y, 260, 22, cBg_);
-  for (int i = 0; i < 5; i++) {
-    bool on = ((frame + i) % 5) < 3;
-    uint16_t c = on ? cLime_ : cPanel_;
-    tft_.fillRoundRect(28 + i * 22, y + 4, 14, 14, 3, c);
+  const int y = 196;
+  tft_.fillRect(24, y, 272, 18, cBg_);
+  // Simple Companion-style activity bars.
+  for (int i = 0; i < 16; i++) {
+    int h = 4 + ((frame + i * 3) % 8);
+    int x = 24 + i * 17;
+    uint16_t c = ((frame + i) % 5 < 3) ? cLime_ : cPanel_;
+    tft_.fillRect(x, y + 14 - h, 10, h, c);
   }
-  int sweep = (int)((frame % 20) * 12);
-  tft_.fillRect(28, y + 20, 240, 2, cPanel_);
-  tft_.fillRect(28 + sweep, y + 20, 36, 2, cLime_);
 }
 
 void DisplayUi::showWaitingCompanion() {
   uint8_t frame = (uint8_t)((millis() / 160) % 40);
-  // Leaving mining mode requires a full redraw of the wait chrome.
   const bool chromeDirty = miningDrawn_ || lastAnim_ == 0xFF;
   miningDrawn_ = false;
 
   if (chromeDirty) {
     tft_.fillScreen(cBg_);
     drawTopRule(false);
-    tft_.fillRect(0, 28, 8, 184, cLime_);
-    tft_.fillRect(8, 28, 4, 184, cLimeDim_);
+    tft_.fillRect(0, 24, 6, 192, cLime_);
 
     tft_.setTextDatum(TL_DATUM);
     tft_.setTextColor(cLime_, cBg_);
-    tft_.drawString("CYD", 28, 24, 4);
-    tft_.setTextColor(cText_, cBg_);
-    tft_.drawString("Waiting for USB", 28, 78, 2);
+    tft_.drawString("CYD", 24, 20, 4);
     tft_.setTextColor(cMuted_, cBg_);
-    tft_.drawString("Plug USB-C · open Companion", 28, 112, 2);
-    tft_.drawString("Bitcoin SHA-256 · pool on PC", 28, 136, 2);
-    tft_.drawString("Board hashes only · no WiFi", 28, 160, 2);
-    lastAnim_ = 0xFE;  // force anim paint below
+    tft_.drawString("Companion", 24, 68, 2);
+    tft_.setTextColor(cText_, cBg_);
+    tft_.drawString("Waiting for USB", 24, 100, 2);
+    tft_.setTextColor(cMuted_, cBg_);
+    tft_.drawString("Open Companion · Connect", 24, 132, 2);
+    tft_.drawString("Board hashes only", 24, 156, 2);
+    lastAnim_ = 0xFE;
   }
 
   if (frame != lastAnim_) {
@@ -95,41 +87,43 @@ void DisplayUi::showWaitingCompanion() {
 }
 
 void DisplayUi::drawActivityBar(float khs, bool hashing, uint8_t frame) {
-  const int x = 12, y = 118, w = 296, h = 10;
-  tft_.fillRoundRect(x, y, w, h, 3, cPanel_);
-  float fill = hashing ? (khs / 80.0f) : 0.0f;  // ~80 kH/s full-ish for ESP32
-  if (fill < 0.08f && hashing) fill = 0.08f + 0.04f * ((frame % 8) / 7.0f);
-  if (fill > 1.0f) fill = 1.0f;
-  int fw = (int)(fill * (w - 4));
-  if (fw > 0) {
-    // Sweep highlight inside the fill.
-    tft_.fillRoundRect(x + 2, y + 2, fw, h - 4, 2, cLime_);
-    int hi = (frame % 16) * (fw > 16 ? (fw - 16) / 15 : 0);
-    tft_.fillRect(x + 2 + hi, y + 2, 10, h - 4, cText_);
+  // Companion-like hash activity bars (not a filled pill).
+  const int x0 = 24, y = 112, w = 272, h = 16;
+  tft_.fillRect(x0, y, w, h, cBg_);
+  const int n = 18;
+  const int gap = 3;
+  const int bar_w = (w - gap * (n - 1)) / n;
+  float level = hashing ? (khs / 80.0f) : 0.08f;
+  if (level < 0.12f && hashing) level = 0.12f;
+  if (level > 1.0f) level = 1.0f;
+  for (int i = 0; i < n; i++) {
+    float breathe = 0.45f + 0.55f * (0.5f + 0.5f * ((float)((frame + i * 2) % 16) / 15.0f));
+    float lh = hashing ? (level * breathe) : (0.08f + 0.04f * ((i + frame) % 5) / 4.0f);
+    if (lh < 0.1f) lh = 0.1f;
+    int bh = (int)(h * lh);
+    int x = x0 + i * (bar_w + gap);
+    tft_.fillRect(x, y + h - bh, bar_w, bh, hashing ? cLime_ : cPanel_);
   }
 }
 
 void DisplayUi::drawMiningChrome() {
   tft_.fillScreen(cBg_);
   drawTopRule(true);
+  tft_.fillRect(0, 24, 6, 188, cLime_);
 
   tft_.setTextDatum(TL_DATUM);
   tft_.setTextColor(cLime_, cBg_);
-  tft_.drawString("CYD", 12, 10, 2);
+  tft_.drawString("CYD", 24, 12, 2);
   tft_.setTextColor(cMuted_, cBg_);
-  tft_.drawString("SHA-256", 68, 14, 1);
-  tft_.drawString("kH/s", 12, 42, 1);
+  tft_.drawString("Companion · SHA-256", 70, 16, 1);
 
-  // Metric wells (interaction-free layout blocks, not card chrome).
-  tft_.fillRoundRect(12, 148, 94, 44, 4, cPanel_);
-  tft_.fillRoundRect(113, 148, 94, 44, 4, cPanel_);
-  tft_.fillRoundRect(214, 148, 94, 44, 4, cPanel_);
-  tft_.setTextColor(cMuted_, cPanel_);
-  tft_.drawString("ACCEPT", 20, 154, 1);
-  tft_.drawString("REJECT", 121, 154, 1);
-  tft_.drawString("CLOCK", 222, 154, 1);
+  // Flat metric row — no card wells (Companion aesthetic).
+  tft_.setTextColor(cMuted_, cBg_);
+  tft_.drawString("ACCEPT", 24, 150, 1);
+  tft_.drawString("REJECT", 120, 150, 1);
+  tft_.drawString("CLOCK", 220, 150, 1);
 
-  tft_.fillRect(0, 226, 320, 14, cPanel_);
+  tft_.fillRect(0, 220, 320, 20, cPanel_);
   miningDrawn_ = true;
   lastRate_ = -1;
   lastAccepted_ = 0xFFFFFFFFu;
@@ -156,21 +150,19 @@ void DisplayUi::showMining(const AppConfig& cfg, const MinerSnapshot& snap, bool
 
   tft_.setTextDatum(TL_DATUM);
 
-  // Live pulse pip next to brand.
   if (animDirty) {
     uint16_t pip = hashing ? ((frame & 1) ? cLime_ : cLimeDim_) : cMuted_;
-    tft_.fillCircle(300, 18, 5, pip);
-    tft_.fillCircle(300, 18, 2, hashing ? cInk_ : cBg_);
+    tft_.fillCircle(300, 20, 4, pip);
   }
 
   if (rateDirty) {
-    tft_.fillRect(12, 56, 250, 56, cBg_);
-    tft_.setTextColor(cLime_, cBg_);
+    tft_.fillRect(24, 40, 260, 56, cBg_);
+    tft_.setTextColor(cText_, cBg_);
     char rate[24];
     snprintf(rate, sizeof(rate), "%.2f", khs);
-    tft_.drawString(rate, 12, 56, 4);
-    tft_.setTextColor(cMuted_, cBg_);
-    tft_.drawString("kH/s", 168, 78, 2);
+    tft_.drawString(rate, 24, 40, 4);
+    tft_.setTextColor(cLime_, cBg_);
+    tft_.drawString("kH/s", 180, 62, 2);
   }
 
   if (animDirty || rateDirty) {
@@ -179,19 +171,13 @@ void DisplayUi::showMining(const AppConfig& cfg, const MinerSnapshot& snap, bool
 
   if (forceFull || snap.connected != lastConnected_ || snap.pool != lastPool_ ||
       snap.jobId != lastJob_) {
-    tft_.fillRect(12, 134, 296, 12, cBg_);
+    tft_.fillRect(24, 134, 280, 12, cBg_);
     tft_.setTextColor(hashing ? cLime_ : cWarn_, cBg_);
-    char state[48];
-    if (hashing) {
-      snprintf(state, sizeof(state), "HASHING");
-    } else {
-      snprintf(state, sizeof(state), "WAIT JOB");
-    }
-    tft_.drawString(state, 12, 134, 1);
+    tft_.drawString(hashing ? "HASHING" : "WAIT JOB", 24, 134, 1);
     tft_.setTextColor(cMuted_, cBg_);
     String job = snap.jobId.length() ? snap.jobId : String("—");
-    if (job.length() > 18) job = job.substring(0, 18);
-    tft_.drawString(job, 90, 134, 1);
+    if (job.length() > 16) job = job.substring(0, 16);
+    tft_.drawString(job, 100, 134, 1);
     lastConnected_ = snap.connected;
     lastPool_ = snap.pool;
     lastJob_ = snap.jobId;
@@ -199,50 +185,41 @@ void DisplayUi::showMining(const AppConfig& cfg, const MinerSnapshot& snap, bool
 
   if (forceFull || snap.accepted != lastAccepted_ || snap.rejected != lastRejected_ ||
       snap.cpuMhz != lastMhz_) {
-    tft_.fillRect(20, 168, 78, 20, cPanel_);
-    tft_.fillRect(121, 168, 78, 20, cPanel_);
-    tft_.fillRect(222, 168, 78, 20, cPanel_);
-    char a[12], r[12], m[12];
+    tft_.fillRect(24, 164, 280, 28, cBg_);
+    char a[12], r[12], m[16];
     snprintf(a, sizeof(a), "%u", snap.accepted);
     snprintf(r, sizeof(r), "%u", snap.rejected);
-    snprintf(m, sizeof(m), "%u", snap.cpuMhz);
-    tft_.setTextColor(cLime_, cPanel_);
-    tft_.drawString(a, 20, 168, 2);
-    tft_.setTextColor(snap.rejected ? cErr_ : cText_, cPanel_);
-    tft_.drawString(r, 121, 168, 2);
-    tft_.setTextColor(cText_, cPanel_);
-    tft_.drawString(m, 222, 168, 2);
-    tft_.setTextColor(cMuted_, cPanel_);
-    tft_.drawString("MHz", 250, 176, 1);
+    snprintf(m, sizeof(m), "%u MHz", snap.cpuMhz);
+    tft_.setTextColor(cLime_, cBg_);
+    tft_.drawString(a, 24, 164, 2);
+    tft_.setTextColor(snap.rejected ? cErr_ : cText_, cBg_);
+    tft_.drawString(r, 120, 164, 2);
+    tft_.setTextColor(cText_, cBg_);
+    tft_.drawString(m, 220, 164, 2);
     lastAccepted_ = snap.accepted;
     lastRejected_ = snap.rejected;
     lastMhz_ = snap.cpuMhz;
   }
 
   if (forceFull || snap.nonce != lastNonce_ || snap.totalHashes != lastHashes_) {
-    tft_.fillRect(12, 198, 296, 24, cBg_);
-    char line[56];
-    snprintf(line, sizeof(line), "nonce %08lx  hashes %llu", (unsigned long)snap.nonce,
-             (unsigned long long)snap.totalHashes);
+    tft_.fillRect(24, 196, 280, 16, cBg_);
+    char line[48];
+    snprintf(line, sizeof(line), "nonce %08lx", (unsigned long)snap.nonce);
     tft_.setTextColor(cMuted_, cBg_);
-    tft_.drawString(line, 12, 200, 1);
-    tft_.setTextColor(cText_, cBg_);
-    tft_.drawString("USB-C only", 220, 200, 1);
+    tft_.drawString(line, 24, 198, 1);
     lastNonce_ = snap.nonce;
     lastHashes_ = snap.totalHashes;
   }
 
   if (forceFull || snap.netTicker != lastTicker_ || animDirty) {
-    tft_.fillRect(0, 226, 320, 14, cPanel_);
-    tft_.setTextDatum(TL_DATUM);
+    tft_.fillRect(0, 220, 320, 20, cPanel_);
     tft_.setTextColor(cLime_, cPanel_);
-    String tick = snap.netTicker.length() ? snap.netTicker : String("usb: companion linked");
-    // Gentle marquee for long tickers.
-    if (tick.length() > 38) {
-      int off = (frame / 2) % (tick.length() - 37);
-      tick = tick.substring(off, off + 38);
+    String tick = snap.netTicker.length() ? snap.netTicker : String("usb · companion linked");
+    if (tick.length() > 40) {
+      int off = (frame / 2) % (tick.length() - 39);
+      tick = tick.substring(off, off + 40);
     }
-    tft_.drawString(tick, 6, 228, 1);
+    tft_.drawString(tick, 8, 224, 1);
     lastTicker_ = snap.netTicker;
   }
 
@@ -255,12 +232,12 @@ void DisplayUi::showMessage(const char* title, const char* detail) {
   lastAnim_ = 0xFF;
   tft_.fillScreen(cBg_);
   drawTopRule(false);
-  tft_.fillRect(0, 28, 8, 184, cLime_);
-  tft_.setTextDatum(MC_DATUM);
+  tft_.fillRect(0, 24, 6, 192, cLime_);
+  tft_.setTextDatum(TL_DATUM);
   tft_.setTextColor(cLime_, cBg_);
-  tft_.drawString("CYD", 160, 70, 4);
+  tft_.drawString("CYD", 24, 48, 4);
   tft_.setTextColor(cText_, cBg_);
-  tft_.drawString(title, 160, 120, 2);
+  tft_.drawString(title, 24, 110, 2);
   tft_.setTextColor(cMuted_, cBg_);
-  tft_.drawString(detail, 160, 150, 2);
+  tft_.drawString(detail, 24, 146, 2);
 }

@@ -2,6 +2,7 @@
 
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
+use std::collections::HashSet;
 use std::io::{BufRead, BufReader, Write};
 use std::net::{TcpStream, ToSocketAddrs};
 use std::time::Duration;
@@ -40,6 +41,8 @@ pub struct StratumClient {
     active_en2_hex: String,
     active_ntime_hex: String,
     pending_job: Option<WorkJob>,
+    /// Share submit ids waiting for a pool reply (ignore other RPC noise).
+    pending_shares: HashSet<u64>,
     pub accepted: u32,
     pub rejected: u32,
     pub phase: String,
@@ -80,6 +83,7 @@ impl StratumClient {
             active_en2_hex: String::new(),
             active_ntime_hex: String::new(),
             pending_job: None,
+            pending_shares: HashSet::new(),
             accepted: 0,
             rejected: 0,
             phase: "off".into(),
@@ -116,6 +120,9 @@ impl StratumClient {
         self.subscribed = false;
         self.authorized = false;
         self.pending_job = None;
+        self.pending_shares.clear();
+        self.accepted = 0;
+        self.rejected = 0;
         self.phase = "tcp".into();
         self.push_recent(format!("← TCP connected {}", self.endpoint));
         self.send_subscribe()
@@ -127,6 +134,9 @@ impl StratumClient {
         self.subscribed = false;
         self.authorized = false;
         self.pending_job = None;
+        self.pending_shares.clear();
+        self.accepted = 0;
+        self.rejected = 0;
         self.phase = "off".into();
         self.push_recent("← disconnected".into());
     }
@@ -221,12 +231,19 @@ impl StratumClient {
         }
         let id = self.msg_id;
         self.msg_id += 1;
+        self.pending_shares.insert(id);
         let msg = json!({
             "id": id,
             "method": "mining.submit",
             "params": [self.worker, job_id, en2, ntime, nonce_hex]
         });
-        self.send_json(&msg)
+        match self.send_json(&msg) {
+            Ok(()) => Ok(()),
+            Err(e) => {
+                self.pending_shares.remove(&id);
+                Err(e)
+            }
+        }
     }
 
     /// Local pre-check before pool submit. `nonce_hex` is cgminer stratum form (`%08x`).
@@ -380,26 +397,35 @@ impl StratumClient {
             if id == self.authorize_id {
                 self.authorized = ok;
                 self.phase = if ok { "idle".into() } else { "err".into() };
-                if !ok {
+                if ok {
+                    // Fresh session counters — ignore handshake / pre-auth noise.
+                    self.accepted = 0;
+                    self.rejected = 0;
+                    self.pending_shares.clear();
+                    self.push_recent("← authorized (share counters reset)".into());
+                } else {
                     return Err("authorize failed".into());
                 }
                 return Ok(());
             }
-            if ok {
-                self.accepted += 1;
-                self.push_recent(format!("← share ACCEPTED id={id}"));
-            } else {
-                self.rejected += 1;
-                let why = v
-                    .get("error")
-                    .map(|e| e.to_string())
-                    .unwrap_or_else(|| "false".into());
-                self.push_recent(format!("← share REJECTED id={id} {why}"));
+            // Only count replies that belong to a mining.submit we sent.
+            if self.pending_shares.remove(&id) {
+                if ok {
+                    self.accepted += 1;
+                    self.push_recent(format!("← share ACCEPTED id={id}"));
+                } else {
+                    self.rejected += 1;
+                    let why = v
+                        .get("error")
+                        .map(|e| e.to_string())
+                        .unwrap_or_else(|| "false".into());
+                    self.push_recent(format!("← share REJECTED id={id} {why}"));
+                }
             }
             return Ok(());
         }
 
-        if has_error && id != 0 && id != self.subscribe_id && id != self.authorize_id {
+        if has_error && self.pending_shares.remove(&id) {
             self.rejected += 1;
             let why = v
                 .get("error")
@@ -408,7 +434,11 @@ impl StratumClient {
             self.push_recent(format!("← share REJECTED id={id} {why}"));
         } else if id == self.authorize_id && !self.authorized && !has_error {
             self.authorized = true;
+            self.accepted = 0;
+            self.rejected = 0;
+            self.pending_shares.clear();
             self.phase = "idle".into();
+            self.push_recent("← authorized (share counters reset)".into());
         }
         Ok(())
     }

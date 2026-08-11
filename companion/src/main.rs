@@ -653,11 +653,16 @@ impl CompanionApp {
 
                     ui.add_space(12.0);
                     ui.with_layout(Layout::top_down(Align::Center), |ui| {
+                        let (acc, rej) = if self.stratum_live.authorized {
+                            (self.accepted, self.rejected)
+                        } else {
+                            (0, 0)
+                        };
                         paint_board_screen(
                             ui,
                             self.displayed_khs,
-                            self.accepted,
-                            self.rejected,
+                            acc,
+                            rej,
                             self.target_mhz,
                             self.board_hashing(),
                             self.usb_open,
@@ -790,9 +795,21 @@ impl CompanionApp {
 
     fn ui_telemetry_rail(&self, ui: &mut egui::Ui) {
         soft_panel(ui, "Board telemetry", |ui| {
+            let authed = self.stratum_live.authorized;
+            let (acc, rej) = if authed {
+                (self.accepted, self.rejected)
+            } else {
+                // Hide handshake / pre-auth noise (often shows a couple rejects).
+                (0, 0)
+            };
             ui.horizontal_wrapped(|ui| {
-                metric(ui, "Accepted", &self.accepted.to_string(), C_LIME);
-                metric(ui, "Rejected", &self.rejected.to_string(), if self.rejected > 0 { C_ERR } else { C_MUTED });
+                metric(ui, "Accepted", &acc.to_string(), C_LIME);
+                metric(
+                    ui,
+                    "Rejected",
+                    &rej.to_string(),
+                    if rej > 0 { C_ERR } else { C_MUTED },
+                );
                 metric(ui, "Board shares", &self.status.shares.to_string(), C_TEXT);
                 metric(ui, "Raw H/s", &format!("{:.0}", self.status.hashrate_hs), C_TEXT);
                 metric(ui, "Hashes", &self.status.hashes.to_string(), C_BUBBLE_HI);
@@ -807,6 +824,14 @@ impl CompanionApp {
                     C_TEXT,
                 );
             });
+            if !authed {
+                ui.add_space(6.0);
+                ui.label(
+                    RichText::new("Share counts start after pool authorize")
+                        .color(C_DIM)
+                        .font(mono_ui_font(11.0)),
+                );
+            }
             ui.add_space(12.0);
             telemetry_line(
                 ui,
@@ -864,12 +889,17 @@ impl CompanionApp {
                 );
             });
             ui.add_space(8.0);
+            let (acc, rej) = if s.authorized {
+                (s.accepted, s.rejected)
+            } else {
+                (0, 0)
+            };
             ui.horizontal_wrapped(|ui| {
                 mini_stat(ui, "TX", &s.lines_tx.to_string());
                 mini_stat(ui, "RX", &s.lines_rx.to_string());
                 mini_stat(ui, "Jobs", &s.jobs.to_string());
-                mini_stat(ui, "Accept", &s.accepted.to_string());
-                mini_stat(ui, "Reject", &s.rejected.to_string());
+                mini_stat(ui, "Accept", &acc.to_string());
+                mini_stat(ui, "Reject", &rej.to_string());
                 mini_stat(
                     ui,
                     "Job id",
@@ -1386,75 +1416,95 @@ fn paint_board_screen(
     let (outer, _) = ui.allocate_exact_size(desired, Sense::hover());
     let painter = ui.painter_at(outer);
 
-    // Device bezel — the product is the visual anchor.
-    painter.rect_filled(outer, Rounding::same(18.0), Color32::from_rgb(18, 24, 22));
+    // Thin device bezel — screen is the product.
+    painter.rect_filled(outer, Rounding::same(14.0), Color32::from_rgb(16, 22, 20));
     painter.rect_stroke(
         outer,
-        Rounding::same(18.0),
-        Stroke::new(1.5_f32, Color32::from_rgb(64, 86, 78)),
+        Rounding::same(14.0),
+        Stroke::new(1.0_f32, Color32::from_rgb(48, 68, 62)),
     );
-    let screen = outer.shrink2(Vec2::new(14.0, 16.0));
-    painter.rect_filled(screen, Rounding::same(8.0), Color32::from_rgb(6, 10, 12));
+    let screen = outer.shrink2(Vec2::new(12.0, 14.0));
+    painter.rect_filled(screen, Rounding::same(4.0), Color32::from_rgb(5, 8, 10));
+
+    // Companion-like chrome: lime rule + left accent.
     painter.rect_filled(
         Rect::from_min_size(screen.min, Vec2::new(screen.width(), 3.0)),
         Rounding::ZERO,
         C_LIME,
     );
     painter.rect_filled(
-        Rect::from_min_size(Pos2::new(screen.left(), screen.top() + 10.0), Vec2::new(5.0, screen.height() - 24.0)),
+        Rect::from_min_size(
+            Pos2::new(screen.left(), screen.top() + 8.0),
+            Vec2::new(4.0, screen.height() - 20.0),
+        ),
         Rounding::ZERO,
         C_LIME,
     );
 
     let breath = 0.5 + 0.5 * pulse.sin();
     painter.text(
-        Pos2::new(screen.left() + 16.0, screen.top() + 14.0),
+        Pos2::new(screen.left() + 14.0, screen.top() + 12.0),
         egui::Align2::LEFT_TOP,
         "CYD",
-        display_font(22.0),
+        display_font(20.0),
         C_LIME,
     );
     painter.text(
-        Pos2::new(screen.left() + 16.0, screen.top() + 42.0),
+        Pos2::new(screen.left() + 58.0, screen.top() + 18.0),
         egui::Align2::LEFT_TOP,
-        "SHA-256",
-        mono_ui_font(11.0),
+        "Companion · SHA-256",
+        mono_ui_font(10.0),
         C_MUTED,
     );
     painter.text(
-        Pos2::new(screen.left() + 16.0, screen.top() + 66.0),
+        Pos2::new(screen.left() + 14.0, screen.top() + 42.0),
         egui::Align2::LEFT_TOP,
         format!("{khs:.2}"),
-        display_font(34.0),
+        display_font(32.0),
         C_TEXT,
     );
     painter.text(
-        Pos2::new(screen.left() + 130.0, screen.top() + 82.0),
+        Pos2::new(screen.left() + 128.0, screen.top() + 58.0),
         egui::Align2::LEFT_TOP,
         "kH/s",
         mono_ui_font(12.0),
         C_LIME,
     );
 
-    // Activity strip
-    let bar = Rect::from_min_size(
-        Pos2::new(screen.left() + 16.0, screen.top() + 112.0),
-        Vec2::new(screen.width() - 32.0, 8.0),
+    // Activity bars (basic Companion strip).
+    let bar_area = Rect::from_min_size(
+        Pos2::new(screen.left() + 14.0, screen.top() + 92.0),
+        Vec2::new(screen.width() - 28.0, 14.0),
     );
-    painter.rect_filled(bar, Rounding::same(3.0), Color32::from_rgb(14, 22, 24));
-    let fill = if hashing {
-        ((khs / 80.0).clamp(0.1, 1.0) * bar.width()).max(10.0)
-    } else {
-        8.0 + breath * 18.0
-    };
-    painter.rect_filled(
-        Rect::from_min_size(bar.min, Vec2::new(fill, bar.height())),
-        Rounding::same(3.0),
-        if hashing { C_LIME } else { C_BUBBLE_HI },
-    );
+    let n = 14;
+    let gap = 2.0;
+    let bw = ((bar_area.width() - gap * (n as f32 - 1.0)) / n as f32).max(3.0);
+    for i in 0..n {
+        let phase = pulse * 2.2 + i as f32 * 0.4;
+        let breathe = 0.4 + 0.6 * (0.5 + 0.5 * phase.sin());
+        let level = if hashing {
+            ((khs / 80.0).clamp(0.1, 1.0) * breathe).clamp(0.14, 1.0)
+        } else {
+            0.1 + 0.05 * (0.5 + 0.5 * (pulse + i as f32 * 0.25).sin())
+        };
+        let h = bar_area.height() * level;
+        let x = bar_area.left() + i as f32 * (bw + gap);
+        painter.rect_filled(
+            Rect::from_min_max(
+                Pos2::new(x, bar_area.bottom() - h),
+                Pos2::new(x + bw, bar_area.bottom()),
+            ),
+            Rounding::same(1.0),
+            if hashing {
+                rgba(C_LIME, (90.0 + level * 120.0) as u8)
+            } else {
+                rgba(C_BUBBLE_HI, 55)
+            },
+        );
+    }
 
     painter.text(
-        Pos2::new(screen.left() + 16.0, screen.top() + 128.0),
+        Pos2::new(screen.left() + 14.0, screen.top() + 114.0),
         egui::Align2::LEFT_TOP,
         if hashing {
             "HASHING"
@@ -1466,19 +1516,55 @@ fn paint_board_screen(
         mono_ui_font(11.0),
         if hashing { C_LIME } else { C_MUTED },
     );
+
+    // Flat accept / reject / clock — no cards.
     painter.text(
-        Pos2::new(screen.left() + 16.0, screen.top() + 148.0),
+        Pos2::new(screen.left() + 14.0, screen.top() + 136.0),
         egui::Align2::LEFT_TOP,
-        format!("a{accepted}  r{rejected}  {mhz} MHz"),
-        mono_ui_font(11.0),
+        "ACCEPT",
+        mono_ui_font(9.0),
+        C_MUTED,
+    );
+    painter.text(
+        Pos2::new(screen.left() + 90.0, screen.top() + 136.0),
+        egui::Align2::LEFT_TOP,
+        "REJECT",
+        mono_ui_font(9.0),
+        C_MUTED,
+    );
+    painter.text(
+        Pos2::new(screen.left() + 166.0, screen.top() + 136.0),
+        egui::Align2::LEFT_TOP,
+        "CLOCK",
+        mono_ui_font(9.0),
+        C_MUTED,
+    );
+    painter.text(
+        Pos2::new(screen.left() + 14.0, screen.top() + 150.0),
+        egui::Align2::LEFT_TOP,
+        format!("{accepted}"),
+        mono_ui_font(14.0),
+        C_LIME,
+    );
+    painter.text(
+        Pos2::new(screen.left() + 90.0, screen.top() + 150.0),
+        egui::Align2::LEFT_TOP,
+        format!("{rejected}"),
+        mono_ui_font(14.0),
+        if rejected > 0 { C_ERR } else { C_TEXT },
+    );
+    painter.text(
+        Pos2::new(screen.left() + 166.0, screen.top() + 150.0),
+        egui::Align2::LEFT_TOP,
+        format!("{mhz} MHz"),
+        mono_ui_font(14.0),
         C_TEXT,
     );
 
-    // Live pip
-    let pip = Pos2::new(screen.right() - 18.0, screen.top() + 22.0);
+    let pip = Pos2::new(screen.right() - 16.0, screen.top() + 20.0);
     painter.circle_filled(
         pip,
-        5.0,
+        4.0,
         if hashing {
             rgba(C_LIME, (140.0 + breath * 100.0) as u8)
         } else {
@@ -2006,10 +2092,14 @@ fn mine_worker(cmd_rx: Receiver<NetCmd>, msg_tx: Sender<NetMsg>) {
                     }
                     if last_stats_push.elapsed() > Duration::from_secs(3) {
                         if let Some(p) = usb.as_mut() {
-                            let cmd = format!(
-                                "cmp stats accepted={}&rejected={}",
-                                client.accepted, client.rejected
-                            );
+                            // Only push share tallies after authorize — avoids board showing
+                            // handshake rejects from the previous moment.
+                            let (a, r) = if client.authorized() {
+                                (client.accepted, client.rejected)
+                            } else {
+                                (0, 0)
+                            };
+                            let cmd = format!("cmp stats accepted={a}&rejected={r}");
                             let _ = usb_cmd(p.as_mut(), &mut usb_rx, &cmd);
                         }
                         last_stats_push = Instant::now();
@@ -2023,8 +2113,16 @@ fn mine_worker(cmd_rx: Receiver<NetCmd>, msg_tx: Sender<NetMsg>) {
             if last_stratum_ui.elapsed() > Duration::from_millis(250) {
                 push_stratum_live(&msg_tx, client);
                 let _ = msg_tx.send(NetMsg::MineStats {
-                    accepted: client.accepted,
-                    rejected: client.rejected,
+                    accepted: if client.authorized() {
+                        client.accepted
+                    } else {
+                        0
+                    },
+                    rejected: if client.authorized() {
+                        client.rejected
+                    } else {
+                        0
+                    },
                     phase: client.phase.clone(),
                 });
                 last_stratum_ui = Instant::now();
