@@ -96,6 +96,46 @@ class AppUpdateChecker(
         prefs.edit().remove(KEY_DISMISSED_VERSION).apply()
     }
 
+    fun markPendingInstall(info: AppUpdateInfo) {
+        prefs.edit()
+            .putInt(KEY_PENDING_VERSION, info.versionCode)
+            .putString(KEY_PENDING_NAME, info.versionName)
+            .putString(KEY_PENDING_URL, info.apkUrl)
+            .putString(KEY_PENDING_NOTES, info.releaseNotes)
+            .apply()
+    }
+
+    fun clearPendingInstall() {
+        prefs.edit()
+            .remove(KEY_PENDING_VERSION)
+            .remove(KEY_PENDING_NAME)
+            .remove(KEY_PENDING_URL)
+            .remove(KEY_PENDING_NOTES)
+            .apply()
+    }
+
+    fun pendingInstallInfo(): AppUpdateInfo? {
+        val code = prefs.getInt(KEY_PENDING_VERSION, 0)
+        if (code <= BuildConfig.VERSION_CODE) return null
+        if (cachedApk() == null) return null
+        val name = prefs.getString(KEY_PENDING_NAME, null) ?: return null
+        val url = prefs.getString(KEY_PENDING_URL, null) ?: return null
+        val notes = prefs.getString(KEY_PENDING_NOTES, "").orEmpty()
+        return AppUpdateInfo(code, name, url, notes)
+    }
+
+    fun markAutoUpdateChecked(status: String) {
+        prefs.edit()
+            .putLong(KEY_LAST_AUTO_CHECK_AT, System.currentTimeMillis())
+            .putString(KEY_LAST_AUTO_CHECK_STATUS, status)
+            .apply()
+    }
+
+    fun lastAutoUpdateStatus(): String =
+        prefs.getString(KEY_LAST_AUTO_CHECK_STATUS, "").orEmpty()
+
+    fun lastAutoUpdateAt(): Long = prefs.getLong(KEY_LAST_AUTO_CHECK_AT, 0L)
+
     fun cachedApk(): File? {
         val file = File(File(appContext.cacheDir, "updates"), "NativePure-update.apk")
         return file.takeIf { it.exists() && it.length() > 1_000_000L }
@@ -137,5 +177,11 @@ class AppUpdateChecker(
         const val MANIFEST_URL =
             "https://github.com/GutFarms/Japan-central/releases/latest/download/update-manifest.json"
         private const val KEY_DISMISSED_VERSION = "update_dismissed_version_code"
+        private const val KEY_PENDING_VERSION = "update_pending_version_code"
+        private const val KEY_PENDING_NAME = "update_pending_version_name"
+        private const val KEY_PENDING_URL = "update_pending_apk_url"
+        private const val KEY_PENDING_NOTES = "update_pending_notes"
+        private const val KEY_LAST_AUTO_CHECK_AT = "update_last_auto_check_at"
+        private const val KEY_LAST_AUTO_CHECK_STATUS = "update_last_auto_check_status"
     }
 }

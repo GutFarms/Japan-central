@@ -2,6 +2,8 @@ package com.solstice.dispensary
 
 import android.app.Application
 import com.solstice.dispensary.data.repository.DispensaryRepository
+import com.solstice.dispensary.data.update.AppAutoUpdateScheduler
+import com.solstice.dispensary.data.update.AppAutoUpdateWorker
 import com.solstice.dispensary.data.update.AppUpdateChecker
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -18,6 +20,8 @@ class DispensaryApplication : Application() {
         super.onCreate()
         repository = DispensaryRepository(this)
         updateChecker = AppUpdateChecker(this)
+        AppAutoUpdateWorker.ensureChannel(this)
+        AppAutoUpdateScheduler.ensureScheduled(this)
         CoroutineScope(Dispatchers.IO).launch {
             repository.ensureSeeded()
         }

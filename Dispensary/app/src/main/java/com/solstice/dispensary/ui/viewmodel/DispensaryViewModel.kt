@@ -613,9 +613,25 @@ class DispensaryViewModel(
     }
 
     fun autoCheckForAppUpdate() {
+        // Surfacing a nightly download if WorkManager already pulled it.
+        updateChecker.pendingInstallInfo()?.let { pending ->
+            downloadedApk = updateChecker.cachedApk()
+            updateState = UpdateUiState.ReadyToInstall(pending)
+            return
+        }
         if (autoUpdateChecked) return
         autoUpdateChecked = true
         checkForAppUpdate(force = false)
+    }
+
+    fun consumeInstallUpdateIntent() {
+        val pending = updateChecker.pendingInstallInfo() ?: return
+        downloadedApk = updateChecker.cachedApk()
+        updateState = UpdateUiState.ReadyToInstall(pending)
+    }
+
+    fun clearPendingInstallAfterInstalled() {
+        updateChecker.clearPendingInstall()
     }
 
     fun dismissAppUpdate() {

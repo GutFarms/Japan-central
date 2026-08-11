@@ -1,6 +1,6 @@
 {
-  "versionCode": 22,
-  "versionName": "1.17.0",
+  "versionCode": 23,
+  "versionName": "1.18.0",
   "apkUrl": "https://github.com/GutFarms/Japan-central/releases/latest/download/NativePure-Dispensary.apk",
-  "releaseNotes": "Native Pure 1.17.0 — staff can update product pictures with the camera."
+  "releaseNotes": "Native Pure 1.18.0 — auto-updates daily at 1:00 AM from GitHub Releases."
 }

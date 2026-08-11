@@ -1,9 +1,14 @@
 package com.solstice.dispensary
 
+import android.Manifest
+import android.content.Intent
+import android.content.pm.PackageManager
+import android.os.Build
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
@@ -21,16 +26,20 @@ import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.core.content.ContextCompat
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
+import com.solstice.dispensary.data.update.ApkInstaller
+import com.solstice.dispensary.data.update.AppAutoUpdateWorker
 import com.solstice.dispensary.ui.navigation.DispensaryNavHost
 import com.solstice.dispensary.ui.navigation.Routes
 import com.solstice.dispensary.ui.screens.AgeGateScreen
@@ -41,16 +50,62 @@ import com.solstice.dispensary.ui.screens.ForcePasswordChangeScreen
 import com.solstice.dispensary.ui.theme.SolsticeTheme
 import com.solstice.dispensary.ui.viewmodel.DispensaryViewModel
 import com.solstice.dispensary.ui.viewmodel.DispensaryViewModelFactory
+import kotlinx.coroutines.flow.MutableStateFlow
 
 class MainActivity : ComponentActivity() {
+    private val notificationPermissionLauncher = registerForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { /* updates still download; notification is best-effort */ }
+
+    private val installUpdateRequested = MutableStateFlow(false)
+
+    private fun maybeRequestNotificationPermission() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) return
+        val granted = ContextCompat.checkSelfPermission(
+            this,
+            Manifest.permission.POST_NOTIFICATIONS
+        ) == PackageManager.PERMISSION_GRANTED
+        if (!granted) {
+            notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+        }
+    }
+
+    private fun captureInstallExtra(intent: Intent?) {
+        if (intent?.getBooleanExtra(AppAutoUpdateWorker.EXTRA_INSTALL_UPDATE, false) == true) {
+            installUpdateRequested.value = true
+            intent.removeExtra(AppAutoUpdateWorker.EXTRA_INSTALL_UPDATE)
+        }
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        captureInstallExtra(intent)
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
         val app = application as DispensaryApplication
+        maybeRequestNotificationPermission()
+        captureInstallExtra(intent)
         setContent {
             val viewModel: DispensaryViewModel = viewModel(
                 factory = DispensaryViewModelFactory(app.repository, app.updateChecker)
             )
+
+            val requestInstall by installUpdateRequested.collectAsState()
+            LaunchedEffect(requestInstall) {
+                if (!requestInstall) return@LaunchedEffect
+                viewModel.consumeInstallUpdateIntent()
+                installUpdateRequested.value = false
+                val apk = viewModel.downloadedApk ?: app.updateChecker.cachedApk()
+                if (apk != null && ApkInstaller.canInstallPackages(this@MainActivity)) {
+                    runCatching {
+                        startActivity(ApkInstaller.installApk(this@MainActivity, apk))
+                    }
+                }
+            }
 
             val lifecycleOwner = LocalLifecycleOwner.current
             DisposableEffect(lifecycleOwner, viewModel) {
@@ -138,6 +193,7 @@ class MainActivity : ComponentActivity() {
 
                 val hideBottomBar = current.startsWith("product/") ||
                     current == Routes.SCANNER ||
+                    current.startsWith("inventory/photo/") ||
                     current == Routes.CUSTOMERS ||
                     current == Routes.REQUESTS ||
                     current == Routes.ORDERS ||

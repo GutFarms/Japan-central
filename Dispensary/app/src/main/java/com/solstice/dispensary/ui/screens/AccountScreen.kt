@@ -586,7 +586,7 @@ fun AccountScreen(
         item {
             SectionHeader(
                 title = "App updates",
-                subtitle = "Installed ${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE})"
+                subtitle = "Installed ${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE}) · auto-checks GitHub daily at 1:00 AM"
             )
             AppUpdateWizard(
                 state = updateState,
@@ -598,6 +598,11 @@ fun AccountScreen(
                 needsInstallPermission = needsInstallPermission,
                 compact = true,
                 showIdleCheck = true
+            )
+            Text(
+                text = "Nightly auto-update pulls the latest release APK when the phone is online. Tap Install when a build is ready (allow install from this app once).",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
             )
             Spacer(Modifier.height(8.dp))
         }
