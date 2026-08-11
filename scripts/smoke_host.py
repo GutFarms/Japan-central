@@ -1,0 +1,88 @@
+#!/usr/bin/env python3
+"""Offline smoke checks for the host agent protocol helpers."""
+
+from __future__ import annotations
+
+import json
+import socket
+import subprocess
+import sys
+import time
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+AGENT = ROOT / "host" / "agent.py"
+VENV_PY = ROOT / "host" / ".venv" / "bin" / "python"
+PY = str(VENV_PY if VENV_PY.exists() else Path(sys.executable))
+
+
+def main() -> int:
+    sys.path.insert(0, str(ROOT / "host"))
+    from cyd_core import GpuReader, MetricsStream, collect_metrics, pick_best_port  # noqa: E402
+
+    gpu = GpuReader()
+    payload = collect_metrics(gpu, "SMOKE")
+    gpu.close()
+
+    required = {
+        "v",
+        "cpu",
+        "cpu_temp",
+        "ram",
+        "gpu",
+        "gpu_temp",
+        "vram",
+        "disk",
+        "swap",
+        "net_up",
+        "net_down",
+        "fps",
+        "host",
+    }
+    missing = required - set(payload)
+    assert not missing, f"missing keys: {missing}"
+    assert payload["v"] == 1
+    assert payload["host"] == "SMOKE"
+    assert 0.0 <= payload["cpu"] <= 100.0
+    assert 0.0 <= payload["ram"] <= 100.0
+    assert "disk_used_gb" in payload and "cpu_mhz_max" in payload
+    assert payload["disk_total_gb"] >= payload["disk_used_gb"] >= 0
+
+    stream = MetricsStream(full_every=8)
+    line = stream.encode(payload, force_full=True) + b"\n"
+    assert len(line) <= 512, f"packet too large: {len(line)}"
+    wire = json.loads(line.decode())
+    assert wire.get("seq", 0) >= 1
+    assert "disk" in wire and "net_down" in wire
+
+    # Delta path should omit unchanged keys after a full snapshot.
+    payload2 = dict(payload)
+    payload2["cpu"] = round((payload["cpu"] + 1.5) % 100.0, 1)
+    delta = json.loads(stream.encode(payload2).decode())
+    assert delta["seq"] == wire["seq"] + 1
+    assert "cpu" in delta
+
+    _ = pick_best_port()
+
+    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    sock.bind(("127.0.0.1", 0))
+    sock.settimeout(5)
+    port = sock.getsockname()[1]
+    proc = subprocess.Popen(
+        [PY, str(AGENT), "--host", "127.0.0.1", "--port", str(port), "--once", "--name", "SMOKE"],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        cwd=str(ROOT / "host"),
+    )
+    data, _addr = sock.recvfrom(512)
+    proc.wait(timeout=5)
+    sock.close()
+    rx = json.loads(data.decode("utf-8"))
+    assert rx["v"] == 1 and rx["host"] == "SMOKE", rx
+    print("smoke_host: OK", json.dumps(rx, separators=(",", ":")))
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

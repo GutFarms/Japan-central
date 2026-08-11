@@ -1,0 +1,17 @@
+[package]
+name = "jc-time"
+version = "0.2.0"
+edition = "2021"
+description = "Japan & Central Time — dual world clock with rich egui graphics"
+license = "MIT"
+
+[dependencies]
+chrono = "0.4"
+chrono-tz = "0.10"
+eframe = { version = "0.29", default-features = true, features = ["default_fonts", "glow"] }
+egui = "0.29"
+
+[profile.release]
+lto = true
+codegen-units = 1
+strip = true
