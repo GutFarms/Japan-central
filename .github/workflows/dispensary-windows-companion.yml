@@ -123,8 +123,12 @@ jobs:
             $sha256sum.Add("$hash  $name")
             Write-Host "$name = $hash"
           }
-          $sumLines | Set-Content -Encoding utf8 dist\SHA256SUMS.txt
-          $sha256sum | Set-Content -Encoding ascii dist\SHA256SUMS
+          $sumLines | ForEach-Object { $_ } | Out-Null
+          $textBody = ($sumLines -join "`n") + "`n"
+          $sumBody = ($sha256sum -join "`n") + "`n"
+          # LF-only so `sha256sum -c` and PowerShell both work
+          [IO.File]::WriteAllText((Resolve-Path dist).Path + "\SHA256SUMS.txt", $textBody)
+          [IO.File]::WriteAllText((Resolve-Path dist).Path + "\SHA256SUMS", $sumBody)
           Copy-Item dist\SHA256SUMS.txt dist\NativePure-POS-SHA256.txt -Force
           Get-ChildItem dist | Sort-Object Name | Format-Table Name, Length
 
