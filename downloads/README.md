@@ -1,4 +1,4 @@
-# Downloads — CYD PC/GPU Monitor
+# Downloads — CYD PC/GPU Monitor + JC Time
 
 Grab a zip, flash the board, run the app.
 
@@ -8,6 +8,7 @@ Grab a zip, flash the board, run the app.
 | **[CYD-Firmware.zip](CYD-Firmware.zip)** | Flash images only (`merged.bin` @ `0x0`) |
 | **[CYD-Monitor-portable.zip](CYD-Monitor-portable.zip)** | PC app (Windows / Linux / macOS, needs Python) |
 | **[CYD-Monitor-linux](CYD-Monitor-linux)** | Linux standalone binary (no Python) |
+| **[JC-Time-linux](JC-Time-linux)** / **[JC-Time-linux.zip](JC-Time-linux.zip)** | egui Japan + Central dual world clock |
 
 App monitor view includes CPU temp, OC/clock readouts, disk used/free, VRAM bar, and upgraded dial graphics.
 
@@ -25,6 +26,13 @@ esptool.py --chip esp32 --port COMx --baud 921600 \
 3. Run `app/CYD-Monitor/CYD Monitor.bat` (Windows) or `./CYD-Monitor.sh` (Linux/macOS)
 4. Leave the CYD plugged in over USB
 
+## JC Time (egui)
+
+```bash
+chmod +x JC-Time-linux
+./JC-Time-linux
+```
+
 ## GitHub direct links
 
 On the feature branch (until merged):
@@ -32,3 +40,4 @@ On the feature branch (until merged):
 - Bundle: `https://github.com/GutFarms/Japan-central/raw/cursor/esp32-cyd-pc-monitor-9f0c/downloads/CYD-Monitor-bundle.zip`
 - Firmware: `https://github.com/GutFarms/Japan-central/raw/cursor/esp32-cyd-pc-monitor-9f0c/downloads/CYD-Firmware.zip`
 - Portable app: `https://github.com/GutFarms/Japan-central/raw/cursor/esp32-cyd-pc-monitor-9f0c/downloads/CYD-Monitor-portable.zip`
+- JC Time: `https://github.com/GutFarms/Japan-central/raw/cursor/esp32-cyd-pc-monitor-9f0c/downloads/JC-Time-linux`

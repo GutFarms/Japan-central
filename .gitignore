@@ -17,6 +17,10 @@ host/build/
 host/dist/
 *.spec
 
+# Rust
+target/
+clock/target/
+
 # Local overrides (optional)
 host/.env
 host/config.local.json
