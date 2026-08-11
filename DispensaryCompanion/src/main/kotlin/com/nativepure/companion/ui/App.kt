@@ -302,15 +302,34 @@ private fun EmailVerifyPane(
                 )
                 if (issuedCode != null) {
                     Surface(
-                        color = MaterialTheme.colorScheme.secondaryContainer,
+                        color = if (issuedCode.deliveredByMail) {
+                            MaterialTheme.colorScheme.primaryContainer
+                        } else {
+                            MaterialTheme.colorScheme.secondaryContainer
+                        },
                         shape = RoundedCornerShape(12.dp)
                     ) {
                         Column(Modifier.padding(12.dp)) {
-                            Text("Offline delivery", style = MaterialTheme.typography.titleSmall)
-                            Text(
-                                "Code: ${issuedCode.code}",
-                                style = MaterialTheme.typography.headlineMedium
-                            )
+                            if (issuedCode.deliveredByMail) {
+                                Text("Code emailed", style = MaterialTheme.typography.titleSmall)
+                                Text(
+                                    "Check ${issuedCode.email}. Local inbox: http://127.0.0.1:8787/",
+                                    color = MaterialTheme.colorScheme.onPrimaryContainer
+                                )
+                            } else {
+                                Text(
+                                    "Mail server offline — code shown here",
+                                    style = MaterialTheme.typography.titleSmall
+                                )
+                                Text(
+                                    issuedCode.mailError?.let { "($it)" } ?: "",
+                                    color = MaterialTheme.colorScheme.onSecondaryContainer
+                                )
+                                Text(
+                                    "Code: ${issuedCode.code}",
+                                    style = MaterialTheme.typography.headlineMedium
+                                )
+                            }
                         }
                     }
                 }

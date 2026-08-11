@@ -235,7 +235,10 @@ object LoyaltyPoints {
 data class EmailCodeIssue(
     val email: String,
     val code: String,
-    val expiresAtMs: Long
+    val expiresAtMs: Long,
+    /** True when the Native Pure mail server accepted delivery. */
+    val deliveredByMail: Boolean = false,
+    val mailError: String? = null
 )
 
 @Entity(

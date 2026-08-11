@@ -1,6 +1,6 @@
 {
-  "versionCode": 19,
-  "versionName": "1.14.1",
+  "versionCode": 20,
+  "versionName": "1.15.0",
   "apkUrl": "https://github.com/GutFarms/Japan-central/releases/latest/download/NativePure-Dispensary.apk",
-  "releaseNotes": "Clean verified build of Native Pure 1.14 — Deals tab, admin inventory editing, loyalty redeem, order receipts."
+  "releaseNotes": "Native Pure mail server for verification emails (with offline code fallback)."
 }

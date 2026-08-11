@@ -1,5 +1,6 @@
 package com.nativepure.companion.data
 
+import com.nativepure.companion.mail.MailApiClient
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import java.io.File
@@ -838,7 +839,18 @@ class CompanionRepository {
         emailCodeHash = PasswordHasher.hash(code, salt)
         emailCodeExpiresAt = System.currentTimeMillis() + EMAIL_CODE_TTL_MS
         emailCodeSentAt = System.currentTimeMillis()
-        return EmailCodeIssue(customer.email, code, emailCodeExpiresAt)
+        val mail = MailApiClient.sendVerificationCodeBlocking(
+            email = customer.email,
+            code = code,
+            expiresInMinutes = (EMAIL_CODE_TTL_MS / 60_000L).toInt().coerceAtLeast(5)
+        )
+        return EmailCodeIssue(
+            email = customer.email,
+            code = code,
+            expiresAtMs = emailCodeExpiresAt,
+            deliveredByMail = mail.ok,
+            mailError = mail.error
+        )
     }
 
     private fun clearEmailCode() {

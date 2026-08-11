@@ -92,30 +92,50 @@ fun EmailVerificationScreen(
 
             if (issuedCode != null) {
                 Surface(
-                    color = colors.secondaryContainer,
+                    color = if (issuedCode.deliveredByMail) {
+                        colors.primaryContainer
+                    } else {
+                        colors.secondaryContainer
+                    },
                     shape = RoundedCornerShape(14.dp),
                     modifier = Modifier.fillMaxWidth()
                 ) {
                     Column(modifier = Modifier.padding(14.dp)) {
-                        Text(
-                            text = "Offline delivery",
-                            style = MaterialTheme.typography.titleSmall,
-                            color = colors.onSecondaryContainer
-                        )
-                        Text(
-                            text = "This build has no mail server, so your code is shown here:",
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = colors.onSecondaryContainer,
-                            modifier = Modifier.padding(top = 4.dp)
-                        )
-                        Text(
-                            text = issuedCode.code,
-                            style = MaterialTheme.typography.headlineLarge.copy(
-                                fontFamily = FontFamily.Monospace
-                            ),
-                            color = colors.onSecondaryContainer,
-                            modifier = Modifier.padding(top = 8.dp)
-                        )
+                        if (issuedCode.deliveredByMail) {
+                            Text(
+                                text = "Code emailed",
+                                style = MaterialTheme.typography.titleSmall,
+                                color = colors.onPrimaryContainer
+                            )
+                            Text(
+                                text = "Check ${issuedCode.email} for your 6-digit code. " +
+                                    "Open the mail inbox at the Native Pure mail server if you are testing locally.",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = colors.onPrimaryContainer,
+                                modifier = Modifier.padding(top = 4.dp)
+                            )
+                        } else {
+                            Text(
+                                text = "Mail server offline — code shown here",
+                                style = MaterialTheme.typography.titleSmall,
+                                color = colors.onSecondaryContainer
+                            )
+                            Text(
+                                text = issuedCode.mailError?.let { "Could not reach mail API ($it). Use this code:" }
+                                    ?: "Could not reach the mail server. Use this code:",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = colors.onSecondaryContainer,
+                                modifier = Modifier.padding(top = 4.dp)
+                            )
+                            Text(
+                                text = issuedCode.code,
+                                style = MaterialTheme.typography.headlineLarge.copy(
+                                    fontFamily = FontFamily.Monospace
+                                ),
+                                color = colors.onSecondaryContainer,
+                                modifier = Modifier.padding(top = 8.dp)
+                            )
+                        }
                     }
                 }
                 Spacer(Modifier.height(16.dp))

@@ -16,6 +16,7 @@ import com.solstice.dispensary.data.model.CartLine
 import com.solstice.dispensary.data.model.CartSummary
 import com.solstice.dispensary.data.model.Customer
 import com.solstice.dispensary.data.model.CustomerProfile
+import com.solstice.dispensary.data.mail.MailApiClient
 import com.solstice.dispensary.data.model.EmailCodeIssue
 import com.solstice.dispensary.data.model.InventoryIntake
 import com.solstice.dispensary.data.model.LabelScanResult
@@ -496,7 +497,8 @@ class DispensaryRepository(context: Context) {
 
     /**
      * Issues a fresh 6-digit email verification code for the signed-in customer.
-     * Offline builds cannot SMTP; [lastIssuedEmailCode] holds the plaintext once for UI delivery.
+     * Attempts delivery through the Native Pure mail server; plaintext is kept for
+     * on-device fallback when mail is unreachable.
      */
     suspend fun resendEmailVerificationCode(): AuthResult {
         val id = currentCustomerId() ?: return AuthResult.Error("Not signed in.")
@@ -550,7 +552,7 @@ class DispensaryRepository(context: Context) {
     @Volatile
     private var lastIssuedEmailCode: EmailCodeIssue? = null
 
-    private fun storeEmailVerificationCode(customer: Customer): EmailCodeIssue {
+    private suspend fun storeEmailVerificationCode(customer: Customer): EmailCodeIssue {
         val code = generateEmailCode()
         val salt = PasswordHasher.newSalt()
         val expiresAt = System.currentTimeMillis() + EMAIL_CODE_TTL_MS
@@ -561,7 +563,18 @@ class DispensaryRepository(context: Context) {
             .putLong(KEY_EMAIL_CODE_EXPIRES_AT, expiresAt)
             .putLong(KEY_EMAIL_CODE_SENT_AT, System.currentTimeMillis())
             .apply()
-        return EmailCodeIssue(email = customer.email, code = code, expiresAtMs = expiresAt)
+        val mail = MailApiClient.sendVerificationCode(
+            email = customer.email,
+            code = code,
+            expiresInMinutes = (EMAIL_CODE_TTL_MS / 60_000L).toInt().coerceAtLeast(5)
+        )
+        return EmailCodeIssue(
+            email = customer.email,
+            code = code,
+            expiresAtMs = expiresAt,
+            deliveredByMail = mail.ok,
+            mailError = mail.error
+        )
     }
 
     private fun clearEmailVerificationCode() {

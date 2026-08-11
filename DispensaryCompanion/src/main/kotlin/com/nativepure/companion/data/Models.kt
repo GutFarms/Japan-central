@@ -206,7 +206,9 @@ fun Customer.toProfile() = CustomerProfile(
 data class EmailCodeIssue(
     val email: String,
     val code: String,
-    val expiresAtMs: Long
+    val expiresAtMs: Long,
+    val deliveredByMail: Boolean = false,
+    val mailError: String? = null
 )
 
 sealed class AuthResult {

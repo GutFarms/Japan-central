@@ -12,9 +12,14 @@ android {
         applicationId = "com.solstice.dispensary"
         minSdk = 26
         targetSdk = 34
-        versionCode = 19
-        versionName = "1.14.1"
+        versionCode = 20
+        versionName = "1.15.0"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+
+        // Emulator → host machine mail server. Override with -PmailApiBaseUrl=...
+        val mailApi = (project.findProperty("mailApiBaseUrl") as String?)
+            ?: "http://10.0.2.2:8787"
+        buildConfigField("String", "MAIL_API_BASE_URL", "\"$mailApi\"")
     }
 
     val releaseKeystore = rootProject.file("keystore/solstice-release.jks")
