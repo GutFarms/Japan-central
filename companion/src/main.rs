@@ -181,6 +181,85 @@ fn stamp() -> String {
     format!("{h:02}:{m:02}:{s:02}")
 }
 
+/// Uptime: `45s` → `3m 12s` → `2h 5m` → `1d 4h`.
+fn format_uptime(secs: u64) -> String {
+    if secs < 60 {
+        format!("{secs}s")
+    } else if secs < 3600 {
+        let m = secs / 60;
+        let s = secs % 60;
+        if s == 0 {
+            format!("{m}m")
+        } else {
+            format!("{m}m {s}s")
+        }
+    } else if secs < 86_400 {
+        let h = secs / 3600;
+        let m = (secs % 3600) / 60;
+        if m == 0 {
+            format!("{h}h")
+        } else {
+            format!("{h}h {m}m")
+        }
+    } else {
+        let d = secs / 86_400;
+        let h = (secs % 86_400) / 3600;
+        if h == 0 {
+            format!("{d}d")
+        } else {
+            format!("{d}d {h}h")
+        }
+    }
+}
+
+fn scale_si(value: f64, units: &[&str]) -> (f64, usize) {
+    let mut v = value.max(0.0);
+    let mut i = 0usize;
+    while v >= 1000.0 && i + 1 < units.len() {
+        v /= 1000.0;
+        i += 1;
+    }
+    (v, i)
+}
+
+fn fmt_scaled(v: f64, i: usize) -> String {
+    if i == 0 {
+        format!("{:.0}", v)
+    } else if v >= 100.0 {
+        format!("{v:.0}")
+    } else if v >= 10.0 {
+        format!("{v:.1}")
+    } else {
+        format!("{v:.2}")
+    }
+}
+
+/// Total hashes: `812 H` → `12.4 kH` → `1.05 MH` → …
+fn format_hash_count(n: u64) -> String {
+    const UNITS: &[&str] = &["H", "kH", "MH", "GH", "TH", "PH"];
+    if n < 1000 {
+        return format!("{n} H");
+    }
+    let (v, i) = scale_si(n as f64, UNITS);
+    format!("{} {}", fmt_scaled(v, i), UNITS[i])
+}
+
+/// Rate string: `812 H/s` → `12.4 kH/s` → `1.05 MH/s`.
+fn format_hashrate(hs: f64) -> String {
+    let (num, unit) = format_hashrate_parts(hs);
+    format!("{num} {unit}")
+}
+
+fn format_hashrate_parts(hs: f64) -> (String, &'static str) {
+    const UNITS: &[&str] = &["H/s", "kH/s", "MH/s", "GH/s", "TH/s"];
+    let hs = hs.max(0.0);
+    if hs < 1000.0 {
+        return (format!("{hs:.0}"), "H/s");
+    }
+    let (v, i) = scale_si(hs, UNITS);
+    (fmt_scaled(v, i), UNITS[i])
+}
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Tab {
     Mine,
@@ -609,14 +688,14 @@ impl CompanionApp {
                         ui.label(
                             RichText::new(if self.board_hashing() {
                                 format!(
-                                    "Board live at {:.0} H/s — nonce {} · {} hashes",
-                                    self.status.hashrate_hs,
+                                    "Board live at {} — nonce {} · {}",
+                                    format_hashrate(self.status.hashrate_hs),
                                     if self.status.nonce.is_empty() {
                                         "—"
                                     } else {
                                         &self.status.nonce
                                     },
-                                    self.status.hashes
+                                    format_hash_count(self.status.hashes)
                                 )
                             } else if self.mining {
                                 "Jobs streaming — waiting for board hashrate…".into()
@@ -630,16 +709,18 @@ impl CompanionApp {
                             .size(15.0),
                         );
                         ui.add_space(14.0);
+                        let (rate_num, rate_unit) =
+                            format_hashrate_parts(self.displayed_khs as f64 * 1000.0);
                         ui.horizontal(|ui| {
                             ui.label(
-                                RichText::new(format!("{:.2}", self.displayed_khs))
+                                RichText::new(rate_num)
                                     .color(C_TEXT)
                                     .font(display_font(72.0)),
                             );
                             ui.vertical(|ui| {
                                 ui.add_space(28.0);
                                 ui.label(
-                                    RichText::new("kH/s")
+                                    RichText::new(rate_unit)
                                         .color(C_LIME)
                                         .font(display_font(26.0)),
                                 );
@@ -811,8 +892,18 @@ impl CompanionApp {
                     if rej > 0 { C_ERR } else { C_MUTED },
                 );
                 metric(ui, "Board shares", &self.status.shares.to_string(), C_TEXT);
-                metric(ui, "Raw H/s", &format!("{:.0}", self.status.hashrate_hs), C_TEXT);
-                metric(ui, "Hashes", &self.status.hashes.to_string(), C_BUBBLE_HI);
+                metric(
+                    ui,
+                    "Rate",
+                    &format_hashrate(self.status.hashrate_hs),
+                    C_TEXT,
+                );
+                metric(
+                    ui,
+                    "Hashes",
+                    &format_hash_count(self.status.hashes),
+                    C_BUBBLE_HI,
+                );
                 metric(
                     ui,
                     "Nonce",
@@ -859,7 +950,11 @@ impl CompanionApp {
             telemetry_line(
                 ui,
                 "Uptime",
-                &format!("{}s · {} MHz", self.status.uptime_secs, self.target_mhz),
+                &format!(
+                    "{} · {} MHz",
+                    format_uptime(self.status.uptime_secs),
+                    self.target_mhz
+                ),
             );
             ui.add_space(10.0);
             if !self.last_ok.is_empty() {
@@ -1456,17 +1551,18 @@ fn paint_board_screen(
         mono_ui_font(10.0),
         C_MUTED,
     );
+    let (rate_num, rate_unit) = format_hashrate_parts(khs as f64 * 1000.0);
     painter.text(
         Pos2::new(screen.left() + 14.0, screen.top() + 42.0),
         egui::Align2::LEFT_TOP,
-        format!("{khs:.2}"),
+        rate_num,
         display_font(32.0),
         C_TEXT,
     );
     painter.text(
         Pos2::new(screen.left() + 128.0, screen.top() + 58.0),
         egui::Align2::LEFT_TOP,
-        "kH/s",
+        rate_unit,
         mono_ui_font(12.0),
         C_LIME,
     );

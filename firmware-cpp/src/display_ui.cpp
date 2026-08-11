@@ -159,10 +159,34 @@ void DisplayUi::showMining(const AppConfig& cfg, const MinerSnapshot& snap, bool
     tft_.fillRect(24, 40, 260, 56, cBg_);
     tft_.setTextColor(cText_, cBg_);
     char rate[24];
-    snprintf(rate, sizeof(rate), "%.2f", khs);
+    char unit[8];
+    // Auto-scale H/s → kH/s → MH/s (same idea as Companion).
+    float hs = snap.hashrateHs;
+    if (hs < 1000.0f) {
+      snprintf(rate, sizeof(rate), "%.0f", hs);
+      snprintf(unit, sizeof(unit), "H/s");
+    } else if (hs < 1000000.0f) {
+      float khs = hs / 1000.0f;
+      if (khs >= 100.0f)
+        snprintf(rate, sizeof(rate), "%.0f", khs);
+      else if (khs >= 10.0f)
+        snprintf(rate, sizeof(rate), "%.1f", khs);
+      else
+        snprintf(rate, sizeof(rate), "%.2f", khs);
+      snprintf(unit, sizeof(unit), "kH/s");
+    } else {
+      float mhs = hs / 1000000.0f;
+      if (mhs >= 100.0f)
+        snprintf(rate, sizeof(rate), "%.0f", mhs);
+      else if (mhs >= 10.0f)
+        snprintf(rate, sizeof(rate), "%.1f", mhs);
+      else
+        snprintf(rate, sizeof(rate), "%.2f", mhs);
+      snprintf(unit, sizeof(unit), "MH/s");
+    }
     tft_.drawString(rate, 24, 40, 4);
     tft_.setTextColor(cLime_, cBg_);
-    tft_.drawString("kH/s", 180, 62, 2);
+    tft_.drawString(unit, 180, 62, 2);
   }
 
   if (animDirty || rateDirty) {
@@ -203,8 +227,19 @@ void DisplayUi::showMining(const AppConfig& cfg, const MinerSnapshot& snap, bool
 
   if (forceFull || snap.nonce != lastNonce_ || snap.totalHashes != lastHashes_) {
     tft_.fillRect(24, 196, 280, 16, cBg_);
+    char hashes[24];
+    uint64_t n = snap.totalHashes;
+    if (n < 1000ull) {
+      snprintf(hashes, sizeof(hashes), "%llu H", (unsigned long long)n);
+    } else if (n < 1000000ull) {
+      snprintf(hashes, sizeof(hashes), "%.1f kH", (double)n / 1000.0);
+    } else if (n < 1000000000ull) {
+      snprintf(hashes, sizeof(hashes), "%.2f MH", (double)n / 1000000.0);
+    } else {
+      snprintf(hashes, sizeof(hashes), "%.2f GH", (double)n / 1000000000.0);
+    }
     char line[48];
-    snprintf(line, sizeof(line), "nonce %08lx", (unsigned long)snap.nonce);
+    snprintf(line, sizeof(line), "%s · %08lx", hashes, (unsigned long)snap.nonce);
     tft_.setTextColor(cMuted_, cBg_);
     tft_.drawString(line, 24, 198, 1);
     lastNonce_ = snap.nonce;
