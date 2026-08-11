@@ -17,10 +17,36 @@ jobs:
         with:
           distribution: temurin
           java-version: "21"
-      - name: Package Windows EXE / MSI
+
+      - name: Package app image + Compose installers
         working-directory: DispensaryCompanion
         run: |
-          .\gradlew.bat packageExe packageMsi packageUberJarForCurrentOS --no-daemon
+          .\gradlew.bat createDistributable packageExe packageMsi packageUberJarForCurrentOS --no-daemon
+
+      - name: Install Inno Setup
+        shell: pwsh
+        run: |
+          choco install innosetup --no-progress -y
+          if (-not (Test-Path "C:\Program Files (x86)\Inno Setup 6\ISCC.exe")) {
+            throw "Inno Setup ISCC.exe not found"
+          }
+
+      - name: Build branded POS install wizard
+        working-directory: DispensaryCompanion
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path dist | Out-Null
+          $appDir = "build\compose\binaries\main\app\NativePureCompanion"
+          if (-not (Test-Path "$appDir\NativePureCompanion.exe")) {
+            Get-ChildItem build\compose\binaries\main\app -Recurse | Select-Object FullName
+            throw "App image missing — createDistributable did not produce NativePureCompanion.exe"
+          }
+          & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" "installer\NativePurePOS-Setup.iss"
+          if (-not (Test-Path "dist\NativePure-POS-Setup.exe")) {
+            throw "Branded setup EXE was not produced"
+          }
+          Get-Item "dist\NativePure-POS-Setup.exe" | Format-List Name, Length, LastWriteTime
+
       - name: Stage dist folder
         working-directory: DispensaryCompanion
         shell: pwsh
@@ -29,12 +55,15 @@ jobs:
           Copy-Item build\compose\binaries\main\exe\* dist\ -Recurse -ErrorAction SilentlyContinue
           Copy-Item build\compose\binaries\main\msi\* dist\ -Recurse -ErrorAction SilentlyContinue
           Copy-Item build\compose\jars\*.jar dist\ -ErrorAction SilentlyContinue
-          Get-ChildItem dist -Recurse | Format-Table Name, Length
+          # Prefer the branded wizard at the top of the artifact listing
+          Get-ChildItem dist -Recurse | Sort-Object Name | Format-Table Name, Length
+
       - name: Upload Windows installers
         uses: actions/upload-artifact@v4
         with:
           name: NativePure-Companion-Windows
           path: |
+            DispensaryCompanion/dist/NativePure-POS-Setup.exe
             DispensaryCompanion/dist/**
             DispensaryCompanion/build/compose/binaries/main/exe/**
             DispensaryCompanion/build/compose/binaries/main/msi/**

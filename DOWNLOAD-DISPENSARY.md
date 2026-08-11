@@ -52,23 +52,25 @@ cp app/build/outputs/apk/release/app-release.apk dist/NativePure-Dispensary.apk
 
 Point-of-sale register for in-store sales, loyalty lookup, cash/card tender, and phone pickup handoff.
 
-### Option A — GitHub Actions (preferred)
+### Windows — install wizard (recommended)
 
 1. Open **[Actions](../../ed)** → **Build Native Pure Windows companion**
-2. Download either:
-   - **`NativePure-Companion-Windows`** — `.exe` / `.msi` installers + Windows JAR
-   - **`NativePure-Companion-linux-jar`** — runnable uber JAR (any OS with JDK 17+)
+2. Open the latest green run → download **`NativePure-Companion-Windows`**
+3. Run **`NativePure-POS-Setup.exe`** — branded install wizard with the Native Pure logo
+4. Choose install folder → Finish → launch from Start menu or desktop shortcut
 
-### Option B — Run the JAR locally
+Also in that artifact (optional): Compose `.exe` / `.msi` packages and a Windows uber JAR.
 
-Needs **JDK 17+**.
+### Mac / Linux — runnable JAR
+
+1. Same Actions workflow → artifact **`NativePure-Companion-linux-jar`**
+2. Needs **JDK 17+**:
 
 ```bash
-# After downloading NativePure-Companion.jar
 java -jar NativePure-Companion.jar
 ```
 
-Helpers (after building):
+Helpers after a local build:
 
 ```bash
 DispensaryCompanion/run-companion.sh    # macOS / Linux
@@ -79,11 +81,13 @@ DispensaryCompanion/run-companion.bat   # Windows
 
 ```bash
 cd DispensaryCompanion
+./gradlew createDistributable
+# Windows (with Inno Setup 6 installed):
+#   ISCC installer/NativePurePOS-Setup.iss
+# → dist/NativePure-POS-Setup.exe
+
 ./gradlew packageUberJarForCurrentOS
 # → build/compose/jars/NativePureCompanion-*-*.jar
-
-# Windows only (on Windows or the Actions runner):
-gradlew.bat packageExe packageMsi
 ```
 
 See [`DispensaryCompanion/README.md`](./DispensaryCompanion/README.md).

@@ -35,9 +35,19 @@ compose.desktop {
             description = "Native Pure dispensary point of sale"
             copyright = "© Native Pure"
             vendor = "Native Pure"
+            // App + Start Menu / taskbar icon (from logo_main.png)
             windows {
+                iconFile.set(project.file("icon.ico"))
+                menu = true
                 menuGroup = "Native Pure"
+                shortcut = true
+                dirChooser = true
+                perUserInstall = false
                 upgradeUuid = "A7C3E91F-4B2D-4E8A-9F1C-6D5B8A0E2C44"
+                console = false
+            }
+            linux {
+                iconFile.set(project.file("icon.png"))
             }
         }
     }

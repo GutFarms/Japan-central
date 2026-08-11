@@ -8,8 +8,28 @@ See [`../DOWNLOAD-DISPENSARY.md`](../DOWNLOAD-DISPENSARY.md).
 
 GitHub Actions workflow **Build Native Pure Windows companion** uploads:
 
-- **`NativePure-Companion-Windows`** — EXE / MSI + Windows uber JAR
+- **`NativePure-Companion-Windows`** — **`NativePure-POS-Setup.exe`** (logo install wizard) + MSI/EXE/JAR
 - **`NativePure-Companion-linux-jar`** — cross-platform runnable JAR
+
+### Windows install wizard
+
+1. Download **`NativePure-POS-Setup.exe`** from the Actions artifact
+2. Run the wizard (Native Pure logo sidebar / welcome screen)
+3. Pick an install folder → Finish → launch from Start menu or desktop
+
+Rebuild wizard art from the app logo:
+
+```bash
+./installer/generate-assets.sh
+```
+
+On Windows with [Inno Setup 6](https://jrsoftware.org/isinfo.php):
+
+```bat
+gradlew.bat createDistributable
+"C:\Program Files (x86)\Inno Setup 6\ISCC.exe" installer\NativePurePOS-Setup.iss
+:: → dist\NativePure-POS-Setup.exe
+```
 
 Run a JAR with JDK 17+:
 

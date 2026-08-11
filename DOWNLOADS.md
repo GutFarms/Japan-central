@@ -20,19 +20,27 @@ Requires Android 8.0+.
 
 ---
 
-## Desktop companion
+## Desktop POS
 
 <a id="desktop-companion"></a>
+<a id="desktop-pos"></a>
 
-**Scan for companion download instructions** (Windows / Mac / Linux):
+**Scan for desktop POS download instructions** (Windows install wizard / Mac / Linux):
 
-<img src="./downloads/qr/nativepure-companion.png" alt="QR code — Native Pure desktop companion downloads" width="240" />
+<img src="./downloads/qr/nativepure-companion.png" alt="QR code — Native Pure desktop POS downloads" width="240" />
 
-**Link:** [DOWNLOAD-DISPENSARY.md — Desktop companion](./DOWNLOAD-DISPENSARY.md#desktop-companion-windows--mac--linux)
+**Link:** [DOWNLOAD-DISPENSARY.md — Desktop POS](./DOWNLOAD-DISPENSARY.md#desktop-pos-windows--mac--linux)
 
-From GitHub Actions, download:
-- **NativePure-Companion-Windows** — `.exe` / `.msi` + Windows JAR  
-- **NativePure-Companion-linux-jar** — runnable JAR (JDK 17+)
+### Windows (easiest)
+
+From GitHub Actions → **Build Native Pure Windows companion** → artifact **`NativePure-Companion-Windows`**:
+
+- **`NativePure-POS-Setup.exe`** — logo-branded install wizard (recommended)
+- Optional: MSI / Compose EXE / JAR
+
+### Mac / Linux
+
+Artifact **`NativePure-Companion-linux-jar`** — runnable JAR (JDK 17+)
 
 ---
 
