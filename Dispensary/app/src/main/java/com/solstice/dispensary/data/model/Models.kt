@@ -198,7 +198,7 @@ object LoyaltyPoints {
         kotlin.math.floor(amount.coerceAtLeast(0.0) * POINTS_PER_DOLLAR).toInt()
 
     fun discountForPoints(points: Int): Double =
-        (points.coerceAtLeast(0) / REDEEM_POINTS_PER_DOLLAR.toDouble())
+        (points.coerceAtLeast(0) / REDEEM_POINTS_PER_DOLLAR).toDouble()
 
     /** Largest redeemable point amount (whole dollars of discount) for this balance/total. */
     fun maxRedeemablePoints(availablePoints: Int, grossTotal: Double): Int {

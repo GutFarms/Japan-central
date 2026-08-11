@@ -526,8 +526,8 @@ class CompanionRepository {
         if (summary.lines.isEmpty()) return null
         val customer = currentCustomer()
         val customerRow = customer?.id?.let { id -> customers.find { it.id == id } }
-        val canRedeem = customerRow != null && customerRow.role == AccountRole.CUSTOMER
-        val maxRedeem = if (canRedeem) {
+        val canRedeem = customerRow?.role == AccountRole.CUSTOMER
+        val maxRedeem = if (canRedeem && customerRow != null) {
             LoyaltyPoints.maxRedeemablePoints(customerRow.loyaltyPoints, summary.total)
         } else {
             0

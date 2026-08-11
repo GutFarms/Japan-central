@@ -878,8 +878,8 @@ class DispensaryRepository(context: Context) {
         val tax = LoyaltyPoints.taxOn(subtotal, TAX_RATE)
         val gross = subtotal + tax
 
-        val canRedeem = customerRow != null && customerRow.role == AccountRole.CUSTOMER
-        val maxRedeem = if (canRedeem) {
+        val canRedeem = customerRow?.role == AccountRole.CUSTOMER
+        val maxRedeem = if (canRedeem && customerRow != null) {
             LoyaltyPoints.maxRedeemablePoints(customerRow.loyaltyPoints, gross)
         } else {
             0
