@@ -1,1 +1,16 @@
 target/
+
+# Native Pure — Android
+**/local.properties
+**/.gradle/
+NativePure/android/keystore/*.jks
+NativePure/android/app/build/
+
+# Native Pure — desktop POS
+NativePure/desktop/.gradle/
+NativePure/desktop/build/
+NativePure/desktop/dist/
+
+# Native Pure — mail server
+NativePure/mail-server/.gradle/
+NativePure/mail-server/build/

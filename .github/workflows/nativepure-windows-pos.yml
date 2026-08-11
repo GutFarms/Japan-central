@@ -1,0 +1,203 @@
+name: Build Native Pure Windows POS
+
+on:
+  push:
+    branches: [master, "cursor/**"]
+    paths:
+      - "NativePure/desktop/**"
+      - ".github/workflows/nativepure-windows-pos.yml"
+    tags: ["nativepure-v*", "nativepure-pos-v*"]
+  workflow_dispatch:
+    inputs:
+      publish_release:
+        description: "Publish Setup.exe + SHA256SUMS to a GitHub Release"
+        type: boolean
+        default: true
+
+permissions:
+  contents: write
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - name: Package app image + Compose installers
+        working-directory: NativePure/desktop
+        run: |
+          .\gradlew.bat createDistributable packageExe packageMsi packageUberJarForCurrentOS --no-daemon
+
+      - name: Install Inno Setup
+        shell: pwsh
+        run: |
+          choco install innosetup --no-progress -y
+          if (-not (Test-Path "C:\Program Files (x86)\Inno Setup 6\ISCC.exe")) {
+            throw "Inno Setup ISCC.exe not found"
+          }
+
+      - name: Build branded POS install wizard
+        working-directory: NativePure/desktop
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path dist | Out-Null
+          $appDir = "build\compose\binaries\main\app\NativePureCompanion"
+          if (-not (Test-Path "$appDir\NativePureCompanion.exe")) {
+            Get-ChildItem build\compose\binaries\main\app -Recurse | Select-Object FullName
+            throw "App image missing — createDistributable did not produce NativePureCompanion.exe"
+          }
+          & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" "installer\NativePurePOS-Setup.iss"
+          if (-not (Test-Path "dist\NativePure-POS-Setup.exe")) {
+            throw "Branded setup EXE was not produced"
+          }
+          Get-Item "dist\NativePure-POS-Setup.exe" | Format-List Name, Length, LastWriteTime
+
+      - name: Stage dist folder
+        working-directory: NativePure/desktop
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path dist | Out-Null
+          Copy-Item build\compose\binaries\main\exe\* dist\ -Recurse -ErrorAction SilentlyContinue
+          Copy-Item build\compose\binaries\main\msi\* dist\ -Recurse -ErrorAction SilentlyContinue
+          Copy-Item build\compose\jars\*.jar dist\ -ErrorAction SilentlyContinue
+          Get-ChildItem dist | Format-Table Name, Length
+
+      - name: Optionally Authenticode-sign Windows binaries
+        working-directory: NativePure/desktop
+        shell: pwsh
+        env:
+          WINDOWS_CERT_PFX_BASE64: ${{ secrets.WINDOWS_CERT_PFX_BASE64 }}
+          WINDOWS_CERT_PASSWORD: ${{ secrets.WINDOWS_CERT_PASSWORD }}
+        run: |
+          if ([string]::IsNullOrWhiteSpace($env:WINDOWS_CERT_PFX_BASE64)) {
+            Write-Host "No WINDOWS_CERT_PFX_BASE64 secret — skipping Authenticode signing (SmartScreen may warn)."
+            "unsigned" | Set-Content -Encoding ascii dist\SIGNING-STATUS.txt
+            return
+          }
+          $pfxPath = Join-Path $env:RUNNER_TEMP "nativepure-codesign.pfx"
+          [IO.File]::WriteAllBytes($pfxPath, [Convert]::FromBase64String($env:WINDOWS_CERT_PFX_BASE64))
+          $signtool = Get-ChildItem -Path "${env:ProgramFiles(x86)}\Windows Kits\10\bin" -Recurse -Filter signtool.exe -ErrorAction SilentlyContinue |
+            Where-Object { $_.FullName -match '\\x64\\signtool.exe$' } |
+            Sort-Object FullName -Descending |
+            Select-Object -First 1
+          if (-not $signtool) {
+            throw "signtool.exe not found — install Windows SDK on the runner or remove signing secrets"
+          }
+          $targets = Get-ChildItem dist -Include *.exe,*.msi -File -Recurse
+          foreach ($file in $targets) {
+            & $signtool.FullName sign /f $pfxPath /p $env:WINDOWS_CERT_PASSWORD /fd SHA256 /td SHA256 /tr http://timestamp.digicert.com /d "Native Pure Point of Sale" $file.FullName
+            if ($LASTEXITCODE -ne 0) { throw "signtool failed for $($file.Name)" }
+            Write-Host "Signed $($file.Name)"
+          }
+          Remove-Item $pfxPath -Force -ErrorAction SilentlyContinue
+          "signed" | Set-Content -Encoding ascii dist\SIGNING-STATUS.txt
+
+      - name: Write SHA-256 checksums (Get-FileHash compatible)
+        working-directory: NativePure/desktop
+        shell: pwsh
+        run: |
+          $names = New-Object System.Collections.Generic.List[string]
+          if (Test-Path "dist\NativePure-POS-Setup.exe") { $names.Add("NativePure-POS-Setup.exe") }
+          Get-ChildItem dist -File | Where-Object {
+            $_.Name -like "NativePureCompanion-*.exe" -or
+            $_.Name -like "NativePureCompanion-*.msi" -or
+            $_.Name -like "NativePureCompanion-*-*.jar"
+          } | ForEach-Object { $names.Add($_.Name) }
+
+          $sumLines = New-Object System.Collections.Generic.List[string]
+          $sumLines.Add("# Native Pure Windows POS — SHA-256")
+          $sumLines.Add("# Verify in PowerShell:")
+          $sumLines.Add("#   Get-FileHash .\\NativePure-POS-Setup.exe -Algorithm SHA256")
+          $sumLines.Add("# Compare Hash to the value below (case-insensitive).")
+          $sumLines.Add("#")
+          $sha256sum = New-Object System.Collections.Generic.List[string]
+          foreach ($name in ($names | Select-Object -Unique)) {
+            $path = Join-Path "dist" $name
+            $hash = (Get-FileHash -Path $path -Algorithm SHA256).Hash.ToLowerInvariant()
+            $len = (Get-Item $path).Length
+            $sumLines.Add("$hash  $name  ($len bytes)")
+            $sha256sum.Add("$hash  $name")
+            Write-Host "$name = $hash"
+          }
+          $sumLines | ForEach-Object { $_ } | Out-Null
+          $textBody = ($sumLines -join "`n") + "`n"
+          $sumBody = ($sha256sum -join "`n") + "`n"
+          # LF-only so `sha256sum -c` and PowerShell both work
+          [IO.File]::WriteAllText((Resolve-Path dist).Path + "\SHA256SUMS.txt", $textBody)
+          [IO.File]::WriteAllText((Resolve-Path dist).Path + "\SHA256SUMS", $sumBody)
+          Copy-Item dist\SHA256SUMS.txt dist\NativePure-POS-SHA256.txt -Force
+          Get-ChildItem dist | Sort-Object Name | Format-Table Name, Length
+
+      - name: Upload Windows installers
+        uses: actions/upload-artifact@v4
+        with:
+          name: NativePure-Companion-Windows
+          path: |
+            NativePure/desktop/dist/NativePure-POS-Setup.exe
+            NativePure/desktop/dist/SHA256SUMS
+            NativePure/desktop/dist/SHA256SUMS.txt
+            NativePure/desktop/dist/NativePure-POS-SHA256.txt
+            NativePure/desktop/dist/SIGNING-STATUS.txt
+            NativePure/desktop/dist/**
+            NativePure/desktop/build/compose/binaries/main/exe/**
+            NativePure/desktop/build/compose/binaries/main/msi/**
+          if-no-files-found: error
+
+      - name: Publish GitHub Release (Setup + checksums)
+        if: startsWith(github.ref, 'refs/tags/') || (github.event_name == 'workflow_dispatch' && inputs.publish_release)
+        uses: softprops/action-gh-release@v2
+        with:
+          # Prefer shared nativepure-v* releases (same tag as the Android APK).
+          # Dispatch-only POS builds use a prerelease tag so they do not steal /releases/latest.
+          tag_name: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || format('nativepure-pos-v{0}', github.run_number) }}
+          name: Native Pure ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || format('POS build-{0}', github.run_number) }}
+          prerelease: ${{ !(startsWith(github.ref, 'refs/tags/') && startsWith(github.ref_name, 'nativepure-v')) }}
+          body: |
+            ### Windows Point of Sale
+            1. Download `NativePure-POS-Setup.exe`
+            2. Verify with `SHA256SUMS` — `Get-FileHash .\NativePure-POS-Setup.exe -Algorithm SHA256`
+            3. Run the logo install wizard
+
+            Optional Authenticode: repo secrets `WINDOWS_CERT_PFX_BASE64` + `WINDOWS_CERT_PASSWORD`.
+          files: |
+            NativePure/desktop/dist/NativePure-POS-Setup.exe
+            NativePure/desktop/dist/SHA256SUMS
+            NativePure/desktop/dist/SHA256SUMS.txt
+            NativePure/desktop/dist/NativePure-POS-SHA256.txt
+          fail_on_unmatched_files: true
+          generate_release_notes: false
+          append_body: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  linux-jar:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+      - name: Package Linux uber JAR
+        working-directory: NativePure/desktop
+        run: |
+          chmod +x gradlew
+          ./gradlew packageUberJarForCurrentOS --no-daemon
+          mkdir -p dist
+          cp build/compose/jars/NativePureCompanion-*-*.jar dist/NativePure-Companion-linux-x64.jar
+          cp dist/NativePure-Companion-linux-x64.jar dist/NativePure-Companion.jar
+          (cd dist && sha256sum NativePure-Companion-linux-x64.jar NativePure-Companion.jar > SHA256SUMS)
+          ls -lh dist/
+          cat dist/SHA256SUMS
+      - name: Upload Linux companion JAR
+        uses: actions/upload-artifact@v4
+        with:
+          name: NativePure-Companion-linux-jar
+          path: |
+            NativePure/desktop/dist/*.jar
+            NativePure/desktop/dist/SHA256SUMS
+          if-no-files-found: error
