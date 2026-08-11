@@ -68,5 +68,6 @@ Also copied for sideload kits: [`Dispensary/dist/qr/nativepure-android.png`](./D
 
 | Role | Login | Password |
 |------|--------|----------|
-| Admin | `admin` or `fidelgutierrez33@gmail.com` | `12345678` (change on first login) |
+| Admin (desktop fresh install) | `admin` | See `admin-setup.txt` in the POS data folder |
+| Admin (Android / existing) | `admin` or `fidelgutierrez33@gmail.com` | Temporary bootstrap — change on first login |
 | Demo | `demo@nativepure.example` | `demo1234` |

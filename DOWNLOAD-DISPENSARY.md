@@ -98,7 +98,8 @@ See [`DispensaryCompanion/README.md`](./DispensaryCompanion/README.md).
 
 | Role | Login | Password |
 |------|--------|----------|
-| Admin | `admin` or `fidelgutierrez33@gmail.com` | `12345678` (must change on first login) |
+| Admin (desktop fresh install) | `admin` | See `admin-setup.txt` in the POS data folder (must change) |
+| Admin (Android / existing) | `admin` or `fidelgutierrez33@gmail.com` | Temporary bootstrap — change on first login |
 | Demo customer | `demo@nativepure.example` | `demo1234` |
 
 ## Phone ↔ desktop sync

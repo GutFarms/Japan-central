@@ -1557,7 +1557,7 @@ private fun AccountPane(
                 style = MaterialTheme.typography.bodyMedium
             )
             Text(
-                "Files: store.json · inventory.json · customers.json",
+                "Files: store.enc · inventory.json · customers.json · .store-key",
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 style = MaterialTheme.typography.bodyMedium
             )

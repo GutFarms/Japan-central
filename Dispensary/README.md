@@ -12,8 +12,8 @@ Adult-use dispensary app for browsing the menu, building a pickup bag, scanning 
 
 - **18+ age gate** — required before entering the app
 - **Customer accounts** — log in or create an account; customers only see their own profile/orders
-- **Admin & staff** — main admin `admin` / `fidelgutierrez33@gmail.com` (password `12345678`); admin can create staff sub-accounts by email; admin/staff can view sensitive customer data and inventory
-- **Security** — password policy for all accounts, email verification with 6-digit code after signup, change password, login lockout after failed attempts, optional app PIN lock with auto-lock, forced password change for staff temp passwords
+- **Admin & staff** — main admin `admin` / `fidelgutierrez33@gmail.com` (temporary bootstrap password — change on first login); admin can create staff sub-accounts by email; admin/staff can view customer data (full PII reveal is admin-only)
+- **Security** — PBKDF2 passwords, password policy, email verification, login lockout, optional app PIN lock with auto-lock, forced password change for staff temp passwords, cart cleared on logout
 - **Keyboard-safe forms** — auth, verification, password, and account screens scroll above the IME so typed text stays visible
 - **Light / Dark mode** — System, Light, or Dark (Account → Appearance)
 - **Home** — branded welcome, category shortcuts, featured products
@@ -25,10 +25,10 @@ Adult-use dispensary app for browsing the menu, building a pickup bag, scanning 
 - **Published catalog** — customers only see published products; publish requires SKU + price; drafts/AI scans stay in Stock
 - **Staff controls** — admin can list, disable/enable, and reset staff passwords
 - **Encrypted session prefs** + forced bootstrap admin password change
-- **Inventory sync JSON** — export/import between Android and Windows companion
+- **Inventory sync JSON** — export/import between Android and Windows POS (no password hashes)
 - **Store** — hours, address, contact, pickup guidance
 - **Plant-inspired UI** — canopy greens, Fraunces + Nunito Sans, botanical hero/age-gate motion, leaf empty states
-- **Windows desktop companion** — see [`../DispensaryCompanion/README.md`](../DispensaryCompanion/README.md)
+- **Windows desktop POS** — logo install wizard; see [`../DispensaryCompanion/README.md`](../DispensaryCompanion/README.md)
 ## Stack
 
 - Kotlin + Jetpack Compose (Material 3)
