@@ -55,7 +55,7 @@ class Converters {
         Customer::class,
         ProductRequest::class
     ],
-    version = 13,
+    version = 14,
     exportSchema = false
 )
 @TypeConverters(Converters::class)

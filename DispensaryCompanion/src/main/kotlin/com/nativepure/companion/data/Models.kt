@@ -91,7 +91,8 @@ data class Product(
     val stockQuarter: Int = 0,
     val priceQuarter: Double = 0.0,
     val stockOunce: Int = 0,
-    val priceOunce: Double = 0.0
+    val priceOunce: Double = 0.0,
+    val imagePath: String = ""
 ) {
     val hasActiveDeal: Boolean
         get() = onDeal && dealPercent > 0

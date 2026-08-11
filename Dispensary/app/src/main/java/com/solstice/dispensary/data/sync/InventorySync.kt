@@ -54,6 +54,7 @@ object InventorySync {
                         .put("priceQuarter", p.priceQuarter)
                         .put("stockOunce", p.stockOunce)
                         .put("priceOunce", p.priceOunce)
+                        .put("imagePath", p.imagePath)
                 )
             }
         })
@@ -127,7 +128,8 @@ object InventorySync {
                     stockQuarter = o.optInt("stockQuarter", 0),
                     priceQuarter = o.optDouble("priceQuarter", 0.0),
                     stockOunce = o.optInt("stockOunce", 0),
-                    priceOunce = o.optDouble("priceOunce", 0.0)
+                    priceOunce = o.optDouble("priceOunce", 0.0),
+                    imagePath = o.optString("imagePath", "")
                 )
                 add(
                     if (product.sizeInventoryEnabled) product.normalizedSizeInventory() else product

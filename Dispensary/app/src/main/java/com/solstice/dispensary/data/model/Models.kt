@@ -104,7 +104,12 @@ data class Product(
     val stockQuarter: Int = 0,
     val priceQuarter: Double = 0.0,
     val stockOunce: Int = 0,
-    val priceOunce: Double = 0.0
+    val priceOunce: Double = 0.0,
+    /**
+     * Relative path under app filesDir (e.g. `product-images/{id}.jpg`),
+     * or empty when no staff photo has been captured.
+     */
+    val imagePath: String = ""
 ) {
     val hasActiveDeal: Boolean
         get() = onDeal && dealPercent > 0

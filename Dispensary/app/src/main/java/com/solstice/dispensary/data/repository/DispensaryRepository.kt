@@ -2,12 +2,14 @@ package com.solstice.dispensary.data.repository
 
 import android.content.Context
 import android.content.SharedPreferences
+import android.graphics.Bitmap
 import androidx.security.crypto.EncryptedSharedPreferences
 import androidx.security.crypto.MasterKey
 import com.solstice.dispensary.data.auth.PasswordHasher
 import com.solstice.dispensary.data.auth.PasswordPolicy
 import com.solstice.dispensary.data.db.DispensaryDatabase
 import com.solstice.dispensary.data.db.SeedCatalog
+import com.solstice.dispensary.data.images.ProductImageStore
 import com.solstice.dispensary.data.model.AccountRole
 import com.solstice.dispensary.data.model.AuthResult
 import com.solstice.dispensary.data.model.AutoLockTimeout
@@ -850,12 +852,41 @@ class DispensaryRepository(context: Context) {
                 product.published -> existing?.publishedAt ?: System.currentTimeMillis()
                 else -> 0L
             },
-            publishedBy = if (product.published) me.email else ""
+            publishedBy = if (product.published) me.email else "",
+            imagePath = product.imagePath.ifBlank { existing?.imagePath.orEmpty() }
         )
         db.productDao().upsert(cleaned)
         return OpResult.Success(
             if (existing == null) "Created “${cleaned.name}”." else "Saved changes to “${cleaned.name}”."
         )
+    }
+
+    /** Staff: save a camera photo for this product and update [Product.imagePath]. */
+    suspend fun updateProductPhoto(productId: String, bitmap: Bitmap): OpResult {
+        val me = currentCustomer() ?: return OpResult.Error("Not signed in.")
+        if (!me.role.canManageInventory) {
+            return OpResult.Error("Only admin and staff can update product pictures.")
+        }
+        val product = db.productDao().getById(productId)
+            ?: return OpResult.Error("Product not found.")
+        val relative = ProductImageStore.save(appContext, productId, bitmap)
+        db.productDao().update(product.copy(imagePath = relative))
+        return OpResult.Success("Updated photo for “${product.name}”.")
+    }
+
+    suspend fun clearProductPhoto(productId: String): OpResult {
+        val me = currentCustomer() ?: return OpResult.Error("Not signed in.")
+        if (!me.role.canManageInventory) {
+            return OpResult.Error("Only admin and staff can update product pictures.")
+        }
+        val product = db.productDao().getById(productId)
+            ?: return OpResult.Error("Product not found.")
+        ProductImageStore.deleteForProduct(appContext, productId)
+        if (product.imagePath.isNotBlank()) {
+            ProductImageStore.delete(appContext, product.imagePath)
+        }
+        db.productDao().update(product.copy(imagePath = ""))
+        return OpResult.Success("Removed photo for “${product.name}”.")
     }
 
     suspend fun createBlankDraftProduct(): OpResult {

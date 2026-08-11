@@ -24,12 +24,15 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextDecoration
@@ -37,6 +40,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import com.solstice.dispensary.R
+import com.solstice.dispensary.data.images.ProductImageStore
 import com.solstice.dispensary.data.model.Product
 import com.solstice.dispensary.data.model.ProductCategory
 import com.solstice.dispensary.data.model.StrainType
@@ -185,19 +189,32 @@ fun ProductTile(
 
 @Composable
 fun ProductSwatch(product: Product, modifier: Modifier = Modifier.size(56.dp)) {
-    val colors = swatchColors(product.category)
-    Box(
-        modifier = modifier
-            .clip(RoundedCornerShape(14.dp))
-            .background(Brush.linearGradient(colors)),
-        contentAlignment = Alignment.Center
-    ) {
-        Text(
-            text = product.category.label.take(1),
-            style = MaterialTheme.typography.titleLarge,
-            color = Ivory,
-            fontWeight = FontWeight.Bold
+    val context = LocalContext.current
+    val photo = remember(product.id, product.imagePath) {
+        ProductImageStore.loadBitmap(context, product.imagePath, maxEdge = 256)
+    }
+    if (photo != null) {
+        Image(
+            bitmap = photo.asImageBitmap(),
+            contentDescription = product.name,
+            modifier = modifier.clip(RoundedCornerShape(14.dp)),
+            contentScale = ContentScale.Crop
         )
+    } else {
+        val colors = swatchColors(product.category)
+        Box(
+            modifier = modifier
+                .clip(RoundedCornerShape(14.dp))
+                .background(Brush.linearGradient(colors)),
+            contentAlignment = Alignment.Center
+        ) {
+            Text(
+                text = product.category.label.take(1),
+                style = MaterialTheme.typography.titleLarge,
+                color = Ivory,
+                fontWeight = FontWeight.Bold
+            )
+        }
     }
 }
 

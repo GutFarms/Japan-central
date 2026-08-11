@@ -28,6 +28,7 @@ import com.solstice.dispensary.ui.screens.InventoryScreen
 import com.solstice.dispensary.ui.screens.MenuScreen
 import com.solstice.dispensary.ui.screens.OrdersScreen
 import com.solstice.dispensary.ui.screens.ProductDetailScreen
+import com.solstice.dispensary.ui.screens.ProductPhotoCameraScreen
 import com.solstice.dispensary.ui.screens.RequestsScreen
 import com.solstice.dispensary.ui.screens.StoreScreen
 import com.solstice.dispensary.ui.viewmodel.DispensaryViewModel
@@ -41,12 +42,14 @@ object Routes {
     const val STORE = "store"
     const val INVENTORY = "inventory"
     const val SCANNER = "inventory/scan"
+    const val PRODUCT_PHOTO = "inventory/photo/{productId}"
     const val ACCOUNT = "account"
     const val CUSTOMERS = "customers"
     const val REQUESTS = "requests"
     const val PRODUCT = "product/{productId}"
 
     fun product(id: String) = "product/$id"
+    fun productPhoto(id: String) = "inventory/photo/$id"
 }
 
 @Composable
@@ -201,7 +204,36 @@ fun DispensaryNavHost(
                     onAdjustStock = viewModel::adjustStock,
                     onSetPublished = viewModel::setPublished,
                     onSaveProduct = viewModel::saveProduct,
-                    onCreateDraft = viewModel::createBlankDraftProduct
+                    onCreateDraft = viewModel::createBlankDraftProduct,
+                    onCaptureProductPhoto = { id ->
+                        navController.navigate(Routes.productPhoto(id))
+                    },
+                    onClearProductPhoto = viewModel::clearProductPhoto
+                )
+            }
+        }
+        composable(
+            route = Routes.PRODUCT_PHOTO,
+            arguments = listOf(navArgument("productId") { type = NavType.StringType })
+        ) { entry ->
+            if (!viewModel.canManageInventory) {
+                Text(
+                    "Product photos are only available to admin and staff accounts.",
+                    modifier = Modifier.padding(20.dp)
+                )
+            } else {
+                val id = entry.arguments?.getString("productId").orEmpty()
+                val product by viewModel.productFlow(id).collectAsState(initial = null)
+                val name = product?.name
+                    ?: inventory.firstOrNull { it.id == id }?.name
+                    ?: "Product"
+                ProductPhotoCameraScreen(
+                    productName = name,
+                    onBack = { navController.popBackStack() },
+                    onPhotoCaptured = { bitmap ->
+                        viewModel.updateProductPhoto(id, bitmap)
+                        navController.popBackStack()
+                    }
                 )
             }
         }

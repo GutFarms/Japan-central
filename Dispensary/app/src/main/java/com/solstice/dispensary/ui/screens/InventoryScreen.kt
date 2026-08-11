@@ -66,7 +66,9 @@ fun InventoryScreen(
     onAdjustStock: (String, Int) -> Unit,
     onSetPublished: (String, Boolean) -> Unit,
     onSaveProduct: (Product) -> Unit,
-    onCreateDraft: () -> Unit
+    onCreateDraft: () -> Unit,
+    onCaptureProductPhoto: (String) -> Unit,
+    onClearProductPhoto: (String) -> Unit
 ) {
     val snackbar = remember { SnackbarHostState() }
     LaunchedEffect(intakeMessage) {
@@ -80,6 +82,12 @@ fun InventoryScreen(
     var filterCategory by remember { mutableStateOf<ProductCategory?>(null) }
     var filterPublished by remember { mutableStateOf("All") }
     var editing by remember { mutableStateOf<Product?>(null) }
+
+    LaunchedEffect(products, editing?.id) {
+        val id = editing?.id ?: return@LaunchedEffect
+        val fresh = products.firstOrNull { it.id == id }
+        if (fresh != null) editing = fresh
+    }
 
     val filtered = remember(products, query, filterCategory, filterPublished) {
         products.filter { product ->
@@ -126,7 +134,7 @@ fun InventoryScreen(
                         if (draftCount > 0) " · $draftCount unpublished" else ""
                 )
                 Text(
-                    text = "Admin and staff can edit name, price, SKU, and stock. Drafts stay hidden until published.",
+                    text = "Admin and staff can edit details, stock, and product photos. Drafts stay hidden until published.",
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
@@ -201,6 +209,12 @@ fun InventoryScreen(
                         onSave = { updated ->
                             onSaveProduct(updated)
                             editing = null
+                        },
+                        onCapturePhoto = {
+                            onCaptureProductPhoto(product.id)
+                        },
+                        onClearPhoto = {
+                            onClearProductPhoto(product.id)
                         }
                     )
                 }
@@ -251,6 +265,14 @@ fun InventoryScreen(
                             TextButton(onClick = { editing = product }) {
                                 Text("Edit")
                             }
+                            TextButton(onClick = { onCaptureProductPhoto(product.id) }) {
+                                Text(if (product.imagePath.isBlank()) "Add photo" else "Update photo")
+                            }
+                            if (product.imagePath.isNotBlank()) {
+                                TextButton(onClick = { onClearProductPhoto(product.id) }) {
+                                    Text("Remove photo")
+                                }
+                            }
                             TextButton(
                                 onClick = { onSetPublished(product.id, !product.published) }
                             ) {
@@ -296,7 +318,9 @@ fun InventoryScreen(
 private fun ProductEditorCard(
     product: Product,
     onCancel: () -> Unit,
-    onSave: (Product) -> Unit
+    onSave: (Product) -> Unit,
+    onCapturePhoto: () -> Unit,
+    onClearPhoto: () -> Unit
 ) {
     var name by remember(product.id) { mutableStateOf(product.name) }
     var brand by remember(product.id) { mutableStateOf(product.brand) }
@@ -361,6 +385,34 @@ private fun ProductEditorCard(
                 style = MaterialTheme.typography.titleLarge,
                 color = MaterialTheme.colorScheme.onSecondaryContainer
             )
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                ProductSwatch(
+                    product = product,
+                    modifier = Modifier
+                        .width(72.dp)
+                        .height(72.dp)
+                )
+                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Text(
+                        if (product.imagePath.isBlank()) "No product photo yet" else "Photo on file",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSecondaryContainer
+                    )
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        OutlinedButton(onClick = onCapturePhoto) {
+                            Text(if (product.imagePath.isBlank()) "Take photo" else "Update photo")
+                        }
+                        if (product.imagePath.isNotBlank()) {
+                            TextButton(onClick = onClearPhoto) {
+                                Text("Remove")
+                            }
+                        }
+                    }
+                }
+            }
             OutlinedTextField(
                 value = name,
                 onValueChange = { name = it },

@@ -1,6 +1,6 @@
 {
-  "versionCode": 21,
-  "versionName": "1.16.0",
+  "versionCode": 22,
+  "versionName": "1.17.0",
   "apkUrl": "https://github.com/GutFarms/Japan-central/releases/latest/download/NativePure-Dispensary.apk",
-  "releaseNotes": "Native Pure 1.16.0 — order flower by size: 1g, 3.5g, 7g, and 1oz with per-size inventory."
+  "releaseNotes": "Native Pure 1.17.0 — staff can update product pictures with the camera."
 }

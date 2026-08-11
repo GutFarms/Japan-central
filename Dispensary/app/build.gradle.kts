@@ -12,8 +12,8 @@ android {
         applicationId = "com.solstice.dispensary"
         minSdk = 26
         targetSdk = 34
-        versionCode = 21
-        versionName = "1.16.0"
+        versionCode = 22
+        versionName = "1.17.0"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
         // Emulator → host machine mail server. Override with -PmailApiBaseUrl=...

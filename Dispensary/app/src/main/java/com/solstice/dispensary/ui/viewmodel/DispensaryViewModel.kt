@@ -537,6 +537,24 @@ class DispensaryViewModel(
         }
     }
 
+    fun updateProductPhoto(productId: String, bitmap: Bitmap) {
+        viewModelScope.launch {
+            when (val result = repository.updateProductPhoto(productId, bitmap)) {
+                is OpResult.Success -> intakeMessage = result.message
+                is OpResult.Error -> intakeMessage = result.message
+            }
+        }
+    }
+
+    fun clearProductPhoto(productId: String) {
+        viewModelScope.launch {
+            when (val result = repository.clearProductPhoto(productId)) {
+                is OpResult.Success -> intakeMessage = result.message
+                is OpResult.Error -> intakeMessage = result.message
+            }
+        }
+    }
+
     fun createBlankDraftProduct() {
         viewModelScope.launch {
             when (val result = repository.createBlankDraftProduct()) {
