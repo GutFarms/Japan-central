@@ -3,9 +3,6 @@
 #include <cstddef>
 
 // Classic ESP32 hardware SHA-256 mining helpers (ESP-IDF Apache register API).
-// The ESP32 SHA engine has no public midstate-restore in the HAL, so each nonce
-// re-feeds both 64-byte header blocks, then a fresh second SHA-256. Still much
-// faster than software transforms when the loop stays in IRAM.
 
 #if defined(ARDUINO_ARCH_ESP32) && !defined(CONFIG_IDF_TARGET_ESP32S2) && \
     !defined(CONFIG_IDF_TARGET_ESP32S3) && !defined(CONFIG_IDF_TARGET_ESP32C3) && \
@@ -22,19 +19,20 @@ bool acquire();
 void release();
 bool locked();
 
-// hdr_be: 20 big-endian SHA message words from the 80-byte Bitcoin wire header.
-// nonce_le: header nonce as the uint32 stored in bytes 76..79 (host-endian value).
-// out_be: always filled with SHA256d digest words (BE), when non-null.
-// Returns true if the Bitcoin LE-MSB word (hash bytes 28..31) is <= msb_limit.
-bool hash_nonce(const uint32_t hdr_be[20], uint32_t nonce_le, uint32_t out_be[8],
-                uint32_t msb_limit);
+// True when midstate→CONTINUE path passed the on-device self-test (faster).
+bool midstate_ok();
+void disable_midstate();  // force full-header path (e.g. after a verify miss)
 
-// Mine up to `count` nonces starting at *nonce_le, stepping by `stride`.
-// Advances *nonce_le past the last tried nonce.
-// If a candidate passes msb_limit, sets *found_nonce / found_hash_be and returns
-// hashes performed including that candidate. Sets *hit=true in that case.
-// If no candidate, *hit=false and return value == count (or 0 on bad args).
-size_t mine(const uint32_t hdr_be[20], uint32_t* nonce_le, size_t count, uint32_t stride,
-            uint32_t msb_limit, bool* hit, uint32_t* found_nonce, uint32_t found_hash_be[8]);
+// hdr_be: 20 big-endian SHA message words from the 80-byte Bitcoin wire header.
+// mid_be: 8 midstate words after hashing hdr_be[0..15] (same format as SW midstate).
+bool hash_nonce(const uint32_t hdr_be[20], const uint32_t mid_be[8], uint32_t nonce_le,
+                uint32_t out_be[8], uint32_t msb_limit);
+
+size_t mine(const uint32_t hdr_be[20], const uint32_t mid_be[8], uint32_t* nonce_le, size_t count,
+            uint32_t stride, uint32_t msb_limit, bool* hit, uint32_t* found_nonce,
+            uint32_t found_hash_be[8]);
+
+// Compare midstate path vs full-header path for a few nonces. Enables midstate_ok on pass.
+bool self_test(const uint32_t hdr_be[20], const uint32_t mid_be[8]);
 
 }  // namespace cyd_sha_hw

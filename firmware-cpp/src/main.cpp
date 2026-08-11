@@ -1,6 +1,7 @@
 #include "companion.hpp"
 #include "config.hpp"
 #include "display_ui.hpp"
+#include "sha256_hw.hpp"
 #include "sha256_miner.hpp"
 
 #include <atomic>
@@ -75,7 +76,9 @@ static void fillSnap() {
   g_snap.totalHashes = g_hashCounter.load(std::memory_order_relaxed);
   g_snap.accepted = g_accepted;
   g_snap.rejected = g_rejected;
-  g_snap.pool = g_jobLoaded ? (g_hwSha ? "SHA256-HW" : "SHA256") : "WAIT USB";
+  g_snap.pool = g_jobLoaded
+                    ? (g_hwSha ? (cyd_sha_hw::midstate_ok() ? "SHA256-HW+" : "SHA256-HW") : "SHA256")
+                    : "WAIT USB";
   g_snap.connected = g_jobLoaded;
   g_snap.difficulty = 0;
   g_snap.nonce = g_minerA.nonce();
@@ -104,12 +107,10 @@ static bool applyConfig(AppConfig& updated, bool& reboot) {
 static void onJob(const UsbJob& job) {
   g_job = job;
   uint32_t start = job.startNonce ? job.startNonce : esp_random();
-  // HW SHA is a single shared peripheral — one lane, stride 1.
-  // SW path can still split odd/even nonces across cores.
+  // HW lane owns the SHA engine on the lower half of the nonce space.
+  // Core-0 SW midstate assist searches the upper half — additive, no SHA contention.
   g_minerA.setJob(job.header, job.target, start);
-  if (!g_hwSha) {
-    g_minerB.setJob(job.header, job.target, start + 1);
-  }
+  g_minerB.setJob(job.header, job.target, start ^ 0x80000000u);
   g_jobLoaded = true;
   g_mining = true;
   // Reset rate window so the next status shows climbing H/s quickly.
@@ -176,19 +177,24 @@ static void mineLane(Sha256Miner& m, uint32_t stride, size_t batch) {
 }
 
 static void mineTaskA(void*) {
+  uint32_t loops = 0;
   for (;;) {
     if (!g_mining || !g_jobLoaded) {
       vTaskDelay(pdMS_TO_TICKS(2));
       continue;
     }
     if (g_hwSha) {
-      // Large batches; HW engine is exclusive to this task.
-      mineLane(g_minerA, 1, 16384);
+      // Big IRAM batches; yield only every few batches to keep the WDT happy.
+      mineLane(g_minerA, 1, 32768);
+      if ((++loops & 3u) == 0u) {
+        taskYIELD();
+        esp_task_wdt_reset();
+      }
     } else {
       mineLane(g_minerA, 2, 4096);
+      taskYIELD();
+      esp_task_wdt_reset();
     }
-    taskYIELD();
-    esp_task_wdt_reset();
   }
 }
 
@@ -246,6 +252,8 @@ void setup() {
 
   g_minerA.begin();
   g_minerB.begin();
+  // Core-0 assist must stay on software midstate — never touch the SHA peripheral.
+  g_minerB.forceSoftware();
   g_hwSha = g_minerA.hardware();
   if (g_hwSha) {
     (void)Sha256Miner::acquireHardware();
@@ -258,7 +266,17 @@ void setup() {
 
   delay(80);
   if (g_hwSha) {
-    g_ui.showMessage("SHA-256 HW", "ESP SHA engine · USB");
+    // Probe midstate with a dummy header so the banner reflects the fast path.
+    uint8_t hdr[80];
+    memset(hdr, 0xA5, 80);
+    uint8_t tgt[32];
+    memset(tgt, 0xFF, 32);
+    g_minerA.setJob(hdr, tgt, 1);
+    if (cyd_sha_hw::midstate_ok()) {
+      g_ui.showMessage("SHA-256 HW+", "midstate · USB link");
+    } else {
+      g_ui.showMessage("SHA-256 HW", "full-header · USB");
+    }
   } else {
     g_ui.showMessage("SHA-256", "live kH/s · USB link");
   }
@@ -283,9 +301,9 @@ void loop() {
     return;
   }
 
-  // Core-0 SW assist only when not using the shared HW SHA peripheral.
-  if (g_mining && !g_hwSha) {
-    mineLane(g_minerB, 2, 128);
+  // Core-0 software midstate assist on a disjoint nonce range (additive H/s).
+  if (g_mining) {
+    mineLane(g_minerB, 1, g_hwSha ? 256 : 128);
   }
 
   uint32_t now = millis();

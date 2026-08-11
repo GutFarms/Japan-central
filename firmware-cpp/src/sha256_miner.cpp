@@ -221,6 +221,10 @@ void Sha256Miner::setJob(const uint8_t header[HEADER_LEN], const uint8_t target[
   packTarget(target);
   nonce_ = startNonce;
   prepareMidstate();
+  // Probe midstate→CONTINUE once per job while we hold the SHA engine.
+  if (hw_ && cyd_sha_hw::locked()) {
+    (void)cyd_sha_hw::self_test(hdrBe_, midstate_);
+  }
 }
 
 void Sha256Miner::updateTarget(const uint8_t target[HASH_LEN]) { packTarget(target); }
@@ -243,7 +247,7 @@ void Sha256Miner::hashNonce(uint32_t nonce, uint8_t out[HASH_LEN]) {
 
   uint32_t digest[8];
   if (hw_ && cyd_sha_hw::locked()) {
-    (void)cyd_sha_hw::hash_nonce(hdrBe_, nonce, digest, 0xFFFFFFFFu);
+    (void)cyd_sha_hw::hash_nonce(hdrBe_, midstate_, nonce, digest, 0xFFFFFFFFu);
   } else {
     uint32_t w2[16];
     memcpy(w2, chunk2_, sizeof(w2));
@@ -263,8 +267,8 @@ bool Sha256Miner::mineBatchHw(size_t count, uint32_t stride) {
     uint32_t found = 0;
     uint32_t digest[8]{};
     bool hit = false;
-    size_t stepped =
-        cyd_sha_hw::mine(hdrBe_, &nonce_, remaining, stride, msb_target, &hit, &found, digest);
+    size_t stepped = cyd_sha_hw::mine(hdrBe_, midstate_, &nonce_, remaining, stride, msb_target,
+                                       &hit, &found, digest);
     hashes_ += stepped;
     if (stepped == 0) break;
     remaining = remaining > stepped ? remaining - stepped : 0;
@@ -277,7 +281,8 @@ bool Sha256Miner::mineBatchHw(size_t count, uint32_t stride) {
     uint32_t sw[8];
     sha256d_mid(midstate_, w2, sw);
     if (memcmp(sw, digest, sizeof(sw)) != 0) {
-      continue;  // HW/SW mismatch — skip, keep mining
+      cyd_sha_hw::disable_midstate();
+      continue;
     }
     if (meetsTargetWords(sw)) {
       for (int j = 0; j < 8; j++) store_be32(lastHash_ + j * 4, sw[j]);

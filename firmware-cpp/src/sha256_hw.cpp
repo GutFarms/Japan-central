@@ -3,6 +3,7 @@
 #if CYD_SHA_HW
 
 #include <Arduino.h>
+#include <cstring>
 #include <esp_attr.h>
 #include <hal/sha_ll.h>
 #include <hal/sha_types.h>
@@ -16,42 +17,47 @@ namespace {
 
 constexpr esp_sha_type kSha = SHA2_256;
 
-// ESP-IDF sha_ll_fill_text_block() HAL_SWAP32s host words into BE register words.
-// We write BE message words directly (same final register contents).
-
 IRAM_ATTR inline void wait_idle() {
   while (DPORT_REG_READ(SHA_256_BUSY_REG) != 0) {
   }
 }
 
-IRAM_ATTR inline void write_block_be(const uint32_t be_words[16]) {
-  volatile uint32_t* reg = (volatile uint32_t*)SHA_TEXT_BASE;
-  reg[0] = be_words[0];
-  reg[1] = be_words[1];
-  reg[2] = be_words[2];
-  reg[3] = be_words[3];
-  reg[4] = be_words[4];
-  reg[5] = be_words[5];
-  reg[6] = be_words[6];
-  reg[7] = be_words[7];
-  reg[8] = be_words[8];
-  reg[9] = be_words[9];
-  reg[10] = be_words[10];
-  reg[11] = be_words[11];
-  reg[12] = be_words[12];
-  reg[13] = be_words[13];
-  reg[14] = be_words[14];
-  reg[15] = be_words[15];
+IRAM_ATTR inline void wait_before_touch() {
+  while (DPORT_REG_READ(SHA_256_BUSY_REG) != 0) {
+  }
 }
 
-IRAM_ATTR inline void write_block2(const uint32_t hdr_be[20], uint32_t nonce_le) {
+IRAM_ATTR inline uint32_t bswap32(uint32_t x) {
+  return ((x & 0x000000ffu) << 24) | ((x & 0x0000ff00u) << 8) | ((x & 0x00ff0000u) >> 8) |
+         ((x & 0xff000000u) >> 24);
+}
+
+IRAM_ATTR inline void write16(const uint32_t w[16]) {
   volatile uint32_t* reg = (volatile uint32_t*)SHA_TEXT_BASE;
-  const uint32_t nonce_be =
-      ((nonce_le & 0xffu) << 24) | (((nonce_le >> 8) & 0xffu) << 16) |
-      (((nonce_le >> 16) & 0xffu) << 8) | ((nonce_le >> 24) & 0xffu);
-  reg[0] = hdr_be[16];
-  reg[1] = hdr_be[17];
-  reg[2] = hdr_be[18];
+  reg[0] = w[0];
+  reg[1] = w[1];
+  reg[2] = w[2];
+  reg[3] = w[3];
+  reg[4] = w[4];
+  reg[5] = w[5];
+  reg[6] = w[6];
+  reg[7] = w[7];
+  reg[8] = w[8];
+  reg[9] = w[9];
+  reg[10] = w[10];
+  reg[11] = w[11];
+  reg[12] = w[12];
+  reg[13] = w[13];
+  reg[14] = w[14];
+  reg[15] = w[15];
+}
+
+// Block2 = header words 16..19 (merkle-tail, ntime, nbits, nonce) + SHA padding for 80 bytes.
+IRAM_ATTR inline void fill_block2(uint32_t w16, uint32_t ntime, uint32_t nbits, uint32_t nonce_be) {
+  volatile uint32_t* reg = (volatile uint32_t*)SHA_TEXT_BASE;
+  reg[0] = w16;
+  reg[1] = ntime;
+  reg[2] = nbits;
   reg[3] = nonce_be;
   reg[4] = 0x80000000u;
   reg[5] = 0;
@@ -67,17 +73,11 @@ IRAM_ATTR inline void write_block2(const uint32_t hdr_be[20], uint32_t nonce_le)
   reg[15] = 0x00000280u;  // 640 bits
 }
 
-IRAM_ATTR inline void pad_second_sha() {
+IRAM_ATTR inline void pad_second_inplace() {
   volatile uint32_t* reg = (volatile uint32_t*)SHA_TEXT_BASE;
-  // After LOAD, TEXT[0..7] hold the first digest (BE words). Pad a 32-byte message.
+  // After LOAD, [0..7]=digest; block2 left [8..14]=0 and [15]=0x280.
   reg[8] = 0x80000000u;
-  reg[9] = 0;
-  reg[10] = 0;
-  reg[11] = 0;
-  reg[12] = 0;
-  reg[13] = 0;
-  reg[14] = 0;
-  reg[15] = 0x00000100u;  // 256 bits
+  reg[15] = 0x00000100u;
 }
 
 IRAM_ATTR inline void read_digest_be(uint32_t out_be[8]) {
@@ -97,35 +97,75 @@ IRAM_ATTR inline uint32_t peek_msb_le() {
   DPORT_INTERRUPT_DISABLE();
   uint32_t h7 = DPORT_SEQUENCE_REG_READ(SHA_TEXT_BASE + 7 * 4);
   DPORT_INTERRUPT_RESTORE();
-  // BE digest word 7 → Bitcoin LE hash bytes 28..31 as uint32.
-  return ((h7 & 0xffu) << 24) | (((h7 >> 8) & 0xffu) << 16) | (((h7 >> 16) & 0xffu) << 8) |
-         ((h7 >> 24) & 0xffu);
+  return bswap32(h7);
 }
 
-IRAM_ATTR inline void sha256d_once(const uint32_t hdr_be[20], uint32_t nonce_le) {
-  write_block_be(hdr_be);
+IRAM_ATTR inline void sha256d_full(const uint32_t block1[16], uint32_t w16, uint32_t ntime,
+                                   uint32_t nbits, uint32_t nonce_be) {
+  wait_before_touch();
+  write16(block1);
   sha_ll_start_block(kSha);
-  wait_idle();
 
-  write_block2(hdr_be, nonce_le);
+  wait_before_touch();
+  fill_block2(w16, ntime, nbits, nonce_be);
   sha_ll_continue_block(kSha);
-  wait_idle();
+
+  wait_before_touch();
   sha_ll_load(kSha);
   wait_idle();
 
-  pad_second_sha();
+  pad_second_inplace();
   sha_ll_start_block(kSha);
+
+  wait_before_touch();
+  sha_ll_load(kSha);
   wait_idle();
+}
+
+/*
+ * Experimental midstate path (Zephyr Apache write-digest pattern).
+ * Espressif docs say classic ESP32 cannot restore digest state — only enabled
+ * after self_test() proves midstate and full-header digests match on-device.
+ */
+IRAM_ATTR inline void sha256d_mid(const uint32_t mid_be[8], uint32_t w16, uint32_t ntime,
+                                  uint32_t nbits, uint32_t nonce_be) {
+  volatile uint32_t* reg = (volatile uint32_t*)SHA_TEXT_BASE;
+  wait_before_touch();
+  reg[0] = mid_be[0];
+  reg[1] = mid_be[1];
+  reg[2] = mid_be[2];
+  reg[3] = mid_be[3];
+  reg[4] = mid_be[4];
+  reg[5] = mid_be[5];
+  reg[6] = mid_be[6];
+  reg[7] = mid_be[7];
+  sha_ll_load(kSha);
+  wait_idle();
+
+  fill_block2(w16, ntime, nbits, nonce_be);
+  sha_ll_continue_block(kSha);
+
+  wait_before_touch();
+  sha_ll_load(kSha);
+  wait_idle();
+
+  pad_second_inplace();
+  sha_ll_start_block(kSha);
+
+  wait_before_touch();
   sha_ll_load(kSha);
   wait_idle();
 }
 
 bool g_locked = false;
+bool g_mid_ok = false;
 
 }  // namespace
 
 bool available() { return true; }
 bool locked() { return g_locked; }
+bool midstate_ok() { return g_mid_ok; }
+void disable_midstate() { g_mid_ok = false; }
 
 bool acquire() {
   if (g_locked) return true;
@@ -133,6 +173,7 @@ bool acquire() {
   DPORT_CLEAR_PERI_REG_MASK(DPORT_PERI_RST_EN_REG, DPORT_PERI_EN_SHA | DPORT_PERI_EN_SECUREBOOT);
   esp_sha_lock_engine(kSha);
   g_locked = true;
+  g_mid_ok = false;
   return true;
 }
 
@@ -140,28 +181,82 @@ void release() {
   if (!g_locked) return;
   esp_sha_unlock_engine(kSha);
   g_locked = false;
+  g_mid_ok = false;
 }
 
-IRAM_ATTR bool hash_nonce(const uint32_t hdr_be[20], uint32_t nonce_le, uint32_t out_be[8],
-                          uint32_t msb_limit) {
-  sha256d_once(hdr_be, nonce_le);
+bool self_test(const uint32_t hdr_be[20], const uint32_t mid_be[8]) {
+  if (!hdr_be || !mid_be || !g_locked) {
+    g_mid_ok = false;
+    return false;
+  }
+  const uint32_t w16 = hdr_be[16];
+  const uint32_t ntime = hdr_be[17];
+  const uint32_t nbits = hdr_be[18];
+  uint32_t block1[16];
+  for (int i = 0; i < 16; i++) block1[i] = hdr_be[i];
+
+  for (uint32_t n = 0; n < 8; n++) {
+    const uint32_t nonce_be = bswap32(n);
+    sha256d_full(block1, w16, ntime, nbits, nonce_be);
+    uint32_t full[8];
+    read_digest_be(full);
+
+    sha256d_mid(mid_be, w16, ntime, nbits, nonce_be);
+    uint32_t mid[8];
+    read_digest_be(mid);
+
+    if (memcmp(full, mid, sizeof(full)) != 0) {
+      g_mid_ok = false;
+      return false;
+    }
+  }
+  g_mid_ok = true;
+  return true;
+}
+
+IRAM_ATTR bool hash_nonce(const uint32_t hdr_be[20], const uint32_t mid_be[8], uint32_t nonce_le,
+                          uint32_t out_be[8], uint32_t msb_limit) {
+  const uint32_t w16 = hdr_be[16];
+  const uint32_t ntime = hdr_be[17];
+  const uint32_t nbits = hdr_be[18];
+  const uint32_t nonce_be = bswap32(nonce_le);
+  if (g_mid_ok && mid_be) {
+    sha256d_mid(mid_be, w16, ntime, nbits, nonce_be);
+  } else {
+    uint32_t block1[16];
+    for (int i = 0; i < 16; i++) block1[i] = hdr_be[i];
+    sha256d_full(block1, w16, ntime, nbits, nonce_be);
+  }
   const uint32_t msb = peek_msb_le();
   if (out_be) read_digest_be(out_be);
   return msb <= msb_limit;
 }
 
-IRAM_ATTR size_t mine(const uint32_t hdr_be[20], uint32_t* nonce_le, size_t count, uint32_t stride,
-                      uint32_t msb_limit, bool* hit, uint32_t* found_nonce,
-                      uint32_t found_hash_be[8]) {
+IRAM_ATTR size_t mine(const uint32_t hdr_be[20], const uint32_t mid_be[8], uint32_t* nonce_le,
+                      size_t count, uint32_t stride, uint32_t msb_limit, bool* hit,
+                      uint32_t* found_nonce, uint32_t found_hash_be[8]) {
   if (hit) *hit = false;
   if (!hdr_be || !nonce_le || stride == 0 || count == 0) return 0;
+
+  const uint32_t w16 = hdr_be[16];
+  const uint32_t ntime = hdr_be[17];
+  const uint32_t nbits = hdr_be[18];
+  uint32_t block1[16];
+  const bool use_mid = g_mid_ok && mid_be;
+  if (!use_mid) {
+    for (int i = 0; i < 16; i++) block1[i] = hdr_be[i];
+  }
 
   uint32_t n = *nonce_le;
   size_t done = 0;
   for (; done < count; done++) {
-    sha256d_once(hdr_be, n);
-    const uint32_t msb = peek_msb_le();
-    if (msb <= msb_limit) {
+    const uint32_t nonce_be = bswap32(n);
+    if (use_mid) {
+      sha256d_mid(mid_be, w16, ntime, nbits, nonce_be);
+    } else {
+      sha256d_full(block1, w16, ntime, nbits, nonce_be);
+    }
+    if (peek_msb_le() <= msb_limit) {
       if (found_hash_be) read_digest_be(found_hash_be);
       if (found_nonce) *found_nonce = n;
       if (hit) *hit = true;
@@ -183,10 +278,14 @@ bool available() { return false; }
 bool acquire() { return false; }
 void release() {}
 bool locked() { return false; }
-bool hash_nonce(const uint32_t*, uint32_t, uint32_t*, uint32_t) { return false; }
-size_t mine(const uint32_t*, uint32_t*, size_t, uint32_t, uint32_t, bool*, uint32_t*, uint32_t*) {
+bool midstate_ok() { return false; }
+void disable_midstate() {}
+bool hash_nonce(const uint32_t*, const uint32_t*, uint32_t, uint32_t*, uint32_t) { return false; }
+size_t mine(const uint32_t*, const uint32_t*, uint32_t*, size_t, uint32_t, uint32_t, bool*,
+            uint32_t*, uint32_t*) {
   return 0;
 }
+bool self_test(const uint32_t*, const uint32_t*) { return false; }
 }  // namespace cyd_sha_hw
 
 #endif

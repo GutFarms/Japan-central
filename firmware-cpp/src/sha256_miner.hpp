@@ -12,6 +12,7 @@ class Sha256Miner {
   bool begin();
   bool ready() const { return ready_; }
   bool hardware() const { return hw_; }
+  void forceSoftware() { hw_ = false; }
 
   void setJob(const uint8_t header[HEADER_LEN], const uint8_t target[HASH_LEN], uint32_t startNonce);
   void updateTarget(const uint8_t target[HASH_LEN]);
