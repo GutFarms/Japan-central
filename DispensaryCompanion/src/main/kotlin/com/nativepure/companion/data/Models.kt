@@ -56,6 +56,8 @@ enum class AccountRole(val label: String) {
     ADMIN("Admin");
 
     val canViewSensitiveInfo: Boolean get() = this == ADMIN || this == STAFF
+    /** Full DOB, notes, and unmasked contact — admin only. */
+    val canRevealFullPii: Boolean get() = this == ADMIN
     val canManageStaff: Boolean get() = this == ADMIN
     val canManageInventory: Boolean get() = this == ADMIN || this == STAFF
 }
@@ -355,6 +357,9 @@ data class PersistedStore(
     val orderLines: List<OrderLine> = emptyList(),
     val cart: List<CartItem> = emptyList(),
     val productRequests: List<ProductRequest> = emptyList(),
+    /** Only customer (non-staff) sessions are restored across restarts. */
     val sessionCustomerId: String? = null,
-    val ageVerified: Boolean = false
+    val ageVerified: Boolean = false,
+    val failedLogins: Map<String, Int> = emptyMap(),
+    val lockoutUntil: Map<String, Long> = emptyMap()
 )

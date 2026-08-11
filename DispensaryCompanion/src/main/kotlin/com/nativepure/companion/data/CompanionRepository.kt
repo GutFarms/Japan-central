@@ -16,6 +16,7 @@ class CompanionRepository {
 
     private val storeDir: File = LocalDataStore.dataDirectory()
     private val storeFile: File = LocalDataStore.storeFile()
+    private val encryptedStoreFile: File = LocalDataStore.encryptedStoreFile()
 
     private var products: MutableList<Product> = mutableListOf()
     private var customers: MutableList<Customer> = mutableListOf()
@@ -25,6 +26,9 @@ class CompanionRepository {
     private var productRequests: MutableList<ProductRequest> = mutableListOf()
     private var sessionCustomerId: String? = null
     var ageVerified: Boolean = false
+        private set
+    /** One-time bootstrap password written for a fresh admin install (tests / first run). */
+    var lastBootstrapAdminPassword: String? = null
         private set
 
     private val failedLogins = ConcurrentHashMap<String, Int>()
@@ -237,7 +241,15 @@ class CompanionRepository {
 
         failedLogins.remove(raw.lowercase())
         lockoutUntil.remove(raw.lowercase())
-        val updated = customer.copy(lastLoginAt = System.currentTimeMillis())
+        var updated = customer.copy(lastLoginAt = System.currentTimeMillis())
+        // Upgrade legacy hashes to PBKDF2 on successful login.
+        if (PasswordHasher.needsRehash(customer.passwordHash)) {
+            val salt = PasswordHasher.newSalt()
+            updated = updated.copy(
+                passwordHash = PasswordHasher.hash(password, salt),
+                passwordSalt = salt
+            )
+        }
         replaceCustomer(updated)
         sessionCustomerId = updated.id
         sessionLocked = false
@@ -292,12 +304,8 @@ class CompanionRepository {
 
     fun peekIssuedEmailCode(): EmailCodeIssue? {
         val issued = lastIssuedEmailCode ?: return null
-        // Never surface the plaintext code in UI once mail delivery succeeded.
-        return if (issued.deliveredByMail) {
-            issued.copy(code = "")
-        } else {
-            issued
-        }
+        // Never surface plaintext codes in the UI — even offline.
+        return issued.copy(code = "")
     }
 
     fun resendEmailVerificationCode(): AuthResult {
@@ -331,7 +339,7 @@ class CompanionRepository {
             lastIssuedEmailCode = null
             return AuthResult.Error("Too many incorrect codes. Resend a new code.")
         }
-        if (!PasswordHasher.matches(clean, emailCodeSalt, emailCodeHash)) {
+        if (!PasswordHasher.matchesVerificationCode(clean, emailCodeSalt, emailCodeHash)) {
             emailCodeVerifyAttempts++
             return AuthResult.Error("Incorrect code. Check the email and try again.")
         }
@@ -1063,6 +1071,12 @@ class CompanionRepository {
         } else {
             failedLogins[key] = count
         }
+        persistSecurityOnly()
+    }
+
+    /** Persist lockouts without rewriting the whole catalog when possible. */
+    private fun persistSecurityOnly() {
+        runCatching { persist() }
     }
 
     private fun replaceCustomer(updated: Customer) {
@@ -1071,18 +1085,23 @@ class CompanionRepository {
     }
 
     private fun loadOrSeed() {
-        if (storeFile.exists()) {
-            runCatching {
-                val data = json.decodeFromString<PersistedStore>(storeFile.readText())
-                products = data.products.toMutableList()
-                customers = data.customers.toMutableList()
-                orders = data.orders.toMutableList()
-                orderLines = data.orderLines.toMutableList()
-                cart = data.cart.toMutableList()
-                productRequests = data.productRequests.toMutableList()
-                sessionCustomerId = data.sessionCustomerId
-                ageVerified = data.ageVerified
-            }.onFailure { seedFresh() }
+        val loaded = readPersistedStore()
+        if (loaded != null) {
+            products = loaded.products.toMutableList()
+            customers = loaded.customers.toMutableList()
+            orders = loaded.orders.toMutableList()
+            orderLines = loaded.orderLines.toMutableList()
+            cart = loaded.cart.toMutableList()
+            productRequests = loaded.productRequests.toMutableList()
+            // Staff/admin sessions are never restored across restarts.
+            sessionCustomerId = loaded.sessionCustomerId?.let { id ->
+                customers.find { it.id == id && it.role == AccountRole.CUSTOMER }?.id
+            }
+            ageVerified = loaded.ageVerified
+            failedLogins.clear()
+            failedLogins.putAll(loaded.failedLogins)
+            lockoutUntil.clear()
+            lockoutUntil.putAll(loaded.lockoutUntil)
             if (products.isEmpty()) products = SeedCatalog.products.toMutableList()
             ensureMainAdmin()
             ensureDemoCustomer()
@@ -1090,6 +1109,26 @@ class CompanionRepository {
         } else {
             seedFresh()
         }
+    }
+
+    private fun readPersistedStore(): PersistedStore? {
+        // Prefer encrypted store; migrate plaintext store.json if present.
+        StoreEncryption.decryptFromFile(encryptedStoreFile)?.let { text ->
+            return runCatching { json.decodeFromString<PersistedStore>(text) }.getOrNull()
+        }
+        if (storeFile.isFile) {
+            val text = storeFile.readText()
+            val data = runCatching { json.decodeFromString<PersistedStore>(text) }.getOrNull()
+            if (data != null) {
+                // Migrate to encrypted form and remove plaintext store when possible.
+                runCatching {
+                    StoreEncryption.encryptToFile(json.encodeToString(data), encryptedStoreFile)
+                    storeFile.delete()
+                }
+                return data
+            }
+        }
+        return null
     }
 
     private fun seedFresh() {
@@ -1122,11 +1161,6 @@ class CompanionRepository {
             if (existing.username.isBlank()) {
                 next = next.copy(username = MAIN_ADMIN_USERNAME)
             }
-            if (!existing.mustChangePassword &&
-                PasswordHasher.matches(MAIN_ADMIN_PASSWORD, existing.passwordSalt, existing.passwordHash)
-            ) {
-                next = next.copy(mustChangePassword = true)
-            }
             if (!existing.emailVerified) {
                 next = next.copy(emailVerified = true)
             }
@@ -1136,22 +1170,39 @@ class CompanionRepository {
             }
             return
         }
+        val bootstrap = System.getProperty("nativepure.companion.adminPassword")
+            ?.takeIf { it.isNotBlank() }
+            ?: PasswordHasher.randomBootstrapPassword()
+        lastBootstrapAdminPassword = bootstrap
         val salt = PasswordHasher.newSalt()
         customers.add(
             Customer(
                 id = MAIN_ADMIN_ID,
                 email = MAIN_ADMIN_EMAIL,
                 username = MAIN_ADMIN_USERNAME,
-                passwordHash = PasswordHasher.hash(MAIN_ADMIN_PASSWORD, salt),
+                passwordHash = PasswordHasher.hash(bootstrap, salt),
                 passwordSalt = salt,
                 fullName = "Main Admin",
                 role = AccountRole.ADMIN,
-                notes = "Primary admin account — change password on first login",
+                notes = "Primary admin — change password on first login",
                 mustChangePassword = true,
                 emailVerified = true,
                 enabled = true
             )
         )
+        runCatching {
+            LocalDataStore.writeAtomic(
+                LocalDataStore.adminSetupFile(),
+                buildString {
+                    appendLine("Native Pure POS — one-time admin setup")
+                    appendLine("Delete this file after first login.")
+                    appendLine("Username: $MAIN_ADMIN_USERNAME")
+                    appendLine("Email: $MAIN_ADMIN_EMAIL")
+                    appendLine("Temporary password: $bootstrap")
+                    appendLine("You will be required to change this password.")
+                }
+            )
+        }
     }
 
     private fun ensureDemoCustomer() {
@@ -1187,7 +1238,7 @@ class CompanionRepository {
         val salt = PasswordHasher.newSalt()
         emailCodeCustomerId = customer.id
         emailCodeSalt = salt
-        emailCodeHash = PasswordHasher.hash(code, salt)
+        emailCodeHash = PasswordHasher.hashVerificationCode(code, salt)
         emailCodeExpiresAt = System.currentTimeMillis() + EMAIL_CODE_TTL_MS
         emailCodeSentAt = System.currentTimeMillis()
         emailCodeVerifyAttempts = 0
@@ -1196,6 +1247,17 @@ class CompanionRepository {
             code = code,
             expiresInMinutes = (EMAIL_CODE_TTL_MS / 60_000L).toInt().coerceAtLeast(5)
         )
+        if (!mail.ok) {
+            // Offline fallback: write to a local dev file — never the UI.
+            runCatching {
+                LocalDataStore.writeAtomic(
+                    LocalDataStore.devEmailCodeFile(),
+                    "DEV ONLY — delete after use\nemail=${customer.email}\ncode=$code\nexpires=$emailCodeExpiresAt\n"
+                )
+            }
+        } else {
+            runCatching { LocalDataStore.devEmailCodeFile().delete() }
+        }
         return EmailCodeIssue(
             email = customer.email,
             code = code,
@@ -1215,26 +1277,42 @@ class CompanionRepository {
 
     private fun persist() {
         storeDir.mkdirs()
+        // Never persist staff/admin sessions — require login after restart.
+        val durableSession = sessionCustomerId?.let { id ->
+            customers.find { it.id == id && it.role == AccountRole.CUSTOMER }?.id
+        }
         val data = PersistedStore(
             products = products.toList(),
             customers = customers.toList(),
             orders = orders.toList(),
             orderLines = orderLines.toList(),
-            cart = cart.toList(),
+            cart = if (durableSession != null) cart.toList() else emptyList(),
             productRequests = productRequests.toList(),
-            sessionCustomerId = sessionCustomerId,
-            ageVerified = ageVerified
+            sessionCustomerId = durableSession,
+            ageVerified = ageVerified,
+            failedLogins = failedLogins.toMap(),
+            lockoutUntil = lockoutUntil.toMap()
         )
         val encoded = json.encodeToString(data)
-        LocalDataStore.writeAtomic(storeFile, encoded)
+        StoreEncryption.encryptToFile(encoded, encryptedStoreFile)
+        // Remove legacy plaintext store if it still exists.
+        runCatching { if (storeFile.exists()) storeFile.delete() }
         LocalDataStore.writeAtomic(
             LocalDataStore.inventoryBackupFile(),
             json.encodeToString(products.toList())
         )
-        // Customer backup omits password hashes — copyable file for ops without credential leak.
+        // Customer backup omits password hashes and full DOB/notes for staff ops copies.
         LocalDataStore.writeAtomic(
             LocalDataStore.customersBackupFile(),
-            json.encodeToString(customers.map { Privacy.redactedCustomerForBackup(it) })
+            json.encodeToString(
+                customers.map {
+                    Privacy.redactedCustomerForBackup(it).copy(
+                        dateOfBirth = "",
+                        notes = "",
+                        phone = Privacy.maskPhone(it.phone)
+                    )
+                }
+            )
         )
     }
 
@@ -1243,6 +1321,7 @@ class CompanionRepository {
         const val MAIN_ADMIN_ID = "admin-main"
         const val MAIN_ADMIN_USERNAME = "admin"
         const val MAIN_ADMIN_EMAIL = "fidelgutierrez33@gmail.com"
+        @Deprecated("Use bootstrap password from admin-setup.txt or test property")
         const val MAIN_ADMIN_PASSWORD = "12345678"
         private const val DEMO_EMAIL = "demo@nativepure.example"
         private const val EMAIL_CODE_TTL_MS = 15 * 60_000L

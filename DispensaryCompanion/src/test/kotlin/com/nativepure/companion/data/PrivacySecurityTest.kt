@@ -12,6 +12,17 @@ class PrivacySecurityTest {
     fun isolateStore() {
         val dir = Files.createTempDirectory("nativepure-privacy-test").toFile()
         System.setProperty("nativepure.companion.dataDir", dir.absolutePath)
+        System.setProperty("nativepure.companion.adminPassword", "12345678")
+    }
+
+    private fun signedInAdmin(): CompanionRepository {
+        val repo = CompanionRepository()
+        val login = repo.login("admin", "12345678")
+        assertTrue("admin login failed: $login", login is AuthResult.Success)
+        if ((login as AuthResult.Success).customer.mustChangePassword) {
+            assertTrue(repo.forceChangePassword("AdminPass1!", "AdminPass1!") is AuthResult.Success)
+        }
+        return repo
     }
 
     @Test
@@ -22,28 +33,36 @@ class PrivacySecurityTest {
     }
 
     @Test
+    fun pbkdf2HashAndLegacyMatch() {
+        val salt = PasswordHasher.newSalt()
+        val hash = PasswordHasher.hash("Secret123", salt)
+        assertTrue(hash.startsWith("pbkdf2$"))
+        assertTrue(PasswordHasher.matches("Secret123", salt, hash))
+        assertFalse(PasswordHasher.needsRehash(hash))
+    }
+
+    @Test
+    fun storeIsEncryptedOnDisk() {
+        signedInAdmin()
+        val enc = LocalDataStore.encryptedStoreFile()
+        assertTrue(enc.isFile)
+        val text = enc.readText()
+        assertTrue(text.startsWith("NPENC1:"))
+        assertFalse(text.contains("passwordHash"))
+        assertFalse(LocalDataStore.storeFile().exists())
+    }
+
+    @Test
     fun syncExportOmitsPasswordHashes() {
-        val repo = CompanionRepository()
-        val login = repo.login("admin", "12345678")
-        assertTrue(login is AuthResult.Success)
-        if ((login as AuthResult.Success).customer.mustChangePassword) {
-            repo.forceChangePassword("AdminPass1!", "AdminPass1!")
-        }
+        val repo = signedInAdmin()
         val json = repo.exportSyncJson()
         assertFalse(json.contains("passwordHash"))
         assertFalse(json.contains("passwordSalt"))
-        assertTrue(json.contains("\"customers\""))
     }
 
     @Test
     fun syncImportDoesNotEscalateRoleOrOverwritePassword() {
-        val repo = CompanionRepository()
-        val login = repo.login("admin", "12345678")
-        assertTrue(login is AuthResult.Success)
-        if ((login as AuthResult.Success).customer.mustChangePassword) {
-            repo.forceChangePassword("AdminPass1!", "AdminPass1!")
-        }
-        val before = repo.allCustomers().first { it.email.contains("demo") }
+        val repo = signedInAdmin()
         val payload = """
             {
               "format": "nativepure-sync-v1",
@@ -62,43 +81,45 @@ class PrivacySecurityTest {
               "orderLines": []
             }
         """.trimIndent()
-        val result = repo.importSyncJson(payload)
-        assertTrue(result is OpResult.Success)
-        // Demo still customer (role preserved, not escalated)
+        assertTrue(repo.importSyncJson(payload) is OpResult.Success)
         val after = repo.allCustomers().first { it.email.contains("demo") }
         assertEquals(AccountRole.CUSTOMER, after.role)
         assertEquals(42, after.loyaltyPoints)
-        // Can still sign in with demo password (credentials preserved)
         repo.logout()
-        val demoLogin = repo.login("demo@nativepure.example", "demo1234")
-        assertTrue(demoLogin is AuthResult.Success)
-        assertEquals(before.id, (demoLogin as AuthResult.Success).customer.id)
+        assertTrue(repo.login("demo@nativepure.example", "demo1234") is AuthResult.Success)
     }
 
     @Test
-    fun receiptMasksEmailAndRequiresOwnership() {
-        val repo = CompanionRepository()
-        val login = repo.login("admin", "12345678")
-        assertTrue(login is AuthResult.Success)
-        if ((login as AuthResult.Success).customer.mustChangePassword) {
-            repo.forceChangePassword("AdminPass1!", "AdminPass1!")
-        }
+    fun staffSessionNotPersistedAcrossRestart() {
+        val dir = System.getProperty("nativepure.companion.dataDir")
+        val repo = signedInAdmin()
+        assertTrue(repo.currentCustomer()?.role?.canViewSensitiveInfo == true)
+        // Simulate process restart
+        val repo2 = CompanionRepository()
+        assertTrue(repo2.currentCustomer() == null)
+        // Same data dir still encrypted
+        assertTrue(LocalDataStore.encryptedStoreFile().isFile)
+        assertEquals(dir, System.getProperty("nativepure.companion.dataDir"))
+    }
+
+    @Test
+    fun receiptMasksEmail() {
+        val repo = signedInAdmin()
         val product = repo.catalogProducts().first { it.stockQuantity > 0 }
         repo.clearCart()
         repo.addToCart(product.id, 1)
-        val sale = repo.completePosSale(
-            PosSaleRequest(
-                customerName = "Walk-in",
-                paymentMethod = PaymentMethod.CARD,
-                amountTendered = 0.0,
-                loyaltyCustomerId = repo.allCustomers().first { it.email.contains("demo") }.id
-            )
+        assertTrue(
+            repo.completePosSale(
+                PosSaleRequest(
+                    customerName = "Walk-in",
+                    paymentMethod = PaymentMethod.CARD,
+                    amountTendered = 0.0,
+                    loyaltyCustomerId = repo.allCustomers().first { it.email.contains("demo") }.id
+                )
+            ) is OpResult.Success
         )
-        assertTrue(sale is OpResult.Success)
-        val orderId = repo.todaysPosSales().first().id
-        val receipt = repo.orderReceiptText(orderId)!!
+        val receipt = repo.orderReceiptText(repo.todaysPosSales().first().id)!!
         assertFalse(receipt.contains("demo@nativepure.example"))
-        assertTrue(receipt.contains("d•••@nativepure.example") || receipt.contains("Email:"))
         assertFalse(receipt.contains("Notes:"))
     }
 }

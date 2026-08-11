@@ -393,23 +393,20 @@ private fun EmailVerifyPane(
                             if (issuedCode.deliveredByMail) {
                                 Text("Code emailed", style = MaterialTheme.typography.titleSmall)
                                 Text(
-                                    "Check ${issuedCode.email}. Local inbox: http://127.0.0.1:8787/",
+                                    "Check your inbox for the 6-digit code. It is never shown on this screen.",
                                     color = MaterialTheme.colorScheme.onPrimaryContainer
                                 )
                             } else {
                                 Text(
-                                    "Mail server offline — temporary code shown on this secure register only",
+                                    "Mail server offline",
                                     style = MaterialTheme.typography.titleSmall
                                 )
                                 Text(
-                                    issuedCode.mailError?.let { "($it)" } ?: "",
+                                    "Ask an admin to check the local mail server or the secure verification-code.dev.txt file in the data folder. Codes are never shown on the register.",
                                     color = MaterialTheme.colorScheme.onSecondaryContainer
                                 )
-                                if (issuedCode.code.isNotBlank()) {
-                                    Text(
-                                        "Code: ${issuedCode.code}",
-                                        style = MaterialTheme.typography.headlineMedium
-                                    )
+                                issuedCode.mailError?.let {
+                                    Text("($it)", color = MaterialTheme.colorScheme.onSecondaryContainer)
                                 }
                             }
                         }
@@ -1360,18 +1357,24 @@ private fun CompanionProductEditor(
 @Composable
 private fun CustomersPane(repository: CompanionRepository) {
     val customers = repository.allCustomers()
+    val me = repository.currentCustomer()
+    val canReveal = me?.role?.canRevealFullPii == true
     val dateFormat = remember { SimpleDateFormat("MMM d, yyyy", Locale.US) }
     var revealIds by remember { mutableStateOf(setOf<String>()) }
     Column(Modifier.fillMaxSize()) {
         Text("Customers", style = MaterialTheme.typography.headlineLarge)
         Text(
-            "${customers.size} accounts · personal details masked until revealed",
+            if (canReveal) {
+                "${customers.size} accounts · admin can reveal personal details"
+            } else {
+                "${customers.size} accounts · contact details masked (admin-only reveal)"
+            },
             color = MaterialTheme.colorScheme.onSurfaceVariant
         )
         Spacer(Modifier.height(12.dp))
         LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
             items(customers, key = { it.id }) { c ->
-                val revealed = c.id in revealIds
+                val revealed = canReveal && c.id in revealIds
                 Surface(shape = RoundedCornerShape(12.dp), tonalElevation = 1.dp, modifier = Modifier.fillMaxWidth()) {
                     Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(3.dp)) {
                         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
@@ -1390,10 +1393,12 @@ private fun CustomersPane(repository: CompanionRepository) {
                             Text("Points: ${c.loyaltyPoints} · Spent $${"%.2f".format(c.lifetimeSpend)}")
                         }
                         Text("Joined ${dateFormat.format(Date(c.createdAt))}", color = MaterialTheme.colorScheme.onSurfaceVariant)
-                        TextButton(onClick = {
-                            revealIds = if (revealed) revealIds - c.id else revealIds + c.id
-                        }) {
-                            Text(if (revealed) "Hide personal details" else "Reveal personal details")
+                        if (canReveal) {
+                            TextButton(onClick = {
+                                revealIds = if (revealed) revealIds - c.id else revealIds + c.id
+                            }) {
+                                Text(if (revealed) "Hide personal details" else "Reveal personal details")
+                            }
                         }
                     }
                 }
@@ -1475,9 +1480,9 @@ private fun AccountPane(
         HorizontalDivider(Modifier.padding(vertical = 8.dp))
         Text("Privacy & security", style = MaterialTheme.typography.headlineMedium)
         Text(
-            "Customer personal information is staff-only, masked in lists and receipts, " +
-                "and never exported as password hashes. Sync cannot raise account roles. " +
-                "This register auto-locks after 5 minutes idle.",
+            "Customer personal information is staff-only. Full reveal (email/phone/DOB/notes) is admin-only. " +
+                "Passwords use PBKDF2; the store is AES-GCM encrypted on disk. Sync never exports password hashes. " +
+                "Staff sessions are not restored after restart. This register auto-locks after 5 minutes idle.",
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             style = MaterialTheme.typography.bodyMedium
         )

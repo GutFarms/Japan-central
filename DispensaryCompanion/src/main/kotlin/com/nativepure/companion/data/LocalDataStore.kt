@@ -14,8 +14,11 @@ import java.nio.file.StandardCopyOption
  */
 object LocalDataStore {
     const val STORE_FILE_NAME = "store.json"
+    const val ENCRYPTED_STORE = "store.enc"
     const val INVENTORY_BACKUP = "inventory.json"
     const val CUSTOMERS_BACKUP = "customers.json"
+    const val ADMIN_SETUP_FILE = "admin-setup.txt"
+    const val DEV_EMAIL_CODE_FILE = "verification-code.dev.txt"
     const val LEGACY_DIR_NAME = ".nativepure-companion"
 
     fun dataDirectory(): File {
@@ -27,9 +30,15 @@ object LocalDataStore {
 
     fun storeFile(): File = File(dataDirectory(), STORE_FILE_NAME)
 
+    fun encryptedStoreFile(): File = File(dataDirectory(), ENCRYPTED_STORE)
+
     fun inventoryBackupFile(): File = File(dataDirectory(), INVENTORY_BACKUP)
 
     fun customersBackupFile(): File = File(dataDirectory(), CUSTOMERS_BACKUP)
+
+    fun adminSetupFile(): File = File(dataDirectory(), ADMIN_SETUP_FILE)
+
+    fun devEmailCodeFile(): File = File(dataDirectory(), DEV_EMAIL_CODE_FILE)
 
     /** Human-readable absolute path for UI / docs. */
     fun dataDirectoryPath(): String = dataDirectory().absolutePath

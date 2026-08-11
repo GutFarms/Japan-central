@@ -663,6 +663,7 @@ fun AccountScreen(
 fun CustomersScreen(
     customers: List<CustomerProfile>,
     showSensitive: Boolean,
+    canRevealFullPii: Boolean = false,
     onBack: () -> Unit
 ) {
     val dateFormat = remember { SimpleDateFormat("MMM d, yyyy", Locale.US) }
@@ -699,10 +700,10 @@ fun CustomersScreen(
             TextButton(onClick = onBack) { Text("← Back") }
             SectionHeader(
                 title = "Customers",
-                subtitle = if (showSensitive) {
-                    "${visible.size} accounts · personal details masked until revealed"
-                } else {
-                    "Access denied"
+                subtitle = when {
+                    !showSensitive -> "Access denied"
+                    canRevealFullPii -> "${visible.size} accounts · admin can reveal personal details"
+                    else -> "${visible.size} accounts · contact details masked (admin-only reveal)"
                 }
             )
         }
@@ -718,7 +719,7 @@ fun CustomersScreen(
         }
 
         items(visible, key = { it.id }) { customer ->
-            val revealed = customer.id in revealIds
+            val revealed = canRevealFullPii && customer.id in revealIds
             Surface(
                 shape = RoundedCornerShape(14.dp),
                 tonalElevation = 1.dp,
@@ -778,12 +779,14 @@ fun CustomersScreen(
                             color = MaterialTheme.colorScheme.error
                         )
                     }
-                    TextButton(
-                        onClick = {
-                            revealIds = if (revealed) revealIds - customer.id else revealIds + customer.id
+                    if (canRevealFullPii) {
+                        TextButton(
+                            onClick = {
+                                revealIds = if (revealed) revealIds - customer.id else revealIds + customer.id
+                            }
+                        ) {
+                            Text(if (revealed) "Hide personal details" else "Reveal personal details")
                         }
-                    ) {
-                        Text(if (revealed) "Hide personal details" else "Reveal personal details")
                     }
                 }
             }

@@ -11,6 +11,7 @@ class PosSaleTest {
     fun isolateStore() {
         val dir = Files.createTempDirectory("nativepure-pos-test").toFile()
         System.setProperty("nativepure.companion.dataDir", dir.absolutePath)
+        System.setProperty("nativepure.companion.adminPassword", "12345678")
     }
 
     private fun signedInAdminRepo(): CompanionRepository {

@@ -244,6 +244,10 @@ enum class AccountRole(val label: String) {
     val canViewSensitiveInfo: Boolean
         get() = this == ADMIN || this == STAFF
 
+    /** Full DOB, notes, and unmasked contact — admin only. */
+    val canRevealFullPii: Boolean
+        get() = this == ADMIN
+
     val canManageStaff: Boolean
         get() = this == ADMIN
 

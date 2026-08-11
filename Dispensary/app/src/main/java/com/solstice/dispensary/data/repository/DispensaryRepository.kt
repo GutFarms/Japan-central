@@ -409,7 +409,7 @@ class DispensaryRepository(context: Context) {
         )
         return try {
             db.customerDao().insert(customer)
-            setSession(customer.id)
+            setSession(customer)
             lastIssuedEmailCode = storeEmailVerificationCode(customer)
             AuthResult.Success(customer.toProfile())
         } catch (_: Exception) {
@@ -484,7 +484,7 @@ class DispensaryRepository(context: Context) {
         }
         if (customer == null) {
             recordFailedLogin(raw)
-            return AuthResult.Error("No account found for that email or username.")
+            return AuthResult.Error("Invalid email/username or password.")
         }
 
         if (!customer.enabled) {
@@ -493,21 +493,24 @@ class DispensaryRepository(context: Context) {
 
         if (!PasswordHasher.matches(password, customer.passwordSalt, customer.passwordHash)) {
             recordFailedLogin(raw)
-            val left = PasswordPolicy.MAX_FAILED_ATTEMPTS -
-                prefs.getInt(failedKey(raw), 0)
             return if (loginLockoutRemainingMs(raw) > 0) {
                 AuthResult.Error("Too many failed attempts. Account locked for 5 minutes.")
             } else {
-                AuthResult.Error(
-                    "Incorrect password. ${left.coerceAtLeast(0)} attempts left before lockout."
-                )
+                AuthResult.Error("Invalid email/username or password.")
             }
         }
 
         clearFailedLogins(raw)
-        val updated = customer.copy(lastLoginAt = System.currentTimeMillis())
+        var updated = customer.copy(lastLoginAt = System.currentTimeMillis())
+        if (PasswordHasher.needsRehash(customer.passwordHash)) {
+            val salt = PasswordHasher.newSalt()
+            updated = updated.copy(
+                passwordHash = PasswordHasher.hash(password, salt),
+                passwordSalt = salt
+            )
+        }
         db.customerDao().update(updated)
-        setSession(updated.id)
+        setSession(updated)
         if (!updated.emailVerified) {
             lastIssuedEmailCode = storeEmailVerificationCode(updated)
         }
@@ -535,7 +538,8 @@ class DispensaryRepository(context: Context) {
         return AuthResult.Success(existing.toProfile())
     }
 
-    fun peekIssuedEmailCode(): EmailCodeIssue? = lastIssuedEmailCode
+    fun peekIssuedEmailCode(): EmailCodeIssue? =
+        lastIssuedEmailCode?.copy(code = "")
 
     suspend fun verifyEmailCode(code: String): AuthResult {
         val id = currentCustomerId() ?: return AuthResult.Error("Not signed in.")
@@ -558,7 +562,13 @@ class DispensaryRepository(context: Context) {
             clearEmailVerificationCode()
             return AuthResult.Error("That code expired. Tap Resend code.")
         }
-        if (!PasswordHasher.matches(clean, salt, hash)) {
+        val ok = if (hash.startsWith("code$")) {
+            PasswordHasher.matchesVerificationCode(clean, salt, hash)
+        } else {
+            // Legacy PBKDF2/SHA hashes for codes issued before this change.
+            PasswordHasher.matches(clean, salt, hash)
+        }
+        if (!ok) {
             return AuthResult.Error("Incorrect code. Check the email and try again.")
         }
         val updated = existing.copy(emailVerified = true)
@@ -578,7 +588,7 @@ class DispensaryRepository(context: Context) {
         prefs.edit()
             .putString(KEY_EMAIL_CODE_CUSTOMER, customer.id)
             .putString(KEY_EMAIL_CODE_SALT, salt)
-            .putString(KEY_EMAIL_CODE_HASH, PasswordHasher.hash(code, salt))
+            .putString(KEY_EMAIL_CODE_HASH, PasswordHasher.hashVerificationCode(code, salt))
             .putLong(KEY_EMAIL_CODE_EXPIRES_AT, expiresAt)
             .putLong(KEY_EMAIL_CODE_SENT_AT, System.currentTimeMillis())
             .apply()
@@ -678,9 +688,14 @@ class DispensaryRepository(context: Context) {
         lastIssuedEmailCode = null
     }
 
-    private fun setSession(customerId: String) {
-        prefs.edit().putString(KEY_CUSTOMER_ID, customerId).apply()
-        sessionCustomerId.value = customerId
+    private fun setSession(customer: Customer) {
+        sessionCustomerId.value = customer.id
+        // Staff/admin sessions stay in memory only — not restored after process death.
+        if (customer.role == AccountRole.CUSTOMER) {
+            prefs.edit().putString(KEY_CUSTOMER_ID, customer.id).apply()
+        } else {
+            prefs.edit().remove(KEY_CUSTOMER_ID).apply()
+        }
     }
 
     suspend fun updateProfile(

@@ -321,6 +321,7 @@ fun DispensaryNavHost(
             CustomersScreen(
                 customers = customers,
                 showSensitive = viewModel.canViewSensitiveInfo,
+                canRevealFullPii = viewModel.currentCustomer?.role?.canRevealFullPii == true,
                 onBack = { navController.popBackStack() }
             )
         }

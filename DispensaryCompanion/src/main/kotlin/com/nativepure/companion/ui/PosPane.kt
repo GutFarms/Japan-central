@@ -480,6 +480,20 @@ private fun PickupQueueStrip(
                                 if (text != null) {
                                     Toolkit.getDefaultToolkit().systemClipboard
                                         .setContents(StringSelection(text), null)
+                                    // Auto-clear clipboard after 30s to limit PII linger.
+                                    Thread {
+                                        try {
+                                            Thread.sleep(30_000)
+                                            val clip = Toolkit.getDefaultToolkit().systemClipboard
+                                            val current = runCatching {
+                                                clip.getData(java.awt.datatransfer.DataFlavor.stringFlavor) as? String
+                                            }.getOrNull()
+                                            if (current == text) {
+                                                clip.setContents(StringSelection(""), null)
+                                            }
+                                        } catch (_: Throwable) {
+                                        }
+                                    }.start()
                                 }
                                 onMessage(text ?: "No receipt.")
                             }) { Text("Receipt") }
