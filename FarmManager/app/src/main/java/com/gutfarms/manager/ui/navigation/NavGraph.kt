@@ -2,12 +2,14 @@ package com.gutfarms.manager.ui.navigation
 
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.navigation.NavHostController
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import com.gutfarms.manager.ui.screens.AnimalsScreen
 import com.gutfarms.manager.ui.screens.ArrivalsScreen
 import com.gutfarms.manager.ui.screens.BreedingScreen
+import com.gutfarms.manager.ui.screens.DataImportScreen
 import com.gutfarms.manager.ui.screens.FeedingScreen
 import com.gutfarms.manager.ui.screens.HomeScreen
 import com.gutfarms.manager.ui.screens.ProfitsScreen
@@ -20,6 +22,7 @@ object Routes {
     const val FEEDING = "feeding"
     const val BREEDING = "breeding"
     const val PROFITS = "profits"
+    const val DATA_IMPORT = "data_import"
 }
 
 @Composable
@@ -47,7 +50,8 @@ fun FarmNavHost(
                 onOpenArrivals = { navController.navigate(Routes.ARRIVALS) },
                 onOpenFeeding = { navController.navigate(Routes.FEEDING) },
                 onOpenBreeding = { navController.navigate(Routes.BREEDING) },
-                onOpenProfits = { navController.navigate(Routes.PROFITS) }
+                onOpenProfits = { navController.navigate(Routes.PROFITS) },
+                onOpenDataImport = { navController.navigate(Routes.DATA_IMPORT) }
             )
         }
         composable(Routes.ANIMALS) {
@@ -96,6 +100,23 @@ fun FarmNavHost(
                 transactions = viewModel.transactions,
                 onSave = viewModel::saveTransaction,
                 onDelete = viewModel::deleteTransaction
+            )
+        }
+        composable(Routes.DATA_IMPORT) {
+            val context = LocalContext.current
+            DataImportScreen(
+                farmName = viewModel.farmName,
+                importFiles = viewModel.importFiles,
+                apiSources = viewModel.apiSources,
+                dataMessage = viewModel.dataMessage,
+                onClearMessage = viewModel::clearDataMessage,
+                onImportUri = { uri -> viewModel.importFile(context, uri) },
+                onDeleteFile = viewModel::deleteImportFile,
+                onSaveApiSource = viewModel::saveApiSource,
+                onDeleteApiSource = viewModel::deleteApiSource,
+                onToggleApiSource = viewModel::toggleApiSource,
+                onPullApiSource = viewModel::pullApiSource,
+                onBack = { navController.popBackStack() }
             )
         }
     }

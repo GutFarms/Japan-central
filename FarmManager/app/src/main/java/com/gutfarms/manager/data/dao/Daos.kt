@@ -8,7 +8,9 @@ import androidx.room.Query
 import androidx.room.Update
 import com.gutfarms.manager.data.model.Animal
 import com.gutfarms.manager.data.model.AnimalArrival
+import com.gutfarms.manager.data.model.ApiFeedSource
 import com.gutfarms.manager.data.model.BreedingSchedule
+import com.gutfarms.manager.data.model.FarmImportFile
 import com.gutfarms.manager.data.model.FarmProfile
 import com.gutfarms.manager.data.model.FarmTransaction
 import com.gutfarms.manager.data.model.FeedingSchedule
@@ -119,4 +121,37 @@ interface TransactionDao {
 
     @Query("SELECT COALESCE(SUM(amount), 0) FROM transactions WHERE type = :type")
     fun observeSum(type: TransactionType): Flow<Double>
+}
+
+@Dao
+interface FarmImportFileDao {
+    @Query("SELECT * FROM farm_import_files ORDER BY importedAt DESC")
+    fun observeAll(): Flow<List<FarmImportFile>>
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun upsert(file: FarmImportFile): Long
+
+    @Delete
+    suspend fun delete(file: FarmImportFile)
+
+    @Query("SELECT * FROM farm_import_files WHERE id = :id")
+    suspend fun getById(id: Long): FarmImportFile?
+}
+
+@Dao
+interface ApiFeedSourceDao {
+    @Query("SELECT * FROM api_feed_sources ORDER BY name ASC")
+    fun observeAll(): Flow<List<ApiFeedSource>>
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun upsert(source: ApiFeedSource): Long
+
+    @Update
+    suspend fun update(source: ApiFeedSource)
+
+    @Delete
+    suspend fun delete(source: ApiFeedSource)
+
+    @Query("SELECT * FROM api_feed_sources WHERE id = :id")
+    suspend fun getById(id: Long): ApiFeedSource?
 }

@@ -11,6 +11,7 @@ Native SwiftUI companion to the Android `FarmManager` app.
 - **Feeding schedules** — rations with daily/monthly cost projections
 - **Breeding schedules** — matings with species gestation defaults and due dates
 - **Profit margins** — income/expense ledger including projected feed cost
+- **Data & maps** — upload KMZ / KML / CSV / JSON / images; add external API feed sources and pull live responses
 - **Choice pickers** — lists with more than five options use a wheel (bubble) scroll
 
 ## Requirements

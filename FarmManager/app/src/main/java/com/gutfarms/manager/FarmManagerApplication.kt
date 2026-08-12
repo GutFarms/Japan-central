@@ -24,7 +24,9 @@ class FarmManagerApplication : Application() {
             breedingScheduleDao = database.breedingScheduleDao(),
             animalArrivalDao = database.animalArrivalDao(),
             transactionDao = database.transactionDao(),
-            farmProfileDao = database.farmProfileDao()
+            farmProfileDao = database.farmProfileDao(),
+            farmImportFileDao = database.farmImportFileDao(),
+            apiFeedSourceDao = database.apiFeedSourceDao()
         )
         appScope.launch {
             seedSampleDataIfEmpty(database)

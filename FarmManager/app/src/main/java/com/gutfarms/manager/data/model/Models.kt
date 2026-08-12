@@ -261,3 +261,49 @@ data class FarmProfile(
     @PrimaryKey val id: Int = 1,
     val farmName: String = "Gut Farms"
 )
+
+enum class FarmFileKind {
+    KMZ,
+    KML,
+    GEOJSON,
+    CSV,
+    JSON,
+    IMAGE,
+    OTHER
+}
+
+@Entity(tableName = "farm_import_files")
+data class FarmImportFile(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    val displayName: String,
+    val kind: FarmFileKind,
+    val mimeType: String = "",
+    /** Absolute path under app filesDir/imports/ */
+    val storedPath: String,
+    val byteSize: Long = 0,
+    val notes: String = "",
+    /** Lightweight summary (e.g. placemark count for KMZ/KML). */
+    val summary: String = "",
+    val importedAt: Long = System.currentTimeMillis()
+)
+
+enum class ApiHttpMethod {
+    GET, POST
+}
+
+@Entity(tableName = "api_feed_sources")
+data class ApiFeedSource(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    val name: String,
+    val baseUrl: String,
+    val method: ApiHttpMethod = ApiHttpMethod.GET,
+    /** Optional bearer / API key header value (stored on-device). */
+    val authHeader: String = "",
+    val notes: String = "",
+    val enabled: Boolean = true,
+    val lastStatus: String = "",
+    val lastPulledAt: Long? = null,
+    /** Truncated body from last successful pull for preview. */
+    val lastPreview: String = "",
+    val createdAt: Long = System.currentTimeMillis()
+)

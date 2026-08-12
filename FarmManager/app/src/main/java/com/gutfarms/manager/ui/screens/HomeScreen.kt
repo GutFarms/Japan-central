@@ -71,7 +71,8 @@ fun HomeScreen(
     onOpenArrivals: () -> Unit,
     onOpenFeeding: () -> Unit,
     onOpenBreeding: () -> Unit,
-    onOpenProfits: () -> Unit
+    onOpenProfits: () -> Unit,
+    onOpenDataImport: () -> Unit
 ) {
     val context = LocalContext.current
     val brand by farmName.collectAsState()
@@ -290,7 +291,16 @@ fun HomeScreen(
                     QuickAction("Arrive", onOpenArrivals, Modifier.weight(1f))
                     QuickAction("Feed", onOpenFeeding, Modifier.weight(1f))
                     QuickAction("Breed", onOpenBreeding, Modifier.weight(1f))
-                    QuickAction("Profits", onOpenProfits, Modifier.weight(1f))
+                    QuickAction("Data", onOpenDataImport, Modifier.weight(1f))
+                }
+
+                Button(
+                    onClick = onOpenDataImport,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(top = 4.dp)
+                ) {
+                    Text("Upload KMZ / pull site APIs")
                 }
 
                 Button(

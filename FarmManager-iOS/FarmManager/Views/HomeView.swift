@@ -137,6 +137,19 @@ struct HomeView: View {
                     }
                     .padding(.horizontal, 16)
 
+                    NavigationLink {
+                        DataImportView(farmName: farmName)
+                    } label: {
+                        Text("Upload KMZ / pull site APIs")
+                            .font(.headline)
+                            .frame(maxWidth: .infinity)
+                            .padding()
+                            .background(FarmTheme.softTeal)
+                            .foregroundStyle(.white)
+                            .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                    }
+                    .padding(.horizontal, 16)
+
                     Button {
                         let html = FarmPrint.fullReportHTML(
                             farmName: farmName,

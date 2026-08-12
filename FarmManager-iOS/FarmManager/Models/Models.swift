@@ -404,3 +404,95 @@ final class FarmTransaction {
         self.date = date
     }
 }
+
+enum class FarmFileKind: String, Codable, CaseIterable, Identifiable {
+    case kmz, kml, geojson, csv, json, image, other
+    var id: String { rawValue }
+    var displayName: String { rawValue.uppercased() }
+}
+
+enum class ApiHttpMethod: String, Codable, CaseIterable, Identifiable {
+    case get, post
+    var id: String { rawValue }
+    var displayName: String { rawValue.uppercased() }
+}
+
+@Model
+final class FarmImportFile {
+    var displayName: String
+    var kindRaw: String
+    var mimeType: String
+    var storedPath: String
+    var byteSize: Int64
+    var notes: String
+    var summary: String
+    var importedAt: Date
+
+    var kind: FarmFileKind {
+        get { FarmFileKind(rawValue: kindRaw) ?? .other }
+        set { kindRaw = newValue.rawValue }
+    }
+
+    init(
+        displayName: String,
+        kind: FarmFileKind,
+        mimeType: String = "",
+        storedPath: String,
+        byteSize: Int64 = 0,
+        notes: String = "",
+        summary: String = "",
+        importedAt: Date = .now
+    ) {
+        self.displayName = displayName
+        self.kindRaw = kind.rawValue
+        self.mimeType = mimeType
+        self.storedPath = storedPath
+        self.byteSize = byteSize
+        self.notes = notes
+        self.summary = summary
+        self.importedAt = importedAt
+    }
+}
+
+@Model
+final class ApiFeedSource {
+    var name: String
+    var baseUrl: String
+    var methodRaw: String
+    var authHeader: String
+    var notes: String
+    var enabled: Bool
+    var lastStatus: String
+    var lastPulledAt: Date?
+    var lastPreview: String
+    var createdAt: Date
+
+    var method: ApiHttpMethod {
+        get { ApiHttpMethod(rawValue: methodRaw) ?? .get }
+        set { methodRaw = newValue.rawValue }
+    }
+
+    init(
+        name: String,
+        baseUrl: String,
+        method: ApiHttpMethod = .get,
+        authHeader: String = "",
+        notes: String = "",
+        enabled: Bool = true,
+        lastStatus: String = "",
+        lastPulledAt: Date? = nil,
+        lastPreview: String = "",
+        createdAt: Date = .now
+    ) {
+        self.name = name
+        self.baseUrl = baseUrl
+        self.methodRaw = method.rawValue
+        self.authHeader = authHeader
+        self.notes = notes
+        self.enabled = enabled
+        self.lastStatus = lastStatus
+        self.lastPulledAt = lastPulledAt
+        self.lastPreview = lastPreview
+        self.createdAt = createdAt
+    }
+}

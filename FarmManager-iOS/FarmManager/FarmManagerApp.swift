@@ -10,7 +10,9 @@ struct FarmManagerApp: App {
             FeedingSchedule.self,
             BreedingSchedule.self,
             AnimalArrival.self,
-            FarmTransaction.self
+            FarmTransaction.self,
+            FarmImportFile.self,
+            ApiFeedSource.self
         ])
         let config = ModelConfiguration(schema: schema, isStoredInMemoryOnly: false)
         do {

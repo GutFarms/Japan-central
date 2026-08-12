@@ -8,18 +8,24 @@ import androidx.room.TypeConverter
 import androidx.room.TypeConverters
 import com.gutfarms.manager.data.dao.AnimalArrivalDao
 import com.gutfarms.manager.data.dao.AnimalDao
+import com.gutfarms.manager.data.dao.ApiFeedSourceDao
 import com.gutfarms.manager.data.dao.BreedingScheduleDao
+import com.gutfarms.manager.data.dao.FarmImportFileDao
 import com.gutfarms.manager.data.dao.FarmProfileDao
 import com.gutfarms.manager.data.dao.FeedingScheduleDao
 import com.gutfarms.manager.data.dao.TransactionDao
 import com.gutfarms.manager.data.model.Animal
 import com.gutfarms.manager.data.model.AnimalArrival
 import com.gutfarms.manager.data.model.AnimalType
+import com.gutfarms.manager.data.model.ApiFeedSource
+import com.gutfarms.manager.data.model.ApiHttpMethod
 import com.gutfarms.manager.data.model.ArrivalOrigin
 import com.gutfarms.manager.data.model.BreedingMethod
 import com.gutfarms.manager.data.model.BreedingSchedule
 import com.gutfarms.manager.data.model.BreedingStatus
 import com.gutfarms.manager.data.model.ExpenseCategory
+import com.gutfarms.manager.data.model.FarmImportFile
+import com.gutfarms.manager.data.model.FarmFileKind
 import com.gutfarms.manager.data.model.FarmProfile
 import com.gutfarms.manager.data.model.FarmTransaction
 import com.gutfarms.manager.data.model.FeedFrequency
@@ -58,6 +64,12 @@ class Converters {
     @TypeConverter fun fromRegistrationStatus(value: RegistrationStatus): String = value.name
     @TypeConverter fun toRegistrationStatus(value: String): RegistrationStatus =
         RegistrationStatus.valueOf(value)
+
+    @TypeConverter fun fromFarmFileKind(value: FarmFileKind): String = value.name
+    @TypeConverter fun toFarmFileKind(value: String): FarmFileKind = FarmFileKind.valueOf(value)
+
+    @TypeConverter fun fromApiHttpMethod(value: ApiHttpMethod): String = value.name
+    @TypeConverter fun toApiHttpMethod(value: String): ApiHttpMethod = ApiHttpMethod.valueOf(value)
 }
 
 @Database(
@@ -67,9 +79,11 @@ class Converters {
         BreedingSchedule::class,
         AnimalArrival::class,
         FarmTransaction::class,
-        FarmProfile::class
+        FarmProfile::class,
+        FarmImportFile::class,
+        ApiFeedSource::class
     ],
-    version = 4,
+    version = 5,
     exportSchema = false
 )
 @TypeConverters(Converters::class)
@@ -80,6 +94,8 @@ abstract class FarmDatabase : RoomDatabase() {
     abstract fun animalArrivalDao(): AnimalArrivalDao
     abstract fun transactionDao(): TransactionDao
     abstract fun farmProfileDao(): FarmProfileDao
+    abstract fun farmImportFileDao(): FarmImportFileDao
+    abstract fun apiFeedSourceDao(): ApiFeedSourceDao
 
     companion object {
         @Volatile private var INSTANCE: FarmDatabase? = null
