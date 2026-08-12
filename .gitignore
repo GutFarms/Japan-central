@@ -3,6 +3,9 @@
 *.exe
 /dist/
 !flash/SHA256SUMS.txt
+# Fetch-latest / web install need these on GitHub (raw.githubusercontent.com).
+!flash/downloads/esp32-2432s028-sha256-miner.bin
+!flash/downloads/esp32-2432s028-sha256-miner-merged.bin
 .idea/
 .vscode/
 **/firmware-cpp/.pio/

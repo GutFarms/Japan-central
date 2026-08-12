@@ -1,6 +1,6 @@
 [package]
 name = "cyd-companion"
-version = "0.8.10"
+version = "0.8.11"
 edition = "2021"
 description = "CYD Companion — USB SHA-256 Bitcoin mining control (PC stratum, board hashes)"
 license = "MIT OR Apache-2.0"
@@ -20,6 +20,7 @@ sha2 = "0.10"
 hex = "0.4"
 ureq = { version = "2.12", default-features = false, features = ["json", "tls"] }
 chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
+zip = { version = "0.6", default-features = false, features = ["deflate"] }
 
 [profile.release]
 lto = true
