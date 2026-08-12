@@ -5,10 +5,9 @@ set -euo pipefail
 ORG="${ORG:-GutFarms}"
 REMOTE_BASE="${REMOTE_BASE:-https://github.com/${ORG}}"
 
-# japan-central stays this repo; push emblem rebuild to master via normal PR merge.
+# japan-central stays this repo; Native Pure intentionally left on Japan-central.
 # remote_name:local_split_ref_suffix
 REPOS=(
-  Native:native
   farm-manager:farm-manager
   boriken-llm:boriken-llm
   cyd-miner:cyd-miner
