@@ -4,7 +4,7 @@ USB mining control for the ESP32-2432S028. The **PC** talks to a Bitcoin stratum
 
 ## Recommended download (all-in-one)
 
-**`CYD-Miner-Setup.exe`** — Windows setup wizard with:
+**[`CYD-Miner-Setup.exe`](flash/downloads/CYD-Miner-Setup.exe)** — Windows setup wizard with:
 
 - CYD Companion app
 - Firmware `esp32-2432s028-sha256-miner-merged.bin`
@@ -15,9 +15,12 @@ Also available:
 
 | Package | Contents |
 |---------|----------|
+| [`cyd-companion.exe`](flash/downloads/cyd-companion.exe) | Standalone app (no installer) |
 | `CYD-Miner-Portable.zip` | Same kit, no installer |
 | `CYD-Companion-App-Only.zip` | Just `cyd-companion.exe` |
 | `CYD-Companion-Setup.exe` | Alias of the full miner setup |
+
+See [`flash/downloads/README.md`](flash/downloads/README.md) for checksums.
 
 ## Build
 

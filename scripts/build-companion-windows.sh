@@ -106,11 +106,28 @@ cp -f "$APP_ONLY_ZIP" /opt/cursor/artifacts/ 2>/dev/null || true
 cp -f "$KIT_ZIP" /opt/cursor/artifacts/ 2>/dev/null || true
 cp -f "$PORTABLE_ZIP" "$APP_ONLY_ZIP" flash/downloads/ 2>/dev/null || true
 cp -f "$KIT_ZIP" flash/downloads/ 2>/dev/null || true
+# Standalone app exe for direct download (no unzip).
+cp -f dist/cyd-companion-windows/cyd-companion.exe flash/downloads/cyd-companion.exe
+cp -f dist/cyd-companion-windows/cyd-companion.exe /opt/cursor/artifacts/ 2>/dev/null || true
 if [[ -f "$SETUP_EXE" ]]; then
   cp -f "$SETUP_EXE" dist/CYD-Companion-Setup.exe /opt/cursor/artifacts/
   cp -f "$SETUP_EXE" dist/CYD-Companion-Setup.exe flash/downloads/ 2>/dev/null || true
 fi
 
+# Keep a short download index next to the binaries.
+cat > flash/downloads/README.md <<EOF
+# CYD Companion downloads (\`${VER}\`)
+
+| File | What it is |
+|------|------------|
+| **[CYD-Miner-Setup.exe](./CYD-Miner-Setup.exe)** | Installer — Companion + firmware (recommended) |
+| **[cyd-companion.exe](./cyd-companion.exe)** | Standalone app — double-click to run |
+| [CYD-Companion-App-Only.zip](./CYD-Companion-App-Only.zip) | App zip |
+| [CYD-Miner-Portable.zip](./CYD-Miner-Portable.zip) | Full portable kit |
+
+Firmware: [merged.bin](./esp32-2432s028-sha256-miner-merged.bin) @ \`0x0\` · [SHA256SUMS.txt](./SHA256SUMS.txt) · [VERSION.txt](./VERSION.txt)
+EOF
+
 ls -la dist/cyd-companion-windows/cyd-companion.exe "$PORTABLE_ZIP" "$APP_ONLY_ZIP" "$KIT_ZIP" || true
 [[ -f "$SETUP_EXE" ]] && ls -la "$SETUP_EXE" dist/CYD-Companion-Setup.exe
-echo "Windows kit ready (Setup wizard · Portable kit · App-only)"
+echo "Windows kit ready (Setup wizard · Portable kit · App-only · downloadable .exe)"
