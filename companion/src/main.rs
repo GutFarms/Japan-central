@@ -3,6 +3,7 @@
 
 #![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
 
+mod api_feeds;
 mod flash_update;
 mod live_bar;
 mod stratum;
@@ -13,6 +14,7 @@ use std::sync::mpsc::{self, Receiver, Sender};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
+use api_feeds::{load_feeds, next_feed_id, pull_feed, save_feeds, ApiFeed, ApiPullOutcome};
 use flash_update::{
     fetch_latest_firmware, find_firmware_image, flash_merged_bin, update_needed, FirmwareImage,
 };
@@ -414,6 +416,7 @@ enum NetMsg {
     },
     Share(ShareOutcome),
     FirmwareFetched(Result<FirmwareImage, String>),
+    ApiFeedResult(ApiPullOutcome),
 }
 
 enum NetCmd {
@@ -442,6 +445,8 @@ enum NetCmd {
     },
     RebootBoard,
     FetchFirmware,
+    /// Pull one user-configured API feed in the worker thread.
+    PullApiFeed(ApiFeed),
 }
 
 struct CompanionApp {
@@ -492,6 +497,14 @@ struct CompanionApp {
     /// None = wizard dismissed; Some(0..3) = step.
     wizard_step: Option<u8>,
     fetch_busy: bool,
+    /// User-configured HTTP APIs that pull external info into the app.
+    api_feeds: Vec<ApiFeed>,
+    api_draft_name: String,
+    api_draft_url: String,
+    api_draft_auth: String,
+    api_draft_path: String,
+    api_pulling_id: Option<u64>,
+    last_api_auto_pull: Instant,
 }
 
 impl CompanionApp {
@@ -508,6 +521,7 @@ impl CompanionApp {
         let mut com_port = String::new();
         let mut auto_connect = false;
         let mut wizard_done = false;
+        let mut api_feeds: Vec<ApiFeed> = Vec::new();
         if let Some(storage) = storage {
             if let Some(raw) = storage.get_string("mine_prefs") {
                 if let Ok(p) = serde_json::from_str::<PersistedMine>(&raw) {
@@ -526,6 +540,9 @@ impl CompanionApp {
                     auto_connect = p.auto_connect;
                     wizard_done = p.wizard_done;
                 }
+            }
+            if let Some(raw) = storage.get_string("api_feeds") {
+                api_feeds = load_feeds(&raw);
             }
         }
 
@@ -577,6 +594,13 @@ impl CompanionApp {
             last_share_latency_ms: None,
             wizard_step: if wizard_done { None } else { Some(0) },
             fetch_busy: false,
+            api_feeds,
+            api_draft_name: String::new(),
+            api_draft_url: String::new(),
+            api_draft_auth: String::new(),
+            api_draft_path: String::new(),
+            api_pulling_id: None,
+            last_api_auto_pull: Instant::now() - Duration::from_secs(120),
         };
         app.push_log(LogKind::Info, "CYD Companion ready".into());
         if let Some(fw) = &app.firmware {
@@ -678,6 +702,67 @@ impl CompanionApp {
         };
         if let Ok(raw) = serde_json::to_string(&p) {
             storage.set_string("mine_prefs", raw);
+        }
+        storage.set_string("api_feeds", save_feeds(&self.api_feeds));
+    }
+
+    fn request_api_pull(&mut self, id: u64) {
+        let Some(feed) = self.api_feeds.iter().find(|f| f.id == id).cloned() else {
+            return;
+        };
+        self.api_pulling_id = Some(id);
+        let _ = self.cmd_tx.send(NetCmd::PullApiFeed(feed));
+        self.push_log(LogKind::Info, format!("API pull → id={id}"));
+    }
+
+    fn add_api_feed_from_draft(&mut self) {
+        let name = self.api_draft_name.trim().to_string();
+        let url = self.api_draft_url.trim().to_string();
+        if name.is_empty() || !(url.starts_with("http://") || url.starts_with("https://")) {
+            self.last_error = "API needs a name and http(s) URL.".into();
+            return;
+        }
+        let id = next_feed_id(&self.api_feeds);
+        let mut feed = ApiFeed::new(id, name, url);
+        feed.auth = self.api_draft_auth.trim().to_string();
+        feed.json_path = self.api_draft_path.trim().to_string();
+        self.api_feeds.push(feed);
+        self.api_draft_name.clear();
+        self.api_draft_url.clear();
+        self.api_draft_auth.clear();
+        self.api_draft_path.clear();
+        self.last_ok = "API feed added — Pull now to load data into the app.".into();
+        self.push_log(LogKind::Info, "API feed added".into());
+        if let Some(last) = self.api_feeds.last() {
+            self.request_api_pull(last.id);
+        }
+    }
+
+    fn apply_api_pull(&mut self, outcome: ApiPullOutcome) {
+        if self.api_pulling_id == Some(outcome.id) {
+            self.api_pulling_id = None;
+        }
+        if let Some(feed) = self.api_feeds.iter_mut().find(|f| f.id == outcome.id) {
+            feed.last_status = outcome.status.clone();
+            feed.last_summary = outcome.summary.clone();
+            feed.last_preview = outcome.preview;
+            feed.last_pulled_ms = outcome.pulled_ms;
+            let name = feed.name.clone();
+            if outcome.ok {
+                self.last_ok = format!(
+                    "API {name}: {}{}",
+                    outcome.status,
+                    if outcome.summary.is_empty() {
+                        String::new()
+                    } else {
+                        format!(" · {}", outcome.summary)
+                    }
+                );
+                self.push_log(LogKind::Info, self.last_ok.clone());
+            } else {
+                self.last_error = format!("API {name}: {}", outcome.status);
+                self.push_log(LogKind::Warn, self.last_error.clone());
+            }
         }
     }
 
@@ -969,6 +1054,7 @@ impl CompanionApp {
         });
 
         ui.add_space(16.0);
+        self.ui_api_feeds_mine(ui);
         self.ui_stratum_panel(ui);
         ui.add_space(12.0);
         self.ui_logs_panel(ui);
@@ -1214,6 +1300,167 @@ impl CompanionApp {
                     .size(12.0),
             );
         });
+
+        ui.add_space(14.0);
+        self.ui_api_feeds(ui);
+    }
+
+    fn ui_api_feeds(&mut self, ui: &mut egui::Ui) {
+        soft_panel(ui, "API feeds", |ui| {
+            ui.label(
+                RichText::new(
+                    "Add HTTPS APIs to pull info from other sites into Companion. Optional JSON path picks a field for the summary (e.g. data.price).",
+                )
+                .color(C_MUTED)
+                .size(13.0),
+            );
+            ui.add_space(10.0);
+            labeled_edit(ui, "Name", &mut self.api_draft_name, "Weather · Markets · Custom");
+            labeled_edit(
+                ui,
+                "URL",
+                &mut self.api_draft_url,
+                "https://api.example.com/v1/info",
+            );
+            labeled_edit(
+                ui,
+                "Auth (optional)",
+                &mut self.api_draft_auth,
+                "Bearer …  or  X-Api-Key: …",
+            );
+            labeled_edit(
+                ui,
+                "JSON path (optional)",
+                &mut self.api_draft_path,
+                "data.price",
+            );
+            ui.add_space(8.0);
+            if soft_button(ui, "Add API feed", 160.0).clicked() {
+                self.add_api_feed_from_draft();
+            }
+
+            if self.api_feeds.is_empty() {
+                ui.add_space(10.0);
+                ui.label(
+                    RichText::new("No API feeds yet — add a URL above to pull live data.")
+                        .color(C_DIM)
+                        .size(12.0),
+                );
+                return;
+            }
+
+            ui.add_space(12.0);
+            let mut pull_id: Option<u64> = None;
+            let mut remove_id: Option<u64> = None;
+            let pulling = self.api_pulling_id;
+            for feed in &mut self.api_feeds {
+                Frame::none()
+                    .fill(Color32::from_rgba_unmultiplied(4, 8, 9, 160))
+                    .rounding(Rounding::same(12.0))
+                    .inner_margin(Margin::same(12.0))
+                    .show(ui, |ui| {
+                        ui.horizontal(|ui| {
+                            ui.checkbox(&mut feed.enabled, "");
+                            ui.label(
+                                RichText::new(&feed.name)
+                                    .color(C_TEXT)
+                                    .font(mono_ui_font(13.0)),
+                            );
+                            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                                if soft_button(ui, "Remove", 88.0).clicked() {
+                                    remove_id = Some(feed.id);
+                                }
+                                let pull_label = if pulling == Some(feed.id) {
+                                    "Pulling…"
+                                } else {
+                                    "Pull now"
+                                };
+                                if soft_button(ui, pull_label, 100.0).clicked()
+                                    && pulling.is_none()
+                                    && feed.enabled
+                                {
+                                    pull_id = Some(feed.id);
+                                }
+                            });
+                        });
+                        ui.label(
+                            RichText::new(&feed.url)
+                                .color(C_DIM)
+                                .font(mono_ui_font(10.0)),
+                        );
+                        if !feed.last_status.is_empty() {
+                            ui.add_space(4.0);
+                            ui.label(
+                                RichText::new(format!(
+                                    "{}{}",
+                                    feed.last_status,
+                                    if feed.last_summary.is_empty() {
+                                        String::new()
+                                    } else {
+                                        format!(" · {}", feed.last_summary)
+                                    }
+                                ))
+                                .color(C_LIME)
+                                .font(mono_ui_font(11.0)),
+                            );
+                        }
+                        if !feed.last_preview.is_empty() {
+                            ui.add_space(4.0);
+                            ui.label(
+                                RichText::new(trunc(&feed.last_preview, 220))
+                                    .color(C_MUTED)
+                                    .font(mono_ui_font(10.0)),
+                            );
+                        }
+                    });
+                ui.add_space(8.0);
+            }
+            if let Some(id) = pull_id {
+                self.request_api_pull(id);
+            }
+            if let Some(id) = remove_id {
+                self.api_feeds.retain(|f| f.id != id);
+                self.push_log(LogKind::Info, format!("API feed removed id={id}"));
+            }
+        });
+    }
+
+    fn ui_api_feeds_mine(&self, ui: &mut egui::Ui) {
+        let active: Vec<_> = self
+            .api_feeds
+            .iter()
+            .filter(|f| f.enabled && (!f.last_summary.is_empty() || !f.last_status.is_empty()))
+            .collect();
+        if active.is_empty() {
+            return;
+        }
+        soft_panel(ui, "API feeds", |ui| {
+            for feed in active.iter().take(6) {
+                ui.horizontal(|ui| {
+                    ui.label(
+                        RichText::new(&feed.name)
+                            .color(C_LIME)
+                            .font(mono_ui_font(11.0)),
+                    );
+                    ui.label(
+                        RichText::new(if feed.last_summary.is_empty() {
+                            feed.last_status.clone()
+                        } else {
+                            feed.last_summary.clone()
+                        })
+                        .color(C_TEXT)
+                        .font(mono_ui_font(11.0)),
+                    );
+                });
+            }
+            ui.add_space(4.0);
+            ui.label(
+                RichText::new("Manage feeds in Settings → API feeds")
+                    .color(C_DIM)
+                    .font(mono_ui_font(10.0)),
+            );
+        });
+        ui.add_space(12.0);
     }
 
     fn ui_connection_controls(&mut self, ui: &mut egui::Ui) {
@@ -1846,12 +2093,45 @@ impl App for CompanionApp {
                         }
                     }
                 }
+                NetMsg::ApiFeedResult(outcome) => {
+                    self.apply_api_pull(outcome);
+                }
             }
         }
 
         if self.usb_open && self.last_poll.elapsed() > Duration::from_millis(800) {
             let _ = self.cmd_tx.send(NetCmd::PollStatus);
             self.last_poll = Instant::now();
+        }
+
+        // Periodically refresh enabled API feeds (every 5 minutes, round-robin).
+        if self.api_pulling_id.is_none()
+            && self.last_api_auto_pull.elapsed() > Duration::from_secs(300)
+        {
+            let enabled: Vec<u64> = self
+                .api_feeds
+                .iter()
+                .filter(|f| f.enabled)
+                .map(|f| f.id)
+                .collect();
+            if let Some(&id) = enabled.first() {
+                // Prefer the feed with the oldest pull time.
+                let id = enabled
+                    .iter()
+                    .min_by_key(|id| {
+                        self.api_feeds
+                            .iter()
+                            .find(|f| f.id == **id)
+                            .map(|f| f.last_pulled_ms)
+                            .unwrap_or(0)
+                    })
+                    .copied()
+                    .unwrap_or(id);
+                self.last_api_auto_pull = Instant::now();
+                self.request_api_pull(id);
+            } else {
+                self.last_api_auto_pull = Instant::now();
+            }
         }
 
         self.update_motion(ctx);
@@ -2935,6 +3215,10 @@ fn mine_worker(cmd_rx: Receiver<NetCmd>, msg_tx: Sender<NetMsg>) {
                     };
                     let result = fetch_latest_firmware(&progress);
                     let _ = msg_tx.send(NetMsg::FirmwareFetched(result));
+                }
+                NetCmd::PullApiFeed(feed) => {
+                    let outcome = pull_feed(&feed);
+                    let _ = msg_tx.send(NetMsg::ApiFeedResult(outcome));
                 }
             }
         }
