@@ -6,23 +6,26 @@ ORG="${ORG:-GutFarms}"
 REMOTE_BASE="${REMOTE_BASE:-https://github.com/${ORG}}"
 
 # japan-central stays this repo; push emblem rebuild to master via normal PR merge.
+# remote_name:local_split_ref_suffix
 REPOS=(
-  native
-  farm-manager
-  boriken-llm
-  cyd-miner
-  esp32-scrypt-miner
-  jchc1-hardware
-  cyd-pc-monitor
-  cursor-appliance
-  grok-agent
-  pi-invest-agent
-  pi-invest-os
+  Native:native
+  farm-manager:farm-manager
+  boriken-llm:boriken-llm
+  cyd-miner:cyd-miner
+  esp32-scrypt-miner:esp32-scrypt-miner
+  jchc1-hardware:jchc1-hardware
+  cyd-pc-monitor:cyd-pc-monitor
+  cursor-appliance:cursor-appliance
+  grok-agent:grok-agent
+  pi-invest-agent:pi-invest-agent
+  pi-invest-os:pi-invest-os
 )
 
 fail=0
-for name in "${REPOS[@]}"; do
-  ref="split/${name}"
+for entry in "${REPOS[@]}"; do
+  name="${entry%%:*}"
+  ref_suffix="${entry##*:}"
+  ref="split/${ref_suffix}"
   if ! git rev-parse -q --verify "$ref" >/dev/null; then
     echo "MISSING local ref $ref" >&2
     fail=1
