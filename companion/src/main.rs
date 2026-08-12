@@ -1257,117 +1257,128 @@ impl CompanionApp {
             } else {
                 (0, 0)
             };
+            // Compact chips — large metric tiles overflow short viewports.
             ui.horizontal_wrapped(|ui| {
-                metric(ui, "Accepted", &acc.to_string(), C_LIME);
-                metric(
-                    ui,
-                    "Rejected",
-                    &rej.to_string(),
-                    if rej > 0 { C_ERR } else { C_MUTED },
-                );
-                metric(ui, "Accept %", &self.accept_rate_label(), C_TEXT);
-                metric(ui, "Session", &self.session_elapsed_label(), C_BUBBLE_HI);
-                metric(ui, "Luck", &self.luck_label(), C_LIME_SOFT);
-                metric(ui, "Sess H", &self.session_hashes_label(), C_TEXT);
-                metric(ui, "Expect/h", &self.expected_shares_label(), C_TEXT);
-                metric(ui, "SHA", self.sha_mode_label(), C_LIME);
-                metric(
+                mini_stat(ui, "Accept", &acc.to_string());
+                mini_stat(ui, "Reject", &rej.to_string());
+                mini_stat(ui, "Accept%", &self.accept_rate_label());
+                mini_stat(ui, "Session", &self.session_elapsed_label());
+                mini_stat(ui, "Luck", &self.luck_label());
+                mini_stat(ui, "Expect/h", &self.expected_shares_label());
+            });
+            ui.add_space(4.0);
+            ui.horizontal_wrapped(|ui| {
+                mini_stat(ui, "Rate", &format_hashrate(self.status.hashrate_hs));
+                mini_stat(ui, "Hashes", &format_hash_count(self.status.hashes));
+                mini_stat(ui, "SHA", self.sha_mode_label());
+                mini_stat(
                     ui,
                     "Reply",
                     &self
                         .last_share_latency_ms
-                        .map(|ms| format!("{ms} ms"))
+                        .map(|ms| format!("{ms}ms"))
                         .unwrap_or_else(|| "—".into()),
-                    C_MUTED,
                 );
-                metric(
-                    ui,
-                    "Rate",
-                    &format_hashrate(self.status.hashrate_hs),
-                    C_TEXT,
-                );
-                metric(
-                    ui,
-                    "Hashes",
-                    &format_hash_count(self.status.hashes),
-                    C_BUBBLE_HI,
-                );
+                mini_stat(ui, "Sess H", &self.session_hashes_label());
             });
             if !authed {
-                ui.add_space(6.0);
+                ui.add_space(4.0);
                 ui.label(
-                    RichText::new("Share counts start after pool authorize")
+                    RichText::new("Share counts after authorize")
                         .color(C_DIM)
-                        .font(mono_ui_font(11.0)),
+                        .font(mono_ui_font(10.0)),
                 );
             }
+            ui.add_space(6.0);
+            ui.label(
+                RichText::new(format!(
+                    "fw {} · {} · job {}",
+                    if self.fw_label.is_empty() {
+                        "—"
+                    } else {
+                        &self.fw_label
+                    },
+                    format!(
+                        "{} @ {} MHz",
+                        format_uptime(self.status.uptime_secs),
+                        self.target_mhz
+                    ),
+                    if self.status.job.is_empty() {
+                        "—"
+                    } else {
+                        &self.status.job
+                    },
+                ))
+                .color(C_MUTED)
+                .font(mono_ui_font(10.0)),
+            );
+            ui.label(
+                RichText::new(format!(
+                    "nonce {}",
+                    if self.status.nonce.is_empty() {
+                        "—"
+                    } else {
+                        &self.status.nonce
+                    }
+                ))
+                .color(C_DIM)
+                .font(FontId::new(11.0, FontFamily::Monospace)),
+            );
             if !self.share_history.is_empty() {
-                ui.add_space(10.0);
+                ui.add_space(6.0);
                 ui.label(
                     RichText::new("Recent shares")
                         .color(C_MUTED)
-                        .font(mono_ui_font(11.0)),
+                        .font(mono_ui_font(10.0)),
                 );
-                for row in self.share_history.iter().rev().take(6) {
-                    let mark = if row.accepted { "OK" } else { "RJ" };
-                    let color = if row.accepted { C_LIME } else { C_ERR };
-                    let lat = row
-                        .latency_ms
-                        .map(|ms| format!(" · {ms}ms"))
-                        .unwrap_or_default();
-                    ui.label(
-                        RichText::new(format!(
-                            "{}  {}  {}{}",
-                            row.time,
-                            mark,
-                            trunc(&row.detail, 40),
-                            lat
-                        ))
-                        .color(color)
-                        .font(FontId::new(11.0, FontFamily::Monospace)),
-                    );
-                }
+                Frame::none()
+                    .fill(Color32::from_rgba_unmultiplied(4, 8, 9, 160))
+                    .rounding(Rounding::same(10.0))
+                    .inner_margin(Margin::same(8.0))
+                    .show(ui, |ui| {
+                        ScrollArea::vertical()
+                            .id_source("share_hist_scroll")
+                            .max_height(72.0)
+                            .auto_shrink([false, true])
+                            .show(ui, |ui| {
+                                for row in self.share_history.iter().rev().take(8) {
+                                    let mark = if row.accepted { "OK" } else { "RJ" };
+                                    let color = if row.accepted { C_LIME } else { C_ERR };
+                                    let lat = row
+                                        .latency_ms
+                                        .map(|ms| format!(" {ms}ms"))
+                                        .unwrap_or_default();
+                                    ui.label(
+                                        RichText::new(format!(
+                                            "{} {} {}{}",
+                                            row.time,
+                                            mark,
+                                            trunc(&row.detail, 28),
+                                            lat
+                                        ))
+                                        .color(color)
+                                        .font(FontId::new(10.0, FontFamily::Monospace)),
+                                    );
+                                }
+                            });
+                    });
             }
-            ui.add_space(12.0);
-            telemetry_line(
-                ui,
-                "Firmware",
-                if self.fw_label.is_empty() { "—" } else { &self.fw_label },
-            );
-            telemetry_line(
-                ui,
-                "Nonce",
-                if self.status.nonce.is_empty() {
-                    "—"
-                } else {
-                    &self.status.nonce
-                },
-            );
-            telemetry_line(
-                ui,
-                "Job",
-                if self.status.job.is_empty() {
-                    "—"
-                } else {
-                    &self.status.job
-                },
-            );
-            telemetry_line(
-                ui,
-                "Uptime",
-                &format!(
-                    "{} · {} MHz",
-                    format_uptime(self.status.uptime_secs),
-                    self.target_mhz
-                ),
-            );
-            telemetry_line(ui, "Expect shares", &self.expected_shares_label());
-            ui.add_space(10.0);
+            if !self.last_ok.is_empty() || !self.last_error.is_empty() {
+                ui.add_space(6.0);
+            }
             if !self.last_ok.is_empty() {
-                ui.label(RichText::new(&self.last_ok).color(C_LIME).size(12.0));
+                ui.label(
+                    RichText::new(trunc(&self.last_ok, 72))
+                        .color(C_LIME)
+                        .size(11.0),
+                );
             }
             if !self.last_error.is_empty() {
-                ui.label(RichText::new(&self.last_error).color(C_ERR).size(12.0));
+                ui.label(
+                    RichText::new(trunc(&self.last_error, 72))
+                        .color(C_ERR)
+                        .size(11.0),
+                );
             }
         });
     }
@@ -2624,12 +2635,17 @@ fn stratum_line(ui: &mut egui::Ui, label: &str, value: &str) {
 fn mini_stat(ui: &mut egui::Ui, label: &str, value: &str) {
     Frame::none()
         .fill(C_PANEL_QUIET)
-        .rounding(Rounding::same(14.0))
-        .inner_margin(Margin::symmetric(11.0, 7.0))
+        .rounding(Rounding::same(10.0))
+        .inner_margin(Margin::symmetric(8.0, 5.0))
         .show(ui, |ui| {
             ui.vertical(|ui| {
-                ui.label(RichText::new(label).color(C_DIM).font(mono_ui_font(10.0)));
-                ui.label(RichText::new(value).color(C_TEXT).size(13.0));
+                ui.spacing_mut().item_spacing.y = 1.0;
+                ui.label(RichText::new(label).color(C_DIM).font(mono_ui_font(9.0)));
+                ui.label(
+                    RichText::new(value)
+                        .color(C_TEXT)
+                        .font(FontId::new(12.0, FontFamily::Monospace)),
+                );
             });
         });
 }
