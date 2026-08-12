@@ -1,0 +1,89 @@
+name: Windows appliance release
+
+on:
+  push:
+    branches: [master, "cursor/**"]
+    paths:
+      - "cursor-appliance/**"
+      - ".github/workflows/windows-release.yml"
+  pull_request:
+    paths:
+      - "cursor-appliance/**"
+      - ".github/workflows/windows-release.yml"
+  workflow_dispatch:
+  release:
+    types: [published]
+
+permissions:
+  contents: write
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    defaults:
+      run:
+        working-directory: cursor-appliance/gui
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: cursor-appliance/gui
+
+      - name: Build release binaries
+        run: cargo build --release --bins
+
+      - name: Stage portable package
+        shell: pwsh
+        working-directory: cursor-appliance
+        run: |
+          $version = (Get-Content VERSION -Raw).Trim()
+          $stage = "dist/cursor-appliance-windows-x64"
+          Remove-Item -Recurse -Force dist -ErrorAction SilentlyContinue
+          New-Item -ItemType Directory -Force -Path "$stage/scripts/windows" | Out-Null
+          New-Item -ItemType Directory -Force -Path "$stage/data/local-queue/incoming" | Out-Null
+          New-Item -ItemType Directory -Force -Path "$stage/data/local-queue/done" | Out-Null
+          New-Item -ItemType Directory -Force -Path "$stage/data/local-queue/failed" | Out-Null
+          New-Item -ItemType Directory -Force -Path "$stage/sandbox","$stage/sandbox-workspace","$stage/sandbox-home","$stage/sandbox-tmp" | Out-Null
+          Copy-Item "gui/target/release/cursor-appliance-gui.exe" "$stage/CursorAppliance.exe"
+          Copy-Item "gui/target/release/cursor-local-worker.exe" "$stage/cursor-local-worker.exe"
+          Copy-Item "Start-CursorAppliance.bat" $stage
+          Copy-Item "Start-PortableSandbox.bat" $stage
+          Copy-Item ".env.example" $stage
+          Copy-Item ".env.example" "$stage/.env"
+          Copy-Item "VERSION" $stage
+          Copy-Item "WINDOWS.md" $stage
+          Copy-Item "README.md" $stage
+          Copy-Item "sandbox/README.txt" "$stage/sandbox/"
+          Copy-Item "scripts/windows/*.ps1" "$stage/scripts/windows/"
+          Copy-Item "scripts/windows/*.cmd" "$stage/scripts/windows/" -ErrorAction SilentlyContinue
+          @"
+          Cursor Appliance for Windows v$version
+          Double-click Start-CursorAppliance.bat to run.
+          Or Start-PortableSandbox.bat for a portable/Windows Sandbox launch.
+          See WINDOWS.md for details.
+          "@ | Set-Content "$stage/README-WINDOWS.txt"
+          $zip = "dist/cursor-appliance-windows-x64-v$version.zip"
+          if (Test-Path $zip) { Remove-Item $zip }
+          Compress-Archive -Path $stage -DestinationPath $zip
+          Get-Item $zip | Format-List FullName, Length
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: cursor-appliance-windows-x64
+          path: cursor-appliance/dist/cursor-appliance-windows-x64-v*.zip
+          if-no-files-found: error
+
+      - name: Attach zip to GitHub Release
+        if: github.event_name == 'release'
+        uses: softprops/action-gh-release@v2
+        with:
+          files: cursor-appliance/dist/cursor-appliance-windows-x64-v*.zip
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
