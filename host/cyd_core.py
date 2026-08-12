@@ -1,0 +1,551 @@
+"""Shared metrics collection and CYD link helpers for CLI + desktop app."""
+
+from __future__ import annotations
+
+import json
+import socket
+import sys
+import time
+import warnings
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any, Optional
+
+import psutil
+
+try:
+    import serial  # type: ignore
+    from serial.tools import list_ports
+
+    _HAS_SERIAL = True
+except Exception:  # noqa: BLE001
+    serial = None  # type: ignore
+    list_ports = None  # type: ignore
+    _HAS_SERIAL = False
+
+try:
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", FutureWarning)
+        from pynvml import (
+            NVML_CLOCK_GRAPHICS,
+            NVML_CLOCK_MEM,
+            NVML_TEMPERATURE_GPU,
+            nvmlDeviceGetClockInfo,
+            nvmlDeviceGetHandleByIndex,
+            nvmlDeviceGetMaxClockInfo,
+            nvmlDeviceGetMemoryInfo,
+            nvmlDeviceGetName,
+            nvmlDeviceGetTemperature,
+            nvmlDeviceGetUtilizationRates,
+            nvmlInit,
+            nvmlShutdown,
+        )
+
+    _HAS_NVML = True
+except Exception:  # noqa: BLE001
+    _HAS_NVML = False
+    NVML_CLOCK_GRAPHICS = 0
+    NVML_CLOCK_MEM = 1
+    NVML_TEMPERATURE_GPU = 0
+    nvmlDeviceGetClockInfo = None  # type: ignore
+    nvmlDeviceGetMaxClockInfo = None  # type: ignore
+    nvmlDeviceGetHandleByIndex = None  # type: ignore
+    nvmlDeviceGetMemoryInfo = None  # type: ignore
+    nvmlDeviceGetName = None  # type: ignore
+    nvmlDeviceGetTemperature = None  # type: ignore
+    nvmlDeviceGetUtilizationRates = None  # type: ignore
+    nvmlInit = None  # type: ignore
+    nvmlShutdown = None  # type: ignore
+
+
+# Common USB-UART chips used on ESP32-CYD boards (VID, PID).
+_CYD_USB_IDS = {
+    (0x10C4, 0xEA60),  # CP2102
+    (0x10C4, 0xEA70),
+    (0x1A86, 0x7523),  # CH340
+    (0x1A86, 0x55D4),  # CH9102
+    (0x0403, 0x6001),  # FTDI
+    (0x0403, 0x6015),
+    (0x303A, 0x1001),  # Espressif
+    (0x303A, 0x0002),
+}
+
+_CYD_KEYWORDS = (
+    "cp210",
+    "ch340",
+    "ch910",
+    "ftdi",
+    "usb-serial",
+    "usb serial",
+    "uart",
+    "esp32",
+    "silicon labs",
+    "usb_serial",
+)
+
+_SETTINGS_PATH = Path.home() / ".cyd_monitor_settings.json"
+
+_DEFAULT_SETTINGS: dict[str, Any] = {
+    "interval": 0.5,
+    "baud": 115200,
+    "auto_reconnect": True,
+    "start_minimized": False,
+    "close_to_tray": True,
+    "host_name": "",
+    "preferred_port": "",
+    "udp_host": "",
+    "udp_port": 4210,
+    "gpu_index": 0,
+}
+
+
+def clamp_pct(value: float) -> float:
+    return max(0.0, min(100.0, float(value)))
+
+
+def load_settings() -> dict[str, Any]:
+    data = dict(_DEFAULT_SETTINGS)
+    try:
+        if _SETTINGS_PATH.exists():
+            loaded = json.loads(_SETTINGS_PATH.read_text(encoding="utf-8"))
+            if isinstance(loaded, dict):
+                data.update(loaded)
+    except Exception:  # noqa: BLE001
+        pass
+    return data
+
+
+def save_settings(settings: dict[str, Any]) -> None:
+    merged = dict(_DEFAULT_SETTINGS)
+    merged.update(settings)
+    try:
+        _SETTINGS_PATH.write_text(json.dumps(merged, indent=2), encoding="utf-8")
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def cpu_temperature_c() -> float:
+    try:
+        temps = psutil.sensors_temperatures(fahrenheit=False)
+    except Exception:  # noqa: BLE001
+        return 0.0
+    if not temps:
+        return 0.0
+    for key in ("coretemp", "k10temp", "cpu_thermal", "acpitz", "zenpower"):
+        entries = temps.get(key)
+        if entries and entries[0].current is not None:
+            return float(entries[0].current)
+    for entries in temps.values():
+        if entries and entries[0].current is not None:
+            return float(entries[0].current)
+    return 0.0
+
+
+class GpuReader:
+    def __init__(self, index: int = 0) -> None:
+        self.enabled = False
+        self.handle = None
+        self.name = ""
+        self.vram_total_mb = 0.0
+        if not _HAS_NVML:
+            return
+        try:
+            nvmlInit()
+            self.handle = nvmlDeviceGetHandleByIndex(index)
+            raw = nvmlDeviceGetName(self.handle)
+            self.name = raw.decode() if isinstance(raw, bytes) else str(raw)
+            mem = nvmlDeviceGetMemoryInfo(self.handle)
+            self.vram_total_mb = float(mem.total) / (1024.0 * 1024.0)
+            self.enabled = True
+        except Exception as exc:  # noqa: BLE001
+            print(f"[warn] NVIDIA GPU unavailable: {exc}", file=sys.stderr)
+            self.enabled = False
+
+    def read(self) -> dict[str, float]:
+        empty = {
+            "gpu": 0.0,
+            "gpu_temp": 0.0,
+            "vram": 0.0,
+            "vram_used_mb": 0.0,
+            "gpu_clock_mhz": 0.0,
+            "gpu_clock_max_mhz": 0.0,
+            "gpu_mem_clock_mhz": 0.0,
+        }
+        if not self.enabled or self.handle is None:
+            return empty
+        try:
+            util = nvmlDeviceGetUtilizationRates(self.handle)
+            mem = nvmlDeviceGetMemoryInfo(self.handle)
+            temp = nvmlDeviceGetTemperature(self.handle, NVML_TEMPERATURE_GPU)
+            vram_pct = (float(mem.used) / float(mem.total) * 100.0) if mem.total else 0.0
+            gpu_clock = 0.0
+            gpu_clock_max = 0.0
+            mem_clock = 0.0
+            try:
+                gpu_clock = float(nvmlDeviceGetClockInfo(self.handle, NVML_CLOCK_GRAPHICS))
+                mem_clock = float(nvmlDeviceGetClockInfo(self.handle, NVML_CLOCK_MEM))
+                gpu_clock_max = float(nvmlDeviceGetMaxClockInfo(self.handle, NVML_CLOCK_GRAPHICS))
+            except Exception:  # noqa: BLE001
+                pass
+            return {
+                "gpu": clamp_pct(util.gpu),
+                "gpu_temp": float(temp),
+                "vram": clamp_pct(vram_pct),
+                "vram_used_mb": float(mem.used) / (1024.0 * 1024.0),
+                "gpu_clock_mhz": gpu_clock,
+                "gpu_clock_max_mhz": gpu_clock_max,
+                "gpu_mem_clock_mhz": mem_clock,
+            }
+        except Exception as exc:  # noqa: BLE001
+            print(f"[warn] GPU read failed: {exc}", file=sys.stderr)
+            return empty
+
+    def close(self) -> None:
+        if self.enabled:
+            try:
+                nvmlShutdown()
+            except Exception:  # noqa: BLE001
+                pass
+
+
+class NetRateTracker:
+    def __init__(self) -> None:
+        self._prev = psutil.net_io_counters()
+        self._prev_t = time.time()
+
+    def read_mbps(self) -> tuple[float, float]:
+        now = time.time()
+        cur = psutil.net_io_counters()
+        dt = max(0.001, now - self._prev_t)
+        up = (cur.bytes_sent - self._prev.bytes_sent) * 8.0 / dt / 1_000_000.0
+        down = (cur.bytes_recv - self._prev.bytes_recv) * 8.0 / dt / 1_000_000.0
+        self._prev = cur
+        self._prev_t = now
+        return max(0.0, up), max(0.0, down)
+
+
+_net_tracker = NetRateTracker()
+
+
+def collect_metrics(gpu: GpuReader, host_name: str) -> dict[str, Any]:
+    cpu = clamp_pct(psutil.cpu_percent(interval=None))
+    vm = psutil.virtual_memory()
+    swap = psutil.swap_memory()
+    disk_pct = 0.0
+    disk_used_gb = 0.0
+    disk_total_gb = 0.0
+    disk_free_gb = 0.0
+    try:
+        du = psutil.disk_usage("/")
+        disk_pct = du.percent
+        disk_used_gb = du.used / (1024**3)
+        disk_total_gb = du.total / (1024**3)
+        disk_free_gb = du.free / (1024**3)
+    except Exception:  # noqa: BLE001
+        pass
+
+    freq = psutil.cpu_freq()
+    cpu_mhz = float(freq.current) if freq and freq.current else 0.0
+    cpu_mhz_min = float(freq.min) if freq and freq.min else 0.0
+    cpu_mhz_max = float(freq.max) if freq and freq.max else 0.0
+    if cpu_mhz_max <= 0 and cpu_mhz > 0:
+        cpu_mhz_max = cpu_mhz
+    cpu_boost_pct = clamp_pct((cpu_mhz / cpu_mhz_max) * 100.0) if cpu_mhz_max > 0 else 0.0
+
+    up_mbps, down_mbps = _net_tracker.read_mbps()
+    gpu_stats = gpu.read()
+    boot = psutil.boot_time()
+    uptime_min = int(max(0.0, time.time() - boot) / 60.0)
+    logical = psutil.cpu_count(logical=True) or 0
+    physical = psutil.cpu_count(logical=False) or 0
+
+    return {
+        "v": 1,
+        "cpu": round(cpu, 1),
+        "cpu_temp": round(cpu_temperature_c(), 1),
+        "cpu_mhz": round(cpu_mhz, 0),
+        "cpu_mhz_min": round(cpu_mhz_min, 0),
+        "cpu_mhz_max": round(cpu_mhz_max, 0),
+        "cpu_boost_pct": round(cpu_boost_pct, 1),
+        "cpu_cores": int(physical),
+        "cpu_threads": int(logical),
+        "ram": round(clamp_pct(vm.percent), 1),
+        "ram_used_gb": round(vm.used / (1024**3), 2),
+        "ram_total_gb": round(vm.total / (1024**3), 2),
+        "swap": round(clamp_pct(swap.percent), 1),
+        "disk": round(clamp_pct(disk_pct), 1),
+        "disk_used_gb": round(disk_used_gb, 2),
+        "disk_total_gb": round(disk_total_gb, 2),
+        "disk_free_gb": round(disk_free_gb, 2),
+        "gpu": round(gpu_stats["gpu"], 1),
+        "gpu_temp": round(gpu_stats["gpu_temp"], 1),
+        "vram": round(gpu_stats["vram"], 1),
+        "vram_used_mb": round(gpu_stats.get("vram_used_mb", 0.0), 0),
+        "gpu_clock_mhz": round(gpu_stats.get("gpu_clock_mhz", 0.0), 0),
+        "gpu_clock_max_mhz": round(gpu_stats.get("gpu_clock_max_mhz", 0.0), 0),
+        "gpu_mem_clock_mhz": round(gpu_stats.get("gpu_mem_clock_mhz", 0.0), 0),
+        "net_up": round(up_mbps, 2),
+        "net_down": round(down_mbps, 2),
+        "uptime_min": uptime_min,
+        "fps": 0,
+        "host": host_name[:23],
+    }
+
+
+@dataclass(frozen=True)
+class SerialPortInfo:
+    device: str
+    description: str
+    vid: Optional[int]
+    pid: Optional[int]
+    score: int
+
+    @property
+    def label(self) -> str:
+        chip = self.description or "Serial"
+        return f"{self.device} — {chip}"
+
+
+def _looks_like_platform_uart(device: str) -> bool:
+    name = device.rsplit("/", 1)[-1].lower()
+    return name.startswith("ttys") or name.startswith("ttyama") or name.startswith("ttyprintk")
+
+
+def list_serial_port_infos(include_platform: bool = False) -> list[SerialPortInfo]:
+    if not _HAS_SERIAL:
+        return []
+    found: list[SerialPortInfo] = []
+    for p in list_ports.comports():
+        if not include_platform and _looks_like_platform_uart(p.device):
+            continue
+        desc = (p.description or "") + " " + (p.manufacturer or "")
+        desc_l = desc.lower()
+        vid = int(p.vid) if p.vid is not None else None
+        pid = int(p.pid) if p.pid is not None else None
+        score = 0
+        if vid is not None and pid is not None and (vid, pid) in _CYD_USB_IDS:
+            score += 100
+        if vid == 0x303A:
+            score += 80
+        dev = p.device.lower()
+        if "ttyusb" in dev or "ttyacm" in dev or dev.startswith("com"):
+            score += 15
+        for kw in _CYD_KEYWORDS:
+            if kw in desc_l:
+                score += 20
+                break
+        if "bluetooth" in desc_l or "debug" in desc_l:
+            score -= 50
+        found.append(
+            SerialPortInfo(
+                device=p.device,
+                description=(p.description or "Serial").strip(),
+                vid=vid,
+                pid=pid,
+                score=score,
+            )
+        )
+    found.sort(key=lambda x: (-x.score, x.device))
+    return found
+
+
+def list_serial_ports() -> list[str]:
+    return [p.device for p in list_serial_port_infos()]
+
+
+def pick_best_port(preferred: Optional[str] = None) -> Optional[SerialPortInfo]:
+    ports = list_serial_port_infos()
+    if not ports:
+        return None
+    if preferred:
+        for p in ports:
+            if p.device == preferred:
+                return p
+    ranked = [p for p in ports if p.score > 0]
+    return ranked[0] if ranked else ports[0]
+
+
+class SerialTransport:
+    def __init__(self, port: str, baud: int = 115200, settle_s: float = 1.2) -> None:
+        if not _HAS_SERIAL:
+            raise RuntimeError("pyserial is required for USB serial")
+        self.port = port
+        self.baud = baud
+        self.ser = serial.Serial(port=port, baudrate=baud, timeout=0.05)
+        time.sleep(max(0.0, settle_s))
+        self.ser.reset_input_buffer()
+        self._rx_buf = ""
+        # Hello handshake so firmware confirms protocol.
+        self.send(json.dumps({"v": 1, "hello": 1}, separators=(",", ":")).encode("utf-8"))
+
+    def send(self, data: bytes) -> None:
+        payload = data if data.endswith(b"\n") else data + b"\n"
+        self.ser.write(payload)
+        self.ser.flush()
+
+    def poll_messages(self) -> list[dict[str, Any]]:
+        """Read NDJSON replies from the CYD (ACK / cfg / hello)."""
+        messages: list[dict[str, Any]] = []
+        try:
+            waiting = self.ser.in_waiting
+        except Exception:  # noqa: BLE001
+            return messages
+        if waiting:
+            chunk = self.ser.read(waiting).decode("utf-8", errors="ignore")
+            self._rx_buf += chunk
+        while "\n" in self._rx_buf:
+            line, self._rx_buf = self._rx_buf.split("\n", 1)
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                obj = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if isinstance(obj, dict) and obj.get("ok"):
+                messages.append(obj)
+        return messages
+
+    def poll_acks(self) -> list[dict[str, Any]]:
+        return self.poll_messages()
+
+    def send_command(self, cmd: str, **fields: Any) -> None:
+        payload = {"v": 1, "cmd": cmd}
+        payload.update(fields)
+        self.send(json.dumps(payload, separators=(",", ":")).encode("utf-8"))
+
+    def close(self) -> None:
+        try:
+            self.ser.close()
+        except Exception:  # noqa: BLE001
+            pass
+
+    def describe(self) -> str:
+        return f"USB serial {self.port} @ {self.baud}"
+
+    @property
+    def is_open(self) -> bool:
+        try:
+            return bool(self.ser and self.ser.is_open)
+        except Exception:  # noqa: BLE001
+            return False
+
+
+class UdpTransport:
+    def __init__(self, host: str, port: int) -> None:
+        self.host = host
+        self.port = port
+        self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        self.sock.settimeout(0.0)
+
+    def send(self, data: bytes) -> None:
+        self.sock.sendto(data, (self.host, self.port))
+
+    def poll_messages(self) -> list[dict[str, Any]]:
+        messages: list[dict[str, Any]] = []
+        while True:
+            try:
+                raw, _addr = self.sock.recvfrom(256)
+            except BlockingIOError:
+                break
+            except OSError:
+                break
+            try:
+                obj = json.loads(raw.decode("utf-8", errors="ignore"))
+            except json.JSONDecodeError:
+                continue
+            if isinstance(obj, dict) and obj.get("ok"):
+                messages.append(obj)
+        return messages
+
+    def poll_acks(self) -> list[dict[str, Any]]:
+        return self.poll_messages()
+
+    def send_command(self, cmd: str, **fields: Any) -> None:
+        payload = {"v": 1, "cmd": cmd}
+        payload.update(fields)
+        self.send(json.dumps(payload, separators=(",", ":")).encode("utf-8"))
+
+    def close(self) -> None:
+        self.sock.close()
+
+    def describe(self) -> str:
+        return f"UDP {self.host}:{self.port}"
+
+
+def encode_device_command(cmd: str, **fields: Any) -> bytes:
+    payload = {"v": 1, "cmd": cmd}
+    payload.update(fields)
+    return json.dumps(payload, separators=(",", ":")).encode("utf-8")
+
+
+_WIRE_KEYS = (
+    "cpu",
+    "cpu_temp",
+    "ram",
+    "gpu",
+    "gpu_temp",
+    "vram",
+    "disk",
+    "swap",
+    "net_up",
+    "net_down",
+    "fps",
+    "host",
+)
+
+
+class MetricsStream:
+    """Sequence numbers + periodic full snapshots for reliable CYD updates."""
+
+    def __init__(self, full_every: int = 8) -> None:
+        self.seq = 0
+        self.full_every = max(1, full_every)
+        self._last_wire: dict[str, Any] = {}
+
+    def encode(self, payload: dict[str, Any], force_full: bool = False) -> bytes:
+        self.seq = (self.seq + 1) & 0xFFFFFFFF
+        wire = {k: payload.get(k, 0) for k in _WIRE_KEYS}
+        wire["v"] = 1
+        wire["seq"] = self.seq
+        wire["host"] = str(payload.get("host", "PC"))[:23]
+
+        send_full = force_full or (self.seq % self.full_every == 1) or not self._last_wire
+        if send_full:
+            out = wire
+        else:
+            out = {"v": 1, "seq": self.seq}
+            for k, val in wire.items():
+                if k in ("v", "seq"):
+                    continue
+                if self._last_wire.get(k) != val:
+                    out[k] = val
+            # Always keep host occasionally so a late join still labels.
+            if "host" not in out and self.seq % 20 == 0:
+                out["host"] = wire["host"]
+        self._last_wire = wire
+        return json.dumps(out, separators=(",", ":")).encode("utf-8")
+
+
+def encode_metrics(payload: dict[str, Any], seq: int = 0) -> bytes:
+    compact = {k: payload.get(k, 0) for k in _WIRE_KEYS}
+    compact["v"] = 1
+    compact["seq"] = seq
+    compact["host"] = str(payload.get("host", "PC"))[:23]
+    return json.dumps(compact, separators=(",", ":")).encode("utf-8")
+
+
+@dataclass
+class LinkQuality:
+    rtt_ms: float = 0.0
+    acks: int = 0
+    sent: int = 0
+    last_ack_seq: int = 0
+
+    @property
+    def loss_pct(self) -> float:
+        if self.sent <= 0:
+            return 0.0
+        # Rough: missing acks relative to sent (USB is reliable; useful for UDP).
+        missed = max(0, self.sent - self.acks)
+        return min(100.0, 100.0 * missed / self.sent)

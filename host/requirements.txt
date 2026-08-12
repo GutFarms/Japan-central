@@ -1,0 +1,5 @@
+psutil>=6.0.0
+nvidia-ml-py>=12.560.30
+pyserial>=3.5
+pystray>=0.19.5
+Pillow>=10.0.0
