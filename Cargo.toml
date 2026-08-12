@@ -1,0 +1,9 @@
+[package]
+name = "japan-central"
+version = "0.2.0"
+edition = "2021"
+description = "Japan & Central dual-zone clock with thought-spin emblem"
+
+[dependencies]
+chrono = "0.4.38"
+eframe = "0.29.1"
