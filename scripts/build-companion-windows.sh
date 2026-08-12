@@ -1,0 +1,133 @@
+#!/usr/bin/env bash
+# Build Windows Companion + all-in-one CYD Miner Setup wizard.
+set -euo pipefail
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+cd "$ROOT/companion"
+
+VER="$(grep -m1 '^version' Cargo.toml | sed -E 's/.*"([^"]+)".*/\1/')"
+
+echo "==> Building egui CYD Companion (MinGW) v${VER}..."
+rustup target add x86_64-pc-windows-gnu >/dev/null
+cargo build --release --target x86_64-pc-windows-gnu
+
+MERGED="$ROOT/flash/esp32-2432s028-sha256-miner-merged.bin"
+SUMS="$ROOT/flash/SHA256SUMS.txt"
+if [[ ! -f "$MERGED" ]]; then
+  echo "error: missing $MERGED — run ./scripts/build-flash-images.sh first" >&2
+  exit 1
+fi
+
+# Vendored Windows espflash for in-app Update board (no Python required).
+ESPFLASH_VER="4.5.0"
+ESPFLASH_EXE="$ROOT/packaging/Tools/espflash.exe"
+if [[ ! -f "$ESPFLASH_EXE" ]]; then
+  echo "==> Downloading espflash ${ESPFLASH_VER} (Windows)…"
+  mkdir -p "$ROOT/packaging/Tools" /tmp/espflash-fetch
+  curl -fsSL -o /tmp/espflash-fetch/espflash.zip \
+    "https://github.com/esp-rs/espflash/releases/download/v${ESPFLASH_VER}/espflash-x86_64-pc-windows-msvc.zip"
+  unzip -o /tmp/espflash-fetch/espflash.zip -d /tmp/espflash-fetch
+  cp -f /tmp/espflash-fetch/espflash.exe "$ESPFLASH_EXE"
+fi
+test -f "$ESPFLASH_EXE"
+
+KIT="$ROOT/dist/cyd-miner-kit"
+rm -rf "$KIT"
+mkdir -p "$KIT/Firmware" "$KIT/Tools"
+cp -f target/x86_64-pc-windows-gnu/release/cyd-companion.exe "$KIT/"
+cp -f "$ROOT/packaging/START-HERE.txt" "$KIT/"
+cp -f "$ROOT/packaging/FLASH-WINDOWS.txt" "$KIT/"
+cp -f "$ROOT/packaging/Flash-Firmware.bat" "$KIT/"
+cp -f "$ROOT/COMPANION.md" "$KIT/"
+cp -f "$ROOT/packaging/README-windows.txt" "$KIT/README.txt"
+cp -f "$MERGED" "$KIT/Firmware/"
+cp -f "$SUMS" "$KIT/Firmware/"
+cp -f "$ROOT/FLASH.md" "$KIT/Firmware/"
+echo "${VER}-sha256" > "$KIT/Firmware/VERSION.txt"
+cp -f "$ESPFLASH_EXE" "$KIT/Tools/"
+{
+  echo "CYD Miner Kit ${VER}"
+  echo "Companion: ${VER}"
+  echo "Firmware: ${VER}-sha256"
+  echo "Firmware image: esp32-2432s028-sha256-miner-merged.bin"
+  echo "Flash offset: 0x0 (DIO, 4MB, 40MHz)"
+  echo "In-app Update: Tools/espflash.exe + Firmware/"
+  date -u +"Built: %Y-%m-%dT%H:%MZ"
+} > "$KIT/VERSION.txt"
+
+# Portable companion also gets Firmware + Tools so Update board works.
+mkdir -p "$ROOT/dist/cyd-companion-windows/Firmware" "$ROOT/dist/cyd-companion-windows/Tools"
+cp -f "$KIT/cyd-companion.exe" "$ROOT/dist/cyd-companion-windows/"
+cp -f "$KIT/COMPANION.md" "$ROOT/dist/cyd-companion-windows/"
+cp -f "$KIT/README.txt" "$ROOT/dist/cyd-companion-windows/README.txt"
+cp -f "$KIT/START-HERE.txt" "$ROOT/dist/cyd-companion-windows/"
+cp -f "$KIT/FLASH-WINDOWS.txt" "$ROOT/dist/cyd-companion-windows/"
+cp -f "$MERGED" "$ROOT/dist/cyd-companion-windows/Firmware/"
+cp -f "$SUMS" "$ROOT/dist/cyd-companion-windows/Firmware/"
+echo "${VER}-sha256" > "$ROOT/dist/cyd-companion-windows/Firmware/VERSION.txt"
+cp -f "$ESPFLASH_EXE" "$ROOT/dist/cyd-companion-windows/Tools/"
+
+cd "$ROOT"
+rm -f dist/cyd-companion-windows.zip dist/CYD-Companion-Portable.zip dist/CYD-Companion-App-Only.zip
+rm -f dist/CYD-Miner-Portable.zip dist/CYD-Miner-Setup.exe dist/CYD-Companion-Setup.exe
+
+( cd dist && zip -r cyd-companion-windows.zip cyd-companion-windows )
+cp -f dist/cyd-companion-windows.zip dist/CYD-Companion-Portable.zip
+
+mkdir -p dist/cyd-companion-app-only
+cp -f dist/cyd-companion-windows/cyd-companion.exe dist/cyd-companion-app-only/
+( cd dist && zip -r CYD-Companion-App-Only.zip cyd-companion-app-only )
+
+# Full kit portable zip (app + firmware + flash helper)
+( cd dist && zip -r CYD-Miner-Portable.zip cyd-miner-kit )
+
+SETUP_EXE="dist/CYD-Miner-Setup.exe"
+PORTABLE_ZIP="dist/CYD-Companion-Portable.zip"
+APP_ONLY_ZIP="dist/CYD-Companion-App-Only.zip"
+KIT_ZIP="dist/CYD-Miner-Portable.zip"
+
+if command -v makensis >/dev/null 2>&1; then
+  # Compile from packaging/ so relative File/License paths resolve.
+  sed "s/!define PRODUCT_VERSION \".*\"/!define PRODUCT_VERSION \"${VER}\"/" \
+    packaging/cyd-miner.nsi > packaging/cyd-miner-build.nsi
+  ( cd packaging && makensis -V2 cyd-miner-build.nsi )
+  rm -f packaging/cyd-miner-build.nsi
+  test -f "$SETUP_EXE"
+  # Keep old filename as alias for existing links/docs
+  cp -f "$SETUP_EXE" dist/CYD-Companion-Setup.exe
+  echo "Windows setup wizard ready: $SETUP_EXE (+ CYD-Companion-Setup.exe alias)"
+else
+  echo "warning: makensis not found — skipping CYD-Miner-Setup.exe" >&2
+fi
+
+mkdir -p /opt/cursor/artifacts flash/downloads
+cp -f dist/cyd-companion-windows.zip /opt/cursor/artifacts/ 2>/dev/null || true
+cp -f "$PORTABLE_ZIP" /opt/cursor/artifacts/ 2>/dev/null || true
+cp -f "$APP_ONLY_ZIP" /opt/cursor/artifacts/ 2>/dev/null || true
+cp -f "$KIT_ZIP" /opt/cursor/artifacts/ 2>/dev/null || true
+cp -f "$PORTABLE_ZIP" "$APP_ONLY_ZIP" flash/downloads/ 2>/dev/null || true
+cp -f "$KIT_ZIP" flash/downloads/ 2>/dev/null || true
+# Standalone app exe for direct download (no unzip).
+cp -f dist/cyd-companion-windows/cyd-companion.exe flash/downloads/cyd-companion.exe
+cp -f dist/cyd-companion-windows/cyd-companion.exe /opt/cursor/artifacts/ 2>/dev/null || true
+if [[ -f "$SETUP_EXE" ]]; then
+  cp -f "$SETUP_EXE" dist/CYD-Companion-Setup.exe /opt/cursor/artifacts/
+  cp -f "$SETUP_EXE" dist/CYD-Companion-Setup.exe flash/downloads/ 2>/dev/null || true
+fi
+
+# Keep a short download index next to the binaries.
+cat > flash/downloads/README.md <<EOF
+# CYD Companion downloads (\`${VER}\`)
+
+| File | What it is |
+|------|------------|
+| **[CYD-Miner-Setup.exe](./CYD-Miner-Setup.exe)** | Installer — Companion + firmware (recommended) |
+| **[cyd-companion.exe](./cyd-companion.exe)** | Standalone app — double-click to run |
+| [CYD-Companion-App-Only.zip](./CYD-Companion-App-Only.zip) | App zip |
+| [CYD-Miner-Portable.zip](./CYD-Miner-Portable.zip) | Full portable kit |
+
+Firmware: [merged.bin](./esp32-2432s028-sha256-miner-merged.bin) @ \`0x0\` · [SHA256SUMS.txt](./SHA256SUMS.txt) · [VERSION.txt](./VERSION.txt)
+EOF
+
+ls -la dist/cyd-companion-windows/cyd-companion.exe "$PORTABLE_ZIP" "$APP_ONLY_ZIP" "$KIT_ZIP" || true
+[[ -f "$SETUP_EXE" ]] && ls -la "$SETUP_EXE" dist/CYD-Companion-Setup.exe
+echo "Windows kit ready (Setup wizard · Portable kit · App-only · downloadable .exe)"

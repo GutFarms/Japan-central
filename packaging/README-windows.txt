@@ -1,0 +1,17 @@
+CYD Companion — USB SHA-256 Bitcoin miner (app-only notes)
+==========================================================
+
+Prefer the full kit installer when possible:
+  CYD-Miner-Setup.exe  (app + firmware + flash helper)
+
+Quick use
+---------
+1. Flash esp32-2432s028-sha256-miner-merged.bin @ 0x0 (see FLASH-WINDOWS.txt)
+2. Plug USB-C
+3. Run cyd-companion.exe
+4. Select COM port → Connect
+5. Stratum stratum+tcp://public-pool.io:21496
+6. Worker = Bitcoin address, password = x
+7. Start mining
+
+Board has no Wi-Fi. Expect tens–hundreds of kH/s. Solo BTC is a lottery.
