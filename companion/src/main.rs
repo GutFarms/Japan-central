@@ -1996,7 +1996,7 @@ impl App for CompanionApp {
                 });
         }
 
-        egui::TopBottomPanel::bottom("live_ticker_bar")
+        egui::TopBottomPanel::top("live_ticker_bar")
             .exact_height(36.0)
             .frame(
                 Frame::none()
