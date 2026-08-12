@@ -29,11 +29,13 @@ for name in "${REPOS[@]}"; do
     continue
   fi
   url="${REMOTE_BASE}/${name}.git"
-  echo "→ $url  ($ref → master)"
-  if git push -u "$url" "+${ref}:refs/heads/master"; then
+  # New GitHub repos default to main (often with a stub README); force-replace with orphan tip.
+  target_branch="${TARGET_BRANCH:-main}"
+  echo "→ $url  ($ref → ${target_branch})"
+  if git push -u "$url" "+${ref}:refs/heads/${target_branch}"; then
     echo "OK $name"
   else
-    echo "FAIL $name (create empty repo + grant app access, then retry)" >&2
+    echo "FAIL $name (create empty repo + grant Cursor App write access, then retry)" >&2
     fail=1
   fi
 done
