@@ -1,0 +1,73 @@
+{
+  "meta": {
+    "description": "Six attested spoken Taíno sentences preserved in colonial records (regularized).",
+    "source": "Colonial transcriptions; regularized after Granberry-style reconstructions"
+  },
+  "sentences": [
+    {
+      "id": "s1",
+      "original": "O cama, guaxeri, guariquen caona yari.",
+      "boriken": "O kãma, waxeri, warikẽ kawóna yari.",
+      "english": "O hear, sir, we see gold jewels.",
+      "spanish": "Oh oye, señor, vemos joyas de oro.",
+      "attested": true
+    },
+    {
+      "id": "s2",
+      "original": "Mayani macaná, Juan desquivel daca.",
+      "boriken": "Mayani makana, Juan desquivel daka.",
+      "english": "Do not kill [me], I am Juan de Esquivel.",
+      "spanish": "No me mates, yo soy Juan de Esquivel.",
+      "attested": true
+    },
+    {
+      "id": "s3",
+      "original": "Dios naboría daca.",
+      "boriken": "Dios naboriya daka.",
+      "english": "I am God's worker.",
+      "spanish": "Soy siervo de Dios.",
+      "attested": true
+    },
+    {
+      "id": "s4",
+      "original": "Ahiacauo, guarocoel.",
+      "boriken": "Ahiyakawo, warokoel.",
+      "english": "Speak to us, our grandfather.",
+      "spanish": "Háblanos, nuestro abuelo.",
+      "attested": true
+    },
+    {
+      "id": "s5",
+      "original": "Guaibbá, Cynato machabuca guamechina.",
+      "boriken": "Waibá, sinato makabuka wamekina.",
+      "english": "Let's go, it is not important that our master is upset.",
+      "spanish": "Vámonos, no importa que nuestro señor esté enojado.",
+      "attested": true
+    },
+    {
+      "id": "s6",
+      "original": "Técheta cynato guamechina.",
+      "boriken": "Teketa sinato wamekina.",
+      "english": "Our master is greatly irritated.",
+      "spanish": "Nuestro señor está muy irritado.",
+      "attested": true
+    }
+  ],
+  "learner_sentences": [
+    {"boriken": "Taí wey.", "english": "Good day.", "spanish": "Buenos días.", "attested": false},
+    {"boriken": "Taíno daka.", "english": "I am Taíno.", "spanish": "Soy taíno.", "attested": false},
+    {"boriken": "Wa-borikén taí.", "english": "Our Borikén is good.", "spanish": "Nuestro Borikén es bueno.", "attested": false},
+    {"boriken": "Da-bohío ka-ni.", "english": "My house has water.", "spanish": "Mi casa tiene agua.", "attested": false},
+    {"boriken": "Waibá batey.", "english": "Let's go to the batey.", "spanish": "Vamos al batey.", "attested": false},
+    {"boriken": "Li-kanowa wa.", "english": "His canoe is large.", "spanish": "Su canoa es grande.", "attested": false},
+    {"boriken": "To-isa chali.", "english": "Her child is happy.", "spanish": "Su hijo/a está feliz.", "attested": false},
+    {"boriken": "Da-aka kasabi.", "english": "I eat cassava bread.", "spanish": "Como casabe.", "attested": false},
+    {"boriken": "Wa-sá ni.", "english": "We drink water.", "spanish": "Bebemos agua.", "attested": false},
+    {"boriken": "Ma-hurakán.", "english": "No hurricane / without storm.", "spanish": "Sin huracán.", "attested": false},
+    {"boriken": "Ka-semí yukayeke.", "english": "The village has spirits.", "spanish": "La aldea tiene cemíes.", "attested": false},
+    {"boriken": "Ahiya wakía baba.", "english": "Speak, our father.", "spanish": "Habla, nuestro padre.", "attested": false},
+    {"boriken": "Da-arika wey.", "english": "I see the sun.", "spanish": "Veo el sol.", "attested": false},
+    {"boriken": "Kokí ahiya.", "english": "The coquí speaks / sings.", "spanish": "El coquí habla / canta.", "attested": false},
+    {"boriken": "Anichi borikén.", "english": "Love Borikén.", "spanish": "Ama a Borikén.", "attested": false}
+  ]
+}

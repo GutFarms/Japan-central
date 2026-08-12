@@ -1,0 +1,122 @@
+{
+  "meta": {
+    "name": "Boriken Reconstruction Grammar",
+    "version": "0.1.0",
+    "word_order": "SVO (learner-friendly Neo-Taíno; classical may have been freer / SOV-leaning)",
+    "family": "Ta-Arawakan"
+  },
+  "phonology": {
+    "consonants": ["p", "t", "k", "b", "d", "g", "s", "sh", "h", "m", "n", "w", "y", "l", "r"],
+    "vowels": ["a", "e", "i", "o", "u"],
+    "notes": [
+      "Flap [ɾ] was likely an allophone of /d/ (word-initial /d/, intervocalic /r/).",
+      "Nasal vowels existed (ẽ, õ, ã).",
+      "No onset consonant clusters; syllable-final consonant usually /s/ (plus masculine -el).",
+      "Stress usually penultimate, unless word ends in /e/, /i/, or a nasal vowel."
+    ],
+    "orthography_map": {
+      "sh": "x or ch in older Spanish transcriptions",
+      "w": "gu/hu in Spanish records",
+      "k": "c/qu in Spanish records",
+      "h": "h or j or x depending on scribe"
+    }
+  },
+  "possessive_prefixes": {
+    "1sg": {"form": "da-", "meaning": "my"},
+    "1pl": {"form": "wa-", "meaning": "our"},
+    "3sg_m": {"form": "li-", "meaning": "his"},
+    "3sg_f": {"form": "to-", "alt": ["tu-"], "meaning": "her"}
+  },
+  "verbal_prefixes": {
+    "note": "Subject marking on verbs often mirrors possessive prefixes.",
+    "1sg": "da-",
+    "1pl": "wa-",
+    "3sg_m": "li-",
+    "3sg_f": "to-",
+    "imperative": "(bare stem or specialized form)"
+  },
+  "derivational_affixes": {
+    "negative": {"form": "ma-", "meaning": "without / not / un-"},
+    "attributive": {"form": "ka-", "meaning": "having / with / characterized by"},
+    "masculine": {"form": "-el", "meaning": "masculine referent (e.g. warokoel)"},
+    "verb_markers": ["a-", "ka-", "-a", "-ka", "-nV"]
+  },
+  "sentence_patterns": [
+    {
+      "id": "identity",
+      "pattern": "{NOUN/ADJ} daka",
+      "example": "taíno daka",
+      "gloss": "I am Taíno / I am good"
+    },
+    {
+      "id": "svo_present",
+      "pattern": "{SUBJ_PREFIX}-{VERB} {OBJECT}",
+      "example": "da-sá ni",
+      "gloss": "I drink water"
+    },
+    {
+      "id": "possessed_noun",
+      "pattern": "{POSS_PREFIX}-{NOUN}",
+      "example": "wa-borikén",
+      "gloss": "our native land"
+    },
+    {
+      "id": "negative_noun",
+      "pattern": "ma-{NOUN/STEM}",
+      "example": "ma-ni",
+      "gloss": "without water"
+    },
+    {
+      "id": "attributive",
+      "pattern": "ka-{NOUN/STEM}",
+      "example": "ka-kawóna",
+      "gloss": "having gold"
+    },
+    {
+      "id": "imperative",
+      "pattern": "{VERB}[, {VOCATIVE}]",
+      "example": "kãma, waxeri",
+      "gloss": "hear, sir"
+    },
+    {
+      "id": "hortative",
+      "pattern": "wa-{VERB}",
+      "example": "waibá",
+      "gloss": "let's go"
+    }
+  ],
+  "reconstruction_rules": [
+    {
+      "id": "prefer_attested",
+      "rule": "Prefer attested colonial forms when available; mark confidence high."
+    },
+    {
+      "id": "comparative_loan",
+      "rule": "If no attested form, propose from Ta-Arawakan cognates (Lokono, Garifuna, Wayuu) and label confidence low/medium."
+    },
+    {
+      "id": "phonotactic_fit",
+      "rule": "Adapt candidate forms to Taíno phonotactics: CV syllables, no onset clusters, map foreign sounds."
+    },
+    {
+      "id": "spanish_adapt",
+      "rule": "Spanish loans historically adapted (espada→isúbara, espejo→isíbuse); apply similar adaptation for modern needed terms."
+    },
+    {
+      "id": "transparency",
+      "rule": "Always expose attestation status and rationale to the learner / app UI."
+    }
+  ],
+  "pronunciation_guide": {
+    "a": "as in father",
+    "e": "as in bet (or ey when /e/)",
+    "i": "as in machine",
+    "o": "as in more",
+    "u": "as in flute",
+    "ã ẽ õ": "nasalized vowels",
+    "sh": "as in ship",
+    "r": "soft flap between vowels",
+    "w": "as in water",
+    "y": "as in yes"
+  }
+}

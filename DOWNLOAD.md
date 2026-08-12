@@ -1,0 +1,42 @@
+# Download BorikenLLM
+
+Three ready-to-download packages (also under `dist/` after `./scripts/package.sh`):
+
+| Package | Best for | File |
+|---|---|---|
+| **Offline Learner** | Instant play on iPhone/desktop — no server | `Boriken-Offline-Learner.zip` |
+| **iOS Content Bundle** | Drop into Xcode (Swift kit + corpus + model) | `Boriken-iOS-ContentBundle.zip` |
+| **Full Toolkit** | Run the API + retrain + ship the app | `BorikenLLM-Toolkit.zip` |
+
+## Quickest path (iPhone)
+
+1. Download **Boriken-Offline-Learner.zip**
+2. Unzip → open `index.html` in Safari  
+3. Share → **Add to Home Screen**
+4. Play Word of the Day, Batey Match, Areyto Quest offline
+
+## iOS app developers
+
+1. Download **Boriken-iOS-ContentBundle.zip**
+2. Add local Swift package `BorikenKit/`
+3. Copy `Corpus/*.json` into the app target
+4. Use `BorikenHomeView.swift` or `BorikenClient`
+
+Optional API (from Toolkit zip):
+
+```bash
+python3 -m pip install -r requirements.txt
+python3 -m uvicorn api.server:app --host 0.0.0.0 --port 8080
+```
+
+## Build packages yourself
+
+```bash
+cd boriken-llm
+./scripts/package.sh
+# → dist/Boriken-Offline-Learner.zip
+# → dist/Boriken-iOS-ContentBundle.zip
+# → dist/BorikenLLM-Toolkit.zip
+```
+
+Artifacts from CI/agent runs are also copied to `/opt/cursor/artifacts/`.
