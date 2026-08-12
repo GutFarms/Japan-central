@@ -41,6 +41,8 @@ Also available:
 - Pool auto-reconnect, share dedupe, accept/reject latency
 - Session luck (expected vs accepted) + SHA path (HW / HW+ / HW/SW)
 - LCD ticker, pool presets, COM auto-connect, copy logs
+- **Find CYD workers** — USB scan for companion firmwares + LAN Companion peer discovery; connect multiple USB boards and fan-out jobs
+- Custom **API feeds** (Settings) to pull external HTTPS data into the app
 
 ## Recommended pool (ESP32-friendly)
 

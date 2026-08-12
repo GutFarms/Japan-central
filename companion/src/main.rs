@@ -7,6 +7,7 @@ mod api_feeds;
 mod flash_update;
 mod live_bar;
 mod stratum;
+mod workers;
 
 use std::collections::VecDeque;
 use std::io::Write;
@@ -22,6 +23,9 @@ use live_bar::{format_change, format_usd, LiveFeed};
 use stratum::{
     encode_job_cmd, encode_job_parts, expected_shares_per_hour, urlenc, ShareOutcome, StratumClient,
     WorkJob,
+};
+use workers::{
+    scan_usb_workers, DiscoveredWorker, LanDiscovery, WorkerKind, WorkerLive, LAN_DISCOVERY_PORT,
 };
 
 use eframe::egui::{
@@ -417,6 +421,8 @@ enum NetMsg {
     Share(ShareOutcome),
     FirmwareFetched(Result<FirmwareImage, String>),
     ApiFeedResult(ApiPullOutcome),
+    WorkersFound(Vec<DiscoveredWorker>),
+    WorkersLive(Vec<WorkerLive>),
 }
 
 enum NetCmd {
@@ -447,6 +453,12 @@ enum NetCmd {
     FetchFirmware,
     /// Pull one user-configured API feed in the worker thread.
     PullApiFeed(ApiFeed),
+    /// Probe USB (+ report) for CYD companion firmwares.
+    ScanWorkers,
+    /// Open an additional CYD USB worker without dropping existing ones.
+    ConnectWorker(String),
+    /// Drop one connected USB worker by COM port name.
+    DisconnectWorker(String),
 }
 
 struct CompanionApp {
@@ -509,6 +521,11 @@ struct CompanionApp {
     api_draft_path: String,
     api_pulling_id: Option<u64>,
     last_api_auto_pull: Instant,
+    /// USB/LAN CYD worker discovery results.
+    discovered_workers: Vec<DiscoveredWorker>,
+    connected_workers: Vec<WorkerLive>,
+    worker_scan_busy: bool,
+    lan: LanDiscovery,
 }
 
 impl CompanionApp {
@@ -607,6 +624,10 @@ impl CompanionApp {
             api_draft_path: String::new(),
             api_pulling_id: None,
             last_api_auto_pull: Instant::now() - Duration::from_secs(120),
+            discovered_workers: Vec::new(),
+            connected_workers: Vec::new(),
+            worker_scan_busy: false,
+            lan: LanDiscovery::start(),
         };
         app.push_log(LogKind::Info, "CYD Companion ready".into());
         if let Some(fw) = &app.firmware {
@@ -783,6 +804,20 @@ impl CompanionApp {
                 self.push_log(LogKind::Warn, self.last_error.clone());
             }
         }
+    }
+
+    fn merge_discovered(&mut self, worker: DiscoveredWorker) {
+        if let Some(existing) = self
+            .discovered_workers
+            .iter_mut()
+            .find(|w| w.id == worker.id)
+        {
+            *existing = worker;
+        } else {
+            self.discovered_workers.push(worker);
+        }
+        self.discovered_workers
+            .sort_by(|a, b| a.endpoint.cmp(&b.endpoint));
     }
 
     fn connect_usb(&mut self) {
@@ -1517,12 +1552,15 @@ impl CompanionApp {
                         self.usb_open = false;
                         self.mining = false;
                         self.session_started = None;
+                        self.connected_workers.clear();
                         self.push_log(LogKind::Usb, "Disconnect requested".into());
                     } else {
                         self.connect_usb();
                     }
                 }
             });
+            ui.add_space(12.0);
+            self.ui_worker_discovery(ui);
             ui.add_space(16.0);
             ui.label(
                 RichText::new("POOL")
@@ -1565,6 +1603,131 @@ impl CompanionApp {
                 }
             });
         });
+    }
+
+    fn ui_worker_discovery(&mut self, ui: &mut egui::Ui) {
+        ui.label(
+            RichText::new("CYD WORKERS")
+                .color(C_LIME)
+                .font(mono_ui_font(12.0)),
+        );
+        ui.label(
+            RichText::new(format!(
+                "Scan USB for companion firmwares and LAN for other Companion hosts (UDP {LAN_DISCOVERY_PORT}). Connect multiple USB boards to fan-out jobs."
+            ))
+            .color(C_MUTED)
+            .size(12.0),
+        );
+        ui.add_space(8.0);
+        ui.horizontal_wrapped(|ui| {
+            let scan_label = if self.worker_scan_busy {
+                "Scanning…"
+            } else {
+                "Find CYD workers"
+            };
+            if soft_button(ui, scan_label, 160.0).clicked() && !self.worker_scan_busy {
+                self.worker_scan_busy = true;
+                self.push_log(LogKind::Usb, "Scanning USB + LAN for CYD workers…".into());
+                let _ = self.cmd_tx.send(NetCmd::ScanWorkers);
+            }
+            ui.label(
+                RichText::new(format!(
+                    "{} linked · {} found",
+                    self.connected_workers.len(),
+                    self.discovered_workers.len()
+                ))
+                .color(C_DIM)
+                .font(mono_ui_font(11.0)),
+            );
+        });
+
+        if !self.connected_workers.is_empty() {
+            ui.add_space(8.0);
+            for w in self.connected_workers.clone() {
+                ui.horizontal(|ui| {
+                    ui.label(
+                        RichText::new(format!(
+                            "● {} · {} · {}",
+                            w.endpoint,
+                            if w.fw.is_empty() { "fw?" } else { &w.fw },
+                            format_hashrate(w.hashrate_hs)
+                        ))
+                        .color(C_LIME)
+                        .font(mono_ui_font(11.0)),
+                    );
+                    if soft_button(ui, "Drop", 64.0).clicked() {
+                        let _ = self
+                            .cmd_tx
+                            .send(NetCmd::DisconnectWorker(w.endpoint.clone()));
+                        self.push_log(LogKind::Usb, format!("Drop worker {}", w.endpoint));
+                    }
+                });
+            }
+        }
+
+        let usb_found: Vec<_> = self
+            .discovered_workers
+            .iter()
+            .filter(|w| w.kind == WorkerKind::Usb)
+            .cloned()
+            .collect();
+        let lan_found: Vec<_> = self
+            .discovered_workers
+            .iter()
+            .filter(|w| w.kind == WorkerKind::Lan)
+            .cloned()
+            .collect();
+
+        if !usb_found.is_empty() {
+            ui.add_space(8.0);
+            ui.label(RichText::new("USB CYD boards").color(C_MUTED).size(12.0));
+            for w in usb_found {
+                let already = self
+                    .connected_workers
+                    .iter()
+                    .any(|c| c.endpoint == w.endpoint);
+                ui.horizontal(|ui| {
+                    ui.label(
+                        RichText::new(format!("{} · {}", w.endpoint, w.detail))
+                            .color(C_TEXT)
+                            .font(mono_ui_font(11.0)),
+                    );
+                    if already {
+                        ui.label(RichText::new("linked").color(C_LIME).size(11.0));
+                    } else if soft_button(ui, "Connect", 88.0).clicked() {
+                        self.com_port = w.endpoint.clone();
+                        let _ = self
+                            .cmd_tx
+                            .send(NetCmd::ConnectWorker(w.endpoint.clone()));
+                        self.push_log(
+                            LogKind::Usb,
+                            format!("Connecting worker {}", w.endpoint),
+                        );
+                    }
+                });
+            }
+        }
+
+        if !lan_found.is_empty() {
+            ui.add_space(8.0);
+            ui.label(
+                RichText::new("LAN Companion peers")
+                    .color(C_MUTED)
+                    .size(12.0),
+            );
+            for w in lan_found.iter().take(8) {
+                ui.label(
+                    RichText::new(format!("{} · {}", w.host, w.detail))
+                        .color(C_DIM)
+                        .font(mono_ui_font(10.0)),
+                );
+            }
+            ui.label(
+                RichText::new("LAN peers advertise local USB CYDs — connect those boards on that PC.")
+                    .color(C_DIM)
+                    .size(11.0),
+            );
+        }
     }
 
     fn ui_telemetry_rail(&self, ui: &mut egui::Ui) {
@@ -2115,6 +2278,29 @@ impl App for CompanionApp {
                 NetMsg::ApiFeedResult(outcome) => {
                     self.apply_api_pull(outcome);
                 }
+                NetMsg::WorkersFound(found) => {
+                    self.worker_scan_busy = false;
+                    for w in found {
+                        self.merge_discovered(w);
+                    }
+                    self.push_log(
+                        LogKind::Usb,
+                        format!(
+                            "Worker scan done · {} USB/LAN entries",
+                            self.discovered_workers.len()
+                        ),
+                    );
+                }
+                NetMsg::WorkersLive(live) => {
+                    self.connected_workers = live;
+                    self.usb_open = !self.connected_workers.is_empty();
+                    if let Some(first) = self.connected_workers.first() {
+                        self.com_port = first.endpoint.clone();
+                        if !first.fw.is_empty() {
+                            self.fw_label = first.fw.clone();
+                        }
+                    }
+                }
             }
         }
 
@@ -2155,6 +2341,17 @@ impl App for CompanionApp {
 
         self.update_motion(ctx);
         self.live.poll();
+        // LAN peer discovery / advertise local CYD USB fleet.
+        for peer in self.lan.poll_peers() {
+            self.merge_discovered(peer);
+        }
+        let board_ads: Vec<(String, String)> = self
+            .connected_workers
+            .iter()
+            .map(|w| (w.endpoint.clone(), w.fw.clone()))
+            .collect();
+        let host = hostname_fallback();
+        self.lan.maybe_beacon(&board_ads, &host);
         if self.usb_open && !self.update_busy {
             self.push_board_ticker(false);
         }
@@ -2443,6 +2640,12 @@ impl App for CompanionApp {
         // Keep animation continuous (~60 fps). 40 ms made looping motion feel stepped.
         ctx.request_repaint_after(Duration::from_millis(16));
     }
+}
+
+fn hostname_fallback() -> String {
+    std::env::var("COMPUTERNAME")
+        .or_else(|_| std::env::var("HOSTNAME"))
+        .unwrap_or_else(|_| "cyd-pc".into())
 }
 
 fn trunc(s: &str, n: usize) -> String {
@@ -2924,11 +3127,102 @@ fn push_stratum_live(tx: &Sender<NetMsg>, client: &StratumClient) {
 }
 
 fn mine_worker(cmd_rx: Receiver<NetCmd>, msg_tx: Sender<NetMsg>) {
-    let mut usb: Option<Box<dyn SerialPort>> = None;
-    let mut usb_rx = String::new();
+    struct UsbBoard {
+        name: String,
+        port: Box<dyn SerialPort>,
+        rx: String,
+        legacy_job: bool,
+        fw: String,
+        hashrate_hs: f64,
+        hashes: u64,
+        mining: bool,
+    }
+
+    fn live_from(boards: &[UsbBoard]) -> Vec<WorkerLive> {
+        boards
+            .iter()
+            .map(|b| WorkerLive {
+                endpoint: b.name.clone(),
+                fw: b.fw.clone(),
+                connected: true,
+                hashrate_hs: b.hashrate_hs,
+                hashes: b.hashes,
+                mining: b.mining,
+            })
+            .collect()
+    }
+
+    fn publish_live(tx: &Sender<NetMsg>, boards: &[UsbBoard]) {
+        let _ = tx.send(NetMsg::WorkersLive(live_from(boards)));
+    }
+
+    fn open_board(name: &str) -> Result<(UsbBoard, bool), String> {
+        let mut port = serialport::new(name, 115_200)
+            .timeout(Duration::from_millis(40))
+            .open()
+            .map_err(|e| format!("USB open failed: {e}"))?;
+        let _ = port.clear(serialport::ClearBuffer::All);
+        let mut rx = String::new();
+        let _ = port.write_all(b"\r\ncmp ping\r\n");
+        let _ = port.flush();
+        let deadline = Instant::now() + Duration::from_millis(3500);
+        let mut saw = false;
+        while Instant::now() < deadline {
+            drain_serial(port.as_mut(), &mut rx);
+            if rx.lines().any(|l| l.trim().starts_with("CMP ok")) {
+                saw = true;
+                break;
+            }
+            thread::sleep(Duration::from_millis(30));
+        }
+        Ok((
+            UsbBoard {
+                name: name.to_string(),
+                port,
+                rx,
+                legacy_job: false,
+                fw: String::new(),
+                hashrate_hs: 0.0,
+                hashes: 0,
+                mining: false,
+            },
+            saw,
+        ))
+    }
+
+    fn configure_board(board: &mut UsbBoard, msg_tx: &Sender<NetMsg>) {
+        if let Ok(line) = usb_cmd(board.port.as_mut(), &mut board.rx, "cmp config") {
+            if let Ok(cfg) = parse_cmp_config(&line) {
+                board.legacy_job = !fw_supports_split_jobs(&cfg.fw);
+                board.fw = cfg.fw.clone();
+                if board.legacy_job {
+                    log_msg(
+                        msg_tx,
+                        LogKind::Warn,
+                        format!(
+                            "Board {} fw {} lacks jh/jt/ja — using legacy job",
+                            board.name, cfg.fw
+                        ),
+                    );
+                }
+                let _ = msg_tx.send(NetMsg::Config(Ok(cfg)));
+            } else {
+                let _ = msg_tx.send(NetMsg::Config(parse_cmp_config(&line)));
+            }
+        }
+        if let Ok(line) = usb_cmd(board.port.as_mut(), &mut board.rx, "cmp status") {
+            if let Ok(st) = parse_cmp_status(&line) {
+                board.hashrate_hs = st.hashrate_hs;
+                board.hashes = st.hashes;
+                board.mining = st.mining;
+                let _ = msg_tx.send(NetMsg::Status(Ok(st)));
+            }
+        }
+    }
+
+    let mut boards: Vec<UsbBoard> = Vec::new();
     let mut stratum: Option<StratumClient> = None;
     let mut mining = false;
-    let mut legacy_job = false; // old firmware without jh/jt/ja
     let mut recent_jobs: VecDeque<WorkJob> = VecDeque::new();
     let mut last_stats_push = Instant::now() - Duration::from_secs(10);
     let mut last_stratum_ui = Instant::now() - Duration::from_secs(10);
@@ -2939,7 +3233,7 @@ fn mine_worker(cmd_rx: Receiver<NetCmd>, msg_tx: Sender<NetMsg>) {
     let mut reconnect_backoff = Duration::from_secs(2);
 
     loop {
-        let cmd = if mining || usb.is_some() {
+        let cmd = if mining || !boards.is_empty() {
             cmd_rx.try_recv().ok()
         } else {
             match cmd_rx.recv_timeout(Duration::from_millis(200)) {
@@ -2959,68 +3253,102 @@ fn mine_worker(cmd_rx: Receiver<NetCmd>, msg_tx: Sender<NetMsg>) {
                         .collect();
                     let _ = msg_tx.send(NetMsg::Ports(ports));
                 }
+                NetCmd::ScanWorkers => {
+                    let skip: Vec<String> = boards.iter().map(|b| b.name.clone()).collect();
+                    log_msg(
+                        &msg_tx,
+                        LogKind::Usb,
+                        format!("USB CYD scan (skipping {} open)…", skip.len()),
+                    );
+                    let found = scan_usb_workers(&skip);
+                    let _ = msg_tx.send(NetMsg::WorkersFound(found));
+                }
                 NetCmd::OpenUsb(name) => {
-                    usb = None;
-                    usb_rx.clear();
                     mining = false;
-                    legacy_job = false;
                     if let Some(mut s) = stratum.take() {
                         s.disconnect();
                     }
+                    boards.clear();
                     log_msg(&msg_tx, LogKind::Usb, format!("Opening {name} @ 115200"));
-                    match serialport::new(&name, 115_200)
-                        .timeout(Duration::from_millis(40))
-                        .open()
-                    {
-                        Ok(mut port) => {
-                            let _ = port.clear(serialport::ClearBuffer::All);
-                            let _ = port.write_all(b"\r\ncmp ping\r\n");
-                            let _ = port.flush();
-                            let deadline = Instant::now() + Duration::from_millis(3500);
-                            let mut saw = false;
-                            while Instant::now() < deadline {
-                                drain_serial(port.as_mut(), &mut usb_rx);
-                                if usb_rx.lines().any(|l| l.trim().starts_with("CMP ok")) {
-                                    saw = true;
-                                    break;
-                                }
-                                thread::sleep(Duration::from_millis(30));
-                            }
-                            usb = Some(port);
+                    match open_board(&name) {
+                        Ok((mut board, saw)) => {
+                            configure_board(&mut board, &msg_tx);
+                            boards.push(board);
+                            publish_live(&msg_tx, &boards);
                             let _ = msg_tx.send(NetMsg::Action(Ok(if saw {
                                 format!("USB open {name} @ 115200 (pong)")
                             } else {
                                 format!("USB open {name} @ 115200 (no pong yet)")
                             })));
-                            if let Some(p) = usb.as_mut() {
-                                if let Ok(line) = usb_cmd(p.as_mut(), &mut usb_rx, "cmp config") {
-                                    if let Ok(cfg) = parse_cmp_config(&line) {
-                                        // Prefer split jobs on 0.6.2+; older boards stay legacy.
-                                        legacy_job = !fw_supports_split_jobs(&cfg.fw);
-                                        if legacy_job {
-                                            log_msg(
-                                                &msg_tx,
-                                                LogKind::Warn,
-                                                format!(
-                                                    "Board fw {} lacks jh/jt/ja — using legacy job (flash 0.6.2+)",
-                                                    cfg.fw
-                                                ),
-                                            );
-                                        }
-                                        let _ = msg_tx.send(NetMsg::Config(Ok(cfg)));
-                                    } else {
-                                        let _ = msg_tx.send(NetMsg::Config(parse_cmp_config(&line)));
-                                    }
-                                }
-                                if let Ok(line) = usb_cmd(p.as_mut(), &mut usb_rx, "cmp status") {
-                                    let _ = msg_tx.send(NetMsg::Status(parse_cmp_status(&line)));
-                                }
-                            }
                         }
                         Err(e) => {
-                            let _ = msg_tx
-                                .send(NetMsg::Action(Err(format!("USB open failed: {e}"))));
+                            publish_live(&msg_tx, &boards);
+                            let _ = msg_tx.send(NetMsg::Action(Err(e)));
                         }
+                    }
+                }
+                NetCmd::ConnectWorker(name) => {
+                    if boards.iter().any(|b| b.name == name) {
+                        let _ = msg_tx.send(NetMsg::Action(Ok(format!(
+                            "Worker {name} already linked"
+                        ))));
+                        publish_live(&msg_tx, &boards);
+                        continue;
+                    }
+                    log_msg(&msg_tx, LogKind::Usb, format!("Connecting worker {name}"));
+                    match open_board(&name) {
+                        Ok((mut board, saw)) => {
+                            configure_board(&mut board, &msg_tx);
+                            if mining {
+                                let mut legacy = board.legacy_job;
+                                let _ = usb_cmd(
+                                    board.port.as_mut(),
+                                    &mut board.rx,
+                                    "cmp stats accepted=0&rejected=0",
+                                );
+                                let _ = usb_push_job(
+                                    board.port.as_mut(),
+                                    &mut board.rx,
+                                    &warmup_job(),
+                                    &mut legacy,
+                                    &msg_tx,
+                                );
+                                board.legacy_job = legacy;
+                            }
+                            boards.push(board);
+                            publish_live(&msg_tx, &boards);
+                            let _ = msg_tx.send(NetMsg::Action(Ok(if saw {
+                                format!("Worker linked {name} (pong) · {} total", boards.len())
+                            } else {
+                                format!(
+                                    "Worker linked {name} (no pong yet) · {} total",
+                                    boards.len()
+                                )
+                            })));
+                        }
+                        Err(e) => {
+                            let _ = msg_tx.send(NetMsg::Action(Err(e)));
+                        }
+                    }
+                }
+                NetCmd::DisconnectWorker(name) => {
+                    if let Some(idx) = boards.iter().position(|b| b.name == name) {
+                        let mut b = boards.remove(idx);
+                        let _ = usb_cmd(b.port.as_mut(), &mut b.rx, "cmp stop");
+                        publish_live(&msg_tx, &boards);
+                        let _ = msg_tx.send(NetMsg::Action(Ok(format!(
+                            "Worker dropped {name} · {} remain",
+                            boards.len()
+                        ))));
+                        if boards.is_empty() {
+                            mining = false;
+                            if let Some(mut s) = stratum.take() {
+                                s.disconnect();
+                            }
+                        }
+                    } else {
+                        let _ = msg_tx
+                            .send(NetMsg::Action(Err(format!("Worker {name} not linked"))));
                     }
                 }
                 NetCmd::CloseUsb => {
@@ -3030,11 +3358,11 @@ fn mine_worker(cmd_rx: Receiver<NetCmd>, msg_tx: Sender<NetMsg>) {
                     if let Some(mut s) = stratum.take() {
                         s.disconnect();
                     }
-                    if let Some(p) = usb.as_mut() {
-                        let _ = usb_cmd(p.as_mut(), &mut usb_rx, "cmp stop");
+                    for b in boards.iter_mut() {
+                        let _ = usb_cmd(b.port.as_mut(), &mut b.rx, "cmp stop");
                     }
-                    usb = None;
-                    usb_rx.clear();
+                    boards.clear();
+                    publish_live(&msg_tx, &boards);
                     let _ = msg_tx.send(NetMsg::Action(Ok("USB closed".into())));
                 }
                 NetCmd::StartMine {
@@ -3042,7 +3370,7 @@ fn mine_worker(cmd_rx: Receiver<NetCmd>, msg_tx: Sender<NetMsg>) {
                     worker,
                     password,
                 } => {
-                    if usb.is_none() {
+                    if boards.is_empty() {
                         let _ = msg_tx.send(NetMsg::Action(Err("USB not open".into())));
                         continue;
                     }
@@ -3051,23 +3379,32 @@ fn mine_worker(cmd_rx: Receiver<NetCmd>, msg_tx: Sender<NetMsg>) {
                     mine_password = password.clone();
                     reconnect_backoff = Duration::from_secs(2);
                     reconnect_at = None;
-                    if let Some(p) = usb.as_mut() {
-                        // Clear any previous-session Accept/Reject digits on the LCD.
+                    for b in boards.iter_mut() {
                         let _ = usb_cmd(
-                            p.as_mut(),
-                            &mut usb_rx,
+                            b.port.as_mut(),
+                            &mut b.rx,
                             "cmp stats accepted=0&rejected=0",
                         );
-                        match usb_push_job(p.as_mut(), &mut usb_rx, &warmup_job(), &mut legacy_job, &msg_tx)
-                        {
+                        let mut legacy = b.legacy_job;
+                        match usb_push_job(
+                            b.port.as_mut(),
+                            &mut b.rx,
+                            &warmup_job(),
+                            &mut legacy,
+                            &msg_tx,
+                        ) {
                             Ok(_) => {
-                                let _ = msg_tx.send(NetMsg::Action(Ok(
-                                    "Board hashing (warmup job)…".into(),
-                                )));
+                                b.legacy_job = legacy;
+                                let _ = msg_tx.send(NetMsg::Action(Ok(format!(
+                                    "Board {} hashing (warmup)…",
+                                    b.name
+                                ))));
                             }
                             Err(e) => {
+                                b.legacy_job = legacy;
                                 let _ = msg_tx.send(NetMsg::Action(Err(format!(
-                                    "Warmup job failed: {e}"
+                                    "Warmup {} failed: {e}",
+                                    b.name
                                 ))));
                             }
                         }
@@ -3075,7 +3412,10 @@ fn mine_worker(cmd_rx: Receiver<NetCmd>, msg_tx: Sender<NetMsg>) {
                     log_msg(
                         &msg_tx,
                         LogKind::Stratum,
-                        format!("Connecting pool {endpoint}"),
+                        format!(
+                            "Connecting pool {endpoint} · {} worker(s)",
+                            boards.len()
+                        ),
                     );
                     let mut client = StratumClient::new(worker, password);
                     match client.connect(&endpoint) {
@@ -3088,7 +3428,8 @@ fn mine_worker(cmd_rx: Receiver<NetCmd>, msg_tx: Sender<NetMsg>) {
                             mining = true;
                             reconnect_backoff = Duration::from_secs(2);
                             let _ = msg_tx.send(NetMsg::Action(Ok(format!(
-                                "Pool connecting {endpoint} — board already hashing"
+                                "Pool connecting {endpoint} — {} board(s) hashing",
+                                boards.len()
                             ))));
                         }
                         Err(e) => {
@@ -3096,7 +3437,7 @@ fn mine_worker(cmd_rx: Receiver<NetCmd>, msg_tx: Sender<NetMsg>) {
                             stratum = None;
                             reconnect_at = Some(Instant::now() + reconnect_backoff);
                             let _ = msg_tx.send(NetMsg::Action(Err(format!(
-                                "Pool error (board still hashing; will retry): {e}"
+                                "Pool error (boards still hashing; will retry): {e}"
                             ))));
                         }
                     }
@@ -3111,9 +3452,11 @@ fn mine_worker(cmd_rx: Receiver<NetCmd>, msg_tx: Sender<NetMsg>) {
                             log_msg(&msg_tx, LogKind::Stratum, line);
                         }
                     }
-                    if let Some(p) = usb.as_mut() {
-                        let _ = usb_cmd(p.as_mut(), &mut usb_rx, "cmp stop");
+                    for b in boards.iter_mut() {
+                        let _ = usb_cmd(b.port.as_mut(), &mut b.rx, "cmp stop");
+                        b.mining = false;
                     }
+                    publish_live(&msg_tx, &boards);
                     let _ = msg_tx.send(NetMsg::Action(Ok("Mining stopped".into())));
                     let _ = msg_tx.send(NetMsg::MineStats {
                         accepted: 0,
@@ -3126,37 +3469,75 @@ fn mine_worker(cmd_rx: Receiver<NetCmd>, msg_tx: Sender<NetMsg>) {
                     }));
                 }
                 NetCmd::SetClock(mhz) => {
-                    if let Some(p) = usb.as_mut() {
+                    let mut any = false;
+                    for b in boards.iter_mut() {
                         let cmd = format!("cmp clock cpu_mhz={mhz}");
-                        let r = usb_cmd(p.as_mut(), &mut usb_rx, &cmd);
-                        let _ = msg_tx
-                            .send(NetMsg::Action(r.map(|_| format!("Clock {mhz} MHz queued"))));
+                        if usb_cmd(b.port.as_mut(), &mut b.rx, &cmd).is_ok() {
+                            any = true;
+                        }
                     }
+                    let _ = msg_tx.send(NetMsg::Action(if any {
+                        Ok(format!("Clock {mhz} MHz queued on {} board(s)", boards.len()))
+                    } else {
+                        Err("USB not open".into())
+                    }));
                 }
                 NetCmd::PollStatus => {
-                    if let Some(p) = usb.as_mut() {
-                        match usb_cmd(p.as_mut(), &mut usb_rx, "cmp status") {
-                            Ok(line) => {
-                                harvest_shares(
-                                    p.as_mut(),
-                                    &mut usb_rx,
-                                    stratum.as_mut(),
-                                    &recent_jobs,
-                                    &msg_tx,
-                                );
-                                let _ = msg_tx.send(NetMsg::Status(parse_cmp_status(&line)));
-                            }
+                    if boards.is_empty() {
+                        continue;
+                    }
+                    let mut total_hs = 0.0;
+                    let mut total_hashes = 0u64;
+                    let mut any_mining = false;
+                    let mut last_status: Option<StatusJson> = None;
+                    for b in boards.iter_mut() {
+                        harvest_shares(
+                            b.port.as_mut(),
+                            &mut b.rx,
+                            stratum.as_mut(),
+                            &recent_jobs,
+                            &msg_tx,
+                        );
+                        match usb_cmd(b.port.as_mut(), &mut b.rx, "cmp status") {
+                            Ok(line) => match parse_cmp_status(&line) {
+                                Ok(st) => {
+                                    b.hashrate_hs = st.hashrate_hs;
+                                    b.hashes = st.hashes;
+                                    b.mining = st.mining;
+                                    total_hs += st.hashrate_hs;
+                                    total_hashes = total_hashes.saturating_add(st.hashes);
+                                    any_mining |= st.mining;
+                                    last_status = Some(st);
+                                }
+                                Err(e) => {
+                                    log_msg(
+                                        &msg_tx,
+                                        LogKind::Warn,
+                                        format!("status {}: {e}", b.name),
+                                    );
+                                }
+                            },
                             Err(e) => {
-                                // Soft-fail: never stall the UI/stratum on a missed status.
-                                // Mining may briefly delay USB; next poll usually recovers.
-                                log_msg(&msg_tx, LogKind::Warn, format!("status soft-fail: {e}"));
+                                log_msg(
+                                    &msg_tx,
+                                    LogKind::Warn,
+                                    format!("status soft-fail {}: {e}", b.name),
+                                );
                             }
                         }
                     }
+                    publish_live(&msg_tx, &boards);
+                    if let Some(mut st) = last_status {
+                        st.hashrate_hs = total_hs;
+                        st.hashrate_khs = total_hs / 1000.0;
+                        st.hashes = total_hashes;
+                        st.mining = any_mining;
+                        let _ = msg_tx.send(NetMsg::Status(Ok(st)));
+                    }
                 }
                 NetCmd::Bench => {
-                    if let Some(p) = usb.as_mut() {
-                        match usb_cmd(p.as_mut(), &mut usb_rx, "cmp bench n=8") {
+                    if let Some(b) = boards.first_mut() {
+                        match usb_cmd(b.port.as_mut(), &mut b.rx, "cmp bench n=8") {
                             Ok(line) => {
                                 let _ = msg_tx.send(NetMsg::Action(Ok(line)));
                             }
@@ -3169,8 +3550,8 @@ fn mine_worker(cmd_rx: Receiver<NetCmd>, msg_tx: Sender<NetMsg>) {
                     }
                 }
                 NetCmd::UsbRaw(cmd) => {
-                    if let Some(p) = usb.as_mut() {
-                        match usb_cmd(p.as_mut(), &mut usb_rx, &cmd) {
+                    if let Some(b) = boards.first_mut() {
+                        match usb_cmd(b.port.as_mut(), &mut b.rx, &cmd) {
                             Ok(line) => {
                                 let _ = msg_tx.send(NetMsg::Terminal(line));
                             }
@@ -3188,62 +3569,37 @@ fn mine_worker(cmd_rx: Receiver<NetCmd>, msg_tx: Sender<NetMsg>) {
                     reopen,
                 } => {
                     mining = false;
-                    legacy_job = false;
                     if let Some(mut s) = stratum.take() {
                         s.disconnect();
                     }
-                    if let Some(mut p) = usb.take() {
-                        let _ = usb_cmd(p.as_mut(), &mut usb_rx, "cmp stop");
-                        drop(p);
+                    for b in boards.iter_mut() {
+                        let _ = usb_cmd(b.port.as_mut(), &mut b.rx, "cmp stop");
                     }
-                    usb_rx.clear();
-                    // Give Windows a moment to release the COM handle.
-                    thread::sleep(Duration::from_millis(400));
-                    let img = std::path::PathBuf::from(&image);
-                    let tx = msg_tx.clone();
+                    boards.clear();
+                    publish_live(&msg_tx, &boards);
+                    let img = std::path::PathBuf::from(image);
+                    let progress_tx = msg_tx.clone();
                     let progress = move |line: String| {
-                        log_msg(&tx, LogKind::Usb, line);
+                        log_msg(&progress_tx, LogKind::Usb, line);
                     };
-                    let result = flash_merged_bin(&port, &img, &progress).map(|_| {
-                        format!(
-                            "Board update OK · flashed {} @ 0x0 on {port}",
-                            img.file_name()
-                                .and_then(|s| s.to_str())
-                                .unwrap_or("firmware.bin")
-                        )
-                    });
-                    let reopen_port = if result.is_ok() && reopen {
-                        // Board reboots after flash — wait briefly before reclaiming USB.
-                        thread::sleep(Duration::from_millis(1200));
-                        Some(port)
-                    } else {
-                        None
-                    };
+                    let result = flash_merged_bin(&port, &img, &progress)
+                        .map(|_| format!("Firmware flashed on {port}"))
+                        .map_err(|e| e);
+                    let reopen_port = if reopen { Some(port) } else { None };
                     let _ = msg_tx.send(NetMsg::FlashDone {
                         result,
                         reopen: reopen_port,
                     });
                 }
                 NetCmd::PushNet { text } => {
-                    if let Some(p) = usb.as_mut() {
+                    for b in boards.iter_mut() {
                         let cmd = format!("cmp netdata text={}", urlenc(&text));
-                        match usb_cmd(p.as_mut(), &mut usb_rx, &cmd) {
-                            Ok(_) => {
-                                log_msg(
-                                    &msg_tx,
-                                    LogKind::Usb,
-                                    format!("LCD ticker ← {}", trunc(&text, 64)),
-                                );
-                            }
-                            Err(e) => {
-                                log_msg(&msg_tx, LogKind::Warn, format!("netdata: {e}"));
-                            }
-                        }
+                        let _ = usb_cmd(b.port.as_mut(), &mut b.rx, &cmd);
                     }
                 }
                 NetCmd::RebootBoard => {
-                    if let Some(p) = usb.as_mut() {
-                        match usb_cmd(p.as_mut(), &mut usb_rx, "cmp reboot") {
+                    if let Some(b) = boards.first_mut() {
+                        match usb_cmd(b.port.as_mut(), &mut b.rx, "cmp reboot") {
                             Ok(line) => {
                                 let _ = msg_tx.send(NetMsg::Action(Ok(format!(
                                     "Board reboot queued ({line})"
@@ -3272,23 +3628,21 @@ fn mine_worker(cmd_rx: Receiver<NetCmd>, msg_tx: Sender<NetMsg>) {
             }
         }
 
-        // Constant stratum communication updates while linked / mining.
         if let Some(client) = stratum.as_mut() {
             let was_authorized = client.authorized();
             match client.poll() {
                 Ok(()) => {
                     if client.authorized() && !was_authorized {
-                        // Publish authorize immediately so the UI does not linger on stale A/R.
                         push_stratum_live(&msg_tx, client);
                         let _ = msg_tx.send(NetMsg::MineStats {
                             accepted: 0,
                             rejected: 0,
                             phase: client.phase.clone(),
                         });
-                        if let Some(p) = usb.as_mut() {
+                        for b in boards.iter_mut() {
                             let _ = usb_cmd(
-                                p.as_mut(),
-                                &mut usb_rx,
+                                b.port.as_mut(),
+                                &mut b.rx,
                                 "cmp stats accepted=0&rejected=0",
                             );
                         }
@@ -3300,40 +3654,49 @@ fn mine_worker(cmd_rx: Receiver<NetCmd>, msg_tx: Sender<NetMsg>) {
                         let _ = msg_tx.send(NetMsg::Share(ev));
                     }
                     if let Some(job) = client.take_job() {
-                        if let Some(p) = usb.as_mut() {
+                        let mut pushed = 0usize;
+                        for b in boards.iter_mut() {
+                            let mut legacy = b.legacy_job;
                             match usb_push_job(
-                                p.as_mut(),
-                                &mut usb_rx,
+                                b.port.as_mut(),
+                                &mut b.rx,
                                 &job,
-                                &mut legacy_job,
+                                &mut legacy,
                                 &msg_tx,
                             ) {
                                 Ok(_) => {
-                                    recent_jobs.push_back(job.clone());
-                                    while recent_jobs.len() > 24 {
-                                        recent_jobs.pop_front();
-                                    }
-                                    let _ = msg_tx.send(NetMsg::Action(Ok(format!(
-                                        "USB ← job {}",
-                                        job.job_id
-                                    ))));
+                                    b.legacy_job = legacy;
+                                    pushed += 1;
                                 }
                                 Err(e) => {
-                                    let _ = msg_tx.send(NetMsg::Action(Err(e)));
+                                    b.legacy_job = legacy;
+                                    let _ = msg_tx.send(NetMsg::Action(Err(format!(
+                                        "{} job push: {e}",
+                                        b.name
+                                    ))));
                                 }
                             }
                         }
+                        if pushed > 0 {
+                            recent_jobs.push_back(job.clone());
+                            while recent_jobs.len() > 24 {
+                                recent_jobs.pop_front();
+                            }
+                            let _ = msg_tx.send(NetMsg::Action(Ok(format!(
+                                "USB ← job {} → {pushed} board(s)",
+                                job.job_id
+                            ))));
+                        }
                     }
                     if last_stats_push.elapsed() > Duration::from_secs(3) {
-                        if let Some(p) = usb.as_mut() {
-                            // Keep LCD at 0/0 through handshake and reject-grace warmup.
-                            let (a, r) = if client.authorized() {
-                                (client.accepted, client.rejected)
-                            } else {
-                                (0, 0)
-                            };
-                            let cmd = format!("cmp stats accepted={a}&rejected={r}");
-                            let _ = usb_cmd(p.as_mut(), &mut usb_rx, &cmd);
+                        let (a, r) = if client.authorized() {
+                            (client.accepted, client.rejected)
+                        } else {
+                            (0, 0)
+                        };
+                        let cmd = format!("cmp stats accepted={a}&rejected={r}");
+                        for b in boards.iter_mut() {
+                            let _ = usb_cmd(b.port.as_mut(), &mut b.rx, &cmd);
                         }
                         last_stats_push = Instant::now();
                     }
@@ -3387,7 +3750,7 @@ fn mine_worker(cmd_rx: Receiver<NetCmd>, msg_tx: Sender<NetMsg>) {
                 log_msg(
                     &msg_tx,
                     LogKind::Stratum,
-                    format!("Reconnecting pool {mine_endpoint}…"),
+                    format!("Reconnecting pool {mine_endpoint}"),
                 );
                 let mut client =
                     StratumClient::new(mine_worker_name.clone(), mine_password.clone());
@@ -3409,7 +3772,7 @@ fn mine_worker(cmd_rx: Receiver<NetCmd>, msg_tx: Sender<NetMsg>) {
                             &msg_tx,
                             LogKind::Warn,
                             format!(
-                                "Reconnect failed ({e}); retry in {}s",
+                                "Reconnect failed: {e} — retry in {}s",
                                 reconnect_backoff.as_secs().max(1)
                             ),
                         );
@@ -3420,19 +3783,19 @@ fn mine_worker(cmd_rx: Receiver<NetCmd>, msg_tx: Sender<NetMsg>) {
             }
         }
 
-        if let Some(p) = usb.as_mut() {
-            harvest_shares(
-                p.as_mut(),
-                &mut usb_rx,
-                stratum.as_mut(),
-                &recent_jobs,
-                &msg_tx,
-            );
+        if !boards.is_empty() {
+            for b in boards.iter_mut() {
+                harvest_shares(
+                    b.port.as_mut(),
+                    &mut b.rx,
+                    stratum.as_mut(),
+                    &recent_jobs,
+                    &msg_tx,
+                );
+            }
         }
 
-        if mining || stratum.is_some() {
-            thread::sleep(Duration::from_millis(15));
-        }
+        thread::sleep(Duration::from_millis(8));
     }
 }
 
