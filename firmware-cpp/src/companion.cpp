@@ -1,5 +1,4 @@
 #include "companion.hpp"
-#include <ArduinoJson.h>
 #include <cstring>
 #include <esp_system.h>
 
@@ -99,17 +98,14 @@ void CompanionLink::handleLine(const String& line, AppConfig& cfg, const MinerSn
 
   if (verb == "ping") {
     Serial.println("CMP ok usb");
-    Serial.flush();
     return;
   }
   if (verb == "status") {
     replyStatus(cfg, snap);
-    Serial.flush();
     return;
   }
   if (verb == "config") {
     replyConfig(cfg);
-    Serial.flush();
     return;
   }
 
@@ -124,12 +120,10 @@ void CompanionLink::handleLine(const String& line, AppConfig& cfg, const MinerSn
     hex.trim();
     if (!hexDecodeFixed(hex, stagedHeader_, 80)) {
       Serial.println("CMPERR jh need 160 hex");
-      Serial.flush();
       return;
     }
     haveHeader_ = true;
     Serial.println("CMPACK jh");
-    Serial.flush();
     return;
   }
   if (verb == "jt" || verb == "jobtgt" || verb == "target") {
@@ -139,24 +133,20 @@ void CompanionLink::handleLine(const String& line, AppConfig& cfg, const MinerSn
     hex.trim();
     if (!hexDecodeFixed(hex, stagedTarget_, 32)) {
       Serial.println("CMPERR jt need 64 hex");
-      Serial.flush();
       return;
     }
     haveTarget_ = true;
     Serial.println("CMPACK jt");
-    Serial.flush();
     return;
   }
   if (verb == "ja" || verb == "jobarm" || verb == "arm") {
     if (!haveHeader_ || !haveTarget_) {
       Serial.println("CMPERR ja need jh+jt first");
-      Serial.flush();
       return;
     }
     UsbJob job;
     if (!parseJobMeta(args, job)) {
       Serial.println("CMPERR ja bad meta");
-      Serial.flush();
       return;
     }
     memcpy(job.header, stagedHeader_, 80);
@@ -164,7 +154,6 @@ void CompanionLink::handleLine(const String& line, AppConfig& cfg, const MinerSn
     job.valid = true;
     job.fresh = true;
     Serial.println("CMPACK ja");
-    Serial.flush();
     if (onJob) onJob(job);
     return;
   }
@@ -174,18 +163,15 @@ void CompanionLink::handleLine(const String& line, AppConfig& cfg, const MinerSn
     UsbJob job;
     if (!parseJob(args, job)) {
       Serial.println("CMPERR job header+target required");
-      Serial.flush();
       return;
     }
     Serial.println("CMPACK job");
-    Serial.flush();
     if (onJob) onJob(job);
     return;
   }
   if (verb == "stop") {
     if (onStop) onStop();
     Serial.println("CMPACK stop");
-    Serial.flush();
     return;
   }
   if (verb == "bench") {
@@ -201,7 +187,6 @@ void CompanionLink::handleLine(const String& line, AppConfig& cfg, const MinerSn
     snprintf(line, sizeof(line), "CMPBENCH hashes=%u hs=%.4f khs=%.6f", (unsigned)n, hs,
              hs / 1000.0f);
     Serial.println(line);
-    Serial.flush();
     return;
   }
   if (verb == "stats") {
@@ -221,25 +206,13 @@ void CompanionLink::handleLine(const String& line, AppConfig& cfg, const MinerSn
     }
     if (onStats) onStats(acc, rej);
     Serial.println("CMPACK stats");
-    Serial.flush();
     return;
   }
   if (verb == "netdata" || verb == "net" || verb == "push") {
-    if (!net) {
-      Serial.println("CMPERR net feed unavailable");
-      Serial.flush();
-      return;
-    }
-    parseNetData(args, *net);
-    if (net->ticker.length() == 0) {
-      Serial.println("CMPERR netdata text required");
-      Serial.flush();
-      return;
-    }
-    net->updatedMs = millis();
-    net->fresh = true;
+    // ACK for Companion compatibility — LCD ticker is disabled in hash-focus builds.
+    (void)net;
+    (void)args;
     Serial.println("CMPACK net");
-    Serial.flush();
     return;
   }
   if (verb == "set" || verb == "clock" || verb == "reboot") {
@@ -248,57 +221,48 @@ void CompanionLink::handleLine(const String& line, AppConfig& cfg, const MinerSn
     parseBody(args, updated, reboot);
     if (verb == "clock" && args.indexOf("cpu_mhz") < 0 && args.indexOf("clock") < 0) {
       Serial.println("CMPERR cpu_mhz required");
-      Serial.flush();
       return;
     }
     Serial.println("CMPACK queued");
-    Serial.flush();
+    if (reboot) Serial.flush();
     (void)onApply(updated, reboot);
     return;
   }
   Serial.println("CMPERR unknown (ping|status|config|jh|jt|ja|job|stop|stats|bench|clock|reboot|netdata)");
-  Serial.flush();
 }
 
 void CompanionLink::replyStatus(const AppConfig& cfg, const MinerSnapshot& snap) {
-  JsonDocument doc;
-  doc["hashrate_hs"] = snap.hashrateHs;
-  doc["hashrate_khs"] = snap.hashrateHs / 1000.0f;
-  doc["shares"] = snap.shares;
-  doc["hashes"] = snap.totalHashes;
-  doc["mining"] = snap.connected;
-  doc["accepted"] = snap.accepted;
-  doc["rejected"] = snap.rejected;
-  doc["pool"] = snap.pool;
-  doc["connected"] = snap.connected;
-  doc["link"] = "usb";
-  doc["difficulty"] = snap.difficulty;
-  doc["uptime_secs"] = (uint32_t)(millis() / 1000);
-  doc["cpu_mhz"] = snap.cpuMhz ? snap.cpuMhz : cfg.cpuMhz;
-  doc["hash_focus"] = snap.hashFocus;
-  doc["net_ticker"] = snap.netTicker;
-  doc["job"] = snap.jobId;
-  doc["sha_mode"] = snap.shaMode.length() ? snap.shaMode : "—";
-  doc["full_v"] = snap.fullV;
-  doc["bench_hs"] = snap.benchHs;
+  // Hand-rolled JSON — ArduinoJson alloc on every Companion poll was burning core 0.
   char nonceHex[9];
-  snprintf(nonceHex, sizeof(nonceHex), "%08x", snap.nonce);
-  doc["nonce"] = nonceHex;
+  snprintf(nonceHex, sizeof(nonceHex), "%08x", (unsigned)snap.nonce);
+  const char* pool = snap.pool.c_str();
+  const char* job = snap.jobId.c_str();
+  const char* sha = snap.shaMode.length() ? snap.shaMode.c_str() : "-";
+  char buf[420];
+  snprintf(
+      buf, sizeof(buf),
+      "{\"hashrate_hs\":%.0f,\"hashrate_khs\":%.3f,\"shares\":%llu,\"hashes\":%llu,"
+      "\"mining\":%s,\"accepted\":%u,\"rejected\":%u,\"pool\":\"%.20s\",\"connected\":%s,"
+      "\"link\":\"usb\",\"difficulty\":0,\"uptime_secs\":%u,\"cpu_mhz\":%u,"
+      "\"hash_focus\":true,\"net_ticker\":\"\",\"job\":\"%.24s\",\"sha_mode\":\"%.8s\","
+      "\"full_v\":true,\"bench_hs\":%.0f,\"nonce\":\"%s\"}",
+      (double)snap.hashrateHs, (double)(snap.hashrateHs / 1000.0f),
+      (unsigned long long)snap.shares, (unsigned long long)snap.totalHashes,
+      snap.connected ? "true" : "false", (unsigned)snap.accepted, (unsigned)snap.rejected, pool,
+      snap.connected ? "true" : "false", (unsigned)(millis() / 1000),
+      (unsigned)(snap.cpuMhz ? snap.cpuMhz : cfg.cpuMhz), job, sha, (double)snap.benchHs, nonceHex);
   Serial.print("CMPSTATUS ");
-  serializeJson(doc, Serial);
-  Serial.println();
+  Serial.println(buf);
 }
 
 void CompanionLink::replyConfig(const AppConfig& cfg) {
-  JsonDocument doc;
-  doc["cpu_mhz"] = cfg.cpuMhz;
-  doc["hash_focus"] = cfg.hashFocus;
-  doc["fw"] = "0.8.15-sha256";
-  doc["mode"] = "usb-sha256";
-  doc["configured"] = true;
+  char buf[128];
+  snprintf(buf, sizeof(buf),
+           "{\"cpu_mhz\":%u,\"hash_focus\":true,\"fw\":\"0.8.16-sha256\",\"mode\":\"usb-sha256\","
+           "\"configured\":true}",
+           (unsigned)cfg.cpuMhz);
   Serial.print("CMPCONFIG ");
-  serializeJson(doc, Serial);
-  Serial.println();
+  Serial.println(buf);
 }
 
 String CompanionLink::urlDecode(const String& in) {

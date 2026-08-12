@@ -18,7 +18,7 @@ static AppConfig g_cfg;
 static CompanionLink g_cmp;
 static DisplayUi g_ui;
 static Sha256Miner g_minerA;  // core 1 (HW SHA owner, or primary SW lane)
-static Sha256Miner g_minerB;  // core 0 SW assist (disabled when HW SHA is active)
+static Sha256Miner g_minerB;  // core 0 SW assist (disjoint nonce range)
 static MinerSnapshot g_snap;
 static bool g_hwSha = false;
 static NetFeed g_net;
@@ -40,10 +40,17 @@ static uint32_t g_windowStart = 0;
 static uint64_t g_windowHashesStart = 0;
 static float g_hashrate = 0;
 static uint32_t g_lastPaint = 0;
+static uint32_t g_lastSnapMs = 0;
 static uint32_t g_accepted = 0;
 static uint32_t g_rejected = 0;
 static TaskHandle_t g_mineTaskA = nullptr;
+static TaskHandle_t g_mineTaskB = nullptr;
 static TaskHandle_t g_usbTask = nullptr;
+
+// Cached labels — avoid String churn on the USB hot path.
+static char g_poolLabel[24] = "WAIT USB";
+static char g_shaLabel[12] = "SW";
+static bool g_labelsReady = false;
 
 static void applyCpu(uint8_t mhz) {
   mhz = g_cfg.normalizeCpu(mhz);
@@ -54,10 +61,23 @@ static void applyCpu(uint8_t mhz) {
 
 extern "C" float cyd_last_bench_hs();
 
+static void refreshLabels() {
+  if (g_jobLoaded && g_hwSha) {
+    snprintf(g_poolLabel, sizeof(g_poolLabel), "SHA256-%s", cyd_sha_hw::mode_label());
+    snprintf(g_shaLabel, sizeof(g_shaLabel), "%s", cyd_sha_hw::mode_label());
+  } else if (g_jobLoaded) {
+    snprintf(g_poolLabel, sizeof(g_poolLabel), "SHA256");
+    snprintf(g_shaLabel, sizeof(g_shaLabel), "SW");
+  } else {
+    snprintf(g_poolLabel, sizeof(g_poolLabel), "WAIT USB");
+    snprintf(g_shaLabel, sizeof(g_shaLabel), g_hwSha ? cyd_sha_hw::mode_label() : "SW");
+  }
+  g_labelsReady = true;
+}
+
 static void updateHashrate() {
-  // Must run from usbTask — Arduino loop() is starved by a high-prio USB task.
-  // Core-0 SW assist + USB/LCD share a core, so short windows swing ±100+ kH/s.
-  // Use ≥1.5s samples + EMA so LCD/Companion show a stable rate.
+  // Core-0 SW assist + USB share a core — short windows swing wildly.
+  // ≥1.5s samples + EMA keep LCD/Companion stable.
   if (!g_jobLoaded || !g_mining) {
     if (g_hashrate > 0.0f) {
       g_hashrate *= 0.82f;
@@ -69,7 +89,6 @@ static void updateHashrate() {
   uint32_t elapsed = now - g_windowStart;
   if (elapsed < 1500) return;
   if (elapsed > 8000) {
-    // Window went stale (long pause) — restart without slamming the display to 0.
     g_windowHashesStart = g_hashCounter.load(std::memory_order_relaxed);
     g_windowStart = now;
     return;
@@ -88,30 +107,24 @@ static void updateHashrate() {
 
 static void fillSnap() {
   updateHashrate();
+  if (!g_labelsReady) refreshLabels();
   g_snap.hashrateHs = g_hashrate;
   g_snap.shares = g_shareCounter;
   g_snap.totalHashes = g_hashCounter.load(std::memory_order_relaxed);
   g_snap.accepted = g_accepted;
   g_snap.rejected = g_rejected;
-  if (g_jobLoaded && g_hwSha) {
-    char poolBuf[24];
-    snprintf(poolBuf, sizeof(poolBuf), "SHA256-%s", cyd_sha_hw::mode_label());
-    g_snap.pool = poolBuf;
-  } else if (g_jobLoaded) {
-    g_snap.pool = "SHA256";
-  } else {
-    g_snap.pool = "WAIT USB";
-  }
+  g_snap.pool = g_poolLabel;
   g_snap.connected = g_jobLoaded;
   g_snap.difficulty = 0;
   g_snap.nonce = g_minerA.nonce();
   g_snap.cpuMhz = (uint8_t)getCpuFrequencyMhz();
   g_snap.hashFocus = true;
-  g_snap.netTicker = g_net.ticker;
   g_snap.jobId = g_job.jobId;
-  g_snap.shaMode = g_hwSha ? String(cyd_sha_hw::mode_label()) : String("SW");
+  g_snap.shaMode = g_shaLabel;
   g_snap.fullV = true;
   g_snap.benchHs = cyd_last_bench_hs();
+  // Ticker disabled while hashing — net pushes are ACK'd but not painted.
+  if (!g_mining) g_snap.netTicker = g_net.ticker;
 }
 
 static bool applyConfig(AppConfig& updated, bool& reboot) {
@@ -137,8 +150,8 @@ static void onJob(const UsbJob& job) {
   g_minerB.setJob(job.header, job.target, start ^ 0x80000000u);
   g_jobLoaded = true;
   g_mining = true;
-  // New job: restart the sample window but keep the last EMA so the LCD
-  // does not drop by 100+ kH/s on every stratum job switch.
+  refreshLabels();
+  // Keep last EMA across job switches so LCD doesn't drop.
   g_windowHashesStart = g_hashCounter.load(std::memory_order_relaxed);
   g_windowStart = millis();
 }
@@ -147,6 +160,7 @@ static void onStop() {
   g_jobLoaded = false;
   g_mining = false;
   g_hashrate = 0;
+  refreshLabels();
 }
 
 static void onStats(uint32_t accepted, uint32_t rejected) {
@@ -173,11 +187,16 @@ static void noteShare(uint32_t nonce) {
 }
 
 static void serviceCompanion() {
-  fillSnap();
+  // Snapshot at most ~2.5 Hz — ArduinoJson-free status still costs String copies.
+  uint32_t now = millis();
+  if (now - g_lastSnapMs >= 400) {
+    fillSnap();
+    g_lastSnapMs = now;
+  }
   g_cmp.poll(g_cfg, g_snap, applyConfig, &g_net, onJob, onStop, onStats);
   if (g_net.fresh) {
-    g_snap.netTicker = g_net.ticker;
-    g_net.fresh = false;
+    g_net.fresh = false;  // Accept but do not paint ticker while mining.
+    if (!g_mining) g_snap.netTicker = g_net.ticker;
   }
   if (g_sharePending) {
     PendingShare s;
@@ -222,12 +241,29 @@ static void mineTaskA(void*) {
   }
 }
 
-// USB + hashrate accounting on core 0. Leave headroom for Arduino loop (LCD).
+// Core-0 SW assist — dedicated task so LCD/Arduino loop cannot starve hashing.
+static void mineTaskB(void*) {
+  uint32_t loops = 0;
+  for (;;) {
+    if (!g_mining || !g_jobLoaded) {
+      vTaskDelay(pdMS_TO_TICKS(2));
+      continue;
+    }
+    // Larger batches than the old loop()-inline assist.
+    mineLane(g_minerB, 1, g_hwSha ? 2048 : 1024);
+    if ((++loops & 7u) == 0u) {
+      taskYIELD();  // Let USB (higher prio) run.
+      esp_task_wdt_reset();
+    }
+  }
+}
+
+// USB only — keep snappy for jobs/shares without burning core 0 on idle wakes.
 static void usbTask(void*) {
   for (;;) {
     serviceCompanion();
-    // 5ms keeps Serial snappy without permanently preempting loopTask.
-    vTaskDelay(pdMS_TO_TICKS(5));
+    // 10ms when quiet → more time for mineTaskB; still fine for 115200 cmp.
+    vTaskDelay(pdMS_TO_TICKS(Serial.available() > 0 ? 2 : 10));
     esp_task_wdt_reset();
   }
 }
@@ -237,7 +273,6 @@ static float runBench(uint32_t hashes) {
   if (hashes > 400000) hashes = 400000;
   uint8_t hdr[80];
   memset(hdr, 0x11, 80);
-  // Impossible target so the msb gate almost never trips (full-speed loop).
   uint8_t tgt[32];
   memset(tgt, 0x00, 32);
   Sha256Miner bench;
@@ -276,66 +311,64 @@ void setup() {
 
   g_minerA.begin();
   g_minerB.begin();
-  // Core-0 assist must stay on software midstate — never touch the SHA peripheral.
   g_minerB.forceSoftware();
   g_hwSha = g_minerA.hardware();
   if (g_hwSha) {
     (void)Sha256Miner::acquireHardware();
   }
+  refreshLabels();
 
-  // USB below miner, above default loop — enough to answer cmp without freezing LCD.
-  xTaskCreatePinnedToCore(usbTask, "usb", 8192, nullptr, 3, &g_usbTask, 0);
+  // Priorities: mineA (core1 max) > USB (3) > mineB (2) > Arduino loop (1).
+  xTaskCreatePinnedToCore(usbTask, "usb", 6144, nullptr, 3, &g_usbTask, 0);
+  xTaskCreatePinnedToCore(mineTaskB, "shaB", 8192, nullptr, 2, &g_mineTaskB, 0);
   xTaskCreatePinnedToCore(mineTaskA, "shaA", 10240, nullptr, configMAX_PRIORITIES - 1, &g_mineTaskA,
                           1);
 
-  delay(80);
+  delay(40);
   if (g_hwSha) {
     uint8_t hdr[80];
     memset(hdr, 0xA5, 80);
     uint8_t tgt[32];
     memset(tgt, 0xFF, 32);
+    // First setJob runs the one-time HW path calibrate.
     g_minerA.setJob(hdr, tgt, 1);
+    refreshLabels();
     char line[28];
     snprintf(line, sizeof(line), "%s · USB link", cyd_sha_hw::mode_label());
     g_ui.showMessage("SHA-256 MAX", line);
   } else {
-    g_ui.showMessage("SHA-256", "live kH/s · USB link");
+    g_ui.showMessage("SHA-256", "hash focus · USB");
   }
-  delay(420);
+  delay(280);
   g_ui.showWaitingCompanion();
 
   g_windowStart = millis();
   g_windowHashesStart = 0;
   g_lastPaint = millis();
+  g_lastSnapMs = millis();
   fillSnap();
 }
 
 void loop() {
-  // LCD + light assist. Hashrate is updated in usbTask/fillSnap.
+  // Idle: static wait screen (no animated bars).
   if (!g_jobLoaded) {
     uint32_t now = millis();
-    if (now - g_lastPaint >= 160) {
+    if (now - g_lastPaint >= 1000) {
       g_ui.showWaitingCompanion();
       g_lastPaint = now;
     }
-    delay(5);
+    delay(20);
     return;
   }
 
-  // Core-0 software midstate assist on a disjoint nonce range (additive H/s).
-  // Bigger batches while mining — LCD paints less often below.
-  if (g_mining) {
-    mineLane(g_minerB, 1, g_hwSha ? 512 : 128);
-  }
-
+  // Mining: rare static LCD — hashing lives in mineTaskA/B.
   uint32_t now = millis();
-  // ~4 fps UI while hashing — less contention with the mine task.
-  if (now - g_lastPaint >= 250) {
+  if (now - g_lastPaint >= 2000) {
     fillSnap();
     g_ui.showMining(g_cfg, g_snap, false);
     g_lastPaint = now;
   }
-  delay(1);
+  delay(50);
 }
 
 extern "C" float cyd_run_bench(uint32_t n) {

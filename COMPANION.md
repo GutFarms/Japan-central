@@ -44,6 +44,7 @@ Also available:
 - **Find CYD workers** — USB scan for companion firmwares + LAN Companion peer discovery; connect multiple USB boards and fan-out jobs
 - Custom **API feeds** (Settings) to pull external HTTPS data into the app
 - Stable board hashrate (EMA + longer sample window; no zero-on-job flicker)
+- **Hash-focus firmware** — strip LCD animations/ticker, one-time HW calibrate, dedicated core-0 mine task, lean USB
 
 ## Recommended pool (ESP32-friendly)
 

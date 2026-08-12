@@ -328,6 +328,7 @@ IRAM_ATTR uint32_t sha256d_hw_sw(const uint32_t block1[16], const uint32_t mid_b
 
 bool g_locked = false;
 bool g_mid_ok = false;
+bool g_calibrated = false;
 Mode g_mode = Mode::FullHw;
 
 }  // namespace
@@ -359,6 +360,7 @@ bool acquire() {
   esp_sha_lock_engine(kSha);
   g_locked = true;
   g_mid_ok = false;
+  g_calibrated = false;
   g_mode = Mode::FullHw;
   return true;
 }
@@ -368,6 +370,7 @@ void release() {
   esp_sha_unlock_engine(kSha);
   g_locked = false;
   g_mid_ok = false;
+  g_calibrated = false;
   g_mode = Mode::FullHw;
 }
 
@@ -408,6 +411,8 @@ bool self_test(const uint32_t hdr_be[20], const uint32_t mid_be[8]) {
 }
 
 void calibrate(const uint32_t hdr_be[20], const uint32_t mid_be[8]) {
+  // Path choice is silicon-stable — do NOT re-bench on every stratum job.
+  if (g_calibrated) return;
   if (!hdr_be || !g_locked) {
     g_mode = Mode::FullHw;
     return;
@@ -482,6 +487,7 @@ void calibrate(const uint32_t hdr_be[20], const uint32_t mid_be[8]) {
   }
 
   g_mode = best;
+  g_calibrated = true;
 }
 
 IRAM_ATTR bool hash_nonce(const uint32_t hdr_be[20], const uint32_t mid_be[8], uint32_t nonce_le,

@@ -2304,7 +2304,7 @@ impl App for CompanionApp {
             }
         }
 
-        if self.usb_open && self.last_poll.elapsed() > Duration::from_millis(800) {
+        if self.usb_open && self.last_poll.elapsed() > Duration::from_millis(1200) {
             let _ = self.cmd_tx.send(NetCmd::PollStatus);
             self.last_poll = Instant::now();
         }
@@ -2352,9 +2352,6 @@ impl App for CompanionApp {
             .collect();
         let host = hostname_fallback();
         self.lan.maybe_beacon(&board_ads, &host);
-        if self.usb_open && !self.update_busy {
-            self.push_board_ticker(false);
-        }
         if self.update_busy || self.fetch_busy {
             ctx.request_repaint();
         }
