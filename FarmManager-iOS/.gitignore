@@ -1,0 +1,6 @@
+# FarmManager.xcodeproj
+xcuserdata/
+*.xcuserstate
+DerivedData/
+build/
+.swiftpm/

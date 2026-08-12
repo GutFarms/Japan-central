@@ -1,0 +1,313 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {};
+	objectVersion = 56;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		6895E4CBDA6B44A3A392DE1E /* FarmManagerApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5AED4609EBF74710B2DFE064 /* FarmManagerApp.swift */; };
+		7B701120D9BB46E3988982FF /* Models.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8DA19146C35A4181ABE4FFA3 /* Models.swift */; };
+		7B7B8F267EA3401DB4D8B826 /* Theme.swift in Sources */ = {isa = PBXBuildFile; fileRef = D366D39698DB4751B22D1A5C /* Theme.swift */; };
+		DECDC1AB4667414EAB5DE013 /* SeedData.swift in Sources */ = {isa = PBXBuildFile; fileRef = B3B473CA4EEF48FEA8947FC2 /* SeedData.swift */; };
+		DCBACDD0D18F4A76A78EEB50 /* MainTabView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1AF80AD525084F6D96344E5B /* MainTabView.swift */; };
+		FFA16E4A12EF4629BE6E7641 /* HomeView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8220152B439F4022A7E21FB9 /* HomeView.swift */; };
+		82AD817D35C24711BF4F19D6 /* LivestockView.swift in Sources */ = {isa = PBXBuildFile; fileRef = D5E566FABD6A47748CF79C30 /* LivestockView.swift */; };
+		D966D5709F41428DBE2CC4DD /* ArrivalsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 98D7037105C241F9A7584702 /* ArrivalsView.swift */; };
+		65B67771114E4C869609B269 /* FeedingView.swift in Sources */ = {isa = PBXBuildFile; fileRef = D2EEECBBA0694D398BB6EB7B /* FeedingView.swift */; };
+		1D0C3BD4A4CE42D6BE04A9EF /* BreedingView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 01EA1142EEE5447788317274 /* BreedingView.swift */; };
+		BB4464581CE442E1B67FA389 /* ProfitsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C3DDF2957F9F46949B3218F8 /* ProfitsView.swift */; };
+		8CA87B1D10084D9BA2B50A35 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 10446C684CAE48A4A9907078 /* Assets.xcassets */; };
+		00EE610C3BF3418EB1766F60 /* FarmPrint.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7D3BC45BB2EC40DDB2D1E93E /* FarmPrint.swift */; };
+/* End PBXBuildFile section */
+
+/* Begin PBXFileReference section */
+		7BDA8E4613EA415791C5D11C /* FarmManager.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = FarmManager.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		5AED4609EBF74710B2DFE064 /* FarmManagerApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FarmManagerApp.swift; sourceTree = "<group>"; };
+		8DA19146C35A4181ABE4FFA3 /* Models.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Models.swift; sourceTree = "<group>"; };
+		D366D39698DB4751B22D1A5C /* Theme.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Theme.swift; sourceTree = "<group>"; };
+		B3B473CA4EEF48FEA8947FC2 /* SeedData.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SeedData.swift; sourceTree = "<group>"; };
+		1AF80AD525084F6D96344E5B /* MainTabView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MainTabView.swift; sourceTree = "<group>"; };
+		8220152B439F4022A7E21FB9 /* HomeView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HomeView.swift; sourceTree = "<group>"; };
+		D5E566FABD6A47748CF79C30 /* LivestockView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LivestockView.swift; sourceTree = "<group>"; };
+		98D7037105C241F9A7584702 /* ArrivalsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ArrivalsView.swift; sourceTree = "<group>"; };
+		D2EEECBBA0694D398BB6EB7B /* FeedingView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FeedingView.swift; sourceTree = "<group>"; };
+		01EA1142EEE5447788317274 /* BreedingView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BreedingView.swift; sourceTree = "<group>"; };
+		C3DDF2957F9F46949B3218F8 /* ProfitsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProfitsView.swift; sourceTree = "<group>"; };
+		10446C684CAE48A4A9907078 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
+		7D3BC45BB2EC40DDB2D1E93E /* FarmPrint.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FarmPrint.swift; sourceTree = "<group>"; };
+/* End PBXFileReference section */
+
+/* Begin PBXFrameworksBuildPhase section */
+		5D6ECC2329244D059208F0BB /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXFrameworksBuildPhase section */
+
+/* Begin PBXGroup section */
+		8987C59B908C47909EB3A0C2 = {
+			isa = PBXGroup;
+			children = (
+				CA1E9F74F40C49D69D808A31 /* FarmManager */,
+				C737E7CA2F5E44B39EC62EC6 /* Products */,
+			);
+			sourceTree = "<group>";
+		};
+		C737E7CA2F5E44B39EC62EC6 /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				7BDA8E4613EA415791C5D11C /* FarmManager.app */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+		CA1E9F74F40C49D69D808A31 /* FarmManager */ = {
+			isa = PBXGroup;
+			children = (
+				5AED4609EBF74710B2DFE064 /* FarmManagerApp.swift */,
+				52ACD13FBD52463F978DCE3E /* Models */,
+				278857A2F19C4CF493882766 /* Views */,
+				A5DD5A747D8F4E6EB8D2AD2C /* Theme */,
+				C09503346E794784B1B6C723 /* Data */,
+				10446C684CAE48A4A9907078 /* Assets.xcassets */,
+			);
+			path = FarmManager;
+			sourceTree = "<group>";
+		};
+		52ACD13FBD52463F978DCE3E /* Models */ = {
+			isa = PBXGroup;
+			children = (
+				8DA19146C35A4181ABE4FFA3 /* Models.swift */,
+			);
+			path = Models;
+			sourceTree = "<group>";
+		};
+		278857A2F19C4CF493882766 /* Views */ = {
+			isa = PBXGroup;
+			children = (
+				1AF80AD525084F6D96344E5B /* MainTabView.swift */,
+				8220152B439F4022A7E21FB9 /* HomeView.swift */,
+				D5E566FABD6A47748CF79C30 /* LivestockView.swift */,
+				98D7037105C241F9A7584702 /* ArrivalsView.swift */,
+				D2EEECBBA0694D398BB6EB7B /* FeedingView.swift */,
+				01EA1142EEE5447788317274 /* BreedingView.swift */,
+				C3DDF2957F9F46949B3218F8 /* ProfitsView.swift */,
+			);
+			path = Views;
+			sourceTree = "<group>";
+		};
+		A5DD5A747D8F4E6EB8D2AD2C /* Theme */ = {
+			isa = PBXGroup;
+			children = (
+				D366D39698DB4751B22D1A5C /* Theme.swift */,
+			);
+			path = Theme;
+			sourceTree = "<group>";
+		};
+		C09503346E794784B1B6C723 /* Data */ = {
+			isa = PBXGroup;
+			children = (
+				B3B473CA4EEF48FEA8947FC2 /* SeedData.swift */,
+				7D3BC45BB2EC40DDB2D1E93E /* FarmPrint.swift */,
+			);
+			path = Data;
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		341C9FB931A84586B2F287A6 /* FarmManager */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 20CB32152CD84BD0B5E7CD5F /* Build configuration list for PBXNativeTarget "FarmManager" */;
+			buildPhases = (
+				371E94D2B3F64FEC84EFDA6E /* Sources */,
+				5D6ECC2329244D059208F0BB /* Frameworks */,
+				71DBEABEA1DA4A89BE7AB144 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = FarmManager;
+			productName = FarmManager;
+			productReference = 7BDA8E4613EA415791C5D11C /* FarmManager.app */;
+			productType = "com.apple.product-type.application";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		C19DAF365C6C489BB2F6F33E /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				BuildIndependentTargetsInParallel = 1;
+				LastSwiftUpdateCheck = 1500;
+				LastUpgradeCheck = 1500;
+			};
+			buildConfigurationList = 218830DF62744D7F8A1F3BD1 /* Build configuration list for PBXProject "FarmManager" */;
+			compatibilityVersion = "Xcode 14.0";
+			developmentRegion = en;
+			hasScannedForEncodings = 0;
+			knownRegions = (
+				en,
+				Base,
+			);
+			mainGroup = 8987C59B908C47909EB3A0C2;
+			productRefGroup = C737E7CA2F5E44B39EC62EC6 /* Products */;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				341C9FB931A84586B2F287A6 /* FarmManager */,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin PBXResourcesBuildPhase section */
+		71DBEABEA1DA4A89BE7AB144 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				8CA87B1D10084D9BA2B50A35 /* Assets.xcassets in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXResourcesBuildPhase section */
+
+/* Begin PBXSourcesBuildPhase section */
+		371E94D2B3F64FEC84EFDA6E /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				6895E4CBDA6B44A3A392DE1E /* FarmManagerApp.swift in Sources */,
+				7B701120D9BB46E3988982FF /* Models.swift in Sources */,
+				7B7B8F267EA3401DB4D8B826 /* Theme.swift in Sources */,
+				DECDC1AB4667414EAB5DE013 /* SeedData.swift in Sources */,
+				00EE610C3BF3418EB1766F60 /* FarmPrint.swift in Sources */,
+				DCBACDD0D18F4A76A78EEB50 /* MainTabView.swift in Sources */,
+				FFA16E4A12EF4629BE6E7641 /* HomeView.swift in Sources */,
+				82AD817D35C24711BF4F19D6 /* LivestockView.swift in Sources */,
+				D966D5709F41428DBE2CC4DD /* ArrivalsView.swift in Sources */,
+				65B67771114E4C869609B269 /* FeedingView.swift in Sources */,
+				1D0C3BD4A4CE42D6BE04A9EF /* BreedingView.swift in Sources */,
+				BB4464581CE442E1B67FA389 /* ProfitsView.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin XCBuildConfiguration section */
+		F51FEDF90FA340398849A773 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ENABLE_MODULES = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				GCC_DYNAMIC_NO_PIC = NO;
+				GCC_OPTIMIZATION_LEVEL = 0;
+				ONLY_ACTIVE_ARCH = YES;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG;
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				SDKROOT = iphoneos;
+			};
+			name = Debug;
+		};
+		9E8D832EE493429DA166FFD5 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ENABLE_MODULES = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = dwarf-with-dsym;
+				GCC_DYNAMIC_NO_PIC = NO;
+				SWIFT_COMPILATION_MODE = wholemodule;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				SDKROOT = iphoneos;
+			};
+			name = Release;
+		};
+		8243EE86FD1849A7A3F43826 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = "";
+				ENABLE_PREVIEWS = YES;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_CFBundleDisplayName = "Gut Farms";
+				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
+				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
+				INFOPLIST_KEY_UISupportedInterfaceOrientations = UIInterfaceOrientationPortrait;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.gutfarms.manager;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Debug;
+		};
+		18C4CBFD941D4E06831FCF3C /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = "";
+				ENABLE_PREVIEWS = YES;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_CFBundleDisplayName = "Gut Farms";
+				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
+				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
+				INFOPLIST_KEY_UISupportedInterfaceOrientations = UIInterfaceOrientationPortrait;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.gutfarms.manager;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Release;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		218830DF62744D7F8A1F3BD1 /* Build configuration list for PBXProject "FarmManager" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				F51FEDF90FA340398849A773 /* Debug */,
+				9E8D832EE493429DA166FFD5 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		20CB32152CD84BD0B5E7CD5F /* Build configuration list for PBXNativeTarget "FarmManager" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				8243EE86FD1849A7A3F43826 /* Debug */,
+				18C4CBFD941D4E06831FCF3C /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+/* End XCConfigurationList section */
+	};
+	rootObject = C19DAF365C6C489BB2F6F33E /* Project object */;
+}
