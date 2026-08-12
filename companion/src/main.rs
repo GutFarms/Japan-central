@@ -710,10 +710,7 @@ impl CompanionApp {
         self.mining = true;
         self.session_started = Some(Instant::now());
         self.session_hash_start = self.status.hashes;
-        self.session_accepted = 0;
-        self.session_rejected = 0;
-        self.last_share_latency_ms = None;
-        self.share_history.clear();
+        self.reset_share_session_ui();
         self.last_ok = "Starting pool on PC → pushing work over USB…".into();
         self.push_log(
             LogKind::Info,
@@ -758,6 +755,9 @@ impl CompanionApp {
     }
 
     fn accept_rate_label(&self) -> String {
+        if !self.stratum_live.authorized {
+            return "—".into();
+        }
         let total = self.session_accepted + self.session_rejected;
         if total == 0 {
             "—".into()
@@ -786,6 +786,9 @@ impl CompanionApp {
     }
 
     fn luck_label(&self) -> String {
+        if !self.stratum_live.authorized {
+            return "—".into();
+        }
         let Some(started) = self.session_started else {
             return "—".into();
         };
@@ -801,6 +804,15 @@ impl CompanionApp {
             "{:.2} exp · {} ok",
             expected, self.session_accepted
         )
+    }
+
+    fn reset_share_session_ui(&mut self) {
+        self.session_accepted = 0;
+        self.session_rejected = 0;
+        self.accepted = 0;
+        self.rejected = 0;
+        self.last_share_latency_ms = None;
+        self.share_history.clear();
     }
 
     fn sha_mode_label(&self) -> &str {
@@ -1292,12 +1304,13 @@ impl CompanionApp {
     fn ui_telemetry_rail(&self, ui: &mut egui::Ui) {
         soft_panel(ui, "Board telemetry", |ui| {
             let authed = self.stratum_live.authorized;
-            let (acc, rej) = if self.session_started.is_some() {
-                (self.session_accepted, self.session_rejected)
-            } else if authed {
-                (self.accepted, self.rejected)
-            } else {
+            // Never surface connect-handshake rejects — stay at 0/0 until authorize.
+            let (acc, rej) = if !authed {
                 (0, 0)
+            } else if self.session_started.is_some() {
+                (self.session_accepted, self.session_rejected)
+            } else {
+                (self.accepted, self.rejected)
             };
             // Compact chips — large metric tiles overflow short viewports.
             ui.horizontal_wrapped(|ui| {
@@ -1706,14 +1719,35 @@ impl App for CompanionApp {
                     rejected,
                     phase,
                 } => {
-                    self.accepted = accepted;
-                    self.rejected = rejected;
+                    if self.stratum_live.authorized {
+                        self.accepted = accepted;
+                        self.rejected = rejected;
+                    } else {
+                        self.accepted = 0;
+                        self.rejected = 0;
+                    }
                     self.pool_phase = phase;
                 }
                 NetMsg::Stratum(live) => {
+                    let was_authed = self.stratum_live.authorized;
                     self.stratum_live = live;
-                    self.accepted = self.stratum_live.accepted;
-                    self.rejected = self.stratum_live.rejected;
+                    if self.stratum_live.authorized && !was_authed {
+                        // Fresh authorize: HUD stays at 0 until real post-grace outcomes arrive.
+                        // Do not wipe session counters here — Share msgs can race ahead of this.
+                        self.accepted = 0;
+                        self.rejected = 0;
+                        self.push_log(
+                            LogKind::Stratum,
+                            "Authorized — counting shares after warmup".into(),
+                        );
+                    }
+                    if self.stratum_live.authorized {
+                        self.accepted = self.stratum_live.accepted;
+                        self.rejected = self.stratum_live.rejected;
+                    } else {
+                        self.accepted = 0;
+                        self.rejected = 0;
+                    }
                     self.pool_phase = self.stratum_live.phase.clone();
                 }
                 NetMsg::Log { kind, text } => self.push_log(kind, text),
@@ -1749,6 +1783,7 @@ impl App for CompanionApp {
                     }
                 }
                 NetMsg::Share(ev) => {
+                    // Stratum only emits post-authorize, post-warmup outcomes.
                     if ev.accepted {
                         self.session_accepted = self.session_accepted.saturating_add(1);
                     } else {
@@ -2688,6 +2723,12 @@ fn mine_worker(cmd_rx: Receiver<NetCmd>, msg_tx: Sender<NetMsg>) {
                     reconnect_backoff = Duration::from_secs(2);
                     reconnect_at = None;
                     if let Some(p) = usb.as_mut() {
+                        // Clear any previous-session Accept/Reject digits on the LCD.
+                        let _ = usb_cmd(
+                            p.as_mut(),
+                            &mut usb_rx,
+                            "cmp stats accepted=0&rejected=0",
+                        );
                         match usb_push_job(p.as_mut(), &mut usb_rx, &warmup_job(), &mut legacy_job, &msg_tx)
                         {
                             Ok(_) => {
@@ -2900,8 +2941,25 @@ fn mine_worker(cmd_rx: Receiver<NetCmd>, msg_tx: Sender<NetMsg>) {
 
         // Constant stratum communication updates while linked / mining.
         if let Some(client) = stratum.as_mut() {
+            let was_authorized = client.authorized();
             match client.poll() {
                 Ok(()) => {
+                    if client.authorized() && !was_authorized {
+                        // Publish authorize immediately so the UI does not linger on stale A/R.
+                        push_stratum_live(&msg_tx, client);
+                        let _ = msg_tx.send(NetMsg::MineStats {
+                            accepted: 0,
+                            rejected: 0,
+                            phase: client.phase.clone(),
+                        });
+                        if let Some(p) = usb.as_mut() {
+                            let _ = usb_cmd(
+                                p.as_mut(),
+                                &mut usb_rx,
+                                "cmp stats accepted=0&rejected=0",
+                            );
+                        }
+                    }
                     for line in client.take_recent() {
                         log_msg(&msg_tx, LogKind::Stratum, line);
                     }
@@ -2935,8 +2993,7 @@ fn mine_worker(cmd_rx: Receiver<NetCmd>, msg_tx: Sender<NetMsg>) {
                     }
                     if last_stats_push.elapsed() > Duration::from_secs(3) {
                         if let Some(p) = usb.as_mut() {
-                            // Only push share tallies after authorize — avoids board showing
-                            // handshake rejects from the previous moment.
+                            // Keep LCD at 0/0 through handshake and reject-grace warmup.
                             let (a, r) = if client.authorized() {
                                 (client.accepted, client.rejected)
                             } else {
@@ -3125,6 +3182,14 @@ fn harvest_shares(
                         msg_tx,
                         LogKind::Warn,
                         format!("Duplicate share skipped {nonce} job={job}"),
+                    );
+                }
+                Err(e) if e.contains("not authorized") => {
+                    // Board may still be hashing warmup / held work during pool handshake.
+                    log_msg(
+                        msg_tx,
+                        LogKind::Info,
+                        format!("Holding share {nonce} until authorize"),
                     );
                 }
                 Err(e) => {

@@ -57,6 +57,10 @@ pub struct StratumClient {
     recent_submit_keys: VecDeque<(String, Instant)>,
     /// Map submit id → share key for latency / outcome detail.
     pending_share_meta: HashMap<u64, (String, String)>, // id → (key, nonce)
+    /// After authorize, ignore reject outcomes until this instant (connect warmup).
+    reject_grace_until: Option<Instant>,
+    /// True once we have emitted at least one post-authorize job to the board.
+    post_auth_job: bool,
     pub accepted: u32,
     pub rejected: u32,
     pub phase: String,
@@ -101,6 +105,8 @@ impl StratumClient {
             pending_shares: HashMap::new(),
             recent_submit_keys: VecDeque::new(),
             pending_share_meta: HashMap::new(),
+            reject_grace_until: None,
+            post_auth_job: false,
             accepted: 0,
             rejected: 0,
             phase: "off".into(),
@@ -140,6 +146,8 @@ impl StratumClient {
         self.pending_job = None;
         self.pending_shares.clear();
         self.pending_share_meta.clear();
+        self.reject_grace_until = None;
+        self.post_auth_job = false;
         // Keep recent_submit_keys across reconnect so duplicate board shares are dropped.
         self.accepted = 0;
         self.rejected = 0;
@@ -156,6 +164,8 @@ impl StratumClient {
         self.pending_job = None;
         self.pending_shares.clear();
         self.pending_share_meta.clear();
+        self.reject_grace_until = None;
+        self.post_auth_job = false;
         self.accepted = 0;
         self.rejected = 0;
         self.phase = "off".into();
@@ -398,15 +408,16 @@ impl StratumClient {
                         self.version_hex = arr[5].as_str().unwrap_or("").to_string();
                         self.nbits_hex = arr[6].as_str().unwrap_or("").to_string();
                         self.ntime_hex = arr[7].as_str().unwrap_or("").to_string();
-                        if let Some(job) = self.build_job() {
-                            self.jobs_seen += 1;
+                        // Hold work until authorize — early board shares against pre-auth
+                        // jobs are a common source of the first 1–2 pool rejects.
+                        if !self.authorized {
                             self.push_recent(format!(
-                                "← mining.notify job={} diff={}",
-                                job.job_id, self.difficulty
+                                "← mining.notify job={} (held until authorize)",
+                                self.job_id
                             ));
-                            self.pending_job = Some(job);
-                            self.phase = "mine".into();
+                            return Ok(());
                         }
+                        self.emit_job_from_fields();
                     }
                 }
                 return Ok(());
@@ -451,16 +462,11 @@ impl StratumClient {
         if let Some(ok) = v.get("result").and_then(|r| r.as_bool()) {
             let ok = ok && !has_error;
             if id == self.authorize_id {
-                self.authorized = ok;
-                self.phase = if ok { "idle".into() } else { "err".into() };
                 if ok {
-                    // Fresh connection counters — ignore handshake / pre-auth noise.
-                    self.accepted = 0;
-                    self.rejected = 0;
-                    self.pending_shares.clear();
-                    self.pending_share_meta.clear();
-                    self.push_recent("← authorized (share counters reset)".into());
+                    self.on_authorized();
                 } else {
+                    self.authorized = false;
+                    self.phase = "err".into();
                     return Err("authorize failed".into());
                 }
                 return Ok(());
@@ -477,35 +483,13 @@ impl StratumClient {
                     })
                     .unwrap_or_default();
                 if ok {
-                    self.accepted += 1;
-                    let detail = match latency_ms {
-                        Some(ms) => format!("accepted · {ms} ms"),
-                        None => "accepted".into(),
-                    };
-                    self.push_recent(format!("← share ACCEPTED id={id} {detail}"));
-                    self.share_events.push(ShareOutcome {
-                        accepted: true,
-                        id,
-                        detail,
-                        latency_ms,
-                        nonce,
-                        job_id,
-                    });
+                    self.record_share_outcome(true, id, "accepted".into(), latency_ms, nonce, job_id);
                 } else {
-                    self.rejected += 1;
                     let why = v
                         .get("error")
                         .map(|e| e.to_string())
                         .unwrap_or_else(|| "false".into());
-                    self.push_recent(format!("← share REJECTED id={id} {why}"));
-                    self.share_events.push(ShareOutcome {
-                        accepted: false,
-                        id,
-                        detail: why,
-                        latency_ms,
-                        nonce,
-                        job_id,
-                    });
+                    self.record_share_outcome(false, id, why, latency_ms, nonce, job_id);
                 }
             }
             return Ok(());
@@ -522,31 +506,109 @@ impl StratumClient {
                         (job, n)
                     })
                     .unwrap_or_default();
-                self.rejected += 1;
                 let why = v
                     .get("error")
                     .map(|e| e.to_string())
                     .unwrap_or_else(|| "error".into());
-                self.push_recent(format!("← share REJECTED id={id} {why}"));
-                self.share_events.push(ShareOutcome {
-                    accepted: false,
-                    id,
-                    detail: why,
-                    latency_ms,
-                    nonce,
-                    job_id,
-                });
+                self.record_share_outcome(false, id, why, latency_ms, nonce, job_id);
             }
         } else if id == self.authorize_id && !self.authorized && !has_error {
-            self.authorized = true;
-            self.accepted = 0;
-            self.rejected = 0;
-            self.pending_shares.clear();
-            self.pending_share_meta.clear();
-            self.phase = "idle".into();
-            self.push_recent("← authorized (share counters reset)".into());
+            self.on_authorized();
         }
         Ok(())
+    }
+
+    fn on_authorized(&mut self) {
+        self.authorized = true;
+        self.accepted = 0;
+        self.rejected = 0;
+        self.pending_shares.clear();
+        self.pending_share_meta.clear();
+        self.pending_job = None;
+        self.post_auth_job = false;
+        // Swallow early pool rejects while the first clean job settles.
+        self.reject_grace_until = Some(Instant::now() + Duration::from_secs(20));
+        self.phase = "idle".into();
+        self.push_recent("← authorized (share counters reset; reject grace 20s)".into());
+        // If notify already arrived during subscribe, release work now.
+        if !self.job_id.is_empty() {
+            self.emit_job_from_fields();
+        }
+    }
+
+    fn emit_job_from_fields(&mut self) {
+        if let Some(job) = self.build_job() {
+            self.jobs_seen += 1;
+            self.post_auth_job = true;
+            self.push_recent(format!(
+                "← mining.notify job={} diff={}",
+                job.job_id, self.difficulty
+            ));
+            self.pending_job = Some(job);
+            self.phase = "mine".into();
+        }
+    }
+
+    fn in_reject_grace(&self) -> bool {
+        match self.reject_grace_until {
+            Some(until) => Instant::now() < until,
+            None => false,
+        }
+    }
+
+    fn record_share_outcome(
+        &mut self,
+        accepted: bool,
+        id: u64,
+        detail: String,
+        latency_ms: Option<u64>,
+        nonce: String,
+        job_id: String,
+    ) {
+        if !self.authorized {
+            self.push_recent(format!(
+                "← share ignored (not authorized) id={id} ok={accepted}"
+            ));
+            return;
+        }
+        if accepted {
+            self.accepted += 1;
+            // First accept ends the connect-warmup grace early.
+            self.reject_grace_until = None;
+            let detail = match latency_ms {
+                Some(ms) => format!("{detail} · {ms} ms"),
+                None => detail,
+            };
+            self.push_recent(format!("← share ACCEPTED id={id} {detail}"));
+            self.share_events.push(ShareOutcome {
+                accepted: true,
+                id,
+                detail,
+                latency_ms,
+                nonce,
+                job_id,
+            });
+            return;
+        }
+
+        // Drop connect-warmup rejects from counters / UI / board stats.
+        if !self.post_auth_job || self.in_reject_grace() {
+            self.push_recent(format!(
+                "← share REJECTED (ignored warmup) id={id} {detail}"
+            ));
+            return;
+        }
+
+        self.rejected += 1;
+        self.push_recent(format!("← share REJECTED id={id} {detail}"));
+        self.share_events.push(ShareOutcome {
+            accepted: false,
+            id,
+            detail,
+            latency_ms,
+            nonce,
+            job_id,
+        });
     }
 
     fn build_job(&mut self) -> Option<WorkJob> {
