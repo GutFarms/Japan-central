@@ -145,7 +145,10 @@ void DisplayUi::showMining(const AppConfig& cfg, const MinerSnapshot& snap, bool
   uint8_t frame = (uint8_t)((millis() / 120) % 32);
   float khs = snap.hashrateHs / 1000.0f;
   bool hashing = snap.connected || snap.hashrateHs > 0.0f;
-  const bool rateDirty = forceFull || snap.hashrateHs != lastRate_;
+  // Ignore sub-kH noise so the big rate digits don't flicker every paint.
+  const float rateDelta = snap.hashrateHs > lastRate_ ? snap.hashrateHs - lastRate_
+                                                      : lastRate_ - snap.hashrateHs;
+  const bool rateDirty = forceFull || rateDelta >= 1500.0f;
   const bool animDirty = forceFull || frame != lastAnim_;
 
   tft_.setTextDatum(TL_DATUM);

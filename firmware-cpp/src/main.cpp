@@ -56,16 +56,32 @@ extern "C" float cyd_last_bench_hs();
 
 static void updateHashrate() {
   // Must run from usbTask — Arduino loop() is starved by a high-prio USB task.
+  // Core-0 SW assist + USB/LCD share a core, so short windows swing ±100+ kH/s.
+  // Use ≥1.5s samples + EMA so LCD/Companion show a stable rate.
   if (!g_jobLoaded || !g_mining) {
-    g_hashrate = 0;
+    if (g_hashrate > 0.0f) {
+      g_hashrate *= 0.82f;
+      if (g_hashrate < 80.0f) g_hashrate = 0.0f;
+    }
     return;
   }
   uint32_t now = millis();
   uint32_t elapsed = now - g_windowStart;
-  if (elapsed < 400) return;
+  if (elapsed < 1500) return;
+  if (elapsed > 8000) {
+    // Window went stale (long pause) — restart without slamming the display to 0.
+    g_windowHashesStart = g_hashCounter.load(std::memory_order_relaxed);
+    g_windowStart = now;
+    return;
+  }
   uint64_t cur = g_hashCounter.load(std::memory_order_relaxed);
   uint64_t delta = cur - g_windowHashesStart;
-  g_hashrate = (float)delta * 1000.0f / (float)elapsed;
+  float instant = (float)delta * 1000.0f / (float)elapsed;
+  if (g_hashrate <= 1.0f) {
+    g_hashrate = instant;
+  } else {
+    g_hashrate = g_hashrate * 0.78f + instant * 0.22f;
+  }
   g_windowHashesStart = cur;
   g_windowStart = now;
 }
@@ -121,10 +137,10 @@ static void onJob(const UsbJob& job) {
   g_minerB.setJob(job.header, job.target, start ^ 0x80000000u);
   g_jobLoaded = true;
   g_mining = true;
-  // Reset rate window so the next status shows climbing H/s quickly.
+  // New job: restart the sample window but keep the last EMA so the LCD
+  // does not drop by 100+ kH/s on every stratum job switch.
   g_windowHashesStart = g_hashCounter.load(std::memory_order_relaxed);
   g_windowStart = millis();
-  g_hashrate = 0;
 }
 
 static void onStop() {
