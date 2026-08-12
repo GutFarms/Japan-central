@@ -470,6 +470,10 @@ struct CompanionApp {
     msg_rx: Receiver<NetMsg>,
     last_poll: Instant,
     pulse: f32,
+    /// 0..1 scroll phase for background grid (wraps exactly one line spacing).
+    grid_phase: f32,
+    /// 0..1 progress toward the next hashrate sample (smooths sparkline scroll).
+    history_phase: f32,
     displayed_khs: f32,
     hashrate_history: VecDeque<f32>,
     last_hash_sample: Instant,
@@ -568,6 +572,8 @@ impl CompanionApp {
             msg_rx,
             last_poll: Instant::now() - Duration::from_secs(10),
             pulse: 0.0,
+            grid_phase: 0.0,
+            history_phase: 0.0,
             displayed_khs: 0.0,
             hashrate_history: VecDeque::from(vec![0.0; HASH_HISTORY_SAMPLES]),
             last_hash_sample: Instant::now(),
@@ -655,13 +661,22 @@ impl CompanionApp {
     }
 
     fn update_motion(&mut self, ctx: &egui::Context) {
-        let dt = ctx.input(|i| i.unstable_dt).clamp(0.0, 0.12);
+        let dt = ctx.input(|i| i.unstable_dt).clamp(0.0, 0.05);
         let pace = if self.mining || self.board_hashing() {
             2.15
         } else {
             0.75
         };
-        self.pulse = (self.pulse + dt * pace) % std::f32::consts::TAU;
+        // Keep pulse continuous for sin()-based motion. Wrapping at τ made
+        // position drifts/sweeps hitch every loop.
+        self.pulse = (self.pulse + dt * pace).rem_euclid(std::f32::consts::TAU * 64.0);
+        // Grid wraps by exactly one spacing → seamless.
+        let grid_speed = if self.mining || self.board_hashing() {
+            0.22
+        } else {
+            0.08
+        };
+        self.grid_phase = (self.grid_phase + dt * grid_speed).rem_euclid(1.0);
 
         let target = self.board_khs();
         let alpha = 1.0 - (-dt * 7.5).exp();
@@ -670,12 +685,16 @@ impl CompanionApp {
             self.displayed_khs = 0.0;
         }
 
-        if self.last_hash_sample.elapsed() > Duration::from_millis(560) {
+        const SAMPLE_MS: f32 = 560.0;
+        let sample_elapsed = self.last_hash_sample.elapsed().as_secs_f32() * 1000.0;
+        self.history_phase = (sample_elapsed / SAMPLE_MS).clamp(0.0, 1.0);
+        if sample_elapsed >= SAMPLE_MS {
             self.hashrate_history.push_back(self.displayed_khs.max(0.0));
             while self.hashrate_history.len() > HASH_HISTORY_SAMPLES {
                 self.hashrate_history.pop_front();
             }
             self.last_hash_sample = Instant::now();
+            self.history_phase = 0.0;
         }
     }
 
@@ -1149,7 +1168,7 @@ impl CompanionApp {
                             .font(mono_ui_font(11.0)),
                         );
                         ui.add_space(10.0);
-                        sparkline(ui, &self.hashrate_history, self.pulse);
+                        sparkline(ui, &self.hashrate_history, self.pulse, self.history_phase);
                         ui.add_space(8.0);
                         hash_activity_bars(ui, self.displayed_khs, self.pulse, self.board_hashing());
                     });
@@ -2368,7 +2387,7 @@ impl App for CompanionApp {
         egui::CentralPanel::default()
             .frame(Frame::none().fill(C_BG).inner_margin(Margin::same(22.0)))
             .show(ctx, |ui| {
-                paint_background(ui, ui.max_rect(), self.pulse, self.mining || self.board_hashing());
+                paint_background(ui, ui.max_rect(), self.pulse, self.grid_phase, self.mining || self.board_hashing());
                 ui.horizontal(|ui| {
                     ui.vertical(|ui| {
                         ui.label(RichText::new("CYD").color(C_LIME).font(display_font(64.0)));
@@ -2421,7 +2440,8 @@ impl App for CompanionApp {
                     });
             });
 
-        ctx.request_repaint_after(Duration::from_millis(40));
+        // Keep animation continuous (~60 fps). 40 ms made looping motion feel stepped.
+        ctx.request_repaint_after(Duration::from_millis(16));
     }
 }
 
@@ -2511,7 +2531,7 @@ fn ui_live_bar(ui: &mut egui::Ui, live: &LiveFeed) {
     );
 }
 
-fn paint_background(ui: &mut egui::Ui, rect: Rect, pulse: f32, mining: bool) {
+fn paint_background(ui: &mut egui::Ui, rect: Rect, pulse: f32, grid_phase: f32, mining: bool) {
     let painter = ui.painter();
     let bands = 84;
     for i in 0..bands {
@@ -2542,8 +2562,9 @@ fn paint_background(ui: &mut egui::Ui, rect: Rect, pulse: f32, mining: bool) {
         rgba(C_LIME_SOFT, 18),
     );
 
+    // Drift wraps by exactly one line spacing — no hitch when phase resets.
     let step = 34.0;
-    let drift = (pulse * 18.0) % step;
+    let drift = grid_phase * step;
     let mut x = rect.left() - rect.height() + drift;
     while x < rect.right() + rect.height() {
         painter.line_segment(
@@ -2578,19 +2599,23 @@ fn paint_hero_wash(ui: &mut egui::Ui, rect: Rect, pulse: f32, mining: bool) {
         rgba(C_LIME_SOFT, if mining { 22 } else { 12 }),
     );
 
-    // Slow diagonal sweep — presence, not noise.
-    let sweep = (pulse * 0.12).fract();
+    // Slow diagonal sweep — fade at loop edges so the reset is invisible.
+    let sweep = (pulse * 0.12).rem_euclid(1.0);
+    let edge = loop_edge_fade(sweep, 0.14);
     let x = rect.left() + rect.width() * sweep;
-    painter.line_segment(
-        [
-            Pos2::new(x, rect.bottom() - 18.0),
-            Pos2::new(x + rect.height() * 0.55, rect.top() + 18.0),
-        ],
-        Stroke::new(
-            2.0_f32,
-            Color32::from_rgba_unmultiplied(198, 255, 64, if mining { 28 } else { 12 }),
-        ),
-    );
+    let sweep_a = ((if mining { 28.0 } else { 12.0 }) * edge) as u8;
+    if sweep_a > 0 {
+        painter.line_segment(
+            [
+                Pos2::new(x, rect.bottom() - 18.0),
+                Pos2::new(x + rect.height() * 0.55, rect.top() + 18.0),
+            ],
+            Stroke::new(
+                2.0_f32,
+                Color32::from_rgba_unmultiplied(198, 255, 64, sweep_a),
+            ),
+        );
+    }
 }
 
 fn hash_activity_bars(ui: &mut egui::Ui, khs: f32, pulse: f32, hashing: bool) {
@@ -2623,7 +2648,7 @@ fn hash_activity_bars(ui: &mut egui::Ui, khs: f32, pulse: f32, hashing: bool) {
     }
 }
 
-fn sparkline(ui: &mut egui::Ui, values: &VecDeque<f32>, pulse: f32) {
+fn sparkline(ui: &mut egui::Ui, values: &VecDeque<f32>, pulse: f32, history_phase: f32) {
     let desired = Vec2::new((ui.available_width() * 0.72).clamp(320.0, 620.0), 86.0);
     let (rect, _) = ui.allocate_exact_size(desired, Sense::hover());
     let painter = ui.painter_at(rect);
@@ -2654,32 +2679,56 @@ fn sparkline(ui: &mut egui::Ui, values: &VecDeque<f32>, pulse: f32) {
         .fold(1.0_f32, |acc, v| acc.max(v.max(0.0)));
     let inner = rect.shrink2(Vec2::new(16.0, 14.0));
     let len = values.len().max(2);
+    // Scroll smoothly between samples so the chart doesn't jump when a point drops off.
+    let dx = inner.width() / (len - 1) as f32;
+    let scroll = if values.len() >= HASH_HISTORY_SAMPLES {
+        history_phase.clamp(0.0, 1.0) * dx
+    } else {
+        0.0
+    };
     let points: Vec<Pos2> = values
         .iter()
         .enumerate()
         .map(|(i, v)| {
-            let x = inner.left() + inner.width() * i as f32 / (len - 1) as f32;
+            let x = inner.left() + dx * i as f32 - scroll;
             let y = inner.bottom() - inner.height() * (v.max(0.0) / max).clamp(0.0, 1.0);
             Pos2::new(x, y)
         })
+        .filter(|p| p.x >= inner.left() - 2.0 && p.x <= inner.right() + 2.0)
         .collect();
     for pair in points.windows(2) {
         painter.line_segment([pair[0], pair[1]], Stroke::new(6.0_f32, rgba(C_LIME, 22)));
         painter.line_segment([pair[0], pair[1]], Stroke::new(2.25_f32, C_LIME));
     }
 
-    let scan_t = (pulse * 0.16).fract();
+    let scan_t = (pulse * 0.16).rem_euclid(1.0);
+    let scan_fade = loop_edge_fade(scan_t, 0.12);
     let scan_x = inner.left() + inner.width() * scan_t;
-    painter.line_segment(
-        [Pos2::new(scan_x, inner.top()), Pos2::new(scan_x, inner.bottom())],
-        Stroke::new(
-            1.0_f32,
-            Color32::from_rgba_unmultiplied(198, 255, 64, 80),
-        ),
-    );
+    let scan_a = (80.0 * scan_fade) as u8;
+    if scan_a > 0 {
+        painter.line_segment(
+            [Pos2::new(scan_x, inner.top()), Pos2::new(scan_x, inner.bottom())],
+            Stroke::new(
+                1.0_f32,
+                Color32::from_rgba_unmultiplied(198, 255, 64, scan_a),
+            ),
+        );
+    }
     if let Some(last) = points.last() {
         painter.circle_filled(*last, 4.5, C_LIME);
         painter.circle_filled(*last, 10.0 + pulse.sin().max(0.0) * 4.0, rgba(C_LIME, 28));
+    }
+}
+
+/// Fade a 0..1 looping parameter near the wrap so teleports aren't visible.
+fn loop_edge_fade(t: f32, edge: f32) -> f32 {
+    let edge = edge.clamp(0.02, 0.45);
+    if t < edge {
+        (t / edge).clamp(0.0, 1.0)
+    } else if t > 1.0 - edge {
+        ((1.0 - t) / edge).clamp(0.0, 1.0)
+    } else {
+        1.0
     }
 }
 
