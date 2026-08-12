@@ -270,6 +270,7 @@ fn format_hashrate_parts(hs: f64) -> (String, &'static str) {
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Tab {
     Mine,
+    Settings,
     Debug,
 }
 
@@ -1112,51 +1113,111 @@ impl CompanionApp {
                                 self.start_mine();
                             }
                         }
-                        ui.add_space(8.0);
-                        if soft_button(ui, "Bench board", 210.0).clicked() {
-                            let _ = self.cmd_tx.send(NetCmd::Bench);
-                            self.push_log(LogKind::Usb, "Bench requested".into());
-                        }
-                        ui.add_space(8.0);
-                        let update_label = if self.update_busy {
-                            "Updating…"
-                        } else {
-                            "Update board"
-                        };
-                        if soft_button(ui, update_label, 210.0).clicked() && !self.update_busy {
-                            self.request_board_update();
-                        }
-                        ui.add_space(6.0);
-                        let fetch_label = if self.fetch_busy {
-                            "Fetching…"
-                        } else {
-                            "Fetch latest FW"
-                        };
-                        if soft_button(ui, fetch_label, 210.0).clicked() && !self.fetch_busy {
-                            self.start_firmware_fetch();
-                        }
-                        let (fw_status, fw_color) = self.firmware_status_label();
-                        ui.add_space(6.0);
-                        ui.label(
-                            RichText::new(fw_status)
-                                .color(fw_color)
-                                .font(mono_ui_font(10.0)),
-                        );
-                        if !self.update_status.is_empty() {
-                            ui.add_space(6.0);
-                            ui.label(
-                                RichText::new(&self.update_status)
-                                    .color(if self.update_busy || self.fetch_busy {
-                                        C_WARN
-                                    } else {
-                                        C_MUTED
-                                    })
-                                    .font(mono_ui_font(11.0)),
-                            );
-                        }
                     });
                 });
             });
+    }
+
+    fn ui_settings(&mut self, ui: &mut egui::Ui) {
+        soft_panel(ui, "Board tools", |ui| {
+            ui.label(
+                RichText::new("Bench, flash, and firmware fetch — kept off the Mine screen.")
+                    .color(C_MUTED)
+                    .size(13.0),
+            );
+            ui.add_space(12.0);
+            ui.horizontal_wrapped(|ui| {
+                if soft_button(ui, "Bench board", 160.0).clicked() {
+                    let _ = self.cmd_tx.send(NetCmd::Bench);
+                    self.push_log(LogKind::Usb, "Bench requested".into());
+                }
+                let update_label = if self.update_busy {
+                    "Updating…"
+                } else {
+                    "Update board"
+                };
+                if soft_button(ui, update_label, 160.0).clicked() && !self.update_busy {
+                    self.request_board_update();
+                }
+                let fetch_label = if self.fetch_busy {
+                    "Fetching…"
+                } else {
+                    "Fetch latest FW"
+                };
+                if soft_button(ui, fetch_label, 160.0).clicked() && !self.fetch_busy {
+                    self.start_firmware_fetch();
+                }
+            });
+            ui.add_space(10.0);
+            let (fw_status, fw_color) = self.firmware_status_label();
+            ui.label(
+                RichText::new(fw_status)
+                    .color(fw_color)
+                    .font(mono_ui_font(11.0)),
+            );
+            if !self.update_status.is_empty() {
+                ui.add_space(6.0);
+                ui.label(
+                    RichText::new(&self.update_status)
+                        .color(if self.update_busy || self.fetch_busy {
+                            C_WARN
+                        } else {
+                            C_MUTED
+                        })
+                        .font(mono_ui_font(11.0)),
+                );
+            }
+            if let Some(fw) = &self.firmware {
+                ui.add_space(8.0);
+                ui.label(
+                    RichText::new(format!(
+                        "Bundled · {} · {} KB",
+                        if fw.version.is_empty() {
+                            "unknown"
+                        } else {
+                            &fw.version
+                        },
+                        fw.bytes / 1024
+                    ))
+                    .color(C_DIM)
+                    .font(mono_ui_font(10.0)),
+                );
+                ui.label(
+                    RichText::new(fw.path.display().to_string())
+                        .color(C_DIM)
+                        .font(mono_ui_font(10.0)),
+                );
+            }
+            ui.add_space(8.0);
+            ui.label(
+                RichText::new(format!(
+                    "Port · {}  ·  board fw {}",
+                    if self.com_port.is_empty() {
+                        "—"
+                    } else {
+                        &self.com_port
+                    },
+                    if self.fw_label.is_empty() {
+                        "—"
+                    } else {
+                        &self.fw_label
+                    }
+                ))
+                .color(C_MUTED)
+                .font(mono_ui_font(11.0)),
+            );
+        });
+
+        ui.add_space(14.0);
+        soft_panel(ui, "Preferences", |ui| {
+            ui.checkbox(&mut self.auto_connect, "Auto-connect USB on launch");
+            ui.add_space(8.0);
+            ui.label(
+                RichText::new("Tip: hold BOOT, tap RESET, release BOOT if Update board fails.")
+                    .color(C_DIM)
+                    .size(12.0),
+            );
+        });
     }
 
     fn ui_connection_controls(&mut self, ui: &mut egui::Ui) {
@@ -1200,9 +1261,6 @@ impl CompanionApp {
                     }
                 }
             });
-            ui.add_space(6.0);
-            ui.checkbox(&mut self.auto_connect, "Auto-connect USB on launch");
-
             ui.add_space(16.0);
             ui.label(
                 RichText::new("POOL")
@@ -2025,6 +2083,9 @@ impl App for CompanionApp {
                     if nav_button(ui, "Mine", self.tab == Tab::Mine).clicked() {
                         self.tab = Tab::Mine;
                     }
+                    if nav_button(ui, "Settings", self.tab == Tab::Settings).clicked() {
+                        self.tab = Tab::Settings;
+                    }
                     if nav_button(ui, "Debug / Terminal", self.tab == Tab::Debug).clicked() {
                         self.tab = Tab::Debug;
                     }
@@ -2054,6 +2115,7 @@ impl App for CompanionApp {
                         ui.set_min_width(ui.available_width());
                         match self.tab {
                             Tab::Mine => self.ui_mine(ui),
+                            Tab::Settings => self.ui_settings(ui),
                             Tab::Debug => self.ui_debug(ui),
                         }
                         ui.add_space(28.0);
