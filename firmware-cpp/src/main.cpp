@@ -227,43 +227,40 @@ static void mineTaskA(void*) {
       continue;
     }
     if (g_hwSha) {
-      // Big IRAM batches; yield only every few batches to keep the WDT happy.
+      // Big IRAM batches; must *delay* (not just YIELD) so core-1 idle feeds TWDT.
       mineLane(g_minerA, 1, 32768);
       if ((++loops & 3u) == 0u) {
-        taskYIELD();
+        vTaskDelay(1);
         esp_task_wdt_reset();
       }
     } else {
       mineLane(g_minerA, 2, 4096);
-      taskYIELD();
+      vTaskDelay(1);
       esp_task_wdt_reset();
     }
   }
 }
 
 // Core-0 SW assist — dedicated task so LCD/Arduino loop cannot starve hashing.
+// IMPORTANT: vTaskDelay is required. taskYIELD() never runs idle (prio 0), so a
+// busy mineB starves the task WDT and the board reboots → start/stop loop.
 static void mineTaskB(void*) {
-  uint32_t loops = 0;
   for (;;) {
     if (!g_mining || !g_jobLoaded) {
       vTaskDelay(pdMS_TO_TICKS(2));
       continue;
     }
-    // Larger batches than the old loop()-inline assist.
-    mineLane(g_minerB, 1, g_hwSha ? 2048 : 1024);
-    if ((++loops & 7u) == 0u) {
-      taskYIELD();  // Let USB (higher prio) run.
-      esp_task_wdt_reset();
-    }
+    mineLane(g_minerB, 1, g_hwSha ? 1024 : 512);
+    vTaskDelay(1);
+    esp_task_wdt_reset();
   }
 }
 
-// USB only — keep snappy for jobs/shares without burning core 0 on idle wakes.
+// USB — snappy for jobs/shares; delay so mineB + idle can run.
 static void usbTask(void*) {
   for (;;) {
     serviceCompanion();
-    // 10ms when quiet → more time for mineTaskB; still fine for 115200 cmp.
-    vTaskDelay(pdMS_TO_TICKS(Serial.available() > 0 ? 2 : 10));
+    vTaskDelay(pdMS_TO_TICKS(Serial.available() > 0 ? 2 : 5));
     esp_task_wdt_reset();
   }
 }

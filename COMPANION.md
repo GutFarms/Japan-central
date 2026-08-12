@@ -48,6 +48,7 @@ See [`flash/downloads/README.md`](flash/downloads/README.md) for checksums.
 - Custom **API feeds** (Settings) to pull external HTTPS data into the app
 - Stable board hashrate (EMA + longer sample window; no zero-on-job flicker)
 - **Hash-focus firmware** — strip LCD animations/ticker, one-time HW calibrate, dedicated core-0 mine task, lean USB
+- **0.8.17** — fix start/stop reboot loop (mine task must `vTaskDelay` so the watchdog idle task can run)
 
 ## Recommended pool (ESP32-friendly)
 
