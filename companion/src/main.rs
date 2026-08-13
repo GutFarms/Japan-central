@@ -60,7 +60,7 @@ fn main() -> eframe::Result<()> {
     let options = NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_inner_size([1200.0, 820.0])
-            .with_min_inner_size([1020.0, 700.0])
+            .with_min_inner_size([640.0, 480.0])
             .with_title(format!(
                 "Njörðr seas CYD miner {}",
                 env!("CARGO_PKG_VERSION")
@@ -1982,10 +1982,40 @@ impl CompanionApp {
             .show(ui, |ui| {
                 let rect = ui.max_rect();
                 paint_hero_wash(ui, rect, self.pulse, self.mining || self.board_hashing());
-                ui.set_min_height(278.0);
+                ui.set_min_height(if ui.available_width() < 720.0 {
+                    220.0
+                } else {
+                    278.0
+                });
+                let narrow_hero = ui.available_width() < 720.0;
+                if narrow_hero {
+                    ui.vertical(|ui| {
+                        ui.set_width(ui.available_width());
+                        brand_logo(ui, 96.0);
+                        ui.add_space(10.0);
+                        ui.label(
+                            RichText::new("Njörðr Seas'")
+                                .color(C_LIME)
+                                .font(display_font(28.0)),
+                        );
+                        ui.label(
+                            RichText::new(
+                                "CYD D0 miner · USB/Wi‑Fi SHA-256 · Bench auto-picks best path",
+                            )
+                            .color(C_TEXT)
+                            .font(display_font(14.0)),
+                        );
+                    });
+                }
                 ui.horizontal(|ui| {
                     ui.vertical(|ui| {
-                        ui.set_min_width((ui.available_width() * 0.58).clamp(420.0, 720.0));
+                        let col_w = if narrow_hero {
+                            ui.available_width()
+                        } else {
+                            (ui.available_width() * 0.58).clamp(280.0, 720.0)
+                        };
+                        ui.set_min_width(col_w);
+                        if !narrow_hero {
                         ui.horizontal(|ui| {
                             brand_logo(ui, 168.0);
                             ui.add_space(14.0);
@@ -2002,6 +2032,7 @@ impl CompanionApp {
                                 );
                             });
                         });
+                        }
                         ui.add_space(6.0);
                         ui.label(
                             RichText::new(if self.mining && self.usb_open {
@@ -2072,7 +2103,57 @@ impl CompanionApp {
                         hash_activity_bars(ui, self.displayed_khs, self.pulse, self.board_hashing());
                     });
 
-                    ui.add_space(12.0);
+                    if !narrow_hero {
+                        ui.add_space(12.0);
+                    }
+                    if narrow_hero {
+                        ui.add_space(12.0);
+                        ui.horizontal_wrapped(|ui| {
+                            let (pool_label, pool_color) = self.pool_state();
+                            ui.label(
+                                RichText::new(format!(
+                                    "USB {} · POOL {}",
+                                    if self.usb_open { "LINKED" } else { "IDLE" },
+                                    pool_label
+                                ))
+                                .color(pool_color)
+                                .font(mono_ui_font(12.0)),
+                            );
+                        });
+                        ui.add_space(8.0);
+                        ui.horizontal_wrapped(|ui| {
+                            let usb_label = if self.usb_open {
+                                "Disconnect USB"
+                            } else {
+                                "Connect USB"
+                            };
+                            if cta_button(ui, usb_label, !self.usb_open, 168.0).clicked() {
+                                if self.usb_open {
+                                    let _ = self.cmd_tx.send(NetCmd::CloseUsb);
+                                    self.usb_open = false;
+                                    self.mining = false;
+                                    self.session_started = None;
+                                    self.connected_workers.clear();
+                                    self.clear_hash_display();
+                                    self.push_log(LogKind::Usb, "Disconnect requested".into());
+                                } else {
+                                    self.connect_or_add_usb();
+                                }
+                            }
+                            let mine_label = if self.mining {
+                                "Stop mining"
+                            } else {
+                                "Start mining"
+                            };
+                            if cta_button(ui, mine_label, !self.mining, 168.0).clicked() {
+                                if self.mining {
+                                    self.stop_mine();
+                                } else {
+                                    self.start_mine();
+                                }
+                            }
+                        });
+                    } else {
                     ui.with_layout(Layout::top_down(Align::Center), |ui| {
                         let (pool_label, pool_color) = self.pool_state();
                         ui.label(
@@ -2117,6 +2198,7 @@ impl CompanionApp {
                             }
                         }
                     });
+                    }
                 });
             });
     }
@@ -3349,6 +3431,104 @@ impl CompanionApp {
         ui.add_space(12.0);
         self.ui_logs_panel(ui);
     }
+
+    /// Top chrome: brand + tabs + status. Wraps on narrow windows so tabs never overlap.
+    fn ui_app_nav(&mut self, ui: &mut egui::Ui) {
+        let wide = ui.available_width() >= 760.0;
+        let (pool, pool_color) = self.pool_state();
+        let usb_label = if self.usb_open { "USB LINKED" } else { "USB IDLE" };
+        let usb_color = if self.usb_open { C_LIME } else { C_MUTED };
+
+        if wide {
+            ui.horizontal(|ui| {
+                brand_logo(ui, 40.0);
+                ui.add_space(8.0);
+                ui.vertical(|ui| {
+                    ui.label(
+                        RichText::new("Njörðr seas CYD miner")
+                            .color(C_MUTED)
+                            .font(mono_ui_font(12.0)),
+                    );
+                    if !self.board_mac.is_empty() {
+                        ui.label(
+                            RichText::new(format!("board {}", self.board_mac))
+                                .color(C_DIM)
+                                .font(mono_ui_font(10.0)),
+                        );
+                    }
+                });
+                ui.add_space(18.0);
+                if nav_button(ui, "Mine", self.tab == Tab::Mine).clicked() {
+                    self.tab = Tab::Mine;
+                }
+                ui.add_space(6.0);
+                if nav_button(ui, "Settings", self.tab == Tab::Settings).clicked() {
+                    self.tab = Tab::Settings;
+                }
+                ui.add_space(10.0);
+                if !self.fw_label.is_empty() {
+                    ui.label(
+                        RichText::new(format!("fw {}", self.fw_label))
+                            .color(C_DIM)
+                            .font(mono_ui_font(11.0)),
+                    );
+                }
+                let rest = ui.available_width();
+                if rest > 8.0 {
+                    ui.allocate_ui_with_layout(
+                        Vec2::new(rest, 40.0),
+                        Layout::right_to_left(Align::Center),
+                        |ui| {
+                            status_chip(ui, pool, pool_color);
+                            ui.add_space(6.0);
+                            status_chip(ui, usb_label, usb_color);
+                        },
+                    );
+                }
+            });
+        } else {
+            // Compact: brand + chips on first row, tabs on second — never overlap.
+            ui.horizontal(|ui| {
+                brand_logo(ui, 32.0);
+                ui.add_space(8.0);
+                ui.vertical(|ui| {
+                    ui.label(
+                        RichText::new("Njörðr seas")
+                            .color(C_MUTED)
+                            .font(mono_ui_font(11.0)),
+                    );
+                    if !self.fw_label.is_empty() {
+                        ui.label(
+                            RichText::new(format!("fw {}", trunc(&self.fw_label, 18)))
+                                .color(C_DIM)
+                                .font(mono_ui_font(10.0)),
+                        );
+                    }
+                });
+                let rest = ui.available_width();
+                if rest > 8.0 {
+                    ui.allocate_ui_with_layout(
+                        Vec2::new(rest, 36.0),
+                        Layout::right_to_left(Align::Center),
+                        |ui| {
+                            status_chip(ui, pool, pool_color);
+                            ui.add_space(4.0);
+                            status_chip(ui, usb_label, usb_color);
+                        },
+                    );
+                }
+            });
+            ui.add_space(6.0);
+            ui.horizontal_wrapped(|ui| {
+                if nav_button(ui, "Mine", self.tab == Tab::Mine).clicked() {
+                    self.tab = Tab::Mine;
+                }
+                if nav_button(ui, "Settings", self.tab == Tab::Settings).clicked() {
+                    self.tab = Tab::Settings;
+                }
+            });
+        }
+    }
 }
 
 impl App for CompanionApp {
@@ -4200,64 +4380,37 @@ impl App for CompanionApp {
         }
 
         egui::TopBottomPanel::top("live_ticker_bar")
-            .exact_height(36.0)
+            .exact_height(if ctx.available_rect().width() < 820.0 {
+                64.0
+            } else {
+                36.0
+            })
             .frame(
                 Frame::none()
                     .fill(Color32::from_rgb(3, 14, 28))
                     .stroke(Stroke::new(1.0_f32, Color32::from_rgb(28, 64, 98)))
-                    .inner_margin(Margin::symmetric(16.0, 0.0)),
+                    .inner_margin(Margin::symmetric(12.0, 4.0)),
             )
             .show(ctx, |ui| {
                 ui_live_bar(ui, &self.live, &mut self.header_coins);
             });
 
+        egui::TopBottomPanel::top("app_nav_bar")
+            .resizable(false)
+            .show_separator_line(false)
+            .frame(
+                Frame::none()
+                    .fill(C_BG)
+                    .inner_margin(Margin::symmetric(16.0, 10.0)),
+            )
+            .show(ctx, |ui| {
+                self.ui_app_nav(ui);
+            });
+
         egui::CentralPanel::default()
-            .frame(Frame::none().fill(C_BG).inner_margin(Margin::same(22.0)))
+            .frame(Frame::none().fill(C_BG).inner_margin(Margin::symmetric(16.0, 8.0)))
             .show(ctx, |ui| {
                 paint_background(ui, ui.max_rect(), self.pulse, self.grid_phase, self.mining || self.board_hashing());
-                ui.horizontal(|ui| {
-                    ui.horizontal(|ui| {
-                        brand_logo(ui, 48.0);
-                        ui.add_space(10.0);
-                        ui.vertical(|ui| {
-                            ui.label(
-                                RichText::new("Njörðr seas CYD miner")
-                                    .color(C_MUTED)
-                                    .font(mono_ui_font(12.0)),
-                            );
-                            if !self.board_mac.is_empty() {
-                                ui.label(
-                                    RichText::new(format!("board {}", self.board_mac))
-                                        .color(C_DIM)
-                                        .font(mono_ui_font(10.0)),
-                                );
-                            }
-                        });
-                    });
-                    ui.add_space(24.0);
-                    if nav_button(ui, "Mine", self.tab == Tab::Mine).clicked() {
-                        self.tab = Tab::Mine;
-                    }
-                    if nav_button(ui, "Settings", self.tab == Tab::Settings).clicked() {
-                        self.tab = Tab::Settings;
-                    }
-                    // Debug / Terminal tab hidden — keep Tab::Debug for persistence compat.
-                    ui.label(
-                        RichText::new(format!("fw {}", self.fw_label))
-                            .color(C_DIM)
-                            .font(mono_ui_font(11.0)),
-                    );
-                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                        let (pool, color) = self.pool_state();
-                        status_chip(ui, pool, color);
-                        status_chip(
-                            ui,
-                            if self.usb_open { "USB LINKED" } else { "USB IDLE" },
-                            if self.usb_open { C_LIME } else { C_MUTED },
-                        );
-                    });
-                });
-                ui.add_space(14.0);
 
                 // Outer scroll so Mine/Settings content is fully reachable on short screens.
                 ScrollArea::vertical()
@@ -4330,10 +4483,8 @@ fn parse_flash_percent(line: &str) -> Option<f32> {
 
 fn ui_live_bar(ui: &mut egui::Ui, live: &LiveFeed, header_coins: &mut Vec<String>) {
     let snap = live.snap();
-    ui.allocate_ui_with_layout(
-        Vec2::new(ui.available_width(), ui.available_height()),
-        Layout::left_to_right(Align::Center),
-        |ui| {
+    // Wrap on narrow windows so the ticker never overlaps the nav tabs below.
+    ui.horizontal_wrapped(|ui| {
             // Local place / weather / clock (IP-derived)
             ui.label(
                 RichText::new(live.place_label())
@@ -4465,8 +4616,7 @@ fn ui_live_bar(ui: &mut egui::Ui, live: &LiveFeed, header_coins: &mut Vec<String
                     });
                 }
             }
-        },
-    );
+    });
 }
 
 fn paint_background(ui: &mut egui::Ui, rect: Rect, pulse: f32, grid_phase: f32, mining: bool) {
