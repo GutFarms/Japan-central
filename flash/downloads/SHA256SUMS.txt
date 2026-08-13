@@ -1,4 +1,4 @@
-# Njörðr Seas' CYD miner 0.8.70 — verify with: sha256sum -c SHA256SUMS.txt
+# Njörðr Seas' CYD miner 0.8.71 — verify with: sha256sum -c SHA256SUMS.txt
 # Firmware images
 352dd7910a2a7f6eeaf274904b7145e8adfd05285c90ed2050f05ef8953daba4  esp32-2432s028-sha256-miner.bin
 4cfd51b7fad41dd629e0ebcae8781e27ce1380029ce94dcc96b1b9ea6d765cc7  esp32-2432s028-sha256-miner-merged.bin

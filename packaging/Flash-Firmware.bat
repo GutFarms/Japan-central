@@ -38,25 +38,24 @@ echo Using port %PORT%
 
 if exist "%ESPFLASH%" (
   echo.
-  echo Trying: Tools\espflash.exe write-bin @ 115200 ...
-  "%ESPFLASH%" --skip-update-check write-bin -p %PORT% -B 115200 -c esp32 --non-interactive --before default-reset 0x0 "%FW%"
-  if %ERRORLEVEL%==0 (
-    "%ESPFLASH%" --skip-update-check reset -p %PORT% -c esp32 --non-interactive --no-stub >nul 2>nul
-    goto DONE
-  )
+  echo Trying: Tools\espflash.exe write-bin @ 460800 ...
+  REM stdin closed via ^<nul — espflash can hang after printing MAC if it waits on a prompt.
+  "%ESPFLASH%" --skip-update-check write-bin -p %PORT% -B 460800 -c esp32 --non-interactive --before default-reset --after hard-reset 0x0 "%FW%" <nul
+  if %ERRORLEVEL%==0 goto DONE
+  echo.
+  echo Trying: write-bin @ 115200 ...
+  "%ESPFLASH%" --skip-update-check write-bin -p %PORT% -B 115200 -c esp32 --non-interactive --before default-reset --after hard-reset 0x0 "%FW%" <nul
+  if %ERRORLEVEL%==0 goto DONE
   echo.
   echo Auto-reset write failed — hold BOOT, tap RESET, release BOOT, then press a key.
   pause >nul
-  "%ESPFLASH%" --skip-update-check write-bin -p %PORT% -B 115200 -c esp32 --non-interactive --before no-reset 0x0 "%FW%"
-  if %ERRORLEVEL%==0 (
-    "%ESPFLASH%" --skip-update-check reset -p %PORT% -c esp32 --non-interactive --no-stub >nul 2>nul
-    goto DONE
-  )
+  "%ESPFLASH%" --skip-update-check write-bin -p %PORT% -B 115200 -c esp32 --non-interactive --before no-reset --after hard-reset 0x0 "%FW%" <nul
+  if %ERRORLEVEL%==0 goto DONE
   echo.
   echo espflash write failed. Trying erase + write...
-  "%ESPFLASH%" --skip-update-check erase-flash -p %PORT% -B 115200 -c esp32 --non-interactive --after hard-reset
+  "%ESPFLASH%" --skip-update-check erase-flash -p %PORT% -B 115200 -c esp32 --non-interactive --after hard-reset <nul
   timeout /t 2 /nobreak >nul
-  "%ESPFLASH%" --skip-update-check write-bin -p %PORT% -B 115200 -c esp32 --non-interactive --before default-reset 0x0 "%FW%"
+  "%ESPFLASH%" --skip-update-check write-bin -p %PORT% -B 115200 -c esp32 --non-interactive --before default-reset --after hard-reset 0x0 "%FW%" <nul
   if %ERRORLEVEL%==0 goto DONE
   echo espflash failed — will try Python esptool if available.
 )

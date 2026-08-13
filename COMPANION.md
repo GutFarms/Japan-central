@@ -59,6 +59,7 @@ In **Settings**:
 - **0.8.22** — fix Windows self-update bat (retry while `.new` remains; do not relaunch a locked old exe)
 - **0.8.23** — fetch updates via GitHub API / commit-pinned raw (branch raw CDN can serve stale VERSION/bins)
 - **0.8.24** — fix Update board: espflash reject `ESPFLASH_SKIP_UPDATE_CHECK=1` (needs true/false); skip Windows Store python stubs
+- **0.8.71** — Fix flash hang after chip MAC: close stdin, idle abort, taskkill tree, Cancel kills espflash
 - **0.8.70** — Post-flash USB verify; redesigned setup wizard with brand icon; Setup + Desktop icons
 - **0.8.69** — Flash timeouts: kill stuck espflash/esptool; Update board UI watchdog + Cancel
 - **0.8.68** — Header prices: LTC + coin dropdown (BTC/LTC/ETH/SOL/BNB/XRP/DOGE/ADA/XMR/BCH)

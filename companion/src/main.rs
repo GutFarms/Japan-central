@@ -14,6 +14,7 @@ mod workers;
 use std::collections::VecDeque;
 use std::io::{Read, Write};
 use std::net::TcpStream;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::Arc;
 use std::thread;
@@ -528,6 +529,8 @@ enum NetCmd {
         port: String,
         image: String,
         reopen: bool,
+        /// Set by UI Cancel — flash runner aborts and kills espflash.
+        cancel: Arc<AtomicBool>,
     },
     /// Push live ticker text to the ESP LCD.
     PushNet {
@@ -593,6 +596,8 @@ struct CompanionApp {
     update_busy: bool,
     /// When Update board started — UI watchdog clears spinner if flash never finishes.
     update_busy_since: Option<Instant>,
+    /// Shared cancel flag for the in-flight flash tool.
+    flash_cancel: Option<Arc<AtomicBool>>,
     /// Manual / UI "Bench boards" in flight (mine-worker retune).
     bench_busy: bool,
     update_status: String,
@@ -783,6 +788,7 @@ impl CompanionApp {
             post_flash_verify: None,
             update_busy: false,
             update_busy_since: None,
+            flash_cancel: None,
             bench_busy: false,
             update_status: String::new(),
             auto_connect,
@@ -1683,6 +1689,8 @@ impl CompanionApp {
             .unwrap_or_default();
         self.update_busy = true;
         self.update_busy_since = Some(Instant::now());
+        let cancel = Arc::new(AtomicBool::new(false));
+        self.flash_cancel = Some(cancel.clone());
         self.pending_post_flash_reconnect = None;
         self.post_flash_verify = None;
         self.update_status = format!("Flashing board via {port}…");
@@ -1704,6 +1712,7 @@ impl CompanionApp {
             image,
             // Always reconnect after a successful flash.
             reopen: true,
+            cancel,
         });
     }
 
@@ -1712,6 +1721,9 @@ impl CompanionApp {
         self.update_busy_since = None;
         self.pending_post_flash_reconnect = None;
         self.post_flash_verify = None;
+        if let Some(c) = self.flash_cancel.take() {
+            c.store(true, Ordering::SeqCst);
+        }
     }
 
     fn schedule_post_flash_reconnect(&mut self, port: String, delay: Duration) {
@@ -3724,9 +3736,9 @@ impl App for CompanionApp {
         if self.update_busy || self.fetch_busy || self.app_update_busy || self.bench_busy {
             ctx.request_repaint();
         }
-        // UI watchdog: flash (~180s) + verify (~90s). Unlock if FlashDone/verify never finishes.
+        // UI watchdog: flash (~160s) + verify. Unlock if FlashDone/verify never finishes.
         if self.update_busy {
-            let flash_cap = Duration::from_secs(210);
+            let flash_cap = Duration::from_secs(200);
             let verify_overdue = self
                 .post_flash_verify
                 .as_ref()
@@ -4071,9 +4083,12 @@ impl App for CompanionApp {
                         );
                         ui.add_space(8.0);
                         if soft_button(ui, "Cancel", 120.0).clicked() {
+                            if let Some(c) = &self.flash_cancel {
+                                c.store(true, Ordering::SeqCst);
+                            }
                             self.clear_flash_overlay();
                             self.update_status =
-                                "Board update cancelled (flash tool may still exit shortly)."
+                                "Board update cancelled — killing flash tool if stuck…"
                                     .into();
                             self.push_log(LogKind::Usb, self.update_status.clone());
                         }
@@ -6042,6 +6057,7 @@ fn mine_worker(cmd_rx: Receiver<NetCmd>, msg_tx: Sender<NetMsg>) {
                     port,
                     image,
                     reopen,
+                    cancel,
                 } => {
                     mining = false;
                     if let Some(mut s) = stratum.take() {
@@ -6058,45 +6074,50 @@ fn mine_worker(cmd_rx: Receiver<NetCmd>, msg_tx: Sender<NetMsg>) {
                         LogKind::Usb,
                         "USB released — waiting for COM port…",
                     );
-                    thread::sleep(Duration::from_millis(2200));
+                    thread::sleep(Duration::from_millis(1800));
 
+                    // Run flash off the mine-worker so Cancel / port list keep working.
                     let progress_tx = msg_tx.clone();
-                    let progress = move |line: String| {
-                        let _ = progress_tx.send(NetMsg::FlashProgress(line));
-                    };
-
-                    let result = (|| {
-                        let img = {
-                            let local = std::path::PathBuf::from(&image);
-                            if !image.is_empty() && local.is_file() {
-                                let bytes =
-                                    std::fs::metadata(&local).map(|m| m.len()).unwrap_or(0);
-                                let version = flash_update::read_nearby_fw_version(&local);
-                                FirmwareImage {
-                                    path: local,
-                                    bytes,
-                                    version,
-                                }
-                            } else {
-                                ensure_firmware_image(&progress)?
-                            }
+                    let done_tx = msg_tx.clone();
+                    thread::spawn(move || {
+                        let progress = move |line: String| {
+                            let _ = progress_tx.send(NetMsg::FlashProgress(line));
                         };
-                        let _ = msg_tx.send(NetMsg::FirmwareFetched(Ok(img.clone())));
-                        flash_merged_bin(&port, &img.path, &progress)?;
-                        Ok(format!(
-                            "Firmware {} flashed on {port}",
-                            if img.version.is_empty() {
-                                "image".into()
-                            } else {
-                                img.version
+                        let result = (|| {
+                            if cancel.load(Ordering::SeqCst) {
+                                return Err("flash cancelled".into());
                             }
-                        ))
-                    })();
-
-                    let reopen_port = if reopen { Some(port) } else { None };
-                    let _ = msg_tx.send(NetMsg::FlashDone {
-                        result,
-                        reopen: reopen_port,
+                            let img = {
+                                let local = std::path::PathBuf::from(&image);
+                                if !image.is_empty() && local.is_file() {
+                                    let bytes =
+                                        std::fs::metadata(&local).map(|m| m.len()).unwrap_or(0);
+                                    let version = flash_update::read_nearby_fw_version(&local);
+                                    FirmwareImage {
+                                        path: local,
+                                        bytes,
+                                        version,
+                                    }
+                                } else {
+                                    ensure_firmware_image(&progress)?
+                                }
+                            };
+                            let _ = done_tx.send(NetMsg::FirmwareFetched(Ok(img.clone())));
+                            flash_merged_bin(&port, &img.path, &progress, Some(&cancel))?;
+                            Ok(format!(
+                                "Firmware {} flashed on {port}",
+                                if img.version.is_empty() {
+                                    "image".into()
+                                } else {
+                                    img.version
+                                }
+                            ))
+                        })();
+                        let reopen_port = if reopen { Some(port) } else { None };
+                        let _ = done_tx.send(NetMsg::FlashDone {
+                            result,
+                            reopen: reopen_port,
+                        });
                     });
                 }
                 NetCmd::PushNet { text } => {
