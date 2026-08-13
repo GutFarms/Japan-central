@@ -338,7 +338,7 @@ fn extract_merged_from_zip(
     })
 }
 
-pub const COMPANION_UA: &str = "CYD-Companion/0.8.31";
+pub const COMPANION_UA: &str = "CYD-Companion/0.8.32";
 const ESPFLASH_VERSION: &str = "4.5.0";
 pub const REPO_OWNER: &str = "GutFarms";
 pub const REPO_NAME: &str = "Japan-central";

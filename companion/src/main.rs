@@ -1182,7 +1182,8 @@ impl CompanionApp {
         ui.add_space(16.0);
         self.ui_api_feeds_mine(ui);
         self.ui_stratum_panel(ui);
-        // Event log / Debug terminal UIs are hidden (0.8.31+).
+        ui.add_space(12.0);
+        self.ui_logs_panel(ui);
     }
 
     fn ui_mining_hero(&mut self, ui: &mut egui::Ui) {
@@ -2036,7 +2037,6 @@ impl CompanionApp {
         });
     }
 
-    #[allow(dead_code)]
     fn ui_logs_panel(&mut self, ui: &mut egui::Ui) {
         soft_panel(ui, "Event log", |ui| {
             ui.horizontal(|ui| {
