@@ -118,6 +118,12 @@ cp -f dist/cyd-companion-windows/cyd-companion.exe /opt/cursor/artifacts/ 2>/dev
 # Tracked flasher so Update board can auto-download espflash.exe from the repo.
 cp -f "$ESPFLASH_EXE" flash/downloads/espflash.exe
 cp -f "$ESPFLASH_EXE" /opt/cursor/artifacts/ 2>/dev/null || true
+# Keep raw firmware fetch URLs in sync (Fetch latest FW / ensure_firmware).
+cp -f "$MERGED" flash/downloads/esp32-2432s028-sha256-miner-merged.bin
+cp -f "$ROOT/flash/esp32-2432s028-sha256-miner.bin" flash/downloads/ 2>/dev/null || true
+cp -f "$SUMS" flash/downloads/SHA256SUMS.txt
+echo "${VER}-sha256" > flash/downloads/VERSION.txt
+echo "${VER}-sha256" > "$ROOT/flash/VERSION.txt"
 if [[ -f "$SETUP_EXE" ]]; then
   cp -f "$SETUP_EXE" dist/CYD-Companion-Setup.exe /opt/cursor/artifacts/
   cp -f "$SETUP_EXE" dist/CYD-Companion-Setup.exe flash/downloads/ 2>/dev/null || true

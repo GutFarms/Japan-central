@@ -7,7 +7,7 @@ use std::process::{Command, Stdio};
 
 use crate::flash_update::normalize_fw_version;
 
-const COMPANION_UA: &str = "CYD-Companion/0.8.21";
+const COMPANION_UA: &str = "CYD-Companion/0.8.22";
 const REFS: &[&str] = &[
     "cursor/esp32-cyd-cpp-firmware-e801",
     "master",
@@ -155,8 +155,8 @@ fn parse_version_text(txt: &str) -> Option<String> {
 pub fn check_app_update(progress: &dyn Fn(String)) -> Result<AppRemoteInfo, String> {
     let local = running_version();
     let mut last = String::new();
+    progress(format!("Checking for Companion updates (running {local})…"));
     for url in version_urls() {
-        progress(format!("Checking {url}"));
         match http_get_text(&url) {
             Ok(txt) => {
                 if let Some(remote) = parse_version_text(&txt) {
@@ -177,6 +177,32 @@ pub fn check_app_update(progress: &dyn Fn(String)) -> Result<AppRemoteInfo, Stri
         }
     }
     Err(format!("Could not check for app updates ({last})"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn version_compare_numeric() {
+        assert!(is_newer("0.8.22", "0.8.21"));
+        assert!(!is_newer("0.8.21", "0.8.21"));
+        assert!(!is_newer("0.8.21-sha256", "0.8.21"));
+        assert!(!is_newer("0.8.3", "0.8.21"));
+        assert!(is_newer("v0.9.0", "0.8.21"));
+    }
+
+    #[test]
+    fn parse_version_lines() {
+        assert_eq!(
+            parse_version_text("0.8.22-sha256\n").as_deref(),
+            Some("0.8.22")
+        );
+        assert_eq!(
+            parse_version_text("# comment\nfw: 0.8.22-sha256\n").as_deref(),
+            Some("0.8.22")
+        );
+    }
 }
 
 fn install_dir() -> Result<PathBuf, String> {
@@ -258,17 +284,31 @@ fn schedule_windows_replace_and_restart(install: &Path) -> Result<(), String> {
     let exe_name = "cyd-companion.exe";
     let new_name = "cyd-companion.exe.new";
     let bat_path = install.join("cyd-companion-update.bat");
+    // Retry while .new still exists (move failed because the old exe is locked).
+    // The previous "if not exist exe" check was wrong: a failed move leaves the
+    // old exe in place, so the bat would start the stale build immediately.
     let bat = format!(
         "@echo off\r\n\
          setlocal\r\n\
          cd /d \"{dir}\"\r\n\
          echo Updating CYD Companion…\r\n\
          timeout /t 2 /nobreak >nul\r\n\
+         set /a tries=0\r\n\
          :retry\r\n\
+         set /a tries+=1\r\n\
+         if exist \"{exe}\" del /f /q \"{exe}\" >nul 2>nul\r\n\
          move /y \"{new}\" \"{exe}\" >nul 2>nul\r\n\
-         if not exist \"{exe}\" (\r\n\
+         if exist \"{new}\" (\r\n\
+           if %tries% geq 40 (\r\n\
+             echo Update failed — close Companion and rename {new} to {exe}\r\n\
+             exit /b 1\r\n\
+           )\r\n\
            timeout /t 1 /nobreak >nul\r\n\
            goto retry\r\n\
+         )\r\n\
+         if not exist \"{exe}\" (\r\n\
+           echo Update failed — {exe} missing after replace\r\n\
+           exit /b 1\r\n\
          )\r\n\
          start \"\" \"{exe}\"\r\n\
          del \"%~f0\"\r\n",

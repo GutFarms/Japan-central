@@ -55,6 +55,8 @@ In **Settings**:
 - **Hash-focus firmware** — strip LCD animations/ticker, one-time HW calibrate, dedicated core-0 mine task, lean USB
 - **0.8.17** — fix start/stop reboot loop (mine task must `vTaskDelay` so the watchdog idle task can run)
 - **0.8.18** — Update board auto-downloads firmware + espflash when missing; waits for COM release; retries 115200
+- **0.8.21** — Check/Update Companion app + Fetch latest board FW from repo downloads
+- **0.8.22** — fix Windows self-update bat (retry while `.new` remains; do not relaunch a locked old exe)
 
 ## Recommended pool (ESP32-friendly)
 

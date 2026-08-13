@@ -44,7 +44,9 @@ echo "==> Writing SHA256SUMS.txt..."
   cat SHA256SUMS.txt
 )
 
-mkdir -p /opt/cursor/artifacts
+mkdir -p /opt/cursor/artifacts flash/downloads
 cp -f "$APP_BIN" "$MERGED_BIN" flash/SHA256SUMS.txt /opt/cursor/artifacts/
+# Keep raw GitHub download URLs current for Companion "Fetch latest FW".
+cp -f "$APP_BIN" "$MERGED_BIN" flash/SHA256SUMS.txt flash/downloads/
 ls -la "$APP_BIN" "$MERGED_BIN"
 echo "Done. Flash merged.bin @ 0x0 (DIO, 4 MB, 40 MHz)."
