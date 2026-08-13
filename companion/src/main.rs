@@ -2417,6 +2417,15 @@ impl CompanionApp {
             });
             ui.add_space(6.0);
             labeled_edit(ui, "Stratum URL", &mut self.edit_stratum, "stratum+tcp://host:port");
+            if self.edit_stratum.contains(":3335") && self.edit_stratum.contains("hmpool") {
+                ui.label(
+                    RichText::new(
+                        "HM Pool :3335 is CPU/GPU (diff≈128) — CYD boards get mass rejects. Use :3337.",
+                    )
+                    .color(C_WARN)
+                    .size(11.0),
+                );
+            }
             labeled_edit(
                 ui,
                 "Worker",
