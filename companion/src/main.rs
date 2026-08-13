@@ -598,6 +598,10 @@ struct CompanionApp {
     update_busy_since: Option<Instant>,
     /// Shared cancel flag for the in-flight flash tool.
     flash_cancel: Option<Arc<AtomicBool>>,
+    /// 0..=1 overall Update board progress for the overlay bar.
+    flash_progress: f32,
+    /// Short phase label under the bar (Writing / Erasing / Verifying…).
+    flash_phase: String,
     /// Manual / UI "Bench boards" in flight (mine-worker retune).
     bench_busy: bool,
     update_status: String,
@@ -789,6 +793,8 @@ impl CompanionApp {
             update_busy: false,
             update_busy_since: None,
             flash_cancel: None,
+            flash_progress: 0.0,
+            flash_phase: String::new(),
             bench_busy: false,
             update_status: String::new(),
             auto_connect,
@@ -1691,6 +1697,8 @@ impl CompanionApp {
         self.update_busy_since = Some(Instant::now());
         let cancel = Arc::new(AtomicBool::new(false));
         self.flash_cancel = Some(cancel.clone());
+        self.flash_progress = 0.02;
+        self.flash_phase = "Starting flash".into();
         self.pending_post_flash_reconnect = None;
         self.post_flash_verify = None;
         self.update_status = format!("Flashing board via {port}…");
@@ -1721,8 +1729,73 @@ impl CompanionApp {
         self.update_busy_since = None;
         self.pending_post_flash_reconnect = None;
         self.post_flash_verify = None;
+        self.flash_progress = 0.0;
+        self.flash_phase.clear();
         if let Some(c) = self.flash_cancel.take() {
             c.store(true, Ordering::SeqCst);
+        }
+    }
+
+    /// Parse espflash / phase lines into overall 0..=1 progress for the overlay bar.
+    fn absorb_flash_progress_line(&mut self, line: &str) {
+        self.update_status = trunc(line, 140);
+        let lower = line.to_ascii_lowercase();
+
+        // Prefer explicit percent from espflash ("12%", "12.5 %", "[====] 45%").
+        if let Some(pct) = parse_flash_percent(line) {
+            // Map tool-local 0..=100 into the write band of the overall bar.
+            let mapped = 0.12 + (pct / 100.0) * 0.70;
+            if mapped > self.flash_progress {
+                self.flash_progress = mapped.clamp(0.0, 0.92);
+            }
+            if self.flash_phase.is_empty() || self.flash_phase.starts_with("Writing") {
+                self.flash_phase = format!("Writing firmware · {pct:.0}%");
+            } else if lower.contains("eras") {
+                self.flash_phase = format!("Erasing · {pct:.0}%");
+            }
+            return;
+        }
+
+        let (phase, floor) = if lower.contains("cancelled") {
+            ("Cancelled", self.flash_progress)
+        } else if lower.contains("verif")
+            || lower.contains("reading board config")
+            || lower.contains("usb linked after flash")
+        {
+            ("Verifying board", 0.92)
+        } else if lower.contains("flash ok")
+            || lower.contains("booting board")
+            || lower.contains("reconnecting")
+            || lower.contains("reconnect")
+        {
+            ("Reconnecting", 0.88)
+        } else if lower.contains("complete") && lower.contains("espflash") {
+            ("Write complete", 0.86)
+        } else if lower.contains("erase") {
+            ("Erasing flash", 0.08)
+        } else if lower.contains("chip seen")
+            || (lower.contains("mac") && lower.contains("connect"))
+        {
+            ("Chip connected", 0.14)
+        } else if lower.contains("write-bin")
+            || lower.contains("writing firmware")
+            || lower.contains("writing after")
+        {
+            ("Writing firmware", 0.12)
+        } else if lower.contains("usb released") || lower.contains("waiting for com") {
+            ("Releasing USB", 0.04)
+        } else if lower.contains("flash budget") || lower.contains("starting") {
+            ("Starting flash", 0.02)
+        } else if lower.contains("download") && lower.contains("firmware") {
+            ("Downloading firmware", 0.05)
+        } else if lower.contains("espflash") && lower.contains("found") {
+            ("Preparing flash tool", 0.06)
+        } else {
+            return;
+        };
+        self.flash_phase = phase.into();
+        if floor > self.flash_progress {
+            self.flash_progress = floor;
         }
     }
 
@@ -1742,6 +1815,8 @@ impl CompanionApp {
             deadline: Instant::now() + Duration::from_secs(90),
         });
         self.update_status = format!("Flash OK — booting board, then verifying on {port}…");
+        self.flash_phase = "Reconnecting".into();
+        self.flash_progress = self.flash_progress.max(0.88);
         self.schedule_post_flash_reconnect(port, Duration::from_millis(2500));
     }
 
@@ -1754,6 +1829,8 @@ impl CompanionApp {
         self.last_ok = msg.clone();
         self.last_error.clear();
         self.update_status = msg.clone();
+        self.flash_phase = "Verified".into();
+        self.flash_progress = 1.0;
         self.push_log(LogKind::Usb, msg);
         self.clear_flash_overlay();
     }
@@ -3312,8 +3389,9 @@ impl App for CompanionApp {
                     if low.contains("usb open") {
                         self.usb_open = true;
                         if self.post_flash_verify.is_some() {
-                            self.update_status =
-                                "USB linked after flash — reading board config…".into();
+                            self.absorb_flash_progress_line(
+                                "USB linked after flash — reading board config…",
+                            );
                         }
                     }
                     if low.contains("closed") {
@@ -3447,7 +3525,7 @@ impl App for CompanionApp {
                     }
                 }
                 NetMsg::FlashProgress(line) => {
-                    self.update_status = trunc(&line, 140);
+                    self.absorb_flash_progress_line(&line);
                 }
                 NetMsg::FlashDone { result, reopen } => {
                     match result {
@@ -3774,6 +3852,10 @@ impl App for CompanionApp {
                 } else {
                     format!("Disconnect + reconnect {port}…")
                 };
+                if verifying {
+                    self.flash_phase = "Verifying board".into();
+                    self.flash_progress = self.flash_progress.max(0.92);
+                }
                 self.push_log(
                     LogKind::Usb,
                     if verifying {
@@ -4042,18 +4124,18 @@ impl App for CompanionApp {
                 });
         }
 
-        // Board update: loading overlay instead of dumping erase/flash lines into Terminal.
+        // Board update: loading overlay with live progress bar.
         if self.update_busy {
             egui::Window::new("Updating board")
                 .collapsible(false)
                 .resizable(false)
                 .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
                 .show(ctx, |ui| {
-                    ui.set_min_width(360.0);
+                    ui.set_min_width(420.0);
                     ui.vertical_centered(|ui| {
                         ui.add_space(12.0);
-                        ui.add(egui::Spinner::new().size(52.0).color(C_LIME));
-                        ui.add_space(16.0);
+                        ui.add(egui::Spinner::new().size(44.0).color(C_LIME));
+                        ui.add_space(12.0);
                         ui.label(
                             RichText::new(if self.post_flash_verify.is_some() {
                                 "Verifying board firmware"
@@ -4065,7 +4147,27 @@ impl App for CompanionApp {
                             .color(C_LIME)
                             .font(display_font(22.0)),
                         );
+                        ui.add_space(12.0);
+                        let pct = (self.flash_progress.clamp(0.0, 1.0) * 100.0).round() as u32;
+                        let phase = if self.flash_phase.is_empty() {
+                            "Working…".to_string()
+                        } else {
+                            self.flash_phase.clone()
+                        };
+                        ui.label(
+                            RichText::new(format!("{phase} · {pct}%"))
+                                .color(C_TEXT)
+                                .font(mono_ui_font(13.0)),
+                        );
                         ui.add_space(8.0);
+                        let bar_w = ui.available_width().min(360.0);
+                        ui.add(
+                            egui::ProgressBar::new(self.flash_progress.clamp(0.0, 1.0))
+                                .desired_width(bar_w)
+                                .animate(true)
+                                .fill(C_LIME),
+                        );
+                        ui.add_space(10.0);
                         ui.label(
                             RichText::new(if self.update_status.is_empty() {
                                 "Starting…".to_string()
@@ -4073,7 +4175,7 @@ impl App for CompanionApp {
                                 self.update_status.clone()
                             })
                             .color(C_MUTED)
-                            .font(mono_ui_font(12.0)),
+                            .font(mono_ui_font(11.0)),
                         );
                         ui.add_space(10.0);
                         ui.label(
@@ -4197,6 +4299,33 @@ fn trunc(s: &str, n: usize) -> String {
     } else {
         s.to_string()
     }
+}
+
+/// Pull a 0..=100 percent from espflash-style progress text.
+fn parse_flash_percent(line: &str) -> Option<f32> {
+    let bytes = line.as_bytes();
+    let mut i = 0usize;
+    while i < bytes.len() {
+        if bytes[i] == b'%' {
+            // Walk back over digits / decimal.
+            let mut j = i;
+            while j > 0 && (bytes[j - 1] == b'.' || bytes[j - 1].is_ascii_digit()) {
+                j -= 1;
+            }
+            if j < i {
+                if let Some(v) = std::str::from_utf8(&bytes[j..i])
+                    .ok()
+                    .and_then(|s| s.parse::<f32>().ok())
+                {
+                    if (0.0..=100.0).contains(&v) {
+                        return Some(v);
+                    }
+                }
+            }
+        }
+        i += 1;
+    }
+    None
 }
 
 fn ui_live_bar(ui: &mut egui::Ui, live: &LiveFeed, header_coins: &mut Vec<String>) {

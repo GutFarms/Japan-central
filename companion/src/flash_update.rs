@@ -373,7 +373,7 @@ fn extract_merged_from_zip(
     })
 }
 
-pub const COMPANION_UA: &str = "Njordr-seas-CYD-miner/0.8.71";
+pub const COMPANION_UA: &str = "Njordr-seas-CYD-miner/0.8.72";
 const ESPFLASH_VERSION: &str = "4.5.0";
 pub const REPO_OWNER: &str = "GutFarms";
 pub const REPO_NAME: &str = "Japan-central";
@@ -1500,8 +1500,9 @@ fn run_streaming_timeout(
                 {
                     saw_write = true;
                 }
-                // Tiny percent ticks still count as activity (already updated last_beat).
-                if line.contains('%') && line.len() < 8 {
+                // Tiny percent ticks still count as activity — forward to UI progress bar.
+                if line.contains('%') && line.len() < 12 {
+                    progress(line.clone());
                     continue;
                 }
                 progress(line.clone());
@@ -1603,9 +1604,9 @@ mod tests {
             Some(false)
         );
         assert_eq!(
-            update_needed("0.8.56-sha256-d0", "0.8.71-sha256"),
+            update_needed("0.8.56-sha256-d0", "0.8.72-sha256"),
             Some(true)
         );
-        assert_eq!(update_needed("", "0.8.71-sha256"), None);
+        assert_eq!(update_needed("", "0.8.72-sha256"), None);
     }
 }
