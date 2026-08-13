@@ -2395,6 +2395,21 @@ impl CompanionApp {
                 .color(C_MUTED)
                 .size(13.0),
             );
+            ui.add_space(8.0);
+            ui.label(
+                RichText::new("What’s left for the best path on this board (not a different alg)")
+                    .color(C_LIME)
+                    .font(mono_ui_font(12.0)),
+            );
+            ui.label(
+                RichText::new(
+                    "· Run Bench boards (D0) so the board locks the fastest of HW / HW+ / HW/SW — aim for Full HW.\n\
+· Set CPU clock to 240 MHz.\n\
+· Scale with more CYDs if you want more hashrate; algorithm stays Bitcoin SHA-256d.",
+                )
+                .color(C_MUTED)
+                .font(mono_ui_font(11.0)),
+            );
             ui.add_space(12.0);
             ui.horizontal_wrapped(|ui| {
                 let bench_label = if self.bench_busy {
@@ -3095,6 +3110,24 @@ impl CompanionApp {
                     "SHA path · Full HW = ESP SHA silicon · HW+ mid = midstate · HW/SW = hybrid",
                 )
                 .color(C_DIM)
+                .font(mono_ui_font(10.0)),
+            );
+            ui.add_space(6.0);
+            ui.label(
+                RichText::new("What’s left for the best path on this board (not a different alg)")
+                    .color(C_LIME)
+                    .font(mono_ui_font(11.0)),
+            );
+            ui.label(
+                RichText::new(format!(
+                    "1. D0 firmware + Bench boards → lock Full HW (now: {})\n\
+2. Clock 240 MHz (now: {} MHz)\n\
+3. Add more CYD boards for more hashrate — one ESP32 tops ~1 MH/s class\n\
+Bitcoin stays SHA-256d only; Scrypt/RandomX won’t mine BTC.",
+                    self.sha_path_display(),
+                    self.target_mhz
+                ))
+                .color(C_MUTED)
                 .font(mono_ui_font(10.0)),
             );
             if !authed {
@@ -4204,6 +4237,14 @@ impl App for CompanionApp {
                                 "Stratum",
                                 &mut self.edit_stratum,
                                 "stratum+tcp://…",
+                            );
+                            ui.add_space(8.0);
+                            ui.label(
+                                RichText::new(
+                                    "Best path on this board (not a different alg): Bench boards → Full HW · 240 MHz · more CYDs for more rate. Algorithm stays SHA-256d.",
+                                )
+                                .color(C_DIM)
+                                .size(12.0),
                             );
                         }
                     }

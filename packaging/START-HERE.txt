@@ -38,6 +38,14 @@ C) Mine
    6. Password: x
    7. Start mining.
 
+D) Best path on this board (not a different algorithm)
+   Bitcoin mining here is SHA-256d only — do not switch to Scrypt/RandomX.
+   What’s left for the best path on this board:
+   1. D0 firmware + Bench boards (D0) → lock Full HW (HW / HW+ / HW/SW)
+   2. Set CPU clock to 240 MHz
+   3. Add more CYD boards for more hashrate (one ESP32 is ~1 MH/s class)
+   The ceiling is ESP32 SHA silicon + how many boards you run, not the algorithm.
+
 Notes
 -----
 - The board has no Wi-Fi. Pool traffic stays on this PC.

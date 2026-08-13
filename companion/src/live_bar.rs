@@ -324,7 +324,7 @@ fn http_get_json<T: for<'de> Deserialize<'de>>(url: &str) -> Result<T, String> {
     let agent = ureq::AgentBuilder::new()
         .timeout_connect(Duration::from_secs(8))
         .timeout_read(Duration::from_secs(12))
-        .user_agent("Njordr-seas-CYD-miner/0.8.73")
+        .user_agent("Njordr-seas-CYD-miner/0.8.74")
         .build();
     let resp = agent.get(url).call().map_err(|e| format!("http: {e}"))?;
     resp.into_json::<T>().map_err(|e| format!("json: {e}"))

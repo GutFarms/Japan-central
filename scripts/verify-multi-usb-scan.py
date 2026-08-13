@@ -16,7 +16,7 @@ import threading
 import time
 
 
-def fake_cyd(slave_fd: int, mac: str, fw: str = "0.8.73-sha256") -> None:
+def fake_cyd(slave_fd: int, mac: str, fw: str = "0.8.74-sha256") -> None:
     buf = b""
     while True:
         r, _, _ = select.select([slave_fd], [], [], 0.2)

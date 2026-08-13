@@ -138,7 +138,7 @@ pub struct ApiPullOutcome {
     pub pulled_ms: u64,
 }
 
-const UA: &str = "Njordr-seas-CYD-miner/0.8.73";
+const UA: &str = "Njordr-seas-CYD-miner/0.8.74";
 const MAX_PREVIEW: usize = 3500;
 const MAX_FILE_BYTES: usize = 32 * 1024 * 1024;
 
