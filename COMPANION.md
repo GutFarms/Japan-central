@@ -59,6 +59,7 @@ In **Settings**:
 - **0.8.22** — fix Windows self-update bat (retry while `.new` remains; do not relaunch a locked old exe)
 - **0.8.23** — fetch updates via GitHub API / commit-pinned raw (branch raw CDN can serve stale VERSION/bins)
 - **0.8.24** — fix Update board: espflash reject `ESPFLASH_SKIP_UPDATE_CHECK=1` (needs true/false); skip Windows Store python stubs
+- **0.8.63** — Clean verify/debug rebuild · fresh downloadable Companion + firmware
 - **0.8.62** — Clean verify rebuild · fresh downloadable Companion exe
 - **0.8.61** — Fix Check for app update: pick newest VERSION across fresh mirrors (no stale CDN miss)
 - **0.8.60** — Mine UI: Total Hash, SHA path legend, hide worker blurb, Live stratum under Board telemetry
