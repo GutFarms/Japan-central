@@ -19,6 +19,8 @@ echo  Image: Firmware\esp32-2432s028-sha256-miner-merged.bin
 echo  Offset: 0x0   Chip: ESP32   Mode: DIO   Size: 4MB   Freq: 40m
 echo.
 echo  Tip: if the port fails, hold BOOT, tap RESET, release BOOT.
+echo  SAFETY: if erase runs but rewrite fails, the board may be blank —
+echo          keep USB plugged in and retry until Flash OK.
 echo.
 
 set "COMPORT="
@@ -54,8 +56,14 @@ if exist "%ESPFLASH%" (
   echo.
   echo espflash write failed. Trying erase + write...
   "%ESPFLASH%" --skip-update-check erase-flash -p %PORT% -B 115200 -c esp32 --non-interactive --after hard-reset <nul
+  echo.
+  echo SAFETY: erase finished — rewriting now. Keep USB connected.
   timeout /t 2 /nobreak >nul
   "%ESPFLASH%" --skip-update-check write-bin -p %PORT% -B 115200 -c esp32 --non-interactive --before default-reset --after hard-reset 0x0 "%FW%" <nul
+  if %ERRORLEVEL%==0 goto DONE
+  echo Rewrite failed — retrying with no-reset (hold BOOT if needed)...
+  pause >nul
+  "%ESPFLASH%" --skip-update-check write-bin -p %PORT% -B 115200 -c esp32 --non-interactive --before no-reset --after hard-reset 0x0 "%FW%" <nul
   if %ERRORLEVEL%==0 goto DONE
   echo espflash failed — will try Python esptool if available.
 )

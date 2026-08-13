@@ -4067,7 +4067,7 @@ impl App for CompanionApp {
         }
         // UI watchdog: flash (~160s) + verify. Unlock if FlashDone/verify never finishes.
         if self.update_busy {
-            let flash_cap = Duration::from_secs(200);
+            let flash_cap = Duration::from_secs(280);
             let verify_overdue = self
                 .post_flash_verify
                 .as_ref()

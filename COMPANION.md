@@ -59,6 +59,7 @@ In **Settings**:
 - **0.8.22** — fix Windows self-update bat (retry while `.new` remains; do not relaunch a locked old exe)
 - **0.8.23** — fetch updates via GitHub API / commit-pinned raw (branch raw CDN can serve stale VERSION/bins)
 - **0.8.24** — fix Update board: espflash reject `ESPFLASH_SKIP_UPDATE_CHECK=1` (needs true/false); skip Windows Store python stubs
+- **0.8.81** — Failed-flash safety (ESP Terminator / esptool-style): grace wait, \r progress, erase-once + rewrite retries, blank-chip SAFETY tip + force reset
 - **0.8.80** — Coin picker closed label shows “Coin selection” (not BTC·LTC·…)
 - **0.8.79** — Harden Companion self-update (GitHub API-first VERSION/SUMS; newest checksum set; raw packages)
 - **0.8.78** — Prefer tip mirrors for Check/Update; stop early-exit on stale CDN VERSION

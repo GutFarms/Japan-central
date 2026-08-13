@@ -1,6 +1,6 @@
 {
   "name": "njordr-seas-cyd-monitor",
-  "version": "0.8.80",
+  "version": "0.8.81",
   "main": "index.ts",
   "dependencies": {
     "@react-native-async-storage/async-storage": "2.2.0",
