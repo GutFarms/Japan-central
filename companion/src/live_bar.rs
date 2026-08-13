@@ -82,8 +82,10 @@ impl LiveFeed {
         }
         if self.snap.ready && !self.snap.city.is_empty() {
             parts.push(format!(
-                "{} {:.0}C {}",
-                self.snap.city, self.snap.temp_c, self.snap.weather
+                "{} {:.0}F {}",
+                self.snap.city,
+                self.snap.temp_c * 9.0 / 5.0 + 32.0,
+                self.snap.weather
             ));
         }
         let t = self.local_now_label();

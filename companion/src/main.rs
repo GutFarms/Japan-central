@@ -419,6 +419,8 @@ enum NetMsg {
         text: String,
     },
     Terminal(String),
+    /// Live erase/flash progress line for the loading overlay (not the terminal).
+    FlashProgress(String),
     /// Firmware flash finished; `reopen` is the COM port to reclaim if flash succeeded.
     FlashDone {
         result: Result<String, String>,
@@ -2072,6 +2074,34 @@ impl CompanionApp {
     }
 
     fn ui_debug(&mut self, ui: &mut egui::Ui) {
+        if self.update_busy {
+            soft_panel(ui, "Board update", |ui| {
+                ui.vertical_centered(|ui| {
+                    ui.add_space(24.0);
+                    ui.add(egui::Spinner::new().size(48.0).color(C_LIME));
+                    ui.add_space(14.0);
+                    ui.label(
+                        RichText::new("Updating board…")
+                            .color(C_LIME)
+                            .font(display_font(24.0)),
+                    );
+                    ui.add_space(6.0);
+                    ui.label(
+                        RichText::new(&self.update_status)
+                            .color(C_MUTED)
+                            .font(mono_ui_font(12.0)),
+                    );
+                    ui.add_space(18.0);
+                    ui.label(
+                        RichText::new("Terminal is paused while flash runs.")
+                            .color(C_DIM)
+                            .size(12.0),
+                    );
+                    ui.add_space(12.0);
+                });
+            });
+            return;
+        }
         soft_panel(ui, "Debug / Terminal", |ui| {
             ui.label(
                 RichText::new("Send raw cmp commands over USB-C without bypassing the worker path.")
@@ -2275,11 +2305,20 @@ impl App for CompanionApp {
                 }
                 NetMsg::Log { kind, text } => self.push_log(kind, text),
                 NetMsg::Terminal(line) => {
-                    self.term_out.push_back(line.clone());
-                    while self.term_out.len() > 300 {
-                        self.term_out.pop_front();
+                    // During board update, keep the UI on the loading overlay — don't
+                    // flood Debug/Terminal with flash chatter.
+                    if self.update_busy {
+                        self.update_status = trunc(&line, 120);
+                    } else {
+                        self.term_out.push_back(line.clone());
+                        while self.term_out.len() > 300 {
+                            self.term_out.pop_front();
+                        }
+                        self.push_log(LogKind::Usb, format!("RX {line}"));
                     }
-                    self.push_log(LogKind::Usb, format!("RX {line}"));
+                }
+                NetMsg::FlashProgress(line) => {
+                    self.update_status = trunc(&line, 140);
                 }
                 NetMsg::FlashDone { result, reopen } => {
                     self.update_busy = false;
@@ -2696,6 +2735,44 @@ impl App for CompanionApp {
                 });
         }
 
+        // Board update: loading overlay instead of dumping erase/flash lines into Terminal.
+        if self.update_busy {
+            egui::Window::new("Updating board")
+                .collapsible(false)
+                .resizable(false)
+                .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+                .show(ctx, |ui| {
+                    ui.set_min_width(360.0);
+                    ui.vertical_centered(|ui| {
+                        ui.add_space(12.0);
+                        ui.add(egui::Spinner::new().size(52.0).color(C_LIME));
+                        ui.add_space(16.0);
+                        ui.label(
+                            RichText::new("Erase + flash in progress")
+                                .color(C_LIME)
+                                .font(display_font(22.0)),
+                        );
+                        ui.add_space(8.0);
+                        ui.label(
+                            RichText::new(if self.update_status.is_empty() {
+                                "Starting…".to_string()
+                            } else {
+                                self.update_status.clone()
+                            })
+                            .color(C_MUTED)
+                            .font(mono_ui_font(12.0)),
+                        );
+                        ui.add_space(10.0);
+                        ui.label(
+                            RichText::new("Keep USB connected · hold BOOT + tap RESET if needed")
+                                .color(C_DIM)
+                                .size(12.0),
+                        );
+                        ui.add_space(8.0);
+                    });
+                });
+        }
+
         egui::TopBottomPanel::top("live_ticker_bar")
             .exact_height(36.0)
             .frame(
@@ -2800,7 +2877,7 @@ fn ui_live_bar(ui: &mut egui::Ui, live: &LiveFeed) {
             ui.add_space(10.0);
             if snap.ready && !snap.weather.is_empty() {
                 ui.label(
-                    RichText::new(format!("{:.0}°C {}", snap.temp_c, snap.weather))
+                    RichText::new(format!("{:.0}°F {}", snap.temp_c * 9.0 / 5.0 + 32.0, snap.weather))
                         .color(C_LIME_SOFT)
                         .font(mono_ui_font(12.0)),
                 );
@@ -3729,7 +3806,7 @@ fn mine_worker(cmd_rx: Receiver<NetCmd>, msg_tx: Sender<NetMsg>) {
 
                     let progress_tx = msg_tx.clone();
                     let progress = move |line: String| {
-                        log_msg(&progress_tx, LogKind::Usb, line);
+                        let _ = progress_tx.send(NetMsg::FlashProgress(line));
                     };
 
                     let result = (|| {
