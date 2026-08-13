@@ -45,13 +45,12 @@ pub fn is_newer(remote: &str, local: &str) -> bool {
 }
 
 fn version_urls() -> Vec<String> {
-    // Prefer GitHub tip (raw / Contents API). Branch-name jsDelivr often lags days
-    // behind and used to make Check stop on a stale "newer" version (e.g. 0.8.64
-    // while tip was 0.8.77) or pair fresh VERSION with stale SHA256SUMS.
+    // Prefer Contents API (always tip). Branch-name raw.githubusercontent and
+    // jsDelivr both cache aggressively and can lag tip by one+ releases.
     vec![
-        "https://raw.githubusercontent.com/GutFarms/Japan-central/cursor/esp32-cyd-cpp-firmware-e801/flash/downloads/VERSION.txt"
-            .into(),
         "https://api.github.com/repos/GutFarms/Japan-central/contents/flash/downloads/VERSION.txt?ref=cursor%2Fesp32-cyd-cpp-firmware-e801"
+            .into(),
+        "https://raw.githubusercontent.com/GutFarms/Japan-central/cursor/esp32-cyd-cpp-firmware-e801/flash/downloads/VERSION.txt"
             .into(),
         "https://cdn.jsdelivr.net/gh/GutFarms/Japan-central@cursor/esp32-cyd-cpp-firmware-e801/flash/downloads/VERSION.txt"
             .into(),
@@ -110,15 +109,33 @@ fn dedupe_urls(urls: Vec<String>) -> Vec<String> {
 }
 
 fn sha256sums_urls() -> Vec<String> {
-    // Raw/API first so verify hashes match the tip packages, not a stale CDN copy.
+    // Contents API first so verify hashes match tip packages, not a cached branch raw.
     vec![
-        "https://raw.githubusercontent.com/GutFarms/Japan-central/cursor/esp32-cyd-cpp-firmware-e801/flash/downloads/SHA256SUMS.txt"
-            .into(),
         "https://api.github.com/repos/GutFarms/Japan-central/contents/flash/downloads/SHA256SUMS.txt?ref=cursor%2Fesp32-cyd-cpp-firmware-e801"
+            .into(),
+        "https://raw.githubusercontent.com/GutFarms/Japan-central/cursor/esp32-cyd-cpp-firmware-e801/flash/downloads/SHA256SUMS.txt"
             .into(),
         "https://cdn.jsdelivr.net/gh/GutFarms/Japan-central@cursor/esp32-cyd-cpp-firmware-e801/flash/downloads/SHA256SUMS.txt"
             .into(),
     ]
+}
+
+/// Best-effort version from a SHA256SUMS header comment (`# … 0.8.78 — …`).
+fn sums_header_version(txt: &str) -> Option<String> {
+    for line in txt.lines().take(4) {
+        if let Some(v) = parse_version_text(line) {
+            return Some(v);
+        }
+        // Header often embeds the version mid-line without a clean lone token.
+        for token in line.split(|c: char| !c.is_ascii_alphanumeric() && c != '.' && c != '-') {
+            if token.matches('.').count() >= 2 {
+                if let Some(v) = parse_version_text(token) {
+                    return Some(v);
+                }
+            }
+        }
+    }
+    None
 }
 
 fn parse_sha256sums(txt: &str) -> std::collections::HashMap<String, String> {
@@ -158,21 +175,42 @@ fn file_sha256_hex(path: &Path) -> Result<String, String> {
 
 fn fetch_download_checksums(progress: &dyn Fn(String)) -> Result<std::collections::HashMap<String, String>, String> {
     let mut last = String::new();
+    let mut best: Option<(String, std::collections::HashMap<String, String>)> = None;
     for url in sha256sums_urls() {
         progress(format!("GET checksums {url}"));
         match http_get_text(&url) {
             Ok(txt) => {
                 let map = parse_sha256sums(&txt);
-                if !map.is_empty() {
-                    progress(format!("Loaded {} checksum(s) for verify", map.len()));
-                    return Ok(map);
+                if map.is_empty() {
+                    last = "SHA256SUMS.txt had no usable entries".into();
+                    continue;
                 }
-                last = "SHA256SUMS.txt had no usable entries".into();
+                let ver = sums_header_version(&txt).unwrap_or_else(|| "0.0.0".into());
+                progress(format!(
+                    "Loaded {} checksum(s) (sums {})",
+                    map.len(),
+                    ver
+                ));
+                best = match best.take() {
+                    None => Some((ver, map)),
+                    Some((prev_ver, prev_map)) if is_newer(&ver, &prev_ver) => Some((ver, map)),
+                    Some(prev) => Some(prev),
+                };
+                // API is first and tip — stop once we have a usable tip set.
+                if url.contains("api.github.com") {
+                    break;
+                }
             }
             Err(e) => last = e,
         }
     }
-    Err(format!("Could not fetch download SHA256SUMS ({last})"))
+    match best {
+        Some((ver, map)) => {
+            progress(format!("Using SHA256SUMS for {ver}"));
+            Ok(map)
+        }
+        None => Err(format!("Could not fetch download SHA256SUMS ({last})")),
+    }
 }
 
 fn verify_named_file(
@@ -706,6 +744,12 @@ mod tests {
         assert!(is_newer("0.8.61", "0.8.60"));
         assert!(is_newer("0.8.78", "0.8.64"));
         assert!(is_newer("0.8.78", "0.8.77"));
+    }
+
+    #[test]
+    fn sums_header_parses_embedded_version() {
+        let txt = "# Njörðr Seas' CYD miner 0.8.78 — verify with: sha256sum -c SHA256SUMS.txt\n";
+        assert_eq!(sums_header_version(txt).as_deref(), Some("0.8.78"));
     }
 
     #[test]
