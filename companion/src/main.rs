@@ -4830,11 +4830,7 @@ fn mine_worker(cmd_rx: Receiver<NetCmd>, msg_tx: Sender<NetMsg>) {
                         board.hashrate_hs = st.hashrate_hs;
                         board.hashes = st.hashes;
                         board.mining = st.mining;
-                        if !st.sha_mode.is_empty() {
-                            let _ = msg_tx.send(NetMsg::Status(Ok(st)));
-                        } else {
-                            let _ = msg_tx.send(NetMsg::Status(Ok(st)));
-                        }
+                        let _ = msg_tx.send(NetMsg::Status(Ok(st)));
                     }
                 }
                 log_msg(
