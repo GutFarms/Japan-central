@@ -3,6 +3,7 @@ setlocal EnableExtensions
 cd /d "%~dp0"
 
 set "FW=%~dp0Firmware\esp32-2432s028-sha256-miner-merged.bin"
+set "ESPFLASH=%~dp0Tools\espflash.exe"
 if not exist "%FW%" (
   echo Firmware image not found:
   echo   %FW%
@@ -27,11 +28,39 @@ if "%COMPORT%"=="" (
   goto MANUAL
 )
 
+set "PORT=\\.\COM%COMPORT%"
+echo Using port %PORT%
+
+if exist "%ESPFLASH%" (
+  echo.
+  echo Trying: Tools\espflash.exe write-bin @ 115200 ...
+  "%ESPFLASH%" --skip-update-check write-bin -p %PORT% -B 115200 -c esp32 --non-interactive --before default-reset 0x0 "%FW%"
+  if %ERRORLEVEL%==0 (
+    "%ESPFLASH%" --skip-update-check reset -p %PORT% -c esp32 --non-interactive --no-stub >nul 2>nul
+    goto DONE
+  )
+  echo.
+  echo Auto-reset write failed — hold BOOT, tap RESET, release BOOT, then press a key.
+  pause >nul
+  "%ESPFLASH%" --skip-update-check write-bin -p %PORT% -B 115200 -c esp32 --non-interactive --before no-reset 0x0 "%FW%"
+  if %ERRORLEVEL%==0 (
+    "%ESPFLASH%" --skip-update-check reset -p %PORT% -c esp32 --non-interactive --no-stub >nul 2>nul
+    goto DONE
+  )
+  echo.
+  echo espflash write failed. Trying erase + write...
+  "%ESPFLASH%" --skip-update-check erase-flash -p %PORT% -B 115200 -c esp32 --non-interactive --after hard-reset
+  timeout /t 2 /nobreak >nul
+  "%ESPFLASH%" --skip-update-check write-bin -p %PORT% -B 115200 -c esp32 --non-interactive --before default-reset 0x0 "%FW%"
+  if %ERRORLEVEL%==0 goto DONE
+  echo espflash failed — will try Python esptool if available.
+)
+
 where py >nul 2>nul
 if %ERRORLEVEL%==0 (
   echo.
   echo Trying: py -3 -m esptool ...
-  py -3 -m esptool --chip esp32 --port COM%COMPORT% --baud 460800 write_flash -z --flash_mode dio --flash_freq 40m --flash_size 4MB 0x0 "%FW%"
+  py -3 -m esptool --chip esp32 --port %PORT% --baud 115200 write_flash --erase-all -z --flash_mode dio --flash_freq 40m --flash_size 4MB 0x0 "%FW%"
   if %ERRORLEVEL%==0 goto DONE
   echo.
   echo esptool missing or failed. Install with:
@@ -44,7 +73,7 @@ where python >nul 2>nul
 if %ERRORLEVEL%==0 (
   echo.
   echo Trying: python -m esptool ...
-  python -m esptool --chip esp32 --port COM%COMPORT% --baud 460800 write_flash -z --flash_mode dio --flash_freq 40m --flash_size 4MB 0x0 "%FW%"
+  python -m esptool --chip esp32 --port %PORT% --baud 115200 write_flash --erase-all -z --flash_mode dio --flash_freq 40m --flash_size 4MB 0x0 "%FW%"
   if %ERRORLEVEL%==0 goto DONE
 )
 

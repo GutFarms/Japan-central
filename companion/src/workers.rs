@@ -132,6 +132,53 @@ pub fn port_names_match(a: &str, b: &str) -> bool {
     normalize_port_name(a) == normalize_port_name(b)
 }
 
+/// True when `name` is a local USB/UART serial device (not Wi‑Fi / LAN TCP).
+pub fn is_usb_serial_port(name: &str) -> bool {
+    let t = name.trim();
+    if t.is_empty() {
+        return false;
+    }
+    // host:port → network worker
+    if t.contains('.') && t.contains(':') {
+        return false;
+    }
+    if t.matches(':').count() == 1 {
+        let mut parts = t.splitn(2, ':');
+        let host = parts.next().unwrap_or("");
+        let port = parts.next().unwrap_or("");
+        if !host.is_empty()
+            && port.chars().all(|c| c.is_ascii_digit())
+            && !host.eq_ignore_ascii_case("COM")
+        {
+            // "192.168.4.1:19284" or "hostname:19284"
+            if host.contains('.') || host.chars().any(|c| c.is_ascii_alphabetic()) {
+                return false;
+            }
+        }
+    }
+    let n = normalize_port_name(t);
+    if n.starts_with("COM") && n.len() > 3 && n[3..].chars().all(|c| c.is_ascii_digit()) {
+        return true;
+    }
+    let lower = t.to_ascii_lowercase();
+    lower.contains("ttyusb")
+        || lower.contains("ttyacm")
+        || lower.contains("usbserial")
+        || lower.contains("wchusb")
+        || lower.contains("usbmodem")
+        || lower.contains("slab_uspto")
+}
+
+/// Port string for espflash/esptool on Windows (`\\.\COM10` required for COM≥10).
+pub fn flash_port_arg(name: &str) -> String {
+    let n = normalize_port_name(name);
+    if n.starts_with("COM") && n.len() > 3 && n[3..].chars().all(|c| c.is_ascii_digit()) {
+        format!(r"\\.\{n}")
+    } else {
+        name.trim().to_string()
+    }
+}
+
 /// True when `mac` is a real 6-byte identity (not empty / `unknown`).
 pub fn mac_is_stable(mac: &str) -> bool {
     let hex: String = normalize_mac(mac)
@@ -786,6 +833,12 @@ mod tests {
         assert!(port_names_match(r"\\.\COM6", "COM6"));
         assert!(port_names_match("com10", r"\\.\COM10"));
         assert!(!port_names_match("COM6", "COM7"));
+        assert!(is_usb_serial_port("COM6"));
+        assert!(is_usb_serial_port(r"\\.\COM10"));
+        assert!(!is_usb_serial_port("192.168.4.1:19284"));
+        assert!(!is_usb_serial_port("cyd.local:19284"));
+        assert_eq!(flash_port_arg("COM6"), r"\\.\COM6");
+        assert_eq!(flash_port_arg("com10"), r"\\.\COM10");
     }
 
     #[test]

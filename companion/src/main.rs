@@ -39,9 +39,10 @@ use stratum::{
     WorkJob,
 };
 use workers::{
-    list_serial_ports, mac_is_stable, mac_worker_id, normalize_mac, open_usb_serial_timed,
-    open_wifi_tcp, port_names_match, probe_wifi_endpoint, scan_usb_workers_with_progress,
-    BoardWifiDiscovery, DiscoveredWorker, LanDiscovery, PortChoice, WorkerKind, WorkerLive,
+    is_usb_serial_port, list_serial_ports, mac_is_stable, mac_worker_id, normalize_mac,
+    open_usb_serial_timed, open_wifi_tcp, port_names_match, probe_wifi_endpoint,
+    scan_usb_workers_with_progress, BoardWifiDiscovery, DiscoveredWorker, LanDiscovery, PortChoice,
+    WorkerKind, WorkerLive,
 };
 
 use eframe::egui::{
@@ -1451,11 +1452,43 @@ impl CompanionApp {
         ctx.output_mut(|o| o.copied_text = out);
     }
 
+    fn resolve_flash_usb_port(&self) -> Result<String, String> {
+        if is_usb_serial_port(&self.com_port) {
+            return Ok(self.com_port.clone());
+        }
+        // Prefer a linked USB board when the UI selection is Wi‑Fi / LAN.
+        for w in &self.connected_workers {
+            if is_usb_serial_port(&w.endpoint) {
+                return Ok(w.endpoint.clone());
+            }
+        }
+        for p in &self.ports {
+            if is_usb_serial_port(&p.name) {
+                return Ok(p.name.clone());
+            }
+        }
+        Err(
+            "Select a USB COM port to flash (Wi‑Fi boards cannot be flashed over TCP)."
+                .into(),
+        )
+    }
+
     fn request_board_update(&mut self) {
         self.firmware = find_firmware_image().ok().or_else(|| self.firmware.clone());
-        if self.com_port.trim().is_empty() {
-            self.last_error = "Select a COM / serial port before updating.".into();
-            return;
+        match self.resolve_flash_usb_port() {
+            Ok(port) => {
+                if port != self.com_port {
+                    self.push_log(
+                        LogKind::Info,
+                        format!("Flash will use USB port {port} (selection was {})", self.com_port),
+                    );
+                    self.com_port = port;
+                }
+            }
+            Err(e) => {
+                self.last_error = e;
+                return;
+            }
         }
         // Missing local image is OK — worker will fetch Firmware\\ + Tools\\espflash.
         if self.firmware.is_none() {
@@ -1537,10 +1570,14 @@ impl CompanionApp {
 
     fn begin_board_update(&mut self) {
         self.update_confirm = false;
-        if self.com_port.trim().is_empty() {
-            self.last_error = "Select a COM / serial port before updating.".into();
-            return;
-        }
+        let port = match self.resolve_flash_usb_port() {
+            Ok(p) => p,
+            Err(e) => {
+                self.last_error = e;
+                return;
+            }
+        };
+        self.com_port = port.clone();
         if self.mining {
             self.stop_mine();
         }
@@ -1551,25 +1588,22 @@ impl CompanionApp {
             .unwrap_or_default();
         self.update_busy = true;
         self.pending_post_flash_reconnect = None;
-        self.update_status = format!("Flashing board via {}…", self.com_port);
+        self.update_status = format!("Flashing board via {port}…");
         self.last_ok = self.update_status.clone();
         self.last_error.clear();
         self.push_log(
             LogKind::Usb,
             if image.is_empty() {
-                format!(
-                    "Update board → fetch firmware + flash on {}",
-                    self.com_port
-                )
+                format!("Update board → fetch firmware + flash on {port}")
             } else {
-                format!("Update board → {image} on {}", self.com_port)
+                format!("Update board → {image} on {port}")
             },
         );
         // Release USB in the worker before flash (port must be free).
         self.usb_open = false;
         self.mining = false;
         let _ = self.cmd_tx.send(NetCmd::UpdateFirmware {
-            port: self.com_port.clone(),
+            port,
             image,
             // Always reconnect after a successful flash.
             reopen: true,
@@ -5665,7 +5699,7 @@ fn mine_worker(cmd_rx: Receiver<NetCmd>, msg_tx: Sender<NetMsg>) {
                         LogKind::Usb,
                         "USB released — waiting for COM port…",
                     );
-                    thread::sleep(Duration::from_millis(1600));
+                    thread::sleep(Duration::from_millis(2200));
 
                     let progress_tx = msg_tx.clone();
                     let progress = move |line: String| {

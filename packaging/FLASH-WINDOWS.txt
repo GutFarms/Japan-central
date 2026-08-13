@@ -14,9 +14,11 @@ Option 1 — Flash-Firmware.bat (recommended)
 3. Enter the COM port number (e.g. 6 for COM6) when asked.
 4. If the port will not open: hold BOOT, tap RESET, release BOOT, retry.
 
-The script uses Python esptool when available:
+The script prefers Tools\espflash.exe (bundled), then Python esptool:
   py -3 -m pip install esptool
   py -3 -m esptool ...
+
+In-app Update board writes diagnostics to last-flash.log next to the app.
 
 Option 2 — Browser flasher
 --------------------------
