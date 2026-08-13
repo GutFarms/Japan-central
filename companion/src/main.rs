@@ -452,7 +452,7 @@ struct ShareRow {
 }
 
 const POOL_PRESETS: &[(&str, &str)] = &[
-    ("HM Pool", "stratum+tcp://btc.hmpool.io:3335"),
+    ("HM Pool (ESP32)", "stratum+tcp://btc.hmpool.io:3337"),
     ("Public Pool", "stratum+tcp://public-pool.io:21496"),
     ("Public Pool EU", "stratum+tcp://eu.public-pool.io:21496"),
     ("NerdMiner", "stratum+tcp://pool.nerdminers.org:3333"),
@@ -631,7 +631,9 @@ impl CompanionApp {
         thread::spawn(move || mine_worker(cmd_rx, msg_tx));
         let _ = cmd_tx.send(NetCmd::ListPorts);
 
-        let mut edit_stratum = "stratum+tcp://btc.hmpool.io:3335".into();
+        // Port 3337 = HM Pool IoT/ESP32 (start diff ~0.01). Port 3335 is CPU/GPU (diff 128)
+        // and produces mass Low-difficulty rejects on CYD hashrates.
+        let mut edit_stratum = "stratum+tcp://btc.hmpool.io:3337".into();
         let mut edit_worker = String::new();
         let mut edit_password = "x".into();
         let mut target_mhz = 240u8;
@@ -647,6 +649,12 @@ impl CompanionApp {
                 if let Ok(p) = serde_json::from_str::<PersistedMine>(&raw) {
                     if !p.stratum.is_empty() {
                         edit_stratum = p.stratum;
+                    }
+                    // Migrate old ESP32-hostile default without clobbering custom ports.
+                    if edit_stratum.trim() == "stratum+tcp://btc.hmpool.io:3335"
+                        || edit_stratum.trim() == "stratum+tcp://hmpool.io:3335"
+                    {
+                        edit_stratum = "stratum+tcp://btc.hmpool.io:3337".into();
                     }
                     edit_worker = p.worker;
                     if !p.password.is_empty() {
@@ -5980,9 +5988,10 @@ fn harvest_shares(
                     msg_tx,
                     LogKind::Warn,
                     format!(
-                        "Share job={job} en2={en2} not in recent job cache — submitting anyway"
+                        "Dropping stale board share job={job} en2={en2} (not in recent job cache)"
                     ),
                 );
+                continue;
             }
             match s.submit_share(&job, &en2, &ntime, &nonce) {
                 Ok(()) => {

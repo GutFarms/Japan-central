@@ -16,7 +16,7 @@ ESP32-2432S028 board **hashes Bitcoin SHA-256 only**. **Njörðr Seas' CYD miner
 2. Power on — LCD: **Waiting for USB**
 3. Run Companion → COM → **Connect** → BTC address → **Start mining**
 
-Default pool: `stratum+tcp://btc.hmpool.io:3335` · worker = **Bitcoin address** · password `x`
+Default pool: `stratum+tcp://btc.hmpool.io:3337` · worker = **Bitcoin address** · password `x`
 
 Solo lottery mining for tiny ESP32 hashrate (hardware SHA-256d on classic ESP32 — expect high **kH/s**; software midstate fallback if HW is unavailable).
 

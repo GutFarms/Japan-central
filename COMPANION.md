@@ -59,6 +59,7 @@ In **Settings**:
 - **0.8.22** — fix Windows self-update bat (retry while `.new` remains; do not relaunch a locked old exe)
 - **0.8.23** — fetch updates via GitHub API / commit-pinned raw (branch raw CDN can serve stale VERSION/bins)
 - **0.8.24** — fix Update board: espflash reject `ESPFLASH_SKIP_UPDATE_CHECK=1` (needs true/false); skip Windows Store python stubs
+- **0.8.59** — Fix mass share rejects: rebuild job on set_difficulty; default HM Pool :3337 (ESP32)
 - **0.8.58** — Clear Update available after flash: treat board `-d0` fw tag as same kit version
 - **0.8.57** — Fetch board FW: spawn off mine-worker (never stuck behind auto-bench); faster raw URLs + timeouts
 - **0.8.56** — Bench boards: immediate busy UI + shorter D0 tune window (no silent USB timeout / dead click)
@@ -98,7 +99,7 @@ In **Settings**:
 
 | Field | Value |
 |-------|--------|
-| Stratum | `stratum+tcp://btc.hmpool.io:3335` |
+| Stratum | `stratum+tcp://btc.hmpool.io:3337` |
 | Worker | Your **Bitcoin** address |
 | Password | `x` |
 

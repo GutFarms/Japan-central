@@ -61,6 +61,8 @@ pub struct StratumClient {
     reject_grace_until: Option<Instant>,
     /// True once we have emitted at least one post-authorize job to the board.
     post_auth_job: bool,
+    /// True after the first `mining.set_difficulty` (avoid shipping diff=1 work to the board).
+    have_difficulty: bool,
     pub accepted: u32,
     pub rejected: u32,
     pub phase: String,
@@ -107,6 +109,7 @@ impl StratumClient {
             pending_share_meta: HashMap::new(),
             reject_grace_until: None,
             post_auth_job: false,
+            have_difficulty: false,
             accepted: 0,
             rejected: 0,
             phase: "off".into(),
@@ -148,6 +151,8 @@ impl StratumClient {
         self.pending_share_meta.clear();
         self.reject_grace_until = None;
         self.post_auth_job = false;
+        self.have_difficulty = false;
+        self.difficulty = 1.0;
         // Keep recent_submit_keys across reconnect so duplicate board shares are dropped.
         self.accepted = 0;
         self.rejected = 0;
@@ -166,6 +171,7 @@ impl StratumClient {
         self.pending_share_meta.clear();
         self.reject_grace_until = None;
         self.post_auth_job = false;
+        self.have_difficulty = false;
         self.accepted = 0;
         self.rejected = 0;
         self.phase = "off".into();
@@ -388,7 +394,16 @@ impl StratumClient {
                 if let Some(d) = params.as_array().and_then(|a| a.first()).and_then(|x| x.as_f64())
                 {
                     // Public-pool style solo pools use fractional difficulty (e.g. 0.001).
-                    self.difficulty = if d > 0.0 { d } else { 1e-12 };
+                    let next = if d > 0.0 { d } else { 1e-12 };
+                    let changed = !self.have_difficulty || (next - self.difficulty).abs() > 1e-15;
+                    self.difficulty = next;
+                    self.have_difficulty = true;
+                    self.push_recent(format!("← mining.set_difficulty {next}"));
+                    // Critical: rebuild/re-push work with the new target. Leaving the board
+                    // on the previous (often diff=1) target causes mass Low-difficulty rejects.
+                    if changed && self.authorized && !self.job_id.is_empty() {
+                        self.emit_job_from_fields();
+                    }
                 }
                 return Ok(());
             }
@@ -419,7 +434,42 @@ impl StratumClient {
                             ));
                             return Ok(());
                         }
+                        if !self.have_difficulty {
+                            self.push_recent(format!(
+                                "← mining.notify job={} (using default diff={} until set_difficulty)",
+                                self.job_id, self.difficulty
+                            ));
+                        }
                         self.emit_job_from_fields();
+                    }
+                }
+                return Ok(());
+            }
+            if method == "mining.set_extranonce" {
+                if let Some(arr) = params.as_array() {
+                    if let Some(en1) = arr.first().and_then(|x| x.as_str()) {
+                        match hex::decode(en1) {
+                            Ok(bytes) if !bytes.is_empty() => {
+                                self.extranonce1 = bytes;
+                                if let Some(sz) = arr.get(1).and_then(|x| x.as_u64()) {
+                                    self.extranonce2_size = (sz as usize).clamp(1, 16);
+                                }
+                                self.push_recent(format!(
+                                    "← mining.set_extranonce en1={} en2size={}",
+                                    en1,
+                                    self.extranonce2_size
+                                ));
+                                if self.authorized && !self.job_id.is_empty() && self.have_difficulty
+                                {
+                                    self.emit_job_from_fields();
+                                }
+                            }
+                            _ => {
+                                self.push_recent(
+                                    "← mining.set_extranonce ignored (bad hex)".into(),
+                                );
+                            }
+                        }
                     }
                 }
                 return Ok(());
@@ -446,7 +496,12 @@ impl StratumClient {
             if let Some(res) = v.get("result").and_then(|r| r.as_array()) {
                 if res.len() >= 3 {
                     let en1 = res[1].as_str().unwrap_or("");
-                    self.extranonce1 = hex::decode(en1).unwrap_or_default();
+                    self.extranonce1 = hex::decode(en1).map_err(|e| {
+                        format!("subscribe extranonce1 hex decode failed ({en1}): {e}")
+                    })?;
+                    if self.extranonce1.is_empty() {
+                        return Err("subscribe extranonce1 empty".into());
+                    }
                     self.extranonce2_size = res[2].as_u64().unwrap_or(4) as usize;
                     if self.extranonce2_size == 0 {
                         self.extranonce2_size = 4;
