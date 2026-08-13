@@ -1366,7 +1366,7 @@ impl CompanionApp {
         if !self.usb_open || self.update_busy {
             return;
         }
-        let tick = self.live.board_ticker();
+        let tick = self.live.board_ticker_for(&self.header_coins);
         if !force && tick == self.last_ticker && self.last_net_push.elapsed() < Duration::from_secs(45)
         {
             return;
