@@ -42,7 +42,6 @@ use workers::{
     list_serial_ports, mac_is_stable, mac_worker_id, normalize_mac, open_usb_serial_timed,
     open_wifi_tcp, port_names_match, probe_wifi_endpoint, scan_usb_workers_with_progress,
     BoardWifiDiscovery, DiscoveredWorker, LanDiscovery, PortChoice, WorkerKind, WorkerLive,
-    BOARD_WIFI_PORT, LAN_DISCOVERY_PORT,
 };
 
 use eframe::egui::{
@@ -1392,6 +1391,18 @@ impl CompanionApp {
         }
     }
 
+    /// Human label for the active SHA hash path (HW = full ESP SHA silicon).
+    fn sha_path_display(&self) -> String {
+        match self.sha_mode_label() {
+            "HW" => "Full HW".into(),
+            "HW+" => "HW+ mid".into(),
+            "HW/SW" => "HW/SW".into(),
+            "SW" => "Software".into(),
+            "—" => "—".into(),
+            other => other.to_string(),
+        }
+    }
+
     fn firmware_status_label(&self) -> (String, Color32) {
         let board = if self.fw_label.is_empty() || self.fw_label == "—" {
             String::new()
@@ -1598,7 +1609,6 @@ impl CompanionApp {
 
         ui.add_space(16.0);
         self.ui_api_feeds_mine(ui);
-        self.ui_stratum_panel(ui);
         ui.add_space(12.0);
         self.ui_logs_panel(ui);
     }
@@ -2459,13 +2469,6 @@ impl CompanionApp {
                 .color(C_LIME)
                 .font(mono_ui_font(12.0)),
         );
-        ui.label(
-                RichText::new(format!(
-                    "Scan USB serial (skip motherboard PCI), listen for Wi‑Fi CYD beacons (UDP {BOARD_WIFI_PORT}), and auto-link. Each new board auto-benches (HW/HW+/HW/SW) on connect. SoftAP SSID Njordr-XXXX / pass njordrseas. LAN peers use UDP {LAN_DISCOVERY_PORT}."
-                ))
-                .color(C_MUTED)
-                .size(12.0),
-            );
         ui.add_space(8.0);
         ui.horizontal_wrapped(|ui| {
             let scan_label = if self.worker_scan_busy {
@@ -2628,7 +2631,7 @@ impl CompanionApp {
         }
     }
 
-    fn ui_telemetry_rail(&self, ui: &mut egui::Ui) {
+    fn ui_telemetry_rail(&mut self, ui: &mut egui::Ui) {
         soft_panel(ui, "Board telemetry", |ui| {
             let authed = self.stratum_live.authorized;
             // Never surface connect-handshake rejects — stay at 0/0 until authorize.
@@ -2658,8 +2661,9 @@ impl CompanionApp {
                     self.status.hashrate_hs
                 };
                 mini_stat(ui, "Rate", &format_hashrate(rate_hs));
-                mini_stat(ui, "Hashes", &format_hash_count(self.status.hashes));
-                mini_stat(ui, "SHA", self.sha_mode_label());
+                mini_stat(ui, "Total Hash", &format_hash_count(self.status.hashes));
+                let sha = self.sha_path_display();
+                mini_stat(ui, "SHA", &sha);
                 mini_stat(
                     ui,
                     "Reply",
@@ -2670,6 +2674,13 @@ impl CompanionApp {
                 );
                 mini_stat(ui, "Sess H", &self.session_hashes_label());
             });
+            ui.label(
+                RichText::new(
+                    "SHA path · Full HW = ESP SHA silicon · HW+ mid = midstate · HW/SW = hybrid",
+                )
+                .color(C_DIM)
+                .font(mono_ui_font(10.0)),
+            );
             if !authed {
                 ui.add_space(4.0);
                 ui.label(
@@ -2770,6 +2781,8 @@ impl CompanionApp {
                 );
             }
         });
+        ui.add_space(12.0);
+        self.ui_stratum_panel(ui);
     }
 
     fn ui_stratum_panel(&mut self, ui: &mut egui::Ui) {
