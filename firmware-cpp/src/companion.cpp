@@ -97,7 +97,10 @@ void CompanionLink::handleLine(const String& line, AppConfig& cfg, const MinerSn
   args.trim();
 
   if (verb == "ping") {
-    Serial.println("CMP ok usb");
+    char buf[48];
+    snprintf(buf, sizeof(buf), "CMP ok usb mac=%s",
+             snap.mac.length() ? snap.mac.c_str() : "unknown");
+    Serial.println(buf);
     Serial.flush();
     return;
   }
@@ -107,7 +110,7 @@ void CompanionLink::handleLine(const String& line, AppConfig& cfg, const MinerSn
     return;
   }
   if (verb == "config") {
-    replyConfig(cfg);
+    replyConfig(cfg, snap);
     Serial.flush();
     return;
   }
@@ -268,29 +271,34 @@ void CompanionLink::replyStatus(const AppConfig& cfg, const MinerSnapshot& snap)
   copyJsonSafe(pool, sizeof(pool), snap.pool.c_str(), 20);
   copyJsonSafe(job, sizeof(job), snap.jobId.c_str(), 24);
   copyJsonSafe(sha, sizeof(sha), snap.shaMode.length() ? snap.shaMode.c_str() : "-", 8);
-  char buf[420];
+  char mac[20];
+  copyJsonSafe(mac, sizeof(mac), snap.mac.length() ? snap.mac.c_str() : "", 17);
+  char buf[460];
   snprintf(
       buf, sizeof(buf),
       "{\"hashrate_hs\":%.0f,\"hashrate_khs\":%.3f,\"shares\":%llu,\"hashes\":%llu,"
       "\"mining\":%s,\"accepted\":%u,\"rejected\":%u,\"pool\":\"%s\",\"connected\":%s,"
       "\"link\":\"usb\",\"difficulty\":0,\"uptime_secs\":%u,\"cpu_mhz\":%u,"
       "\"hash_focus\":true,\"net_ticker\":\"\",\"job\":\"%s\",\"sha_mode\":\"%s\","
-      "\"full_v\":true,\"bench_hs\":%.0f,\"nonce\":\"%s\"}",
+      "\"full_v\":true,\"bench_hs\":%.0f,\"nonce\":\"%s\",\"mac\":\"%s\"}",
       (double)snap.hashrateHs, (double)(snap.hashrateHs / 1000.0f),
       (unsigned long long)snap.shares, (unsigned long long)snap.totalHashes,
       snap.mining ? "true" : "false", (unsigned)snap.accepted, (unsigned)snap.rejected, pool,
       snap.connected ? "true" : "false", (unsigned)(millis() / 1000),
-      (unsigned)(snap.cpuMhz ? snap.cpuMhz : cfg.cpuMhz), job, sha, (double)snap.benchHs, nonceHex);
+      (unsigned)(snap.cpuMhz ? snap.cpuMhz : cfg.cpuMhz), job, sha, (double)snap.benchHs, nonceHex,
+      mac);
   Serial.print("CMPSTATUS ");
   Serial.println(buf);
 }
 
-void CompanionLink::replyConfig(const AppConfig& cfg) {
-  char buf[128];
+void CompanionLink::replyConfig(const AppConfig& cfg, const MinerSnapshot& snap) {
+  char mac[20];
+  copyJsonSafe(mac, sizeof(mac), snap.mac.length() ? snap.mac.c_str() : "", 17);
+  char buf[160];
   snprintf(buf, sizeof(buf),
-           "{\"cpu_mhz\":%u,\"hash_focus\":true,\"fw\":\"0.8.34-sha256\",\"mode\":\"usb-sha256\","
-           "\"configured\":true}",
-           (unsigned)cfg.cpuMhz);
+           "{\"cpu_mhz\":%u,\"hash_focus\":true,\"fw\":\"0.8.35-sha256\",\"mode\":\"usb-sha256\","
+           "\"configured\":true,\"mac\":\"%s\"}",
+           (unsigned)cfg.cpuMhz, mac);
   Serial.print("CMPCONFIG ");
   Serial.println(buf);
 }

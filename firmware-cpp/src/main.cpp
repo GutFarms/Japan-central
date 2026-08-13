@@ -10,6 +10,7 @@
 #include <esp_system.h>
 #include <esp_task_wdt.h>
 #include <esp_wifi.h>
+#include <esp_mac.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
 
@@ -50,6 +51,7 @@ static TaskHandle_t g_usbTask = nullptr;
 // Cached labels — avoid String churn on the USB hot path.
 static char g_poolLabel[24] = "WAIT USB";
 static char g_shaLabel[12] = "SW";
+static char g_macStr[18] = "";
 static bool g_labelsReady = false;
 
 static void applyCpu(uint8_t mhz) {
@@ -141,6 +143,7 @@ static void fillSnap() {
   g_snap.shaMode = g_shaLabel;
   g_snap.fullV = true;
   g_snap.benchHs = cyd_last_bench_hs();
+  g_snap.mac = g_macStr;
   // Ticker disabled while hashing — net pushes are ACK'd but not painted.
   if (!g_mining) g_snap.netTicker = g_net.ticker;
 }
@@ -328,6 +331,14 @@ static float runBench(uint32_t hashes) {
 }
 
 void setup() {
+  uint8_t mac[6] = {0};
+  if (esp_read_mac(mac, ESP_MAC_WIFI_STA) == ESP_OK) {
+    snprintf(g_macStr, sizeof(g_macStr), "%02x:%02x:%02x:%02x:%02x:%02x", mac[0], mac[1], mac[2],
+             mac[3], mac[4], mac[5]);
+  } else {
+    snprintf(g_macStr, sizeof(g_macStr), "unknown");
+  }
+
   (void)esp_wifi_stop();
   (void)esp_wifi_deinit();
 

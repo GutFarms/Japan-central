@@ -21,6 +21,7 @@ struct MinerSnapshot {
   String shaMode;  // HW / HW+ / HW/SW / SW
   float benchHs = 0;
   bool fullV = false;
+  String mac;  // STA eFuse MAC, aa:bb:cc:dd:ee:ff
 };
 
 struct NetFeed {
@@ -77,7 +78,7 @@ class CompanionLink {
   void handleLine(const String& line, AppConfig& cfg, const MinerSnapshot& snap, ApplyFn onApply,
                   NetFeed* net, JobFn onJob, StopFn onStop, StatsFn onStats);
   void replyStatus(const AppConfig& cfg, const MinerSnapshot& snap);
-  void replyConfig(const AppConfig& cfg);
+  void replyConfig(const AppConfig& cfg, const MinerSnapshot& snap);
   static String urlDecode(const String& in);
   static void parseBody(const String& body, AppConfig& cfg, bool& reboot);
   static void parseNetData(const String& body, NetFeed& net);

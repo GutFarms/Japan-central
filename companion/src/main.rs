@@ -28,7 +28,8 @@ use stratum::{
     WorkJob,
 };
 use workers::{
-    scan_usb_workers, DiscoveredWorker, LanDiscovery, WorkerKind, WorkerLive, LAN_DISCOVERY_PORT,
+    list_serial_ports, mac_worker_id, normalize_mac, scan_usb_workers, DiscoveredWorker,
+    LanDiscovery, PortChoice, WorkerKind, WorkerLive, LAN_DISCOVERY_PORT,
 };
 
 use eframe::egui::{
@@ -84,6 +85,15 @@ const C_WARN: Color32 = Color32::from_rgb(255, 196, 91);
 const C_ERR: Color32 = Color32::from_rgb(255, 108, 91);
 const MAX_LOGS: usize = 500;
 const HASH_HISTORY_SAMPLES: usize = 90;
+const LOGO_PNG: egui::ImageSource<'static> = egui::include_image!("../assets/cyd-logo.png");
+
+fn brand_logo(ui: &mut egui::Ui, height: f32) {
+    ui.add(
+        egui::Image::new(LOGO_PNG)
+            .fit_to_exact_size(Vec2::splat(height))
+            .rounding(Rounding::same((height * 0.18).clamp(6.0, 14.0))),
+    );
+}
 
 fn install_fonts(ctx: &egui::Context) {
     let mut fonts = FontDefinitions::default();
@@ -357,6 +367,8 @@ struct StatusJson {
     job: String,
     #[serde(default)]
     sha_mode: String,
+    #[serde(default)]
+    mac: String,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -369,6 +381,8 @@ struct ConfigJson {
     fw: String,
     #[serde(default)]
     mode: String,
+    #[serde(default)]
+    mac: String,
 }
 
 #[derive(Serialize, Deserialize, Default)]
@@ -408,7 +422,7 @@ const POOL_PRESETS: &[(&str, &str)] = &[
 ];
 
 enum NetMsg {
-    Ports(Vec<String>),
+    Ports(Vec<PortChoice>),
     Action(Result<String, String>),
     Status(Result<StatusJson, String>),
     Config(Result<ConfigJson, String>),
@@ -482,7 +496,7 @@ enum NetCmd {
 struct CompanionApp {
     tab: Tab,
     com_port: String,
-    ports: Vec<String>,
+    ports: Vec<PortChoice>,
     usb_open: bool,
     mining: bool,
     edit_stratum: String,
@@ -491,6 +505,7 @@ struct CompanionApp {
     target_mhz: u8,
     status: StatusJson,
     fw_label: String,
+    board_mac: String,
     pool_phase: String,
     accepted: u32,
     rejected: u32,
@@ -603,6 +618,7 @@ impl CompanionApp {
             target_mhz,
             status: StatusJson::default(),
             fw_label: "—".into(),
+            board_mac: String::new(),
             pool_phase: "off".into(),
             accepted: 0,
             rejected: 0,
@@ -709,6 +725,8 @@ impl CompanionApp {
         self.status.connected = false;
         self.status.nonce.clear();
         self.status.job.clear();
+        self.status.mac.clear();
+        self.board_mac.clear();
         self.displayed_khs = 0.0;
         self.hashrate_history = VecDeque::from(vec![0.0; HASH_HISTORY_SAMPLES]);
         self.history_phase = 0.0;
@@ -868,17 +886,22 @@ impl CompanionApp {
     }
 
     fn merge_discovered(&mut self, worker: DiscoveredWorker) {
-        if let Some(existing) = self
-            .discovered_workers
-            .iter_mut()
-            .find(|w| w.id == worker.id)
-        {
+        // Prefer stable MAC identity over COM path when matching USB boards.
+        if let Some(existing) = self.discovered_workers.iter_mut().find(|w| {
+            w.id == worker.id
+                || (!worker.mac.is_empty()
+                    && !w.mac.is_empty()
+                    && normalize_mac(&w.mac) == normalize_mac(&worker.mac))
+                || (w.kind == WorkerKind::Usb
+                    && worker.kind == WorkerKind::Usb
+                    && w.endpoint == worker.endpoint)
+        }) {
             *existing = worker;
         } else {
             self.discovered_workers.push(worker);
         }
         self.discovered_workers
-            .sort_by(|a, b| a.endpoint.cmp(&b.endpoint));
+            .sort_by(|a, b| a.mac.cmp(&b.mac).then(a.endpoint.cmp(&b.endpoint)));
     }
 
     fn connect_usb(&mut self) {
@@ -1226,16 +1249,22 @@ impl CompanionApp {
                 ui.horizontal(|ui| {
                     ui.vertical(|ui| {
                         ui.set_min_width((ui.available_width() * 0.58).clamp(420.0, 720.0));
-                        ui.label(
-                            RichText::new("CYD")
-                                .color(C_LIME)
-                                .font(display_font(54.0)),
-                        );
-                        ui.label(
-                            RichText::new("USB SHA-256 miner · Njörðr seas")
-                                .color(C_TEXT)
-                                .font(display_font(22.0)),
-                        );
+                        ui.horizontal(|ui| {
+                            brand_logo(ui, 56.0);
+                            ui.add_space(10.0);
+                            ui.vertical(|ui| {
+                                ui.label(
+                                    RichText::new("Companion")
+                                        .color(C_LIME)
+                                        .font(display_font(28.0)),
+                                );
+                                ui.label(
+                                    RichText::new("USB SHA-256 miner · Njörðr seas")
+                                        .color(C_TEXT)
+                                        .font(display_font(18.0)),
+                                );
+                            });
+                        });
                         ui.add_space(6.0);
                         ui.label(
                             RichText::new(if self.board_hashing() {
@@ -1660,15 +1689,26 @@ impl CompanionApp {
             );
             ui.horizontal(|ui| {
                 egui::ComboBox::from_id_source("com")
-                    .width(210.0)
+                    .width(320.0)
                     .selected_text(if self.com_port.is_empty() {
-                        "Select port"
+                        "Select port".to_string()
                     } else {
-                        &self.com_port
+                        self.ports
+                            .iter()
+                            .find(|p| p.name == self.com_port)
+                            .map(|p| p.label.clone())
+                            .unwrap_or_else(|| self.com_port.clone())
                     })
                     .show_ui(ui, |ui| {
-                        for p in &self.ports {
-                            ui.selectable_value(&mut self.com_port, p.clone(), p);
+                        if self.ports.is_empty() {
+                            ui.label(
+                                RichText::new("No serial ports reported by the OS")
+                                    .color(C_WARN)
+                                    .size(12.0),
+                            );
+                        }
+                        for p in self.ports.clone() {
+                            ui.selectable_value(&mut self.com_port, p.name.clone(), &p.label);
                         }
                     });
                 if soft_button(ui, "Refresh", 98.0).clicked() {
@@ -1747,12 +1787,12 @@ impl CompanionApp {
                 .font(mono_ui_font(12.0)),
         );
         ui.label(
-            RichText::new(format!(
-                "Scan USB for companion firmwares and LAN for other Companion hosts (UDP {LAN_DISCOVERY_PORT}). Connect multiple USB boards to fan-out jobs."
-            ))
-            .color(C_MUTED)
-            .size(12.0),
-        );
+                RichText::new(format!(
+                    "Scan every COM/serial port for companion firmwares (boards identified by MAC). LAN peers use UDP {LAN_DISCOVERY_PORT}."
+                ))
+                .color(C_MUTED)
+                .size(12.0),
+            );
         ui.add_space(8.0);
         ui.horizontal_wrapped(|ui| {
             let scan_label = if self.worker_scan_busy {
@@ -1781,12 +1821,20 @@ impl CompanionApp {
             for w in self.connected_workers.clone() {
                 ui.horizontal(|ui| {
                     ui.label(
-                        RichText::new(format!(
-                            "● {} · {} · {}",
-                            w.endpoint,
-                            if w.fw.is_empty() { "fw?" } else { &w.fw },
-                            format_hashrate(w.hashrate_hs)
-                        ))
+                        RichText::new({
+                            let mac = if w.mac.is_empty() {
+                                "mac?".to_string()
+                            } else {
+                                w.mac.clone()
+                            };
+                            format!(
+                                "● {} · {} · {} · {}",
+                                mac,
+                                w.endpoint,
+                                if w.fw.is_empty() { "fw?" } else { &w.fw },
+                                format_hashrate(w.hashrate_hs)
+                            )
+                        })
                         .color(C_LIME)
                         .font(mono_ui_font(11.0)),
                     );
@@ -1823,9 +1871,12 @@ impl CompanionApp {
                     .any(|c| c.endpoint == w.endpoint);
                 ui.horizontal(|ui| {
                     ui.label(
-                        RichText::new(format!("{} · {}", w.endpoint, w.detail))
-                            .color(C_TEXT)
-                            .font(mono_ui_font(11.0)),
+                        RichText::new({
+                            let mac = if w.mac.is_empty() { "mac?" } else { &w.mac };
+                            format!("{mac} · {} · {}", w.endpoint, w.detail)
+                        })
+                        .color(C_TEXT)
+                        .font(mono_ui_font(11.0)),
                     );
                     if already {
                         ui.label(RichText::new("linked").color(C_LIME).size(11.0));
@@ -2242,19 +2293,24 @@ impl App for CompanionApp {
         while let Ok(msg) = self.msg_rx.try_recv() {
             match msg {
                 NetMsg::Ports(p) => {
+                    let n = p.len();
                     self.ports = p;
                     if self.com_port.is_empty() {
                         if let Some(first) = self.ports.first() {
-                            self.com_port = first.clone();
+                            self.com_port = first.name.clone();
                         }
-                    } else if !self.ports.iter().any(|x| x == &self.com_port) {
+                    } else if !self.ports.iter().any(|x| x.name == self.com_port) {
                         // Keep remembered port even if not listed yet (driver lag).
                     }
+                    self.push_log(
+                        LogKind::Usb,
+                        format!("Serial ports: {n} reported by OS (all listed, none filtered)"),
+                    );
                     if self.auto_connect
                         && !self.auto_connect_attempted
                         && !self.usb_open
                         && !self.com_port.is_empty()
-                        && self.ports.iter().any(|x| x == &self.com_port)
+                        && self.ports.iter().any(|x| x.name == self.com_port)
                     {
                         self.auto_connect_attempted = true;
                         self.connect_usb();
@@ -2285,6 +2341,9 @@ impl App for CompanionApp {
                     self.push_log(LogKind::Err, e);
                 }
                 NetMsg::Status(Ok(s)) => {
+                    if !s.mac.is_empty() {
+                        self.board_mac = normalize_mac(&s.mac);
+                    }
                     self.status = s;
                     self.last_error.clear();
                 }
@@ -2298,12 +2357,20 @@ impl App for CompanionApp {
                     } else {
                         c.fw.clone()
                     };
+                    if !c.mac.is_empty() {
+                        self.board_mac = normalize_mac(&c.mac);
+                    }
                     if c.cpu_mhz == 80 || c.cpu_mhz == 160 || c.cpu_mhz == 240 {
                         self.target_mhz = c.cpu_mhz;
                     }
                     self.push_log(
                         LogKind::Usb,
-                        format!("config fw={} mode={}", c.fw, c.mode),
+                        format!(
+                            "config fw={} mode={} mac={}",
+                            c.fw,
+                            c.mode,
+                            if c.mac.is_empty() { "—" } else { &c.mac }
+                        ),
                     );
                 }
                 NetMsg::Config(Err(e)) => self.push_log(LogKind::Warn, format!("config: {e}")),
@@ -2517,6 +2584,9 @@ impl App for CompanionApp {
                         if !first.fw.is_empty() {
                             self.fw_label = first.fw.clone();
                         }
+                        if !first.mac.is_empty() {
+                            self.board_mac = first.mac.clone();
+                        }
                     }
                 }
             }
@@ -2563,10 +2633,10 @@ impl App for CompanionApp {
         for peer in self.lan.poll_peers() {
             self.merge_discovered(peer);
         }
-        let board_ads: Vec<(String, String)> = self
+        let board_ads: Vec<(String, String, String)> = self
             .connected_workers
             .iter()
-            .map(|w| (w.endpoint.clone(), w.fw.clone()))
+            .map(|w| (w.endpoint.clone(), w.fw.clone(), w.mac.clone()))
             .collect();
         let host = hostname_fallback();
         self.lan.maybe_beacon(&board_ads, &host);
@@ -2626,15 +2696,23 @@ impl App for CompanionApp {
                             ui.add_space(8.0);
                             ui.horizontal(|ui| {
                                 egui::ComboBox::from_id_source("wiz_com")
-                                    .width(200.0)
+                                    .width(320.0)
                                     .selected_text(if self.com_port.is_empty() {
-                                        "Select port"
+                                        "Select port".to_string()
                                     } else {
-                                        &self.com_port
+                                        self.ports
+                                            .iter()
+                                            .find(|p| p.name == self.com_port)
+                                            .map(|p| p.label.clone())
+                                            .unwrap_or_else(|| self.com_port.clone())
                                     })
                                     .show_ui(ui, |ui| {
-                                        for p in &self.ports {
-                                            ui.selectable_value(&mut self.com_port, p.clone(), p);
+                                        for p in self.ports.clone() {
+                                            ui.selectable_value(
+                                                &mut self.com_port,
+                                                p.name.clone(),
+                                                &p.label,
+                                            );
                                         }
                                     });
                                 if soft_button(ui, "Refresh", 90.0).clicked() {
@@ -2864,13 +2942,23 @@ impl App for CompanionApp {
             .show(ctx, |ui| {
                 paint_background(ui, ui.max_rect(), self.pulse, self.grid_phase, self.mining || self.board_hashing());
                 ui.horizontal(|ui| {
-                    ui.vertical(|ui| {
-                        ui.label(RichText::new("CYD").color(C_LIME).font(display_font(64.0)));
-                        ui.label(
-                            RichText::new("Companion · Njörðr")
-                                .color(C_MUTED)
-                                .font(mono_ui_font(12.0)),
-                        );
+                    ui.horizontal(|ui| {
+                        brand_logo(ui, 48.0);
+                        ui.add_space(10.0);
+                        ui.vertical(|ui| {
+                            ui.label(
+                                RichText::new("Companion · Njörðr")
+                                    .color(C_MUTED)
+                                    .font(mono_ui_font(12.0)),
+                            );
+                            if !self.board_mac.is_empty() {
+                                ui.label(
+                                    RichText::new(format!("board {}", self.board_mac))
+                                        .color(C_DIM)
+                                        .font(mono_ui_font(10.0)),
+                                );
+                            }
+                        });
                     });
                     ui.add_space(24.0);
                     if nav_button(ui, "Mine", self.tab == Tab::Mine).clicked() {
@@ -3491,6 +3579,7 @@ fn mine_worker(cmd_rx: Receiver<NetCmd>, msg_tx: Sender<NetMsg>) {
         rx: String,
         legacy_job: bool,
         fw: String,
+        mac: String,
         hashrate_hs: f64,
         hashes: u64,
         mining: bool,
@@ -3503,6 +3592,7 @@ fn mine_worker(cmd_rx: Receiver<NetCmd>, msg_tx: Sender<NetMsg>) {
             .iter()
             .map(|b| WorkerLive {
                 endpoint: b.name.clone(),
+                mac: b.mac.clone(),
                 fw: b.fw.clone(),
                 connected: true,
                 hashrate_hs: b.hashrate_hs,
@@ -3557,6 +3647,7 @@ fn mine_worker(cmd_rx: Receiver<NetCmd>, msg_tx: Sender<NetMsg>) {
                 rx,
                 legacy_job: false,
                 fw: String::new(),
+                mac: String::new(),
                 hashrate_hs: 0.0,
                 hashes: 0,
                 mining: false,
@@ -3571,6 +3662,9 @@ fn mine_worker(cmd_rx: Receiver<NetCmd>, msg_tx: Sender<NetMsg>) {
             if let Ok(cfg) = parse_cmp_config(&line) {
                 board.legacy_job = !fw_supports_split_jobs(&cfg.fw);
                 board.fw = cfg.fw.clone();
+                if !cfg.mac.is_empty() {
+                    board.mac = normalize_mac(&cfg.mac);
+                }
                 if board.legacy_job {
                     log_msg(
                         msg_tx,
@@ -3591,8 +3685,24 @@ fn mine_worker(cmd_rx: Receiver<NetCmd>, msg_tx: Sender<NetMsg>) {
                 board.hashrate_hs = st.hashrate_hs;
                 board.hashes = st.hashes;
                 board.mining = st.mining;
+                if !st.mac.is_empty() {
+                    board.mac = normalize_mac(&st.mac);
+                }
                 let _ = msg_tx.send(NetMsg::Status(Ok(st)));
             }
+        }
+        if !board.mac.is_empty() {
+            let id = mac_worker_id(&board.mac);
+            log_msg(
+                msg_tx,
+                LogKind::Usb,
+                format!(
+                    "Board {} identity {} ({})",
+                    board.name,
+                    board.mac,
+                    if id.is_empty() { "port" } else { &id }
+                ),
+            );
         }
     }
 
@@ -3622,11 +3732,7 @@ fn mine_worker(cmd_rx: Receiver<NetCmd>, msg_tx: Sender<NetMsg>) {
         if let Some(cmd) = cmd {
             match cmd {
                 NetCmd::ListPorts => {
-                    let ports = serialport::available_ports()
-                        .unwrap_or_default()
-                        .into_iter()
-                        .map(|p| p.port_name)
-                        .collect();
+                    let ports = list_serial_ports();
                     let _ = msg_tx.send(NetMsg::Ports(ports));
                 }
                 NetCmd::ScanWorkers => {
@@ -3914,6 +4020,9 @@ fn mine_worker(cmd_rx: Receiver<NetCmd>, msg_tx: Sender<NetMsg>) {
                                     b.hashrate_hs = st.hashrate_hs;
                                     b.hashes = st.hashes;
                                     b.mining = st.mining;
+                                    if !st.mac.is_empty() {
+                                        b.mac = normalize_mac(&st.mac);
+                                    }
                                     total_hs += st.hashrate_hs;
                                     total_hashes = total_hashes.saturating_add(st.hashes);
                                     any_mining |= st.mining;
