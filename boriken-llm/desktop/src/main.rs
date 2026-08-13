@@ -1,5 +1,6 @@
 mod corpus;
 mod scene;
+mod symbols;
 
 use corpus::{load_lexicon, Lexeme};
 use eframe::egui::{self, Color32, FontData, FontDefinitions, FontFamily, Key, RichText, Sense};
@@ -351,10 +352,10 @@ impl eframe::App for BorikenApp {
                         ui.vertical(|ui| {
                             brand_title(ui, self.scene.pulse);
                             ui.label(
-                                RichText::new("High-seas classroom · rebuild the native tongue")
-                                    .size(18.0)
-                                    .color(Color32::from_rgba_unmultiplied(245, 255, 245, 220)),
-                            );
+                        RichText::new("High-seas classroom · Taíno symbols of Borikén")
+                            .size(18.0)
+                            .color(Color32::from_rgba_unmultiplied(245, 255, 245, 220)),
+                    );
                         });
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                             glass_panel(ui, 220.0, |ui| {
@@ -456,7 +457,7 @@ impl eframe::App for BorikenApp {
                                 ui.add_space(8.0);
                                 ui.label(
                                     RichText::new(
-                                        "Motion canvas · particle weather · ocean parallax · cinematic sun",
+                                        "Sol Taíno · cemí · coquí · carey · petroglyph friezes · particle weather",
                                     )
                                     .size(14.0)
                                     .color(Color32::from_rgb(180, 210, 195)),

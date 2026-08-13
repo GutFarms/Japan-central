@@ -2,7 +2,8 @@
 
 Native egui/eframe classroom with cinematic island atmosphere:
 
-- Animated sky bands, sun rays, ocean parallax, particle weather
+- Animated **Sol Taíno** (Jayuya-inspired), cemí, coquí, carey, spiral petroglyphs
+- Ocean parallax, particle glyph weather, carved monolith accents
 - Word of the Day, Batey Match, Memory Flip, Konuko Fill, Areyto Quest, Define
 - XP / streak / level titles
 - Full lexicon with definitions + fun facts (embedded + `corpus/`)

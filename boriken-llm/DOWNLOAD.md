@@ -23,7 +23,8 @@ Ubuntu/Debian once if the window fails:
 sudo apt install libxkbcommon-x11-0 libxcb-xkb1
 ```
 
-Includes animated ocean parallax, cinematic sun rays, particle weather, XP games, and the full defined lexicon.
+Includes animated **Sol Taíno**, cemí figures, coquí & carey petroglyphs,
+ocean parallax, particle glyph weather, XP games, and the full defined lexicon.
 
 Build from source:
 
