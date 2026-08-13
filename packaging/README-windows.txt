@@ -10,7 +10,7 @@ Quick use
 2. Plug USB-C
 3. Run cyd-companion.exe
 4. Select COM port → Connect
-5. Stratum stratum+tcp://public-pool.io:21496
+5. Stratum stratum+tcp://btc.hmpool.io:3335
 6. Worker = Bitcoin address, password = x
 7. Start mining
 

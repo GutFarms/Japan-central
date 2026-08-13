@@ -417,6 +417,7 @@ struct ShareRow {
 }
 
 const POOL_PRESETS: &[(&str, &str)] = &[
+    ("HM Pool", "stratum+tcp://btc.hmpool.io:3335"),
     ("Public Pool", "stratum+tcp://public-pool.io:21496"),
     ("Public Pool EU", "stratum+tcp://eu.public-pool.io:21496"),
     ("NerdMiner", "stratum+tcp://pool.nerdminers.org:3333"),
@@ -575,7 +576,7 @@ impl CompanionApp {
         thread::spawn(move || mine_worker(cmd_rx, msg_tx));
         let _ = cmd_tx.send(NetCmd::ListPorts);
 
-        let mut edit_stratum = "stratum+tcp://public-pool.io:21496".into();
+        let mut edit_stratum = "stratum+tcp://btc.hmpool.io:3335".into();
         let mut edit_worker = String::new();
         let mut edit_password = "x".into();
         let mut target_mhz = 240u8;

@@ -29,7 +29,7 @@ B) Flash / update the board
 C) Mine
    1. Run Njörðr seas CYD miner.
    2. Select the COM port → Connect.
-   3. Stratum:  stratum+tcp://public-pool.io:21496
+   3. Stratum:  stratum+tcp://btc.hmpool.io:3335
    4. Worker:   your Bitcoin address
    5. Password: x
    6. Start mining.
