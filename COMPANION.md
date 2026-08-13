@@ -58,6 +58,7 @@ In **Settings**:
 - **0.8.21** — Check/Update Companion app + Fetch latest board FW from repo downloads
 - **0.8.22** — fix Windows self-update bat (retry while `.new` remains; do not relaunch a locked old exe)
 - **0.8.23** — fetch updates via GitHub API / commit-pinned raw (branch raw CDN can serve stale VERSION/bins)
+- **0.8.24** — fix Update board: espflash reject `ESPFLASH_SKIP_UPDATE_CHECK=1` (needs true/false); skip Windows Store python stubs
 
 ## Recommended pool (ESP32-friendly)
 

@@ -338,7 +338,7 @@ fn extract_merged_from_zip(
     })
 }
 
-pub const COMPANION_UA: &str = "CYD-Companion/0.8.23";
+pub const COMPANION_UA: &str = "CYD-Companion/0.8.24";
 const ESPFLASH_VERSION: &str = "4.5.0";
 pub const REPO_OWNER: &str = "GutFarms";
 pub const REPO_NAME: &str = "Japan-central";
@@ -713,23 +713,50 @@ fn run_espflash(
         "espflash write-bin → {port} @ {baud} ({})",
         espflash.display()
     ));
-    // Global --skip-update-check must come *before* the subcommand (espflash 4.x).
-    let mut cmd = Command::new(espflash);
-    cmd.args([
-        "--skip-update-check",
-        "write-bin",
-        "-p",
-        port,
-        "-B",
-        baud,
-        "-c",
-        "esp32",
-        "--non-interactive",
-        "0x0",
-    ])
-    .arg(image)
-    .env("ESPFLASH_SKIP_UPDATE_CHECK", "1");
-    run_streaming(&mut cmd, progress, "espflash")
+    // Global skip-update-check must come *before* the subcommand (espflash 4.x).
+    // Never set ESPFLASH_SKIP_UPDATE_CHECK=1 — some Windows clap builds only accept
+    // true/false and fail with: invalid value '1' for '--skip-update-check'.
+    let mut last = String::new();
+    for (skip, set_env_true) in [
+        (&["--skip-update-check"][..], false),
+        (&["--skip-update-check=true"][..], true),
+        (&[][..], true),
+    ] {
+        let mut cmd = Command::new(espflash);
+        cmd.env_remove("ESPFLASH_SKIP_UPDATE_CHECK");
+        if set_env_true {
+            cmd.env("ESPFLASH_SKIP_UPDATE_CHECK", "true");
+        }
+        cmd.args(skip).args([
+            "write-bin",
+            "-p",
+            port,
+            "-B",
+            baud,
+            "-c",
+            "esp32",
+            "--non-interactive",
+            "0x0",
+        ]);
+        cmd.arg(image);
+        match run_streaming(&mut cmd, progress, "espflash") {
+            Ok(()) => return Ok(()),
+            Err(e) => {
+                let lower = e.to_ascii_lowercase();
+                last = e;
+                // Only rotate skip-flag forms on CLI parse errors; port/flash errors stop here.
+                if !(lower.contains("skip-update-check")
+                    || lower.contains("skip_update_check")
+                    || lower.contains("unexpected argument")
+                    || lower.contains("invalid value"))
+                {
+                    return Err(last);
+                }
+                progress(format!("espflash CLI variant failed — trying next…"));
+            }
+        }
+    }
+    Err(last)
 }
 
 /// Flash merged image @ 0x0 (DIO / 4MB / 40MHz layout already inside the merge).
@@ -768,11 +795,12 @@ pub fn flash_merged_bin(port: &str, image: &Path, progress: &dyn Fn(String)) -> 
         }
     }
 
-    // Optional Python fallback — only if a real Python launcher exists.
+    // Optional Python fallback — skip Windows Store python stubs (exit 9009).
     let mut py_err = String::new();
     let py_bins: Vec<PathBuf> = ["py", "python", "python3"]
         .iter()
         .filter_map(|n| which_on_path(n))
+        .filter(|p| !is_windows_store_python_stub(p))
         .collect();
     if !py_bins.is_empty() {
         progress("espflash failed — trying Python esptool…".into());
@@ -813,8 +841,14 @@ pub fn flash_merged_bin(port: &str, image: &Path, progress: &dyn Fn(String)) -> 
                 match run_streaming(&mut cmd, progress, "esptool") {
                     Ok(()) => return Ok(()),
                     Err(e) => {
+                        // 9009 = Windows Store alias with no real Python installed.
+                        if e.contains("9009") || e.to_ascii_lowercase().contains("microsoft store")
+                        {
+                            progress("Skipping Windows Store Python stub…".into());
+                            continue;
+                        }
                         py_err = e;
-                        progress(format!("esptool failed — trying next…"));
+                        progress("esptool failed — trying next…".into());
                     }
                 }
             }
@@ -822,13 +856,18 @@ pub fn flash_merged_bin(port: &str, image: &Path, progress: &dyn Fn(String)) -> 
     }
 
     Err(format!(
-        "Flash failed (espflash: {esp_err}{}). Tip: hold BOOT, tap RESET, release BOOT, then Update again.",
+        "Flash failed (espflash: {esp_err}{}). Tip: hold BOOT, tap RESET, release BOOT, then Update again. Ensure Tools\\espflash.exe sits next to the app.",
         if py_err.is_empty() {
             String::new()
         } else {
             format!("; esptool: {py_err}")
         }
     ))
+}
+
+fn is_windows_store_python_stub(path: &Path) -> bool {
+    let s = path.to_string_lossy().to_ascii_lowercase();
+    s.contains("windowsapps") || s.contains("\\windowsapps\\")
 }
 
 fn run_streaming(

@@ -58,7 +58,7 @@ pub struct ApiPullOutcome {
     pub pulled_ms: u64,
 }
 
-const UA: &str = "CYD-Companion/0.8.23";
+const UA: &str = "CYD-Companion/0.8.24";
 const MAX_PREVIEW: usize = 3500;
 
 /// GET `url` and return status + preview (+ optional JSON-path summary).
