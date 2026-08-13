@@ -17,7 +17,10 @@ use std::sync::mpsc::{self, Receiver, Sender};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use api_feeds::{load_feeds, next_feed_id, pull_feed, save_feeds, ApiFeed, ApiPullOutcome};
+use api_feeds::{
+    load_feeds, next_feed_id, pull_feed, save_feeds, ApiContentKind, ApiFeed, ApiPullOutcome,
+    ApiSource,
+};
 use app_update::{check_app_update, running_version, update_companion_app, AppRemoteInfo};
 use flash_update::{
     ensure_firmware_image, fetch_latest_firmware, find_firmware_image, flash_merged_bin,
@@ -568,6 +571,12 @@ struct CompanionApp {
     api_draft_url: String,
     api_draft_auth: String,
     api_draft_path: String,
+    api_draft_kind: ApiContentKind,
+    /// Extra sources being edited before Add (url, kind, path).
+    api_draft_extra_url: String,
+    api_draft_extra_kind: ApiContentKind,
+    api_draft_extra_path: String,
+    api_draft_extras: Vec<ApiSource>,
     api_pulling_id: Option<u64>,
     last_api_auto_pull: Instant,
     /// USB/LAN CYD worker discovery results.
@@ -678,6 +687,11 @@ impl CompanionApp {
             api_draft_url: String::new(),
             api_draft_auth: String::new(),
             api_draft_path: String::new(),
+            api_draft_kind: ApiContentKind::Auto,
+            api_draft_extra_url: String::new(),
+            api_draft_extra_kind: ApiContentKind::Auto,
+            api_draft_extra_path: String::new(),
+            api_draft_extras: Vec::new(),
             api_pulling_id: None,
             last_api_auto_pull: Instant::now() - Duration::from_secs(120),
             discovered_workers: Vec::new(),
@@ -911,16 +925,46 @@ impl CompanionApp {
         let mut feed = ApiFeed::new(id, name, url);
         feed.auth = self.api_draft_auth.trim().to_string();
         feed.json_path = self.api_draft_path.trim().to_string();
+        feed.kind = self.api_draft_kind;
+        feed.sources = std::mem::take(&mut self.api_draft_extras);
         self.api_feeds.push(feed);
         self.api_draft_name.clear();
         self.api_draft_url.clear();
         self.api_draft_auth.clear();
         self.api_draft_path.clear();
-        self.last_ok = "API feed added — Pull now to load data into the app.".into();
-        self.push_log(LogKind::Info, "API feed added".into());
+        self.api_draft_kind = ApiContentKind::Auto;
+        self.api_draft_extra_url.clear();
+        self.api_draft_extra_path.clear();
+        self.api_draft_extra_kind = ApiContentKind::Auto;
+        let n_src = self.api_feeds.last().map(|f| f.all_sources().len()).unwrap_or(1);
+        self.last_ok = format!(
+            "API feed added ({n_src} source{}) — Pull now to load data.",
+            if n_src == 1 { "" } else { "s" }
+        );
+        self.push_log(LogKind::Info, self.last_ok.clone());
         if let Some(last) = self.api_feeds.last() {
             self.request_api_pull(last.id);
         }
+    }
+
+    fn add_api_draft_extra_source(&mut self) {
+        let url = self.api_draft_extra_url.trim().to_string();
+        if !(url.starts_with("http://") || url.starts_with("https://")) {
+            self.last_error = "Extra source needs an http(s) URL.".into();
+            return;
+        }
+        self.api_draft_extras.push(ApiSource::new(
+            url,
+            self.api_draft_extra_kind,
+            self.api_draft_extra_path.trim().to_string(),
+        ));
+        self.api_draft_extra_url.clear();
+        self.api_draft_extra_path.clear();
+        self.api_draft_extra_kind = ApiContentKind::Auto;
+        self.last_ok = format!(
+            "Extra source queued ({} total extras).",
+            self.api_draft_extras.len()
+        );
     }
 
     fn apply_api_pull(&mut self, outcome: ApiPullOutcome) {
@@ -931,6 +975,7 @@ impl CompanionApp {
             feed.last_status = outcome.status.clone();
             feed.last_summary = outcome.summary.clone();
             feed.last_preview = outcome.preview;
+            feed.last_saved = outcome.saved.clone();
             feed.last_pulled_ms = outcome.pulled_ms;
             let name = feed.name.clone();
             if outcome.ok {
@@ -1662,18 +1707,57 @@ impl CompanionApp {
         soft_panel(ui, "API feeds", |ui| {
             ui.label(
                 RichText::new(
-                    "Add HTTPS APIs to pull info from other sites into Companion. Optional JSON path picks a field for the summary (e.g. data.price).",
+                    "Pull JSON, text, CSV, or files from one or more HTTPS sources. File saves land in ApiDownloads\\ next to the app.",
                 )
                 .color(C_MUTED)
                 .size(13.0),
             );
             ui.add_space(10.0);
-            labeled_edit(ui, "Name", &mut self.api_draft_name, "Weather · Markets · Custom");
+            labeled_edit(ui, "Name", &mut self.api_draft_name, "Weather · Markets · Firmware mirror");
             labeled_edit(
                 ui,
-                "URL",
+                "Primary URL",
                 &mut self.api_draft_url,
-                "https://api.example.com/v1/info",
+                "https://api.example.com/v1/info.json",
+            );
+            ui.horizontal(|ui| {
+                ui.label(
+                    RichText::new("Type")
+                        .color(C_MUTED)
+                        .font(mono_ui_font(12.0)),
+                );
+                egui::ComboBox::from_id_source("api_draft_kind")
+                    .width(120.0)
+                    .selected_text(self.api_draft_kind.label())
+                    .show_ui(ui, |ui| {
+                        for k in ApiContentKind::all() {
+                            ui.selectable_value(&mut self.api_draft_kind, *k, k.label());
+                        }
+                    });
+                ui.add_space(12.0);
+                ui.label(
+                    RichText::new(match self.api_draft_kind {
+                        ApiContentKind::File => "Save as (optional)",
+                        ApiContentKind::Csv => "CSV column (optional)",
+                        _ => "JSON path (optional)",
+                    })
+                    .color(C_MUTED)
+                    .font(mono_ui_font(12.0)),
+                );
+            });
+            labeled_edit(
+                ui,
+                match self.api_draft_kind {
+                    ApiContentKind::File => "Save as",
+                    ApiContentKind::Csv => "Column",
+                    _ => "Path",
+                },
+                &mut self.api_draft_path,
+                match self.api_draft_kind {
+                    ApiContentKind::File => "merged.bin",
+                    ApiContentKind::Csv => "price",
+                    _ => "data.price",
+                },
             );
             labeled_edit(
                 ui,
@@ -1681,21 +1765,68 @@ impl CompanionApp {
                 &mut self.api_draft_auth,
                 "Bearer …  or  X-Api-Key: …",
             );
+
+            ui.add_space(8.0);
+            ui.label(
+                RichText::new("Extra sources (optional — other file types / URLs on the same feed)")
+                    .color(C_DIM)
+                    .font(mono_ui_font(11.0)),
+            );
             labeled_edit(
                 ui,
-                "JSON path (optional)",
-                &mut self.api_draft_path,
-                "data.price",
+                "Extra URL",
+                &mut self.api_draft_extra_url,
+                "https://cdn.example.com/data.csv",
             );
-            ui.add_space(8.0);
-            if soft_button(ui, "Add API feed", 160.0).clicked() {
-                self.add_api_feed_from_draft();
+            ui.horizontal(|ui| {
+                ui.label(
+                    RichText::new("Extra type")
+                        .color(C_MUTED)
+                        .font(mono_ui_font(12.0)),
+                );
+                egui::ComboBox::from_id_source("api_draft_extra_kind")
+                    .width(120.0)
+                    .selected_text(self.api_draft_extra_kind.label())
+                    .show_ui(ui, |ui| {
+                        for k in ApiContentKind::all() {
+                            ui.selectable_value(&mut self.api_draft_extra_kind, *k, k.label());
+                        }
+                    });
+            });
+            labeled_edit(
+                ui,
+                "Extra path / save-as",
+                &mut self.api_draft_extra_path,
+                "optional",
+            );
+            ui.horizontal(|ui| {
+                if soft_button(ui, "Add extra source", 150.0).clicked() {
+                    self.add_api_draft_extra_source();
+                }
+                if soft_button(ui, "Add API feed", 140.0).clicked() {
+                    self.add_api_feed_from_draft();
+                }
+            });
+            if !self.api_draft_extras.is_empty() {
+                ui.add_space(6.0);
+                for (i, src) in self.api_draft_extras.iter().enumerate() {
+                    ui.label(
+                        RichText::new(format!(
+                            "· extra {}: {} · {}",
+                            i + 1,
+                            src.kind.label(),
+                            src.url
+                        ))
+                        .color(C_LIME)
+                        .font(mono_ui_font(10.0)),
+                    );
+                }
             }
 
             if self.api_feeds.is_empty() {
                 ui.add_space(10.0);
                 ui.label(
-                    RichText::new("No API feeds yet — add a URL above to pull live data.")
+                    RichText::new("No API feeds yet — add a URL above to pull live data or files.")
                         .color(C_DIM)
                         .size(12.0),
                 );
@@ -1707,6 +1838,7 @@ impl CompanionApp {
             let mut remove_id: Option<u64> = None;
             let pulling = self.api_pulling_id;
             for feed in &mut self.api_feeds {
+                let src_n = 1 + feed.sources.len();
                 Frame::none()
                     .fill(Color32::from_rgba_unmultiplied(3, 12, 26, 170))
                     .rounding(Rounding::same(12.0))
@@ -1718,6 +1850,15 @@ impl CompanionApp {
                                 RichText::new(&feed.name)
                                     .color(C_TEXT)
                                     .font(mono_ui_font(13.0)),
+                            );
+                            ui.label(
+                                RichText::new(format!(
+                                    "· {} · {src_n} source{}",
+                                    feed.kind.label(),
+                                    if src_n == 1 { "" } else { "s" }
+                                ))
+                                .color(C_DIM)
+                                .font(mono_ui_font(10.0)),
                             );
                             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                                 if soft_button(ui, "Remove", 88.0).clicked() {
@@ -1741,6 +1882,18 @@ impl CompanionApp {
                                 .color(C_DIM)
                                 .font(mono_ui_font(10.0)),
                         );
+                        for (i, src) in feed.sources.iter().enumerate() {
+                            ui.label(
+                                RichText::new(format!(
+                                    "+{} {} · {}",
+                                    i + 1,
+                                    src.kind.label(),
+                                    src.url
+                                ))
+                                .color(C_DIM)
+                                .font(mono_ui_font(10.0)),
+                            );
+                        }
                         if !feed.last_status.is_empty() {
                             ui.add_space(4.0);
                             ui.label(
@@ -1755,6 +1908,13 @@ impl CompanionApp {
                                 ))
                                 .color(C_LIME)
                                 .font(mono_ui_font(11.0)),
+                            );
+                        }
+                        if !feed.last_saved.is_empty() {
+                            ui.label(
+                                RichText::new(format!("saved {}", feed.last_saved))
+                                    .color(C_WARN)
+                                    .font(mono_ui_font(10.0)),
                             );
                         }
                         if !feed.last_preview.is_empty() {

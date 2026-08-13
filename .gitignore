@@ -15,6 +15,10 @@
 .vscode/
 **/firmware-cpp/.pio/
 **/companion/build/
+**/companion/target/
 *.rs.bk
+# API feed File downloads (runtime)
+ApiDownloads/
+**/ApiDownloads/
 hardware/esp32-asic-controller/firmware-stub/target/
 packaging/cyd-miner-build.nsi
