@@ -73,8 +73,14 @@ rm -f dist/CYD-Miner-Portable.zip dist/CYD-Miner-Setup.exe dist/CYD-Companion-Se
 ( cd dist && zip -r cyd-companion-windows.zip cyd-companion-windows )
 cp -f dist/cyd-companion-windows.zip dist/CYD-Companion-Portable.zip
 
-mkdir -p dist/cyd-companion-app-only
+# App kit: exe + Firmware + Tools so Update board works without the full installer.
+rm -rf dist/cyd-companion-app-only
+mkdir -p dist/cyd-companion-app-only/Firmware dist/cyd-companion-app-only/Tools
 cp -f dist/cyd-companion-windows/cyd-companion.exe dist/cyd-companion-app-only/
+cp -f "$MERGED" dist/cyd-companion-app-only/Firmware/
+cp -f "$SUMS" dist/cyd-companion-app-only/Firmware/
+echo "${VER}-sha256" > dist/cyd-companion-app-only/Firmware/VERSION.txt
+cp -f "$ESPFLASH_EXE" dist/cyd-companion-app-only/Tools/
 ( cd dist && zip -r CYD-Companion-App-Only.zip cyd-companion-app-only )
 
 # Full kit portable zip (app + firmware + flash helper)

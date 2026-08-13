@@ -17,7 +17,8 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use api_feeds::{load_feeds, next_feed_id, pull_feed, save_feeds, ApiFeed, ApiPullOutcome};
 use flash_update::{
-    fetch_latest_firmware, find_firmware_image, flash_merged_bin, update_needed, FirmwareImage,
+    ensure_firmware_image, fetch_latest_firmware, find_firmware_image, flash_merged_bin,
+    update_needed, FirmwareImage,
 };
 use live_bar::{format_change, format_usd, LiveFeed};
 use stratum::{
@@ -1018,18 +1019,17 @@ impl CompanionApp {
 
     fn request_board_update(&mut self) {
         self.firmware = find_firmware_image().ok().or_else(|| self.firmware.clone());
-        if self.firmware.is_none() {
-            self.last_error =
-                "Firmware image not found. Use Fetch latest or install the Miner kit."
-                    .into();
-            self.push_log(LogKind::Err, self.last_error.clone());
-            return;
-        }
         if self.com_port.trim().is_empty() {
             self.last_error = "Select a COM / serial port before updating.".into();
             return;
         }
-        // Soft-block when already matching — still allow force via confirm dialog.
+        // Missing local image is OK — worker will fetch Firmware\\ + Tools\\espflash.
+        if self.firmware.is_none() {
+            self.push_log(
+                LogKind::Info,
+                "No local firmware yet — Update will download image + espflash.".into(),
+            );
+        }
         self.update_confirm = true;
     }
 
@@ -1045,10 +1045,6 @@ impl CompanionApp {
 
     fn begin_board_update(&mut self) {
         self.update_confirm = false;
-        let Some(fw) = self.firmware.clone() else {
-            self.last_error = "No firmware image available.".into();
-            return;
-        };
         if self.com_port.trim().is_empty() {
             self.last_error = "Select a COM / serial port before updating.".into();
             return;
@@ -1057,25 +1053,32 @@ impl CompanionApp {
         if self.mining {
             self.stop_mine();
         }
+        let image = self
+            .firmware
+            .as_ref()
+            .map(|fw| fw.path.to_string_lossy().into_owned())
+            .unwrap_or_default();
         self.update_busy = true;
         self.update_status = format!("Updating board via {}…", self.com_port);
         self.last_ok = self.update_status.clone();
         self.last_error.clear();
         self.push_log(
             LogKind::Usb,
-            format!(
-                "Update board → {} ({} KB) on {}",
-                fw.path.display(),
-                fw.bytes / 1024,
-                self.com_port
-            ),
+            if image.is_empty() {
+                format!(
+                    "Update board → fetch firmware + flash on {}",
+                    self.com_port
+                )
+            } else {
+                format!("Update board → {image} on {}", self.com_port)
+            },
         );
         // Release USB in the worker before flash (port must be free).
         self.usb_open = false;
         self.mining = false;
         let _ = self.cmd_tx.send(NetCmd::UpdateFirmware {
             port: self.com_port.clone(),
-            image: fw.path.to_string_lossy().into_owned(),
+            image,
             reopen,
         });
     }
@@ -3572,16 +3575,49 @@ fn mine_worker(cmd_rx: Receiver<NetCmd>, msg_tx: Sender<NetMsg>) {
                     for b in boards.iter_mut() {
                         let _ = usb_cmd(b.port.as_mut(), &mut b.rx, "cmp stop");
                     }
+                    // Drop serial handles so Windows releases the COM port for espflash.
                     boards.clear();
                     publish_live(&msg_tx, &boards);
-                    let img = std::path::PathBuf::from(image);
+                    log_msg(
+                        &msg_tx,
+                        LogKind::Usb,
+                        "USB released — waiting for COM port…",
+                    );
+                    thread::sleep(Duration::from_millis(1200));
+
                     let progress_tx = msg_tx.clone();
                     let progress = move |line: String| {
                         log_msg(&progress_tx, LogKind::Usb, line);
                     };
-                    let result = flash_merged_bin(&port, &img, &progress)
-                        .map(|_| format!("Firmware flashed on {port}"))
-                        .map_err(|e| e);
+
+                    let result = (|| {
+                        let img = {
+                            let local = std::path::PathBuf::from(&image);
+                            if !image.is_empty() && local.is_file() {
+                                let bytes =
+                                    std::fs::metadata(&local).map(|m| m.len()).unwrap_or(0);
+                                let version = flash_update::read_nearby_fw_version(&local);
+                                FirmwareImage {
+                                    path: local,
+                                    bytes,
+                                    version,
+                                }
+                            } else {
+                                ensure_firmware_image(&progress)?
+                            }
+                        };
+                        let _ = msg_tx.send(NetMsg::FirmwareFetched(Ok(img.clone())));
+                        flash_merged_bin(&port, &img.path, &progress)?;
+                        Ok(format!(
+                            "Firmware {} flashed on {port}",
+                            if img.version.is_empty() {
+                                "image".into()
+                            } else {
+                                img.version
+                            }
+                        ))
+                    })();
+
                     let reopen_port = if reopen { Some(port) } else { None };
                     let _ = msg_tx.send(NetMsg::FlashDone {
                         result,

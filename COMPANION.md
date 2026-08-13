@@ -15,9 +15,9 @@ Also available:
 
 | Package | Contents |
 |---------|----------|
-| [`cyd-companion.exe`](flash/downloads/cyd-companion.exe) | Standalone app (no installer) |
+| [`cyd-companion.exe`](flash/downloads/cyd-companion.exe) | App binary (Update board auto-fetches Firmware + espflash) |
 | `CYD-Miner-Portable.zip` | Same kit, no installer |
-| `CYD-Companion-App-Only.zip` | Just `cyd-companion.exe` |
+| `CYD-Companion-App-Only.zip` | App + `Firmware\` + `Tools\espflash.exe` |
 | `CYD-Companion-Setup.exe` | Alias of the full miner setup |
 
 See [`flash/downloads/README.md`](flash/downloads/README.md) for checksums.
@@ -49,6 +49,7 @@ See [`flash/downloads/README.md`](flash/downloads/README.md) for checksums.
 - Stable board hashrate (EMA + longer sample window; no zero-on-job flicker)
 - **Hash-focus firmware** — strip LCD animations/ticker, one-time HW calibrate, dedicated core-0 mine task, lean USB
 - **0.8.17** — fix start/stop reboot loop (mine task must `vTaskDelay` so the watchdog idle task can run)
+- **0.8.18** — Update board auto-downloads firmware + espflash when missing; waits for COM release; retries 115200
 
 ## Recommended pool (ESP32-friendly)
 

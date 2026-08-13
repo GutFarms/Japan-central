@@ -349,7 +349,9 @@ fn extract_merged_from_zip(
     })
 }
 
-const COMPANION_UA: &str = "CYD-Companion/0.8.11";
+const COMPANION_UA: &str = "CYD-Companion/0.8.18";
+const ESPFLASH_VERSION: &str = "4.5.0";
+const ESPFLASH_WIN_ZIP: &str = "https://github.com/esp-rs/espflash/releases/download/v4.5.0/espflash-x86_64-pc-windows-msvc.zip";
 
 fn firmware_writable_dir() -> Result<PathBuf, String> {
     if let Ok(exe) = std::env::current_exe() {
@@ -360,6 +362,102 @@ fn firmware_writable_dir() -> Result<PathBuf, String> {
     std::env::current_dir()
         .map(|d| d.join("Firmware"))
         .map_err(|e| e.to_string())
+}
+
+fn tools_writable_dir() -> Result<PathBuf, String> {
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(dir) = exe.parent() {
+            return Ok(dir.join("Tools"));
+        }
+    }
+    std::env::current_dir()
+        .map(|d| d.join("Tools"))
+        .map_err(|e| e.to_string())
+}
+
+/// Ensure `Tools/espflash.exe` exists (download from GitHub if the kit omitted it).
+pub fn ensure_espflash(progress: &dyn Fn(String)) -> Result<PathBuf, String> {
+    if let Some(p) = find_tool(&[
+        "espflash.exe",
+        "espflash",
+        #[cfg(windows)]
+        "espflash.cmd",
+    ]) {
+        // Prefer a real path next to the app over a bare PATH name.
+        if p.is_absolute() || p.exists() {
+            return Ok(p);
+        }
+    }
+
+    #[cfg(windows)]
+    {
+        progress(format!(
+            "Downloading espflash {ESPFLASH_VERSION} into Tools\\…"
+        ));
+        let tools = tools_writable_dir()?;
+        std::fs::create_dir_all(&tools).map_err(|e| format!("mkdir Tools: {e}"))?;
+        let zip_path = tools.join("espflash-fetch.zip.part");
+        download_to(ESPFLASH_WIN_ZIP, &zip_path, progress)?;
+        let exe_path = tools.join("espflash.exe");
+        extract_named_from_zip(&zip_path, "espflash.exe", &exe_path, progress)?;
+        let _ = std::fs::remove_file(&zip_path);
+        if exe_path.is_file() {
+            progress(format!("espflash ready · {}", exe_path.display()));
+            return Ok(exe_path);
+        }
+        return Err("espflash.exe missing after download".into());
+    }
+
+    #[cfg(not(windows))]
+    {
+        let _ = progress;
+        Err(
+            "espflash not found. Install espflash on PATH, or use the Windows Miner kit with Tools\\espflash.exe."
+                .into(),
+        )
+    }
+}
+
+fn extract_named_from_zip(
+    zip_path: &Path,
+    want_name: &str,
+    dest: &Path,
+    progress: &dyn Fn(String),
+) -> Result<(), String> {
+    let file = std::fs::File::open(zip_path).map_err(|e| format!("open zip: {e}"))?;
+    let mut archive = zip::ZipArchive::new(file).map_err(|e| format!("zip: {e}"))?;
+    for i in 0..archive.len() {
+        let mut entry = archive
+            .by_index(i)
+            .map_err(|e| format!("zip entry: {e}"))?;
+        let name = entry.name().replace('\\', "/");
+        let file_name = name.rsplit('/').next().unwrap_or("");
+        if file_name.eq_ignore_ascii_case(want_name) {
+            progress(format!("Extracting {name}…"));
+            let mut out = std::fs::File::create(dest).map_err(|e| format!("create: {e}"))?;
+            std::io::copy(&mut entry, &mut out).map_err(|e| format!("extract: {e}"))?;
+            return Ok(());
+        }
+    }
+    Err(format!("{want_name} not inside zip"))
+}
+
+/// Resolve a flashable image: local kit first, otherwise fetch into Firmware\\.
+pub fn ensure_firmware_image(progress: &dyn Fn(String)) -> Result<FirmwareImage, String> {
+    if let Ok(img) = find_firmware_image() {
+        progress(format!(
+            "Using local firmware {} ({} KB)",
+            if img.version.is_empty() {
+                "bundled"
+            } else {
+                &img.version
+            },
+            img.bytes / 1024
+        ));
+        return Ok(img);
+    }
+    progress("No local Firmware\\ image — fetching…".into());
+    fetch_latest_firmware(progress)
 }
 
 fn find_release_firmware_url() -> Result<(String, String), String> {
@@ -515,164 +613,113 @@ pub fn flash_merged_bin(port: &str, image: &Path, progress: &dyn Fn(String)) -> 
     ));
     progress("Hold BOOT + tap RESET if the board does not enter download mode.".into());
 
-    if let Some(espflash) = find_tool(&[
-        "espflash.exe",
-        "espflash",
-        #[cfg(windows)]
-        "espflash.cmd",
-    ]) {
+    // Prefer bundled / auto-downloaded espflash; fall back to Python esptool.
+    let espflash = match ensure_espflash(progress) {
+        Ok(p) => Some(p),
+        Err(e) => {
+            progress(format!("espflash unavailable ({e}) — trying Python esptool…"));
+            None
+        }
+    };
+
+    if let Some(espflash) = espflash {
         progress(format!("Using espflash ({})", espflash.display()));
-        let mut cmd = Command::new(&espflash);
-        cmd.args([
-            "write-bin",
-            "-p",
-            port,
-            "-B",
-            "460800",
-            "-c",
-            "esp32",
-            "--non-interactive",
-            "--skip-update-check",
-            "0x0",
-        ])
-        .arg(image)
-        .env("ESPFLASH_SKIP_UPDATE_CHECK", "1");
-        return run_streaming(&mut cmd, progress, "espflash");
+        // Global --skip-update-check must come *before* the subcommand (espflash 4.x).
+        for baud in ["460800", "115200"] {
+            progress(format!("espflash write-bin @ {baud} baud…"));
+            let mut cmd = Command::new(&espflash);
+            cmd.args([
+                "--skip-update-check",
+                "write-bin",
+                "-p",
+                port,
+                "-B",
+                baud,
+                "-c",
+                "esp32",
+                "--non-interactive",
+                "0x0",
+            ])
+            .arg(image)
+            .env("ESPFLASH_SKIP_UPDATE_CHECK", "1");
+            match run_streaming(&mut cmd, progress, "espflash") {
+                Ok(()) => return Ok(()),
+                Err(e) => {
+                    progress(format!("espflash @ {baud} failed: {e}"));
+                    if baud == "460800" {
+                        progress("Retrying at 115200…".into());
+                    }
+                }
+            }
+        }
     }
 
     // Python esptool — same flags as packaging/Flash-Firmware.bat
-    let esptool_cmds: Vec<(&str, Vec<&str>)> = vec![
-        (
-            "py",
-            vec![
-                "-3",
-                "-m",
-                "esptool",
-                "--chip",
-                "esp32",
-                "--port",
-                port,
-                "--baud",
-                "460800",
-                "write_flash",
-                "-z",
-                "--flash_mode",
-                "dio",
-                "--flash_freq",
-                "40m",
-                "--flash_size",
-                "4MB",
-                "0x0",
-            ],
-        ),
-        (
-            "python",
-            vec![
-                "-m",
-                "esptool",
-                "--chip",
-                "esp32",
-                "--port",
-                port,
-                "--baud",
-                "460800",
-                "write_flash",
-                "-z",
-                "--flash_mode",
-                "dio",
-                "--flash_freq",
-                "40m",
-                "--flash_size",
-                "4MB",
-                "0x0",
-            ],
-        ),
-        (
-            "python3",
-            vec![
-                "-m",
-                "esptool",
-                "--chip",
-                "esp32",
-                "--port",
-                port,
-                "--baud",
-                "460800",
-                "write_flash",
-                "-z",
-                "--flash_mode",
-                "dio",
-                "--flash_freq",
-                "40m",
-                "--flash_size",
-                "4MB",
-                "0x0",
-            ],
-        ),
-        (
-            "esptool.py",
-            vec![
-                "--chip",
-                "esp32",
-                "--port",
-                port,
-                "--baud",
-                "460800",
-                "write_flash",
-                "-z",
-                "--flash_mode",
-                "dio",
-                "--flash_freq",
-                "40m",
-                "--flash_size",
-                "4MB",
-                "0x0",
-            ],
-        ),
-        (
-            "esptool",
-            vec![
-                "--chip",
-                "esp32",
-                "--port",
-                port,
-                "--baud",
-                "460800",
-                "write_flash",
-                "-z",
-                "--flash_mode",
-                "dio",
-                "--flash_freq",
-                "40m",
-                "--flash_size",
-                "4MB",
-                "0x0",
-            ],
-        ),
-    ];
-
+    let bauds = ["460800", "115200"];
     let mut last_err = String::new();
-    for (bin, args) in esptool_cmds {
-        if which_on_path(bin).is_none() && bin != "esptool.py" {
-            // Still try — Windows py launcher may exist without being a normal PATH file probe.
-            if bin != "py" && bin != "python" && bin != "python3" {
-                continue;
+    for baud in bauds {
+        let esptool_cmds: Vec<(&str, Vec<&str>)> = vec![
+            (
+                "py",
+                vec![
+                    "-3", "-m", "esptool", "--chip", "esp32", "--port", port, "--baud", baud,
+                    "write_flash", "-z", "--flash_mode", "dio", "--flash_freq", "40m",
+                    "--flash_size", "4MB", "0x0",
+                ],
+            ),
+            (
+                "python",
+                vec![
+                    "-m", "esptool", "--chip", "esp32", "--port", port, "--baud", baud,
+                    "write_flash", "-z", "--flash_mode", "dio", "--flash_freq", "40m",
+                    "--flash_size", "4MB", "0x0",
+                ],
+            ),
+            (
+                "python3",
+                vec![
+                    "-m", "esptool", "--chip", "esp32", "--port", port, "--baud", baud,
+                    "write_flash", "-z", "--flash_mode", "dio", "--flash_freq", "40m",
+                    "--flash_size", "4MB", "0x0",
+                ],
+            ),
+            (
+                "esptool.py",
+                vec![
+                    "--chip", "esp32", "--port", port, "--baud", baud, "write_flash", "-z",
+                    "--flash_mode", "dio", "--flash_freq", "40m", "--flash_size", "4MB", "0x0",
+                ],
+            ),
+            (
+                "esptool",
+                vec![
+                    "--chip", "esp32", "--port", port, "--baud", baud, "write_flash", "-z",
+                    "--flash_mode", "dio", "--flash_freq", "40m", "--flash_size", "4MB", "0x0",
+                ],
+            ),
+        ];
+
+        for (bin, args) in esptool_cmds {
+            if which_on_path(bin).is_none() && bin != "esptool.py" {
+                if bin != "py" && bin != "python" && bin != "python3" {
+                    continue;
+                }
             }
-        }
-        progress(format!("Trying {bin} -m esptool / esptool…"));
-        let mut cmd = Command::new(bin);
-        cmd.args(&args).arg(image);
-        match run_streaming(&mut cmd, progress, bin) {
-            Ok(()) => return Ok(()),
-            Err(e) => {
-                last_err = e;
-                progress(format!("{bin} failed — trying next flasher…"));
+            progress(format!("Trying {bin} @ {baud}…"));
+            let mut cmd = Command::new(bin);
+            cmd.args(&args).arg(image);
+            match run_streaming(&mut cmd, progress, bin) {
+                Ok(()) => return Ok(()),
+                Err(e) => {
+                    last_err = e;
+                    progress(format!("{bin} failed — trying next…"));
+                }
             }
         }
     }
 
     Err(if last_err.is_empty() {
-        "No flasher found. Install espflash (Tools\\espflash.exe in the kit) or: py -3 -m pip install esptool".into()
+        "No flasher found. Update board will auto-download espflash on Windows, or install: py -3 -m pip install esptool".into()
     } else {
         format!(
             "Flash failed: {last_err}. Tip: hold BOOT, tap RESET, release BOOT, then Update again."
