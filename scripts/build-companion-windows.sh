@@ -116,6 +116,8 @@ cp -f dist/cyd-companion-windows.zip dist/CYD-Companion-Portable.zip
 rm -rf dist/cyd-companion-app-only
 mkdir -p dist/cyd-companion-app-only/Firmware dist/cyd-companion-app-only/Tools
 cp -f dist/cyd-companion-windows/cyd-companion.exe dist/cyd-companion-app-only/
+cp -f dist/cyd-companion-windows/cyd-miner.ico dist/cyd-companion-app-only/ 2>/dev/null || \
+  cp -f "$ROOT/packaging/icons/cyd-miner.ico" dist/cyd-companion-app-only/cyd-miner.ico
 cp -f "$MERGED" dist/cyd-companion-app-only/Firmware/
 cp -f "$SUMS" dist/cyd-companion-app-only/Firmware/
 echo "${VER}-sha256" > dist/cyd-companion-app-only/Firmware/VERSION.txt
