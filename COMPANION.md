@@ -59,6 +59,7 @@ In **Settings**:
 - **0.8.22** — fix Windows self-update bat (retry while `.new` remains; do not relaunch a locked old exe)
 - **0.8.23** — fetch updates via GitHub API / commit-pinned raw (branch raw CDN can serve stale VERSION/bins)
 - **0.8.24** — fix Update board: espflash reject `ESPFLASH_SKIP_UPDATE_CHECK=1` (needs true/false); skip Windows Store python stubs
+- **0.8.40** — stabilize hashrate display (hold on missed polls; heavier board EMA; no slow bleed to 0)
 - **0.8.39** — multi-board: auto-link every CYD found by scan; Add board while one is connected; do not merge mac=unknown boards
 - **0.8.38** — fix `cmp status` USB timeouts while mining (mineB yields on RX; USB/mineB equal priority; longer Companion waits)
 - **0.8.37** — fix Find CYD workers: open probes without DTR reset, settle/retry after boot, longer timeouts, background scan + per-port Event log

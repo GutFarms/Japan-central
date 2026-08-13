@@ -85,18 +85,18 @@ static constexpr float kMaxPlausibleHs = 2000000.0f;
 
 static void updateHashrate() {
   // Core-0 SW assist + USB share a core — short windows swing wildly.
-  // ≥1s samples + EMA keep LCD/Companion stable; never seed from a wild spike.
+  // ~1.5s samples + heavy EMA keep LCD/Companion stable.
   if (!g_jobLoaded || !g_mining) {
     if (g_hashrate > 0.0f) {
-      g_hashrate *= 0.88f;
+      g_hashrate *= 0.92f;
       if (g_hashrate < 40.0f) g_hashrate = 0.0f;
     }
     return;
   }
   uint32_t now = millis();
   uint32_t elapsed = now - g_windowStart;
-  if (elapsed < 1000) return;
-  if (elapsed > 8000) {
+  if (elapsed < 1500) return;
+  if (elapsed > 10000) {
     // Stale window (e.g. long stall) — resync baseline without zeroing EMA.
     g_windowHashesStart = g_hashCounter.load(std::memory_order_relaxed);
     g_windowStart = now;
@@ -119,7 +119,8 @@ static void updateHashrate() {
   if (g_hashrate <= 1.0f) {
     g_hashrate = instant;
   } else {
-    g_hashrate = g_hashrate * 0.75f + instant * 0.25f;
+    // Heavy EMA — USB yield / mineB scheduling makes 1s instant rates noisy.
+    g_hashrate = g_hashrate * 0.88f + instant * 0.12f;
   }
   if (g_hashrate > kMaxPlausibleHs) g_hashrate = kMaxPlausibleHs;
   g_windowHashesStart = cur;

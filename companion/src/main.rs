@@ -766,21 +766,23 @@ impl CompanionApp {
         self.grid_phase = (self.grid_phase + dt * grid_speed).rem_euclid(1.0);
 
         let target = self.board_khs();
-        // Hold last rate briefly when a single poll returns 0 while still mining —
-        // avoids the UI slamming to zero between status samples.
-        // Must require usb_open + mining — never hold after disconnect/stop.
-        let target = if target <= 0.0
-            && self.usb_open
-            && self.mining
-            && self.displayed_khs > 1.0
-        {
-            self.displayed_khs * 0.97
-        } else if !self.usb_open || !self.mining {
+        // While mining, never slow-bleed the display toward 0 on a missed poll —
+        // that looked like "raises, slow drops, raises again". Hold flat on 0;
+        // ease only when the board reports a sustained lower rate.
+        let target = if !self.usb_open || !self.mining {
             0.0
+        } else if target <= 0.0 && self.displayed_khs > 1.0 {
+            self.displayed_khs
+        } else if target > 0.0
+            && self.displayed_khs > 80.0
+            && target < self.displayed_khs * 0.55
+        {
+            // Single weak sample (one of N boards timed out) — ease, don't cliff.
+            self.displayed_khs * 0.94 + target * 0.06
         } else {
             target
         };
-        let alpha = 1.0 - (-dt * 2.4).exp();
+        let alpha = 1.0 - (-dt * 1.8).exp();
         self.displayed_khs += (target - self.displayed_khs) * alpha;
         if self.displayed_khs.abs() < 0.05 {
             self.displayed_khs = 0.0;
@@ -2360,6 +2362,21 @@ impl App for CompanionApp {
                 NetMsg::Status(Ok(s)) => {
                     if !s.mac.is_empty() {
                         self.board_mac = normalize_mac(&s.mac);
+                    }
+                    // Keep last live rate if a poll came back with 0 while still mining.
+                    let mut s = s;
+                    if self.usb_open
+                        && self.mining
+                        && s.hashrate_hs <= 0.0
+                        && self.status.hashrate_hs > 0.0
+                    {
+                        s.hashrate_hs = self.status.hashrate_hs;
+                        s.hashrate_khs = self.status.hashrate_khs;
+                        if !self.status.mining {
+                            s.mining = true;
+                        } else {
+                            s.mining = self.status.mining;
+                        }
                     }
                     self.status = s;
                     self.last_error.clear();
@@ -4137,6 +4154,10 @@ fn mine_worker(cmd_rx: Receiver<NetCmd>, msg_tx: Sender<NetMsg>) {
                                 }
                                 Err(e) => {
                                     b.status_fails = b.status_fails.saturating_add(1);
+                                    // Hold last known rate so multi-board totals don't dip.
+                                    total_hs += b.hashrate_hs;
+                                    total_hashes = total_hashes.saturating_add(b.hashes);
+                                    any_mining |= b.mining || mining;
                                     if b.status_fails == 1 || b.status_fails % 3 == 0 {
                                         log_msg(
                                             &msg_tx,
@@ -4151,6 +4172,9 @@ fn mine_worker(cmd_rx: Receiver<NetCmd>, msg_tx: Sender<NetMsg>) {
                             },
                             Err(e) => {
                                 b.status_fails = b.status_fails.saturating_add(1);
+                                total_hs += b.hashrate_hs;
+                                total_hashes = total_hashes.saturating_add(b.hashes);
+                                any_mining |= b.mining || mining;
                                 // Soft-fails are common under hash load; only log first + every 3rd.
                                 if b.status_fails == 1 || b.status_fails % 3 == 0 {
                                     log_msg(
@@ -4195,12 +4219,16 @@ fn mine_worker(cmd_rx: Receiver<NetCmd>, msg_tx: Sender<NetMsg>) {
                         st.hashrate_hs = total_hs;
                         st.hashrate_khs = total_hs / 1000.0;
                         st.hashes = total_hashes;
-                        st.mining = any_mining;
+                        st.mining = any_mining || mining;
                         let _ = msg_tx.send(NetMsg::Status(Ok(st)));
                     } else {
-                        // All boards soft-failed this round — don't freeze the last rate.
+                        // All boards soft-failed — publish held rates, never a zero spike.
                         let _ = msg_tx.send(NetMsg::Status(Ok(StatusJson {
+                            hashrate_hs: total_hs,
+                            hashrate_khs: total_hs / 1000.0,
                             hashes: total_hashes,
+                            mining: any_mining || mining,
+                            connected: true,
                             ..Default::default()
                         })));
                     }
