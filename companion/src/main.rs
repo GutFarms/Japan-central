@@ -537,7 +537,11 @@ enum NetMsg {
 
 enum NetCmd {
     ListPorts,
-    OpenUsb(String),
+    OpenUsb {
+        name: String,
+        /// Skip connect auto-bench (post-flash verify must not thrash the COM port).
+        skip_bench: bool,
+    },
     CloseUsb,
     StartMine {
         stratum: String,
@@ -614,7 +618,7 @@ struct CompanionApp {
     live: LiveFeed,
     firmware: Option<FirmwareImage>,
     update_confirm: bool,
-    /// After a successful board flash: wait until Instant, then CloseUsb + OpenUsb.
+    /// After a successful board flash: wait until Instant, then OpenUsb (no Close bounce).
     pending_post_flash_reconnect: Option<(Instant, String)>,
     /// After reconnect: confirm board answers `cmp config` with kit firmware.
     post_flash_verify: Option<PostFlashVerify>,
@@ -1361,7 +1365,10 @@ impl CompanionApp {
             self.last_ok = format!("Adding board {}…", self.com_port);
             self.push_log(LogKind::Usb, format!("Adding worker {}", self.com_port));
         } else {
-            let _ = self.cmd_tx.send(NetCmd::OpenUsb(self.com_port.clone()));
+            let _ = self.cmd_tx.send(NetCmd::OpenUsb {
+                name: self.com_port.clone(),
+                skip_bench: false,
+            });
             self.last_ok = format!("Opening {}…", self.com_port);
             self.push_log(LogKind::Usb, format!("Opening {}", self.com_port));
         }
@@ -1836,13 +1843,14 @@ impl CompanionApp {
     fn begin_post_flash_verify(&mut self, port: String) {
         self.post_flash_verify = Some(PostFlashVerify {
             port: port.clone(),
-            attempts_left: 3,
-            deadline: Instant::now() + Duration::from_secs(90),
+            attempts_left: 2,
+            deadline: Instant::now() + Duration::from_secs(75),
         });
         self.update_status = format!("Flash OK — booting board, then verifying on {port}…");
         self.flash_phase = "Reconnecting".into();
         self.flash_progress = self.flash_progress.max(0.88);
-        self.schedule_post_flash_reconnect(port, Duration::from_millis(2500));
+        // Single quiet reopen after boot settle — no CloseUsb churn.
+        self.schedule_post_flash_reconnect(port, Duration::from_secs(4));
     }
 
     fn finish_post_flash_ok(&mut self, board_fw: &str) {
@@ -1881,14 +1889,21 @@ impl CompanionApp {
             return;
         }
         v.attempts_left = v.attempts_left.saturating_sub(1);
-        self.update_status = format!(
-            "Verify retry ({}/3 left): {why} — reconnecting…",
-            v.attempts_left
-        );
-        self.push_log(LogKind::Usb, self.update_status.clone());
         let port = v.port.clone();
         self.post_flash_verify = Some(v);
-        self.schedule_post_flash_reconnect(port, Duration::from_secs(2));
+        if self.usb_open {
+            // Already linked — wait for the next config/status tick; do NOT bounce the port.
+            self.update_status = format!(
+                "Verify wait ({why}) — USB stays linked, waiting for board config…"
+            );
+            self.push_log(LogKind::Usb, self.update_status.clone());
+        } else {
+            self.update_status = format!(
+                "Verify retry: {why} — opening {port} (no disconnect bounce)…"
+            );
+            self.push_log(LogKind::Usb, self.update_status.clone());
+            self.schedule_post_flash_reconnect(port, Duration::from_secs(3));
+        }
     }
 
     fn on_post_flash_config(&mut self, board_fw: &str) {
@@ -1906,10 +1921,15 @@ impl CompanionApp {
         }
         match update_needed(board_fw, &kit) {
             Some(true) => {
-                self.retry_post_flash_verify(&format!("board fw {board_fw} != kit {kit}"));
+                // Flash write already succeeded and the board answers USB — don't
+                // thrash COM over a tag mismatch (kit VERSION vs board kFwTag).
+                self.push_log(
+                    LogKind::Warn,
+                    format!("Post-flash tag differs · board {board_fw} · kit {kit}"),
+                );
+                self.finish_post_flash_ok(&format!("{board_fw} (kit expected {kit})"));
             }
             _ => {
-                // Match, or versions unavailable but board answered — treat as verified.
                 self.finish_post_flash_ok(board_fw);
             }
         }
@@ -3512,6 +3532,7 @@ impl App for CompanionApp {
                     if self.auto_connect
                         && !self.auto_connect_attempted
                         && !self.usb_open
+                        && !self.update_busy
                         && !self.com_port.is_empty()
                         && self.ports.iter().any(|x| x.name == self.com_port)
                     {
@@ -3983,26 +4004,37 @@ impl App for CompanionApp {
                 self.update_busy = true;
                 self.com_port = port.clone();
                 let verifying = self.post_flash_verify.is_some();
-                self.update_status = if verifying {
-                    format!("Verifying firmware on {port}…")
-                } else {
-                    format!("Disconnect + reconnect {port}…")
-                };
                 if verifying {
                     self.flash_phase = "Verifying board".into();
                     self.flash_progress = self.flash_progress.max(0.92);
                 }
-                self.push_log(
-                    LogKind::Usb,
-                    if verifying {
-                        format!("Post-flash verify: reconnect {port}")
+                if self.usb_open {
+                    // Already linked — do not bounce COM; wait for config/status.
+                    self.update_status = if verifying {
+                        format!("Verifying firmware on {port} (USB already open)…")
                     } else {
-                        format!("Post-flash: disconnect, then reconnect {port}")
-                    },
-                );
-                let _ = self.cmd_tx.send(NetCmd::CloseUsb);
-                self.usb_open = false;
-                let _ = self.cmd_tx.send(NetCmd::OpenUsb(port));
+                        format!("USB already open on {port}")
+                    };
+                    self.push_log(LogKind::Usb, self.update_status.clone());
+                } else {
+                    self.update_status = if verifying {
+                        format!("Verifying firmware on {port}…")
+                    } else {
+                        format!("Opening {port} after flash…")
+                    };
+                    self.push_log(
+                        LogKind::Usb,
+                        if verifying {
+                            format!("Post-flash verify: open {port} (no disconnect)")
+                        } else {
+                            format!("Post-flash: open {port}")
+                        },
+                    );
+                    let _ = self.cmd_tx.send(NetCmd::OpenUsb {
+                        name: port,
+                        skip_bench: true,
+                    });
+                }
             } else {
                 ctx.request_repaint_after(Duration::from_millis(50));
             }
@@ -4375,6 +4407,8 @@ impl App for CompanionApp {
             .frame(Frame::none().fill(C_BG).inner_margin(Margin::symmetric(16.0, 8.0)))
             .show(ctx, |ui| {
                 paint_background(ui, ui.max_rect(), self.pulse, self.grid_phase, self.mining || self.board_hashing());
+                // After sea backdrop, before widgets — faded so it never fights controls.
+                paint_under_development_watermarks(ui);
 
                 // Outer scroll so Mine/Settings content is fully reachable on short screens.
                 ScrollArea::vertical()
@@ -4390,8 +4424,6 @@ impl App for CompanionApp {
                         ui.add_space(28.0);
                     });
             });
-
-        paint_under_development_watermarks(ctx);
 
         // Keep animation continuous (~60 fps). 40 ms made looping motion feel stepped.
         ctx.request_repaint_after(Duration::from_millis(16));
@@ -4579,23 +4611,20 @@ fn ui_live_bar(ui: &mut egui::Ui, live: &LiveFeed, header_coins: &mut Vec<String
     });
 }
 
-fn paint_under_development_watermarks(ctx: &egui::Context) {
-    // Diagonal TL→BR watermark bands (ESP / companion still under development).
-    let painter = ctx.layer_painter(egui::LayerId::new(
-        egui::Order::Foreground,
-        egui::Id::new("under_development_watermarks"),
-    ));
-    let rect = ctx.screen_rect();
+fn paint_under_development_watermarks(ui: &egui::Ui) {
+    // Drawn on the panel layer after the sea backdrop and before widgets.
+    let rect = ui.max_rect();
     if rect.width() < 8.0 || rect.height() < 8.0 {
         return;
     }
+    let painter = ui.painter();
 
     let phrase = "UNDER DEVELOPMENT";
     let chars: Vec<char> = phrase.chars().collect();
     let angle = rect.height().atan2(rect.width());
     let dir = Vec2::angled(angle);
     let perp = Vec2::new(-dir.y, dir.x);
-    let color = Color32::from_rgba_unmultiplied(186, 214, 232, 34);
+    let color = Color32::from_rgba_unmultiplied(186, 214, 232, 11);
     let font = FontId::monospace(15.0);
     let char_step = 13.5;
     let phrase_span = chars.len() as f32 * char_step;
@@ -5813,7 +5842,7 @@ fn mine_worker(cmd_rx: Receiver<NetCmd>, msg_tx: Sender<NetMsg>) {
                         let _ = msg_tx_scan.send(NetMsg::WorkersFound(found));
                     });
                 }
-                NetCmd::OpenUsb(name) => {
+                NetCmd::OpenUsb { name, skip_bench } => {
                     // Do not wipe the whole fleet — reconnect/replace this port only
                     // so multi-board setups survive a primary Connect click.
                     if let Some(idx) = boards
@@ -5833,12 +5862,20 @@ fn mine_worker(cmd_rx: Receiver<NetCmd>, msg_tx: Sender<NetMsg>) {
                             let endpoint = board.name.clone();
                             boards.push(board);
                             publish_live(&msg_tx, &boards);
-                            pending_auto_bench.push_back(endpoint);
-                            let _ = msg_tx.send(NetMsg::Action(Ok(format!(
-                                "USB open {name}{} · {} board(s) · auto-bench queued",
-                                if saw { " (pong)" } else { "" },
-                                boards.len()
-                            ))));
+                            if skip_bench {
+                                let _ = msg_tx.send(NetMsg::Action(Ok(format!(
+                                    "USB open {name}{} · {} board(s)",
+                                    if saw { " (pong)" } else { "" },
+                                    boards.len()
+                                ))));
+                            } else {
+                                pending_auto_bench.push_back(endpoint);
+                                let _ = msg_tx.send(NetMsg::Action(Ok(format!(
+                                    "USB open {name}{} · {} board(s) · auto-bench queued",
+                                    if saw { " (pong)" } else { "" },
+                                    boards.len()
+                                ))));
+                            }
                         }
                         Err(e) => {
                             publish_live(&msg_tx, &boards);
