@@ -4594,19 +4594,13 @@ fn ui_live_bar(ui: &mut egui::Ui, live: &LiveFeed, header_coins: &mut Vec<String
             ui.add_space(12.0);
 
             // Coin picker — choose which symbols appear in the strip.
-            let summary = if header_coins.is_empty() {
-                "Coins".into()
-            } else {
-                header_coins
-                    .iter()
-                    .take(4)
-                    .cloned()
-                    .collect::<Vec<_>>()
-                    .join(" · ")
-            };
             egui::ComboBox::from_id_source("header_coin_picker")
-                .selected_text(RichText::new(summary).color(C_LIME).font(mono_ui_font(11.0)))
-                .width(118.0)
+                .selected_text(
+                    RichText::new("Coin selection")
+                        .color(C_LIME)
+                        .font(mono_ui_font(11.0)),
+                )
+                .width(128.0)
                 .show_ui(ui, |ui| {
                     ui.set_min_width(160.0);
                     ui.label(
