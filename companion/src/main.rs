@@ -720,10 +720,60 @@ impl CompanionApp {
     }
 
     fn board_hashing(&self) -> bool {
-        // Live hashing only — never use lifetime hashes/nonce (those stuck true forever).
+        // Live hashing — hold true across brief status soft-fails so the hero
+        // subtitle / activity bars don't blink "waiting for hashrate".
         self.usb_open
             && self.mining
-            && (self.status.mining || self.status.hashrate_hs > 0.0)
+            && (self.status.mining
+                || self.status.hashrate_hs > 0.0
+                || self.displayed_khs > 1.0
+                || self.status.hashes > self.session_hash_start)
+    }
+
+    /// Merge a fresh board status into the UI without blinking zeros on soft polls.
+    fn absorb_status(&mut self, mut s: StatusJson) {
+        if !s.mac.is_empty() {
+            self.board_mac = normalize_mac(&s.mac);
+        }
+        let prev = &self.status;
+        let hold = self.usb_open && self.mining;
+        if hold {
+            if s.hashrate_hs <= 0.0 && prev.hashrate_hs > 0.0 {
+                s.hashrate_hs = prev.hashrate_hs;
+                s.hashrate_khs = prev.hashrate_khs;
+            }
+            // Hash counters only rise while mining — never flash back to 0.
+            if s.hashes < prev.hashes {
+                s.hashes = prev.hashes;
+            }
+            if !s.mining && (prev.mining || s.hashrate_hs > 0.0 || prev.hashrate_hs > 0.0) {
+                s.mining = true;
+            }
+            if s.job.is_empty() && !prev.job.is_empty() {
+                s.job = prev.job.clone();
+            }
+            if s.nonce.is_empty() && !prev.nonce.is_empty() {
+                s.nonce = prev.nonce.clone();
+            }
+            if s.sha_mode.is_empty() && !prev.sha_mode.is_empty() {
+                s.sha_mode = prev.sha_mode.clone();
+            }
+            if s.pool.is_empty() && !prev.pool.is_empty() {
+                s.pool = prev.pool.clone();
+            }
+            if s.mac.is_empty() && !prev.mac.is_empty() {
+                s.mac = prev.mac.clone();
+            }
+            if s.uptime_secs == 0 && prev.uptime_secs > 0 {
+                s.uptime_secs = prev.uptime_secs;
+            }
+            if s.cpu_mhz == 0 && prev.cpu_mhz > 0 {
+                s.cpu_mhz = prev.cpu_mhz;
+            }
+            s.connected = true;
+        }
+        self.status = s;
+        self.last_error.clear();
     }
 
     fn clear_hash_display(&mut self) {
@@ -1296,20 +1346,28 @@ impl CompanionApp {
                         });
                         ui.add_space(6.0);
                         ui.label(
-                            RichText::new(if self.board_hashing() {
-                                format!(
-                                    "Board measured {} · path {} · nonce {} · {}",
-                                    format_hashrate(self.status.hashrate_hs),
-                                    self.sha_mode_label(),
-                                    if self.status.nonce.is_empty() {
-                                        "—"
-                                    } else {
-                                        &self.status.nonce
-                                    },
-                                    format_hash_count(self.status.hashes)
-                                )
-                            } else if self.mining {
-                                "Jobs streaming — waiting for board hashrate…".into()
+                            RichText::new(if self.mining && self.usb_open {
+                                if self.board_hashing()
+                                    || self.status.hashes > 0
+                                    || self.displayed_khs > 0.5
+                                {
+                                    format!(
+                                        "Board measured {} · path {} · nonce {} · {}",
+                                        format_hashrate(
+                                            (self.displayed_khs as f64 * 1000.0)
+                                                .max(self.status.hashrate_hs)
+                                        ),
+                                        self.sha_mode_label(),
+                                        if self.status.nonce.is_empty() {
+                                            "—"
+                                        } else {
+                                            &self.status.nonce
+                                        },
+                                        format_hash_count(self.status.hashes)
+                                    )
+                                } else {
+                                    "Jobs streaming — waiting for board hashrate…".into()
+                                }
                             } else if self.usb_open {
                                 "USB linked. Start mining to stream pool work to the board.".into()
                             } else {
@@ -2010,7 +2068,13 @@ impl CompanionApp {
             });
             ui.add_space(4.0);
             ui.horizontal_wrapped(|ui| {
-                mini_stat(ui, "Rate", &format_hashrate(self.status.hashrate_hs));
+                // Use smoothed display rate so soft-fails don't blink the chip.
+                let rate_hs = if self.mining && self.displayed_khs > 0.5 {
+                    self.displayed_khs as f64 * 1000.0
+                } else {
+                    self.status.hashrate_hs
+                };
+                mini_stat(ui, "Rate", &format_hashrate(rate_hs));
                 mini_stat(ui, "Hashes", &format_hash_count(self.status.hashes));
                 mini_stat(ui, "SHA", self.sha_mode_label());
                 mini_stat(
@@ -2413,26 +2477,7 @@ impl App for CompanionApp {
                     self.push_log(LogKind::Err, e);
                 }
                 NetMsg::Status(Ok(s)) => {
-                    if !s.mac.is_empty() {
-                        self.board_mac = normalize_mac(&s.mac);
-                    }
-                    // Keep last live rate if a poll came back with 0 while still mining.
-                    let mut s = s;
-                    if self.usb_open
-                        && self.mining
-                        && s.hashrate_hs <= 0.0
-                        && self.status.hashrate_hs > 0.0
-                    {
-                        s.hashrate_hs = self.status.hashrate_hs;
-                        s.hashrate_khs = self.status.hashrate_khs;
-                        if !self.status.mining {
-                            s.mining = true;
-                        } else {
-                            s.mining = self.status.mining;
-                        }
-                    }
-                    self.status = s;
-                    self.last_error.clear();
+                    self.absorb_status(s);
                 }
                 NetMsg::Status(Err(e)) => {
                     self.last_error = e.clone();
@@ -2750,7 +2795,7 @@ impl App for CompanionApp {
             }
         }
 
-        if self.usb_open && self.last_poll.elapsed() > Duration::from_millis(750) {
+        if self.usb_open && self.last_poll.elapsed() > Duration::from_millis(1_100) {
             let _ = self.cmd_tx.send(NetCmd::PollStatus);
             self.last_poll = Instant::now();
         }
@@ -3977,6 +4022,7 @@ fn mine_worker(cmd_rx: Receiver<NetCmd>, msg_tx: Sender<NetMsg>) {
     let mut recent_jobs: VecDeque<WorkJob> = VecDeque::new();
     let mut last_stats_push = Instant::now() - Duration::from_secs(10);
     let mut last_stratum_ui = Instant::now() - Duration::from_secs(10);
+    let mut last_fleet_status = StatusJson::default();
     let mut mine_endpoint = String::new();
     let mut mine_worker_name = String::new();
     let mut mine_password = String::new();
@@ -4424,6 +4470,7 @@ fn mine_worker(cmd_rx: Receiver<NetCmd>, msg_tx: Sender<NetMsg>) {
                 }
                 NetCmd::PollStatus => {
                     if boards.is_empty() {
+                        last_fleet_status = StatusJson::default();
                         let _ = msg_tx.send(NetMsg::Status(Ok(StatusJson::default())));
                         continue;
                     }
@@ -4444,15 +4491,25 @@ fn mine_worker(cmd_rx: Receiver<NetCmd>, msg_tx: Sender<NetMsg>) {
                             Ok(line) => match parse_cmp_status(&line) {
                                 Ok(st) => {
                                     b.status_fails = 0;
-                                    b.hashrate_hs = st.hashrate_hs;
-                                    b.hashes = st.hashes;
-                                    b.mining = st.mining;
+                                    // Hold last rate across empty EMA windows / job edges.
+                                    if st.hashrate_hs > 0.0 {
+                                        b.hashrate_hs = st.hashrate_hs;
+                                    } else if !(mining || b.mining) {
+                                        b.hashrate_hs = 0.0;
+                                    }
+                                    // Counters only rise while the fleet is mining.
+                                    if mining {
+                                        b.hashes = b.hashes.max(st.hashes);
+                                    } else if st.hashes > 0 || !b.mining {
+                                        b.hashes = st.hashes;
+                                    }
+                                    b.mining = st.mining || (mining && b.hashrate_hs > 0.0);
                                     if !st.mac.is_empty() {
                                         b.mac = normalize_mac(&st.mac);
                                     }
-                                    total_hs += st.hashrate_hs;
-                                    total_hashes = total_hashes.saturating_add(st.hashes);
-                                    any_mining |= st.mining;
+                                    total_hs += b.hashrate_hs;
+                                    total_hashes = total_hashes.saturating_add(b.hashes);
+                                    any_mining |= b.mining;
                                     last_status = Some(st);
                                 }
                                 Err(e) => {
@@ -4461,14 +4518,14 @@ fn mine_worker(cmd_rx: Receiver<NetCmd>, msg_tx: Sender<NetMsg>) {
                                     total_hs += b.hashrate_hs;
                                     total_hashes = total_hashes.saturating_add(b.hashes);
                                     any_mining |= b.mining || mining;
-                                    if b.status_fails == 1 || b.status_fails % 3 == 0 {
+                                    if b.status_fails == 1 || b.status_fails % 5 == 0 {
                                         log_msg(
                                             &msg_tx,
                                             LogKind::Warn,
                                             format!("status {}: {e}", b.name),
                                         );
                                     }
-                                    if b.status_fails >= 8 {
+                                    if b.status_fails >= 12 {
                                         drop_names.push(b.name.clone());
                                     }
                                 }
@@ -4478,8 +4535,8 @@ fn mine_worker(cmd_rx: Receiver<NetCmd>, msg_tx: Sender<NetMsg>) {
                                 total_hs += b.hashrate_hs;
                                 total_hashes = total_hashes.saturating_add(b.hashes);
                                 any_mining |= b.mining || mining;
-                                // Soft-fails are common under hash load; only log first + every 3rd.
-                                if b.status_fails == 1 || b.status_fails % 3 == 0 {
+                                // Soft-fails are common under hash load; only log sparsely.
+                                if b.status_fails == 1 || b.status_fails % 5 == 0 {
                                     log_msg(
                                         &msg_tx,
                                         LogKind::Warn,
@@ -4490,7 +4547,7 @@ fn mine_worker(cmd_rx: Receiver<NetCmd>, msg_tx: Sender<NetMsg>) {
                                     );
                                 }
                                 // Need a longer streak before dropping — USB can stall briefly.
-                                if b.status_fails >= 8 {
+                                if b.status_fails >= 12 {
                                     drop_names.push(b.name.clone());
                                 }
                             }
@@ -4510,6 +4567,7 @@ fn mine_worker(cmd_rx: Receiver<NetCmd>, msg_tx: Sender<NetMsg>) {
                     if boards.is_empty() {
                         mining = false;
                         reconnect_at = None;
+                        last_fleet_status = StatusJson::default();
                         if let Some(mut s) = stratum.take() {
                             s.disconnect();
                         }
@@ -4518,23 +4576,36 @@ fn mine_worker(cmd_rx: Receiver<NetCmd>, msg_tx: Sender<NetMsg>) {
                         continue;
                     }
                     publish_live(&msg_tx, &boards);
-                    if let Some(mut st) = last_status {
-                        st.hashrate_hs = total_hs;
-                        st.hashrate_khs = total_hs / 1000.0;
-                        st.hashes = total_hashes;
-                        st.mining = any_mining || mining;
-                        let _ = msg_tx.send(NetMsg::Status(Ok(st)));
-                    } else {
-                        // All boards soft-failed — publish held rates, never a zero spike.
-                        let _ = msg_tx.send(NetMsg::Status(Ok(StatusJson {
-                            hashrate_hs: total_hs,
-                            hashrate_khs: total_hs / 1000.0,
-                            hashes: total_hashes,
-                            mining: any_mining || mining,
-                            connected: true,
-                            ..Default::default()
-                        })));
+                    let mut st = last_status.unwrap_or_else(|| last_fleet_status.clone());
+                    st.hashrate_hs = total_hs;
+                    st.hashrate_khs = total_hs / 1000.0;
+                    st.hashes = total_hashes.max(last_fleet_status.hashes);
+                    st.mining = any_mining || mining;
+                    st.connected = true;
+                    // Preserve identity fields when this round was all soft-fails.
+                    if st.job.is_empty() {
+                        st.job = last_fleet_status.job.clone();
                     }
+                    if st.nonce.is_empty() {
+                        st.nonce = last_fleet_status.nonce.clone();
+                    }
+                    if st.sha_mode.is_empty() {
+                        st.sha_mode = last_fleet_status.sha_mode.clone();
+                    }
+                    if st.mac.is_empty() {
+                        st.mac = last_fleet_status.mac.clone();
+                    }
+                    if st.pool.is_empty() {
+                        st.pool = last_fleet_status.pool.clone();
+                    }
+                    if st.uptime_secs == 0 {
+                        st.uptime_secs = last_fleet_status.uptime_secs;
+                    }
+                    if st.cpu_mhz == 0 {
+                        st.cpu_mhz = last_fleet_status.cpu_mhz;
+                    }
+                    last_fleet_status = st.clone();
+                    let _ = msg_tx.send(NetMsg::Status(Ok(st)));
                 }
                 NetCmd::Bench => {
                     if boards.is_empty() {
@@ -4809,7 +4880,7 @@ fn mine_worker(cmd_rx: Receiver<NetCmd>, msg_tx: Sender<NetMsg>) {
                             ))));
                         }
                     }
-                    if last_stats_push.elapsed() > Duration::from_secs(1) {
+                    if last_stats_push.elapsed() > Duration::from_secs(2) {
                         let (a, r) = if client.authorized() {
                             (client.accepted, client.rejected)
                         } else {
@@ -4817,6 +4888,10 @@ fn mine_worker(cmd_rx: Receiver<NetCmd>, msg_tx: Sender<NetMsg>) {
                         };
                         let cmd = format!("cmp stats accepted={a}&rejected={r}");
                         for b in boards.iter_mut() {
+                            // Skip LCD stats push while status is soft-failing — frees USB.
+                            if b.status_fails > 0 {
+                                continue;
+                            }
                             let _ = usb_cmd(&mut b.port, &mut b.rx, &cmd);
                         }
                         last_stats_push = Instant::now();
