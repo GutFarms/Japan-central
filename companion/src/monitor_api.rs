@@ -182,8 +182,15 @@ fn url_encode(s: &str) -> String {
 
 /// QR module matrix (true = dark). Empty on encode failure.
 pub fn qr_modules(data: &str) -> Option<(usize, Vec<bool>)> {
-    let code = QrCode::new(data.as_bytes()).ok()?;
+    use qrcode::EcLevel;
+    // Low ECC keeps personal pair URLs inside a small matrix that paints clearly.
+    let code = QrCode::with_error_correction_level(data.as_bytes(), EcLevel::L)
+        .or_else(|_| QrCode::new(data.as_bytes()))
+        .ok()?;
     let w = code.width();
+    if w == 0 {
+        return None;
+    }
     let mut cells = Vec::with_capacity(w * w);
     for y in 0..w {
         for x in 0..w {

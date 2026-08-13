@@ -7,7 +7,7 @@ use std::process::{Command, Stdio};
 
 use sha2::{Digest, Sha256};
 
-use crate::flash_update::{normalize_fw_version, repo_version_urls, COMPANION_UA};
+use crate::flash_update::{normalize_fw_version, COMPANION_UA};
 
 #[derive(Clone, Debug)]
 pub struct AppRemoteInfo {
@@ -45,19 +45,18 @@ pub fn is_newer(remote: &str, local: &str) -> bool {
 }
 
 fn version_urls() -> Vec<String> {
-    let mut out = repo_version_urls("flash/downloads/VERSION.txt");
-    out.extend(repo_version_urls("flash/VERSION.txt"));
-    // Hard pin to the shipping PR branch so older installs still see updates even
-    // when master has no VERSION.txt yet.
-    out.push(
+    // Keep this list short and free of GitHub API / resolve_ref_commit round-trips.
+    // (Building repo_version_urls used to block on commits API and made Check feel stuck.)
+    vec![
         "https://cdn.jsdelivr.net/gh/GutFarms/Japan-central@cursor/esp32-cyd-cpp-firmware-e801/flash/downloads/VERSION.txt"
             .into(),
-    );
-    out.push(
         "https://raw.githubusercontent.com/GutFarms/Japan-central/cursor/esp32-cyd-cpp-firmware-e801/flash/downloads/VERSION.txt"
             .into(),
-    );
-    out
+        "https://api.github.com/repos/GutFarms/Japan-central/contents/flash/downloads/VERSION.txt?ref=cursor%2Fesp32-cyd-cpp-firmware-e801"
+            .into(),
+        "https://cdn.jsdelivr.net/gh/GutFarms/Japan-central@master/flash/downloads/VERSION.txt"
+            .into(),
+    ]
 }
 
 fn app_zip_urls() -> Vec<String> {
@@ -73,11 +72,15 @@ fn app_exe_urls() -> Vec<String> {
 }
 
 fn sha256sums_urls() -> Vec<String> {
-    let mut out = crate::flash_update::repo_file_urls("flash/downloads/SHA256SUMS.txt");
-    out.extend(crate::flash_update::repo_version_urls(
-        "flash/downloads/SHA256SUMS.txt",
-    ));
-    out
+    // Fast mirrors first — avoid resolve_ref_commit HTTP while building the list.
+    vec![
+        "https://cdn.jsdelivr.net/gh/GutFarms/Japan-central@cursor/esp32-cyd-cpp-firmware-e801/flash/downloads/SHA256SUMS.txt"
+            .into(),
+        "https://raw.githubusercontent.com/GutFarms/Japan-central/cursor/esp32-cyd-cpp-firmware-e801/flash/downloads/SHA256SUMS.txt"
+            .into(),
+        "https://api.github.com/repos/GutFarms/Japan-central/contents/flash/downloads/SHA256SUMS.txt?ref=cursor%2Fesp32-cyd-cpp-firmware-e801"
+            .into(),
+    ]
 }
 
 fn parse_sha256sums(txt: &str) -> std::collections::HashMap<String, String> {
@@ -165,9 +168,13 @@ fn verify_named_file(
 }
 
 fn http_get_text(url: &str) -> Result<String, String> {
+    http_get_text_timeout(url, 4, 8)
+}
+
+fn http_get_text_timeout(url: &str, connect_s: u64, read_s: u64) -> Result<String, String> {
     let agent = ureq::AgentBuilder::new()
-        .timeout_connect(std::time::Duration::from_secs(10))
-        .timeout_read(std::time::Duration::from_secs(20))
+        .timeout_connect(std::time::Duration::from_secs(connect_s))
+        .timeout_read(std::time::Duration::from_secs(read_s))
         .user_agent(COMPANION_UA)
         .build();
     let mut req = agent.get(url);
@@ -247,8 +254,7 @@ pub fn check_app_update(progress: &dyn Fn(String)) -> Result<AppRemoteInfo, Stri
     let mut best_remote: Option<String> = None;
     let mut sources_ok = 0u32;
     progress(format!("Checking for Companion updates (running {local})…"));
-    // Probe every candidate and keep the *newest* version. Returning on the first
-    // hit used to accept a stale CDN copy and hide a real update.
+    // Probe fast mirrors; stop early once we have a newer version, or after 2 agreeing hits.
     for url in version_urls() {
         match http_get_text(&url) {
             Ok(txt) => {
@@ -260,6 +266,14 @@ pub fn check_app_update(progress: &dyn Fn(String)) -> Result<AppRemoteInfo, Stri
                         Some(prev) if is_newer(&remote, &prev) => Some(remote),
                         Some(prev) => Some(prev),
                     };
+                    if let Some(ref remote) = best_remote {
+                        if is_newer(remote, local) && sources_ok >= 1 {
+                            break;
+                        }
+                        if sources_ok >= 2 {
+                            break;
+                        }
+                    }
                 } else {
                     last = "VERSION.txt had no usable version".into();
                 }

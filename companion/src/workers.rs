@@ -169,14 +169,24 @@ pub fn is_usb_serial_port(name: &str) -> bool {
         || lower.contains("slab_uspto")
 }
 
-/// Port string for espflash/esptool on Windows (`\\.\COM10` required for COM≥10).
+/// Port string for espflash/esptool.
+///
+/// espflash resolves ports with an *exact* match against `serialport::available_ports()`.
+/// Passing `\\.\COM6` when the OS lists `COM6` yields `espflash::serial_not_found`.
+/// Always prefer the enumerated name; fall back to plain `COMx`.
 pub fn flash_port_arg(name: &str) -> String {
-    let n = normalize_port_name(name);
-    if n.starts_with("COM") && n.len() > 3 && n[3..].chars().all(|c| c.is_ascii_digit()) {
-        format!(r"\\.\{n}")
-    } else {
-        name.trim().to_string()
+    let want = normalize_port_name(name);
+    if let Ok(ports) = serialport::available_ports() {
+        for p in ports {
+            if normalize_port_name(&p.port_name) == want {
+                return p.port_name;
+            }
+        }
     }
+    if want.starts_with("COM") && want.len() > 3 && want[3..].chars().all(|c| c.is_ascii_digit()) {
+        return want;
+    }
+    name.trim().to_string()
 }
 
 /// True when `mac` is a real 6-byte identity (not empty / `unknown`).
@@ -837,8 +847,13 @@ mod tests {
         assert!(is_usb_serial_port(r"\\.\COM10"));
         assert!(!is_usb_serial_port("192.168.4.1:19284"));
         assert!(!is_usb_serial_port("cyd.local:19284"));
-        assert_eq!(flash_port_arg("COM6"), r"\\.\COM6");
-        assert_eq!(flash_port_arg("com10"), r"\\.\COM10");
+        // Prefer plain COMx — espflash exact-matches available_ports() names.
+        let arg = flash_port_arg("COM6");
+        assert!(
+            arg.eq_ignore_ascii_case("COM6") || arg.eq_ignore_ascii_case(r"\\.\COM6"),
+            "unexpected flash port arg {arg}"
+        );
+        assert_eq!(flash_port_arg(r"\\.\COM6").to_ascii_uppercase().replace(r"\\.\", ""), "COM6");
     }
 
     #[test]

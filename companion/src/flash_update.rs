@@ -371,7 +371,7 @@ fn extract_merged_from_zip(
     })
 }
 
-pub const COMPANION_UA: &str = "Njordr-seas-CYD-miner/0.8.66";
+pub const COMPANION_UA: &str = "Njordr-seas-CYD-miner/0.8.67";
 const ESPFLASH_VERSION: &str = "4.5.0";
 pub const REPO_OWNER: &str = "GutFarms";
 pub const REPO_NAME: &str = "Japan-central";
@@ -944,6 +944,30 @@ pub fn flash_merged_bin(port: &str, image: &Path, progress: &dyn Fn(String)) -> 
     }
 
     let port_arg = flash_port_arg(port);
+    // Fail fast with a clear list if Windows no longer sees the COM (common after unplug
+    // or when Companion still held the handle a moment ago).
+    {
+        let listed: Vec<String> = serialport::available_ports()
+            .unwrap_or_default()
+            .into_iter()
+            .map(|p| p.port_name)
+            .collect();
+        let want = crate::workers::normalize_port_name(&port_arg);
+        let found = listed
+            .iter()
+            .any(|n| crate::workers::normalize_port_name(n) == want);
+        if !found {
+            let hint = if listed.is_empty() {
+                "no serial ports listed".into()
+            } else {
+                listed.join(", ")
+            };
+            return Err(format!(
+                "USB port '{port}' not found right now (looked for '{port_arg}'). \
+Available: {hint}. Unplug/replug the CYD, pick the COM again, then Update board."
+            ));
+        }
+    }
     progress(format!(
         "Flash {} ({} bytes) → {port} ({port_arg}) @ 0x0",
         image
@@ -1228,9 +1252,9 @@ mod tests {
             Some(false)
         );
         assert_eq!(
-            update_needed("0.8.56-sha256-d0", "0.8.66-sha256"),
+            update_needed("0.8.56-sha256-d0", "0.8.67-sha256"),
             Some(true)
         );
-        assert_eq!(update_needed("", "0.8.66-sha256"), None);
+        assert_eq!(update_needed("", "0.8.67-sha256"), None);
     }
 }

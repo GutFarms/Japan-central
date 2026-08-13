@@ -621,6 +621,9 @@ struct CompanionApp {
     monitor_token: String,
     /// Optional public host / DDNS for QR (empty → auto LAN IPv4).
     monitor_public_host: String,
+    /// Cached LAN IPv4 for QR / phone API (refreshed every few seconds — not every frame).
+    monitor_lan_ip: String,
+    monitor_lan_ip_at: Instant,
 }
 
 impl CompanionApp {
@@ -768,6 +771,8 @@ impl CompanionApp {
             monitor_install_id,
             monitor_token,
             monitor_public_host,
+            monitor_lan_ip: primary_lan_ipv4().unwrap_or_default(),
+            monitor_lan_ip_at: Instant::now(),
         };
         match start_monitor_api(app.monitor.clone()) {
             Ok(addr) => {
@@ -819,7 +824,7 @@ impl CompanionApp {
         } else {
             (0, 0)
         };
-        let boards: Vec<MonitorBoard> = self
+        let mut boards: Vec<MonitorBoard> = self
             .connected_workers
             .iter()
             .map(|w| MonitorBoard {
@@ -831,6 +836,21 @@ impl CompanionApp {
                 mining: w.mining,
             })
             .collect();
+        // Legacy single-USB path may not be in connected_workers — still publish it.
+        if boards.is_empty() && self.usb_open {
+            boards.push(MonitorBoard {
+                endpoint: self.com_port.clone(),
+                mac: self.board_mac.clone(),
+                fw: self.fw_label.clone(),
+                hashrate_hs: if self.displayed_khs > 0.5 {
+                    self.displayed_khs as f64 * 1000.0
+                } else {
+                    self.status.hashrate_hs
+                },
+                hashes: self.status.hashes,
+                mining: self.mining && self.status.mining,
+            });
+        }
         let snap = MonitorSnapshot {
             version: running_version().into(),
             product: "Njörðr Seas' CYD miner".into(),
@@ -861,6 +881,18 @@ impl CompanionApp {
         self.monitor.publish(snap);
     }
 
+    fn refresh_monitor_lan_ip(&mut self) {
+        if self.monitor_lan_ip_at.elapsed() < Duration::from_secs(5)
+            && !self.monitor_lan_ip.is_empty()
+        {
+            return;
+        }
+        self.monitor_lan_ip_at = Instant::now();
+        if let Some(ip) = primary_lan_ipv4() {
+            self.monitor_lan_ip = ip;
+        }
+    }
+
     fn monitor_connect_host(&self) -> String {
         let override_host = self.monitor_public_host.trim();
         if !override_host.is_empty() {
@@ -875,6 +907,10 @@ impl CompanionApp {
                 .unwrap_or(override_host)
                 .to_string();
         }
+        if !self.monitor_lan_ip.is_empty() {
+            return self.monitor_lan_ip.clone();
+        }
+        // Avoid hostname fallback when possible — phones rarely resolve Windows COMPUTERNAME.
         primary_lan_ipv4().unwrap_or_else(local_host_hint)
     }
 
@@ -1917,7 +1953,14 @@ impl CompanionApp {
                         }
                     }
                 } else {
-                    ui.label(RichText::new("QR unavailable").color(C_WARN));
+                    ui.vertical(|ui| {
+                        ui.label(RichText::new("QR unavailable — copy link below").color(C_WARN));
+                        ui.label(
+                            RichText::new(&pair)
+                                .color(C_DIM)
+                                .font(mono_ui_font(9.0)),
+                        );
+                    });
                 }
 
                 ui.add_space(14.0);
@@ -1933,6 +1976,15 @@ impl CompanionApp {
                             .color(C_TEXT)
                             .font(mono_ui_font(11.0)),
                     );
+                    if !host.chars().any(|c| c == '.') {
+                        ui.label(
+                            RichText::new(
+                                "Host is not an IP — set Remote host to your LAN IP (ipconfig) so the phone can reach this PC.",
+                            )
+                            .color(C_WARN)
+                            .size(11.0),
+                        );
+                    }
                     ui.add_space(4.0);
                     ui.label(
                         RichText::new(format!("API · {}", self.monitor_addr))
@@ -3866,6 +3918,7 @@ impl App for CompanionApp {
 
         // Keep animation continuous (~60 fps). 40 ms made looping motion feel stepped.
         ctx.request_repaint_after(Duration::from_millis(16));
+        self.refresh_monitor_lan_ip();
         self.publish_phone_monitor();
     }
 }
