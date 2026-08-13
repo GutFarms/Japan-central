@@ -59,6 +59,7 @@ In **Settings**:
 - **0.8.22** — fix Windows self-update bat (retry while `.new` remains; do not relaunch a locked old exe)
 - **0.8.23** — fetch updates via GitHub API / commit-pinned raw (branch raw CDN can serve stale VERSION/bins)
 - **0.8.24** — fix Update board: espflash reject `ESPFLASH_SKIP_UPDATE_CHECK=1` (needs true/false); skip Windows Store python stubs
+- **0.8.55** — Fix USB connect + update fetch: link immediately, defer auto-bench; run update HTTP off mine-worker thread
 - **0.8.54** — Auto-bench each board on USB/Wi‑Fi connect (D0 path pick + NVS lock)
 - **0.8.53** — ESP32-D0 build (`*-d0.bin`); Bench auto-times HW/HW+/HW/SW and locks the fastest path in NVS
 - **0.8.52** — Neon-blue lightning splashes (Companion storm, logo halo, phone monitor + web UI)

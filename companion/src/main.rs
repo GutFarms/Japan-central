@@ -4807,8 +4807,9 @@ fn mine_worker(cmd_rx: Receiver<NetCmd>, msg_tx: Sender<NetMsg>) {
         }
     }
 
-    /// Run D0 path auto-tune on a freshly linked board, then optionally arm a warmup job.
-    fn auto_bench_on_connect(
+    /// Run D0 path auto-tune on a linked board. Caller owns timing (deferred, never on
+    /// the critical connect path — blocking here freezes USB + update cmds).
+    fn auto_bench_board(
         board: &mut UsbBoard,
         msg_tx: &Sender<NetMsg>,
         resume_mining: bool,
@@ -4818,13 +4819,13 @@ fn mine_worker(cmd_rx: Receiver<NetCmd>, msg_tx: Sender<NetMsg>) {
             msg_tx,
             LogKind::Usb,
             format!(
-                "Auto-bench {} on connect (HW / HW+ / HW/SW → lock best)…",
+                "Auto-bench {} (HW / HW+ / HW/SW → lock best)…",
                 board.name
             ),
         );
-        let summary = match usb_cmd(&mut board.port, &mut board.rx, "cmp bench tune=1&n=120000") {
+        // Shorter sample than manual Bench — enough to pick a path without wedging the link.
+        let summary = match usb_cmd(&mut board.port, &mut board.rx, "cmp bench tune=1&n=60000") {
             Ok(line) => {
-                // Pull status so SHA path / bench_hs show in the UI immediately.
                 if let Ok(st_line) = usb_cmd(&mut board.port, &mut board.rx, "cmp status") {
                     if let Ok(st) = parse_cmp_status(&st_line) {
                         board.hashrate_hs = st.hashrate_hs;
@@ -4844,7 +4845,7 @@ fn mine_worker(cmd_rx: Receiver<NetCmd>, msg_tx: Sender<NetMsg>) {
                 log_msg(
                     msg_tx,
                     LogKind::Warn,
-                    format!("{} auto-bench failed: {e}", board.name),
+                    format!("{} auto-bench failed (board stays linked): {e}", board.name),
                 );
                 format!("ERR {e}")
             }
@@ -4869,7 +4870,34 @@ fn mine_worker(cmd_rx: Receiver<NetCmd>, msg_tx: Sender<NetMsg>) {
         summary
     }
 
+    /// Arm mining job on a newly linked board without waiting for auto-bench.
+    fn arm_mining_if_needed(
+        board: &mut UsbBoard,
+        msg_tx: &Sender<NetMsg>,
+        resume_mining: bool,
+    ) {
+        if !resume_mining {
+            return;
+        }
+        let mut legacy = board.legacy_job;
+        let _ = usb_cmd(
+            &mut board.port,
+            &mut board.rx,
+            "cmp stats accepted=0&rejected=0",
+        );
+        let _ = usb_push_job(
+            &mut board.port,
+            &mut board.rx,
+            &warmup_job(),
+            &mut legacy,
+            msg_tx,
+        );
+        board.legacy_job = legacy;
+        board.mining = true;
+    }
+
     let mut boards: Vec<UsbBoard> = Vec::new();
+    let mut pending_auto_bench: VecDeque<String> = VecDeque::new();
     let mut stratum: Option<StratumClient> = None;
     let mut mining = false;
     let mut recent_jobs: VecDeque<WorkJob> = VecDeque::new();
@@ -4893,6 +4921,7 @@ fn mine_worker(cmd_rx: Receiver<NetCmd>, msg_tx: Sender<NetMsg>) {
             }
         };
 
+        let had_cmd = cmd.is_some();
         if let Some(cmd) = cmd {
             match cmd {
                 NetCmd::ListPorts => {
@@ -4987,15 +5016,19 @@ fn mine_worker(cmd_rx: Receiver<NetCmd>, msg_tx: Sender<NetMsg>) {
                         let mut old = boards.remove(idx);
                         let _ = usb_cmd(&mut old.port, &mut old.rx, "cmp stop");
                     }
+                    // Drop any queued auto-bench for this port (reconnect).
+                    pending_auto_bench.retain(|n| !port_names_match(n, &name));
                     log_msg(&msg_tx, LogKind::Usb, format!("Opening {name} (460800→115200)"));
                     match open_board(&name) {
                         Ok((mut board, saw)) => {
                             configure_board(&mut board, &msg_tx);
-                            let bench = auto_bench_on_connect(&mut board, &msg_tx, mining);
+                            arm_mining_if_needed(&mut board, &msg_tx, mining);
+                            let endpoint = board.name.clone();
                             boards.push(board);
                             publish_live(&msg_tx, &boards);
+                            pending_auto_bench.push_back(endpoint);
                             let _ = msg_tx.send(NetMsg::Action(Ok(format!(
-                                "USB open {name}{} · auto-bench · {} board(s) · {bench}",
+                                "USB open {name}{} · {} board(s) · auto-bench queued",
                                 if saw { " (pong)" } else { "" },
                                 boards.len()
                             ))));
@@ -5025,6 +5058,7 @@ fn mine_worker(cmd_rx: Receiver<NetCmd>, msg_tx: Sender<NetMsg>) {
                                         && normalize_mac(&b.mac) == normalize_mac(&board.mac)
                                 }) {
                                     let old = boards.remove(idx);
+                                    pending_auto_bench.retain(|n| !port_names_match(n, &old.name));
                                     log_msg(
                                         &msg_tx,
                                         LogKind::Usb,
@@ -5035,11 +5069,13 @@ fn mine_worker(cmd_rx: Receiver<NetCmd>, msg_tx: Sender<NetMsg>) {
                                     );
                                 }
                             }
-                            let bench = auto_bench_on_connect(&mut board, &msg_tx, mining);
+                            arm_mining_if_needed(&mut board, &msg_tx, mining);
+                            let endpoint = board.name.clone();
                             boards.push(board);
                             publish_live(&msg_tx, &boards);
+                            pending_auto_bench.push_back(endpoint);
                             let _ = msg_tx.send(NetMsg::Action(Ok(format!(
-                                "Worker linked {name}{} · auto-bench · {} total · {bench}",
+                                "Worker linked {name}{} · {} total · auto-bench queued",
                                 if saw { " (pong)" } else { "" },
                                 boards.len()
                             ))));
@@ -5073,6 +5109,7 @@ fn mine_worker(cmd_rx: Receiver<NetCmd>, msg_tx: Sender<NetMsg>) {
                                         && normalize_mac(&b.mac) == normalize_mac(&board.mac)
                                 }) {
                                     let old = boards.remove(idx);
+                                    pending_auto_bench.retain(|n| n != &old.name);
                                     log_msg(
                                         &msg_tx,
                                         LogKind::Usb,
@@ -5083,11 +5120,13 @@ fn mine_worker(cmd_rx: Receiver<NetCmd>, msg_tx: Sender<NetMsg>) {
                                     );
                                 }
                             }
-                            let bench = auto_bench_on_connect(&mut board, &msg_tx, mining);
+                            arm_mining_if_needed(&mut board, &msg_tx, mining);
+                            let ep = board.name.clone();
                             boards.push(board);
                             publish_live(&msg_tx, &boards);
+                            pending_auto_bench.push_back(ep);
                             let _ = msg_tx.send(NetMsg::Action(Ok(format!(
-                                "Wi‑Fi worker linked {endpoint}{} · auto-bench · {} total · {bench}",
+                                "Wi‑Fi worker linked {endpoint}{} · {} total · auto-bench queued",
                                 if saw { " (pong)" } else { "" },
                                 boards.len()
                             ))));
@@ -5100,6 +5139,7 @@ fn mine_worker(cmd_rx: Receiver<NetCmd>, msg_tx: Sender<NetMsg>) {
                     }
                 }
                 NetCmd::DisconnectWorker(name) => {
+                    pending_auto_bench.retain(|n| !port_names_match(n, &name));
                     if let Some(idx) = boards
                         .iter()
                         .position(|b| port_names_match(&b.name, &name))
@@ -5126,6 +5166,7 @@ fn mine_worker(cmd_rx: Receiver<NetCmd>, msg_tx: Sender<NetMsg>) {
                     mining = false;
                     reconnect_at = None;
                     mine_endpoint.clear();
+                    pending_auto_bench.clear();
                     if let Some(mut s) = stratum.take() {
                         s.disconnect();
                     }
@@ -5561,32 +5602,60 @@ fn mine_worker(cmd_rx: Receiver<NetCmd>, msg_tx: Sender<NetMsg>) {
                     }
                 }
                 NetCmd::FetchFirmware => {
+                    // HTTP must not block USB / stratum — run off the mine worker.
                     let tx = msg_tx.clone();
-                    let progress = move |line: String| {
-                        log_msg(&tx, LogKind::Info, line);
-                    };
-                    let result = fetch_latest_firmware(&progress);
-                    let _ = msg_tx.send(NetMsg::FirmwareFetched(result));
+                    thread::spawn(move || {
+                        let progress = {
+                            let tx = tx.clone();
+                            move |line: String| log_msg(&tx, LogKind::Info, line)
+                        };
+                        let result = fetch_latest_firmware(&progress);
+                        let _ = tx.send(NetMsg::FirmwareFetched(result));
+                    });
                 }
                 NetCmd::CheckAppUpdate => {
                     let tx = msg_tx.clone();
-                    let progress = move |line: String| {
-                        log_msg(&tx, LogKind::Info, line);
-                    };
-                    let result = check_app_update(&progress);
-                    let _ = msg_tx.send(NetMsg::AppUpdate(result));
+                    thread::spawn(move || {
+                        let progress = {
+                            let tx = tx.clone();
+                            move |line: String| log_msg(&tx, LogKind::Info, line)
+                        };
+                        let result = check_app_update(&progress);
+                        let _ = tx.send(NetMsg::AppUpdate(result));
+                    });
                 }
                 NetCmd::UpdateApp => {
                     let tx = msg_tx.clone();
-                    let progress = move |line: String| {
-                        log_msg(&tx, LogKind::Info, line);
-                    };
-                    let result = update_companion_app(&progress);
-                    let _ = msg_tx.send(NetMsg::AppUpdate(result));
+                    thread::spawn(move || {
+                        let progress = {
+                            let tx = tx.clone();
+                            move |line: String| log_msg(&tx, LogKind::Info, line)
+                        };
+                        let result = update_companion_app(&progress);
+                        let _ = tx.send(NetMsg::AppUpdate(result));
+                    });
                 }
                 NetCmd::PullApiFeed(feed) => {
                     let outcome = pull_feed(&feed);
                     let _ = msg_tx.send(NetMsg::ApiFeedResult(outcome));
+                }
+            }
+        }
+
+        // Deferred connect auto-bench — only when the cmd queue is idle so USB
+        // link / update checks are never stuck behind a multi-minute tune.
+        if !had_cmd {
+            if let Some(name) = pending_auto_bench.pop_front() {
+                if let Some(b) = boards
+                    .iter_mut()
+                    .find(|b| port_names_match(&b.name, &name) || b.name == name)
+                {
+                    let was_mining = mining;
+                    let summary = auto_bench_board(b, &msg_tx, was_mining);
+                    publish_live(&msg_tx, &boards);
+                    let _ = msg_tx.send(NetMsg::Action(Ok(format!(
+                        "Auto-bench {name} done · {summary}"
+                    ))));
                 }
             }
         }
@@ -5908,8 +5977,8 @@ fn usb_cmd(port: &mut BoardIo, buf: &mut String, cmd: &str) -> Result<String, St
     let mut last_err = String::new();
     // Bigger writes + single flush cut job-push latency a lot vs per-chunk sleeps.
     let (wait_ms, retries, chunk, gap_ms) = if cmd.contains("bench") {
-        // D0 auto-tune times HW / HW+ / HW/SW (~3× samples) — allow up to 3 minutes.
-        (180_000u64, 2usize, 128usize, 1u64)
+        // Connect auto-bench uses n=60000; manual Bench may still be longer.
+        (90_000u64, 2usize, 128usize, 1u64)
     } else if cmd.contains("status") {
         // Board may be mid mineB batch; firmware yields on RX, but allow headroom.
         (2_800u64, 3usize, 256usize, 0u64)
