@@ -9,6 +9,7 @@ from typing import Any
 
 from .corpus import Corpus, Lexeme, load_corpus, normalize
 from .tutor import TutorEngine
+from .sentence import SentenceStructureEngine
 
 BADGES = [
     {"id": "first_spark", "title": "First Spark", "rule": "Earn 10 XP", "xp": 10},
@@ -42,6 +43,7 @@ class FunLearnEngine:
     def __init__(self, corpus: Corpus | None = None) -> None:
         self.corpus = corpus or load_corpus()
         self.tutor = TutorEngine(self.corpus)
+        self.sentences = SentenceStructureEngine(self.corpus)
 
     def word_of_the_day(self, day: str | None = None) -> dict[str, Any]:
         day = day or date.today().isoformat()
@@ -268,7 +270,12 @@ class FunLearnEngine:
                 {"id": "match", "name": "Batey Match", "blurb": "Pair Boriken ↔ meaning against the clock.", "route": "/v1/fun/match"},
                 {"id": "fill_blank", "name": "Konuko Fill-In", "blurb": "Plant the missing word in a sentence.", "route": "/v1/fun/fill-blank"},
                 {"id": "story_quest", "name": "Areyto Quest", "blurb": "A tiny adventure that teaches as you choose.", "route": "/v1/fun/story"},
+                {"id": "sentence_builder", "name": "Sentence Builder", "blurb": "Assemble SVO / identity / possession patterns.", "route": "/v1/sentences/lesson"},
+                {"id": "sentence_scramble", "name": "Sentence Scramble", "blurb": "Restore Boriken word order for XP.", "route": "/v1/fun/sentence-scramble"},
                 {"id": "daily_challenge", "name": "Daily Island Run", "blurb": "Three quests. One streak-friendly combo.", "route": "/v1/fun/daily"},
             ],
             "badges": BADGES,
         }
+
+    def sentence_scramble(self, n: int = 3) -> dict[str, Any]:
+        return self.sentences.scramble_game(n=n)

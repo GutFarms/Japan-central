@@ -14,6 +14,8 @@ OUT_HTML = OUT_DIR / "index.html"
 
 def main() -> None:
     data = json.loads(VOCAB.read_text(encoding="utf-8"))
+    grammar = json.loads((ROOT / "corpus" / "grammar.json").read_text(encoding="utf-8"))
+    sentences = json.loads((ROOT / "corpus" / "sentences.json").read_text(encoding="utf-8"))
     entries = []
     for e in data["entries"]:
         if e.get("pos") in {"unknown"}:
@@ -34,8 +36,18 @@ def main() -> None:
             }
         )
 
+    patterns = grammar.get("sentence_patterns", [])
+    learner = sentences.get("learner_sentences", [])
     payload = json.dumps(entries, ensure_ascii=False)
-    html = HTML_TEMPLATE.replace("__LEXICON_JSON__", payload)
+    patterns_json = json.dumps(patterns, ensure_ascii=False)
+    learner_json = json.dumps(learner, ensure_ascii=False)
+    overview = json.dumps(grammar.get("sentence_structure", {}).get("overview", {}), ensure_ascii=False)
+    html = (
+        HTML_TEMPLATE.replace("__LEXICON_JSON__", payload)
+        .replace("__PATTERNS_JSON__", patterns_json)
+        .replace("__LEARNER_JSON__", learner_json)
+        .replace("__OVERVIEW_JSON__", overview)
+    )
     OUT_DIR.mkdir(parents=True, exist_ok=True)
     OUT_HTML.write_text(html, encoding="utf-8")
     (OUT_DIR / "README.txt").write_text(
@@ -43,10 +55,11 @@ def main() -> None:
         "======================\n\n"
         "Open index.html in any browser (iPhone Safari works).\n"
         "On iOS: Share → Add to Home Screen for an app-like icon.\n"
+        "Includes sentence structure (SVO), definitions, and games.\n"
         "No server required — lexicon and games are embedded.\n",
         encoding="utf-8",
     )
-    print(f"Wrote {OUT_HTML} with {len(entries)} words")
+    print(f"Wrote {OUT_HTML} with {len(entries)} words and {len(patterns)} sentence patterns")
 
 
 HTML_TEMPLATE = r"""<!DOCTYPE html>
@@ -136,6 +149,8 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
       <button onclick="fillBlank()">Konuko Fill</button>
       <button onclick="showSearch()">Define</button>
       <button onclick="story()">Areyto Quest</button>
+      <button onclick="showStructure()">Sentences</button>
+      <button onclick="scramble()">Scramble</button>
     </div>
 
     <div class="panel" id="stage">
@@ -154,6 +169,9 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
 
 <script>
 const LEXICON = __LEXICON_JSON__;
+const PATTERNS = __PATTERNS_JSON__;
+const LEARNER = __LEARNER_JSON__;
+const OVERVIEW = __OVERVIEW_JSON__;
 const state = {
   xp: Number(localStorage.getItem("boriken_xp") || 0),
   streak: Number(localStorage.getItem("boriken_streak") || 1),
@@ -161,6 +179,7 @@ const state = {
   flashIdx: 0,
   flashCards: [],
   storyIdx: 0,
+  scramble: null,
 };
 
 function save() {
@@ -315,6 +334,56 @@ function storyPick(choice, answer) {
   state.storyIdx += 1;
   stage(`<p class="${ok ? "ok" : "bad"}">${ok ? "Kasike energy unlocked." : "Remember: " + answer}</p>
     <button class="primary" onclick="showStory()">Continue</button>`);
+}
+
+function showStructure() {
+  const ov = OVERVIEW.english || "Neo-Taíno Boriken usually follows Subject–Verb–Object (SVO).";
+  const rows = PATTERNS.map(p =>
+    `<div class="panel" style="margin:8px 0">
+      <strong class="gold">${p.name || p.id}</strong>
+      <div class="boriken" style="font-size:1.3rem">${p.example}</div>
+      <div>${p.gloss || ""} · <span class="muted">${p.structure || ""}</span></div>
+      <div class="muted">${p.pattern || ""}</div>
+    </div>`
+  ).join("");
+  stage(`<h3>Sentence structure</h3>
+    <p>${ov}</p>
+    <p class="gold">da- I/my · wa- we/our · li- he/his · to- she/her · ma- without · ka- having</p>
+    ${rows}
+    <button class="primary" onclick="scramble()">Practice scramble</button>`);
+}
+
+function scramble() {
+  const pool = LEARNER.filter(s => (s.boriken || "").replace(/-/g," ").trim().split(/\s+/).length >= 2);
+  const s = pool[Math.floor(Math.random() * pool.length)];
+  let tokens = s.boriken.replace(/,/g," ").split(/\s+/).filter(Boolean);
+  let shuffled = tokens.slice().sort(() => Math.random() - 0.5);
+  if (shuffled.join(" ") === tokens.join(" ")) shuffled = tokens.slice().reverse();
+  state.scramble = { answer: s.boriken, picked: [] };
+  stage(`<h3>Sentence Scramble</h3>
+    <p class="muted">${s.english} · ${s.structure || ""}</p>
+    <p id="built" class="boriken">____</p>
+    <div id="toks">${shuffled.map(t =>
+      `<button class="choice" onclick="pickTok('${t.replace(/'/g, "\\'")}')">${t}</button>`
+    ).join("")}</div>
+    <button onclick="scramble()">Skip</button>
+    <button class="primary" onclick="checkScramble()">Check</button>`);
+}
+
+function pickTok(t) {
+  if (!state.scramble) return;
+  state.scramble.picked.push(t);
+  document.getElementById("built").textContent = state.scramble.picked.join(" ");
+}
+
+function checkScramble() {
+  if (!state.scramble) return;
+  const got = state.scramble.picked.join(" ");
+  const ok = got === state.scramble.answer;
+  addXp(ok ? 10 : 1);
+  stage(`<p class="${ok ? "ok" : "bad"}">${ok ? "Word order restored." : "Answer: " + state.scramble.answer}</p>
+    <button class="primary" onclick="scramble()">Another</button>
+    <button onclick="showStructure()">See structures</button>`);
 }
 </script>
 </body>

@@ -12,6 +12,7 @@ sys.path.insert(0, str(ROOT))
 from engine.corpus import load_corpus
 from engine.fun import FunLearnEngine
 from engine.reconstruct import ReconstructionEngine
+from engine.sentence import SentenceStructureEngine
 from engine.tutor import TutorEngine
 
 
@@ -117,6 +118,47 @@ class FunTests(unittest.TestCase):
         p = self.fun.progress_preview(xp=60, streak=3)
         self.assertGreaterEqual(p["level"], 2)
         self.assertTrue(any(b["unlocked"] for b in p["badges"]))
+
+    def test_sentence_scramble(self) -> None:
+        g = self.fun.sentence_scramble(n=2)
+        self.assertEqual(g["mode"], "sentence_scramble")
+        self.assertTrue(g["cards"])
+
+
+class SentenceStructureTests(unittest.TestCase):
+    def setUp(self) -> None:
+        load_corpus.cache_clear()
+        self.ss = SentenceStructureEngine()
+
+    def test_overview(self) -> None:
+        ov = self.ss.overview()
+        self.assertIn("SVO", ov["word_order"])
+        self.assertGreaterEqual(ov["pattern_count"], 10)
+
+    def test_build_svo(self) -> None:
+        r = self.ss.build("svo_present", subject="I", verb="drink", obj="water")
+        self.assertTrue(r["ok"])
+        self.assertIn("da-", r["boriken"])
+        self.assertIn("SUBJECT-VERB", r["structure"])
+
+    def test_build_identity(self) -> None:
+        r = self.ss.build("identity", predicate="Taíno")
+        self.assertEqual(r["boriken"].split()[-1], "daka")
+
+    def test_build_possession(self) -> None:
+        r = self.ss.build("possessed_noun", subject="our", noun="house")
+        self.assertTrue(r["boriken"].startswith("wa-"))
+
+    def test_lesson(self) -> None:
+        lesson = self.ss.lesson("svo_present")
+        self.assertEqual(lesson["pattern"]["id"], "svo_present")
+        self.assertIn("practice", lesson)
+
+    def test_tutor_sentence_skill(self) -> None:
+        tutor = TutorEngine()
+        lesson = tutor.lesson("sentence_structure")
+        self.assertEqual(lesson["skill"], "sentence_structure")
+        self.assertIn("pattern", lesson)
 
 
 if __name__ == "__main__":

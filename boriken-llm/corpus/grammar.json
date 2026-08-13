@@ -1,9 +1,10 @@
 {
   "meta": {
     "name": "Boriken Reconstruction Grammar",
-    "version": "0.1.0",
+    "version": "0.3.0",
     "word_order": "SVO (learner-friendly Neo-Taíno; classical may have been freer / SOV-leaning)",
-    "family": "Ta-Arawakan"
+    "family": "Ta-Arawakan",
+    "sentence_structure_ready": true
   },
   "phonology": {
     "consonants": ["p", "t", "k", "b", "d", "g", "s", "sh", "h", "m", "n", "w", "y", "l", "r"],
@@ -22,67 +23,206 @@
     }
   },
   "possessive_prefixes": {
-    "1sg": {"form": "da-", "meaning": "my"},
-    "1pl": {"form": "wa-", "meaning": "our"},
-    "3sg_m": {"form": "li-", "meaning": "his"},
-    "3sg_f": {"form": "to-", "alt": ["tu-"], "meaning": "her"}
+    "1sg": {"form": "da-", "meaning": "my", "english": "my", "spanish": "mi"},
+    "1pl": {"form": "wa-", "meaning": "our", "english": "our", "spanish": "nuestro/a"},
+    "3sg_m": {"form": "li-", "meaning": "his", "english": "his", "spanish": "su (de él)"},
+    "3sg_f": {"form": "to-", "alt": ["tu-"], "meaning": "her", "english": "her", "spanish": "su (de ella)"}
   },
   "verbal_prefixes": {
     "note": "Subject marking on verbs often mirrors possessive prefixes.",
-    "1sg": "da-",
-    "1pl": "wa-",
-    "3sg_m": "li-",
-    "3sg_f": "to-",
-    "imperative": "(bare stem or specialized form)"
+    "1sg": {"form": "da-", "english": "I", "spanish": "yo"},
+    "1pl": {"form": "wa-", "english": "we", "spanish": "nosotros/as"},
+    "3sg_m": {"form": "li-", "english": "he", "spanish": "él"},
+    "3sg_f": {"form": "to-", "english": "she", "spanish": "ella"},
+    "imperative": {"form": "(bare stem)", "english": "command", "spanish": "imperativo"}
   },
   "derivational_affixes": {
-    "negative": {"form": "ma-", "meaning": "without / not / un-"},
-    "attributive": {"form": "ka-", "meaning": "having / with / characterized by"},
+    "negative": {"form": "ma-", "meaning": "without / not / un-", "english": "without/not", "spanish": "sin/no"},
+    "attributive": {"form": "ka-", "meaning": "having / with / characterized by", "english": "having/with", "spanish": "con/que tiene"},
     "masculine": {"form": "-el", "meaning": "masculine referent (e.g. warokoel)"},
     "verb_markers": ["a-", "ka-", "-a", "-ka", "-nV"]
+  },
+  "sentence_structure": {
+    "overview": {
+      "english": "Neo-Taíno Boriken for learners usually follows Subject–Verb–Object (SVO). Person is often marked on the verb with the same prefixes used for possession (da-/wa-/li-/to-). Identity sentences use daka ('I am').",
+      "spanish": "El boriken neo-taíno para aprendices suele seguir Sujeto–Verbo–Objeto (SVO). La persona se marca en el verbo con los mismos prefijos de posesión (da-/wa-/li-/to-). Las oraciones de identidad usan daka ('yo soy')."
+    },
+    "slot_guide": [
+      {"slot": "SUBJECT", "how": "Use an independent noun/pronoun, OR mark person on the verb with da-/wa-/li-/to-.", "example": "da- (I) · wa- (we)"},
+      {"slot": "VERB", "how": "Place the verb stem after the subject prefix: da-sá, wa-aka, li-arika.", "example": "da-sá"},
+      {"slot": "OBJECT", "how": "Follows the verb in SVO order. May be bare or possessed.", "example": "ni · da-bohío"},
+      {"slot": "PREDICATE", "how": "For identity/description: NOUN/ADJ + daka (I am …).", "example": "taíno daka"},
+      {"slot": "NEGATION", "how": "Use ma- on a stem for 'without/not', or set phrases like mayani / makabuka.", "example": "ma-ni"},
+      {"slot": "ATTRIBUTE", "how": "Use ka- for 'having/with'.", "example": "ka-kawóna"},
+      {"slot": "VOCATIVE", "how": "Name/title after a comma in commands.", "example": "kãma, waxeri"}
+    ],
+    "build_order": [
+      "1. Choose the sentence type (identity, action, possession, negation, command, hortative).",
+      "2. Pick person (I/we/he/she) → da-/wa-/li-/to- when needed.",
+      "3. Attach the verb or noun stem.",
+      "4. Add object / complement in SVO order.",
+      "5. Label attestation: attested vs reconstructed composition."
+    ]
   },
   "sentence_patterns": [
     {
       "id": "identity",
+      "name": "Identity / I am",
       "pattern": "{NOUN/ADJ} daka",
+      "slots": ["PREDICATE", "daka"],
       "example": "taíno daka",
-      "gloss": "I am Taíno / I am good"
+      "gloss": "I am Taíno / I am good",
+      "spanish": "Soy taíno / soy bueno",
+      "structure": "PREDICATE + daka",
+      "level": 1,
+      "notes": "daka is attested as 'I am'."
     },
     {
       "id": "svo_present",
+      "name": "Action (SVO)",
       "pattern": "{SUBJ_PREFIX}-{VERB} {OBJECT}",
+      "slots": ["SUBJECT", "VERB", "OBJECT"],
       "example": "da-sá ni",
-      "gloss": "I drink water"
+      "gloss": "I drink water",
+      "spanish": "Yo bebo agua",
+      "structure": "SUBJECT-VERB + OBJECT",
+      "level": 1,
+      "notes": "Default learner word order is SVO."
+    },
+    {
+      "id": "svo_no_object",
+      "name": "Action intransitive",
+      "pattern": "{SUBJ_PREFIX}-{VERB}",
+      "slots": ["SUBJECT", "VERB"],
+      "example": "waibá",
+      "gloss": "we go / let's go",
+      "spanish": "vamos",
+      "structure": "SUBJECT-VERB",
+      "level": 1
     },
     {
       "id": "possessed_noun",
+      "name": "Possession",
       "pattern": "{POSS_PREFIX}-{NOUN}",
+      "slots": ["POSSESSOR", "NOUN"],
       "example": "wa-borikén",
-      "gloss": "our native land"
+      "gloss": "our native land",
+      "spanish": "nuestra tierra nativa",
+      "structure": "POSSESSOR-NOUN",
+      "level": 1
     },
     {
       "id": "negative_noun",
+      "name": "Privative / without",
       "pattern": "ma-{NOUN/STEM}",
+      "slots": ["NEGATION", "STEM"],
       "example": "ma-ni",
-      "gloss": "without water"
+      "gloss": "without water",
+      "spanish": "sin agua",
+      "structure": "ma- + STEM",
+      "level": 2
     },
     {
       "id": "attributive",
+      "name": "Having / with",
       "pattern": "ka-{NOUN/STEM}",
+      "slots": ["ATTRIBUTE", "STEM"],
       "example": "ka-kawóna",
-      "gloss": "having gold"
+      "gloss": "having gold",
+      "spanish": "con oro / que tiene oro",
+      "structure": "ka- + STEM",
+      "level": 2
     },
     {
       "id": "imperative",
+      "name": "Command",
       "pattern": "{VERB}[, {VOCATIVE}]",
+      "slots": ["VERB", "VOCATIVE"],
       "example": "kãma, waxeri",
-      "gloss": "hear, sir"
+      "gloss": "hear, sir",
+      "spanish": "oye, señor",
+      "structure": "VERB (+ VOCATIVE)",
+      "level": 2,
+      "notes": "Attested imperative style from colonial sentences."
     },
     {
       "id": "hortative",
+      "name": "Let's …",
       "pattern": "wa-{VERB}",
+      "slots": ["SUBJECT", "VERB"],
       "example": "waibá",
-      "gloss": "let's go"
+      "gloss": "let's go",
+      "spanish": "vámonos",
+      "structure": "wa- + VERB",
+      "level": 1
+    },
+    {
+      "id": "possessed_object_svo",
+      "name": "SVO with possessed object",
+      "pattern": "{SUBJ_PREFIX}-{VERB} {POSS_PREFIX}-{NOUN}",
+      "slots": ["SUBJECT", "VERB", "POSSESSOR", "OBJECT"],
+      "example": "da-arika li-kanowa",
+      "gloss": "I see his canoe",
+      "spanish": "Veo su canoa",
+      "structure": "SUBJECT-VERB + POSSESSED OBJECT",
+      "level": 2
+    },
+    {
+      "id": "descriptor",
+      "name": "Noun + quality",
+      "pattern": "{NOUN} {ADJ}",
+      "slots": ["NOUN", "QUALITY"],
+      "example": "to-isa chali",
+      "gloss": "her child is happy",
+      "spanish": "su hijo/a está feliz",
+      "structure": "NOUN + ADJECTIVE",
+      "level": 2
+    },
+    {
+      "id": "location_motion",
+      "name": "Go to place",
+      "pattern": "waibá / {SUBJ_PREFIX}-iba {PLACE}",
+      "slots": ["SUBJECT", "VERB", "PLACE"],
+      "example": "waibá batey",
+      "gloss": "let's go to the batey",
+      "spanish": "vamos al batey",
+      "structure": "MOTION + PLACE",
+      "level": 2
+    },
+    {
+      "id": "give_dative",
+      "name": "Give to someone",
+      "pattern": "busika {RECIPIENT}",
+      "slots": ["VERB", "RECIPIENT"],
+      "example": "busika wakía",
+      "gloss": "give to us",
+      "spanish": "danos / da a nosotros",
+      "structure": "GIVE + RECIPIENT",
+      "level": 2
+    },
+    {
+      "id": "negated_clause",
+      "name": "Do not …",
+      "pattern": "mayani {OBJECT?} / ma-{STEM}",
+      "slots": ["NEGATION", "STEM"],
+      "example": "mayani makana",
+      "gloss": "do not kill (with the club)",
+      "spanish": "no mates",
+      "structure": "NEGATION + STEM/CLAUSE",
+      "level": 3,
+      "notes": "mayani is attested in colonial records."
+    },
+    {
+      "id": "complex_attested",
+      "name": "Attested multi-part",
+      "pattern": "{IMPERATIVE}, {VOCATIVE}, {CLAUSE}",
+      "slots": ["VERB", "VOCATIVE", "CLAUSE"],
+      "example": "O kãma, waxeri, warikẽ kawóna yari",
+      "gloss": "O hear, sir, we see gold jewels",
+      "spanish": "Oh oye, señor, vemos joyas de oro",
+      "structure": "CALL + COMMAND + SVO CLAUSE",
+      "level": 3,
+      "notes": "One of the six attested spoken sentences."
     }
   ],
   "reconstruction_rules": [
@@ -105,6 +245,10 @@
     {
       "id": "transparency",
       "rule": "Always expose attestation status and rationale to the learner / app UI."
+    },
+    {
+      "id": "svo_default",
+      "rule": "Default learner sentence order is SVO unless teaching an attested historical string."
     }
   ],
   "pronunciation_guide": {

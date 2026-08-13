@@ -18,6 +18,7 @@ enum Mode {
     Fill,
     Define,
     Story,
+    Structure,
 }
 
 #[derive(Clone)]
@@ -387,11 +388,11 @@ impl eframe::App for BorikenApp {
                             ("Memory Flip", Mode::Flash),
                             ("Konuko Fill", Mode::Fill),
                             ("Areyto Quest", Mode::Story),
+                            ("Sentences", Mode::Structure),
                             ("Define", Mode::Define),
                         ];
                         for (label, mode) in buttons {
-                            let selected = self.mode == mode
-                                || (mode == Mode::WordOfDay && self.mode == Mode::WordOfDay);
+                            let selected = self.mode == mode;
                             let btn = egui::Button::new(
                                 RichText::new(label)
                                     .size(16.0)
@@ -407,7 +408,7 @@ impl eframe::App for BorikenApp {
                             } else {
                                 Color32::from_rgba_unmultiplied(255, 255, 255, 28)
                             })
-                            .min_size(egui::vec2(128.0, 40.0));
+                            .min_size(egui::vec2(118.0, 40.0));
                             if ui.add(btn).clicked() {
                                 match mode {
                                     Mode::WordOfDay => self.word_of_day(),
@@ -419,6 +420,11 @@ impl eframe::App for BorikenApp {
                                         self.story.feedback = None;
                                         self.mode = Mode::Story;
                                         self.status = "Areyto Quest begins at dawn.".into();
+                                    }
+                                    Mode::Structure => {
+                                        self.mode = Mode::Structure;
+                                        self.status =
+                                            "Sentence structure · SVO · da-/wa-/li-/to-".into();
                                     }
                                     Mode::Define => {
                                         self.mode = Mode::Define;
@@ -448,7 +454,7 @@ impl eframe::App for BorikenApp {
                                 );
                                 ui.label(
                                     RichText::new(format!(
-                                        "{} words loaded with definitions, fun facts, and examples.",
+                                        "{} words loaded · sentence patterns ready (SVO, identity, possession…).",
                                         self.lexicon.len()
                                     ))
                                     .size(16.0)
@@ -457,11 +463,80 @@ impl eframe::App for BorikenApp {
                                 ui.add_space(8.0);
                                 ui.label(
                                     RichText::new(
-                                        "Sol Taíno · cemí · coquí · carey · petroglyph friezes · particle weather",
+                                        "Sol Taíno · cemí · coquí · carey · petroglyph friezes · sentence structure",
                                     )
                                     .size(14.0)
                                     .color(Color32::from_rgb(180, 210, 195)),
                                 );
+                            });
+                        }
+                        Mode::Structure => {
+                            glass_panel(ui, 900.0, |ui| {
+                                ui.label(
+                                    RichText::new("Sentence structure")
+                                        .size(22.0)
+                                        .color(Color32::from_rgb(242, 199, 90))
+                                        .strong(),
+                                );
+                                ui.label(
+                                    RichText::new(
+                                        "Default learner order is SVO. Person often rides on the verb:",
+                                    )
+                                    .size(16.0)
+                                    .color(Color32::WHITE),
+                                );
+                                ui.label(
+                                    RichText::new(
+                                        "da- I/my · wa- we/our · li- he/his · to- she/her · ma- without · ka- having",
+                                    )
+                                    .size(15.0)
+                                    .color(Color32::from_rgb(210, 235, 220)),
+                                );
+                                ui.add_space(10.0);
+                                let patterns = [
+                                    ("Identity", "taíno daka", "PREDICATE + daka"),
+                                    ("SVO action", "da-sá ni", "SUBJECT-VERB + OBJECT"),
+                                    ("Possession", "wa-borikén", "POSSESSOR-NOUN"),
+                                    ("Without", "ma-ni", "ma- + STEM"),
+                                    ("Having", "ka-kawóna", "ka- + STEM"),
+                                    ("Let's go", "waibá batey", "MOTION + PLACE"),
+                                    ("Command", "kãma, waxeri", "VERB + VOCATIVE"),
+                                    ("I see his canoe", "da-arika li-kanowa", "SVO + possessed object"),
+                                ];
+                                for (name, ex, structure) in patterns {
+                                    ui.horizontal(|ui| {
+                                        ui.label(
+                                            RichText::new(name)
+                                                .size(15.0)
+                                                .color(Color32::from_rgb(242, 199, 90))
+                                                .strong(),
+                                        );
+                                        ui.label(
+                                            RichText::new(ex)
+                                                .size(18.0)
+                                                .color(Color32::WHITE)
+                                                .strong(),
+                                        );
+                                        ui.label(
+                                            RichText::new(structure)
+                                                .size(13.0)
+                                                .color(Color32::from_rgb(180, 210, 195)),
+                                        );
+                                    });
+                                }
+                                ui.add_space(8.0);
+                                if ui
+                                    .add(
+                                        egui::Button::new("Practice: build da-sá ni (+12 XP)")
+                                            .fill(Color32::from_rgb(242, 199, 90)),
+                                    )
+                                    .clicked()
+                                {
+                                    self.add_xp(12);
+                                    self.burst(640.0, 360.0);
+                                    self.status =
+                                        "da-sá ni = I drink water · SUBJECT-VERB + OBJECT".into();
+                                }
                             });
                         }
                         Mode::WordOfDay => {

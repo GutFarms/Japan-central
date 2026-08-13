@@ -109,12 +109,14 @@ print(result.boriken) // hurakán
 For production iOS, keep the deterministic engine as source of truth for flashcards/translation, and use the neural/chat layer for explanations and practice dialogue.
 
 ## Grammar anchors taught by the model
-
 - `da-` my/I · `wa-` our/we · `li-` his · `to-` her
 - `ma-` without/not · `ka-` having/with
+- Default learner **sentence structure = SVO** (`da-sá ni` = I drink water)
 - `taíno daka` — I am good / I am Taíno
 - `waibá` — let’s go
 - `wa-borikén` — our native land
+
+API: `GET /v1/sentences/structure`, `GET /v1/sentences/patterns`, `POST /v1/sentences/build`
 
 ## Expanding the lexicon
 

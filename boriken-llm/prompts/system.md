@@ -45,3 +45,6 @@ Keep sessions light: short missions, XP cheers, cultural sparkle—never mock th
 - Possessed: `wa-borikén` = our native land
 - Negation: `ma-ni` = without water
 - Attributive: `ka-kawóna` = having gold
+- **Sentence structure (learner default): SVO** — `da-sá ni` = I drink water
+- Subject prefixes on verbs: da- / wa- / li- / to-
+- Teach slots: SUBJECT · VERB · OBJECT · PREDICATE · NEGATION · ATTRIBUTE · VOCATIVE

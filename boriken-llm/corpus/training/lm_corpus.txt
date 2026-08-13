@@ -523,9 +523,15 @@ Taí wey.
 I am Taíno. => Taíno daka.
 Soy taíno. => Taíno daka.
 Taíno daka.
+I am a worker. => Naboriya daka.
+Soy trabajador. => Naboriya daka.
+Naboriya daka.
 Our Borikén is good. => Wa-borikén taí.
 Nuestro Borikén es bueno. => Wa-borikén taí.
 Wa-borikén taí.
+My house. => Da-bohío.
+Mi casa. => Da-bohío.
+Da-bohío.
 My house has water. => Da-bohío ka-ni.
 Mi casa tiene agua. => Da-bohío ka-ni.
 Da-bohío ka-ni.
@@ -544,15 +550,33 @@ Da-aka kasabi.
 We drink water. => Wa-sá ni.
 Bebemos agua. => Wa-sá ni.
 Wa-sá ni.
+He sees the sun. => Li-arika wey.
+Él ve el sol. => Li-arika wey.
+Li-arika wey.
+She eats guava. => To-aka wayaba.
+Ella come guayaba. => To-aka wayaba.
+To-aka wayaba.
+I see his canoe. => Da-arika li-kanowa.
+Veo su canoa. => Da-arika li-kanowa.
+Da-arika li-kanowa.
 No hurricane / without storm. => Ma-hurakán.
 Sin huracán. => Ma-hurakán.
 Ma-hurakán.
+Without water. => Ma-ni.
+Sin agua. => Ma-ni.
+Ma-ni.
 The village has spirits. => Ka-semí yukayeke.
 La aldea tiene cemíes. => Ka-semí yukayeke.
 Ka-semí yukayeke.
+Having gold. => Ka-kawóna.
+Con oro. => Ka-kawóna.
+Ka-kawóna.
 Speak, our father. => Ahiya wakía baba.
 Habla, nuestro padre. => Ahiya wakía baba.
 Ahiya wakía baba.
+Hear, sir. => Kãma, waxeri.
+Oye, señor. => Kãma, waxeri.
+Kãma, waxeri.
 I see the sun. => Da-arika wey.
 Veo el sol. => Da-arika wey.
 Da-arika wey.
@@ -562,6 +586,27 @@ Kokí ahiya.
 Love Borikén. => Anichi borikén.
 Ama a Borikén. => Anichi borikén.
 Anichi borikén.
+Give to us. => Busika wakía.
+Danos. => Busika wakía.
+Busika wakía.
+Let's go. => Waibá.
+Vámonos. => Waibá.
+Waibá.
+I drink water. => Da-sá ni.
+Yo bebo agua. => Da-sá ni.
+Da-sá ni.
+We eat cassava bread. => Wa-aka kasabi.
+Comemos casabe. => Wa-aka kasabi.
+Wa-aka kasabi.
+Her house is joyful/happy. => To-bohío chali.
+Su casa es alegre. => To-bohío chali.
+To-bohío chali.
+His father speaks. => Li-baba ahiya.
+Su padre habla. => Li-baba ahiya.
+Li-baba ahiya.
+Our canoe goes to the sea. => Wa-kanowa iba bara.
+Nuestra canoa va al mar. => Wa-kanowa iba bara.
+Wa-kanowa iba bara.
 da- means my or I
 wa- means our or we
 li- means his or he

@@ -17,12 +17,13 @@ from engine.corpus import load_corpus  # noqa: E402
 from engine.fun import FunLearnEngine  # noqa: E402
 from engine.llm import BorikenLLM  # noqa: E402
 from engine.reconstruct import ReconstructionEngine  # noqa: E402
+from engine.sentence import SentenceStructureEngine  # noqa: E402
 from engine.tutor import TutorEngine  # noqa: E402
 
 app = FastAPI(
     title="BorikenLLM API",
     description="Fun Boriken language reconstruction & learning API for iOS",
-    version="0.2.0",
+    version="0.3.0",
 )
 app.add_middleware(
     CORSMiddleware,
@@ -36,6 +37,7 @@ corpus = load_corpus()
 recon = ReconstructionEngine(corpus)
 tutor = TutorEngine(corpus)
 fun = FunLearnEngine(corpus)
+sentences = SentenceStructureEngine(corpus)
 llm = BorikenLLM()
 
 
@@ -73,6 +75,19 @@ class ProgressRequest(BaseModel):
     streak: int = 0
 
 
+class SentenceBuildRequest(BaseModel):
+    pattern_id: str = Field(..., min_length=1)
+    subject: str | None = None
+    verb: str | None = None
+    object: str | None = None
+    noun: str | None = None
+    quality: str | None = None
+    place: str | None = None
+    recipient: str | None = None
+    predicate: str | None = None
+    vocative: str | None = None
+
+
 @app.get("/health")
 def health() -> dict[str, Any]:
     return {
@@ -80,9 +95,11 @@ def health() -> dict[str, Any]:
         "language": "Boriken (Taíno-Borikenaíki)",
         "lexicon_size": len(corpus.entries),
         "has_definitions": bool(getattr(corpus.entries[0], "definition_en", "")),
+        "sentence_patterns": len(corpus.grammar.get("sentence_patterns", [])),
         "llm": llm.info(),
-        "version": "0.2.0",
+        "version": "0.3.0",
         "play": "/v1/fun/menu",
+        "sentence_structure": "/v1/sentences/structure",
     }
 
 
@@ -108,8 +125,45 @@ def grammar() -> dict[str, Any]:
 
 
 @app.get("/v1/sentences")
-def sentences() -> dict[str, Any]:
+def sentences_bank() -> dict[str, Any]:
     return corpus.sentences
+
+
+@app.get("/v1/sentences/structure")
+def sentence_structure() -> dict[str, Any]:
+    return sentences.overview()
+
+
+@app.get("/v1/sentences/patterns")
+def sentence_patterns(level: int | None = None) -> dict[str, Any]:
+    rows = sentences.list_patterns(level=level)
+    return {"count": len(rows), "patterns": rows}
+
+
+@app.get("/v1/sentences/lesson")
+def sentence_lesson(pattern_id: str | None = None) -> dict[str, Any]:
+    return sentences.lesson(pattern_id)
+
+
+@app.post("/v1/sentences/build")
+def sentence_build(req: SentenceBuildRequest) -> dict[str, Any]:
+    return sentences.build(
+        pattern_id=req.pattern_id,
+        subject=req.subject,
+        verb=req.verb,
+        obj=req.object,
+        noun=req.noun,
+        quality=req.quality,
+        place=req.place,
+        recipient=req.recipient,
+        predicate=req.predicate,
+        vocative=req.vocative,
+    )
+
+
+@app.get("/v1/sentences/quiz")
+def sentence_quiz(n: int = 5) -> dict[str, Any]:
+    return {"cards": sentences.quiz(n)}
 
 
 @app.post("/v1/translate")
@@ -197,6 +251,11 @@ def story_quest() -> dict[str, Any]:
 @app.get("/v1/fun/daily")
 def daily_challenge() -> dict[str, Any]:
     return fun.daily_challenge()
+
+
+@app.get("/v1/fun/sentence-scramble")
+def sentence_scramble(n: int = 3) -> dict[str, Any]:
+    return fun.sentence_scramble(n=n)
 
 
 @app.post("/v1/fun/grade")

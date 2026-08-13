@@ -7,6 +7,7 @@ from typing import Any
 
 from .corpus import Corpus, load_corpus
 from .reconstruct import ReconstructionEngine
+from .sentence import SentenceStructureEngine
 
 
 LESSON_SKILLS = [
@@ -18,16 +19,24 @@ LESSON_SKILLS = [
     "kinship",
     "grammar_possessive",
     "grammar_negation",
+    "sentence_structure",
+    "sentence_svo",
 ]
-
 
 class TutorEngine:
     def __init__(self, corpus: Corpus | None = None) -> None:
         self.corpus = corpus or load_corpus()
         self.recon = ReconstructionEngine(self.corpus)
+        self.sentences = SentenceStructureEngine(self.corpus)
 
     def lesson(self, skill: str | None = None) -> dict[str, Any]:
         skill = skill or random.choice(LESSON_SKILLS)
+        if skill in {"sentence_structure", "sentence_svo"}:
+            lesson = self.sentences.lesson("svo_present" if skill == "sentence_svo" else None)
+            lesson["skill"] = skill
+            lesson["vibe"] = "areyto"
+            lesson["fun_hook"] = self._fun_hook(skill)
+            return lesson
         if skill == "greetings":
             examples = [
                 ("Taí wey", "Good day", "Buenos días"),
@@ -101,8 +110,9 @@ class TutorEngine:
             "kinship": "Mission: text a family member using baba or nana in a joke caption.",
             "grammar_possessive": "Mission: invent da- + any noun you know.",
             "grammar_negation": "Mission: make a silly ma- phrase (ma-hurakán = no storm vibes).",
+            "sentence_structure": "Mission: build one SVO sentence: da-VERB OBJECT.",
+            "sentence_svo": "Mission: say da-sá ni out loud three times.",
         }.get(skill, "Mission: use one new word before sunset.")
-
     def _explain_skill(self, skill: str) -> str:
         return {
             "greetings": "Start with warm everyday phrases used in Neo-Taíno community learning.",
@@ -113,6 +123,8 @@ class TutorEngine:
             "kinship": "Possessive prefixes attach directly to kinship stems.",
             "grammar_possessive": "da- my, wa- our, li- his, to-/tu- her.",
             "grammar_negation": "ma- marks absence/negation; ka- marks having/with.",
+            "sentence_structure": "Default learner order is SVO. Mark person on the verb: da-sá ni.",
+            "sentence_svo": "SUBJECT-prefix + VERB + OBJECT — the core action sentence.",
         }.get(skill, "Practice core Boriken forms with transparent morphology.")
 
     def chat(self, message: str) -> dict[str, Any]:
