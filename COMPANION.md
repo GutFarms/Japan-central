@@ -59,6 +59,7 @@ In **Settings**:
 - **0.8.22** — fix Windows self-update bat (retry while `.new` remains; do not relaunch a locked old exe)
 - **0.8.23** — fetch updates via GitHub API / commit-pinned raw (branch raw CDN can serve stale VERSION/bins)
 - **0.8.24** — fix Update board: espflash reject `ESPFLASH_SKIP_UPDATE_CHECK=1` (needs true/false); skip Windows Store python stubs
+- **0.8.44** — Companion self-update clean-sweeps the install dir (drops stale kit files) before promoting the new build
 - **0.8.43** — fix stratum accept/reject counting; hero logo 3× + **Seas'** brand; Bench boards retunes HW path for max H/s
 - **0.8.42** — board SoftAP/STA Wi‑Fi + TCP `cmp`; Find workers scans USB + Bluetooth + Wi‑Fi beacons (parallel COM probe)
 - **0.8.41** — default stratum `stratum+tcp://btc.hmpool.io:3335` (HM Pool preset)

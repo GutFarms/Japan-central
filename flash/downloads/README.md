@@ -1,4 +1,4 @@
-# Njörðr Seas' CYD miner downloads (`0.8.43`)
+# Njörðr Seas' CYD miner downloads (`0.8.44`)
 
 | File | What it is |
 |------|------------|
