@@ -49,22 +49,44 @@ use workers::{
 };
 
 use eframe::egui::{
-    self, Align, Color32, FontData, FontDefinitions, FontFamily, FontId, Frame, Layout, Margin,
-    Pos2, Rect, RichText, Rounding, ScrollArea, Sense, Stroke, TextEdit, Vec2,
+    self, Align, Color32, FontData, FontDefinitions, FontFamily, FontId, Frame, IconData, Layout,
+    Margin, Pos2, Rect, RichText, Rounding, ScrollArea, Sense, Stroke, TextEdit, Vec2,
 };
 use eframe::{App, NativeOptions};
 use serde::{Deserialize, Serialize};
 use serialport::SerialPort;
 
+fn load_app_icon() -> Option<IconData> {
+    // Prefer multi-size logo; taskbar/title-bar use this runtime icon (PE ICO is separate).
+    let bytes = include_bytes!("../assets/cyd-logo.png");
+    let img = image::load_from_memory(bytes).ok()?.into_rgba8();
+    let (w, h) = img.dimensions();
+    // Windows taskbar looks best with a square mid/large icon.
+    let resized = if w != 256 || h != 256 {
+        image::imageops::resize(&img, 256, 256, image::imageops::FilterType::Lanczos3)
+    } else {
+        img
+    };
+    Some(IconData {
+        rgba: resized.into_raw(),
+        width: 256,
+        height: 256,
+    })
+}
+
 fn main() -> eframe::Result<()> {
+    let mut viewport = egui::ViewportBuilder::default()
+        .with_inner_size([1200.0, 820.0])
+        .with_min_inner_size([640.0, 480.0])
+        .with_title(format!(
+            "Njörðr seas CYD miner {}",
+            env!("CARGO_PKG_VERSION")
+        ));
+    if let Some(icon) = load_app_icon() {
+        viewport = viewport.with_icon(icon);
+    }
     let options = NativeOptions {
-        viewport: egui::ViewportBuilder::default()
-            .with_inner_size([1200.0, 820.0])
-            .with_min_inner_size([640.0, 480.0])
-            .with_title(format!(
-                "Njörðr seas CYD miner {}",
-                env!("CARGO_PKG_VERSION")
-            )),
+        viewport,
         multisampling: 8,
         depth_buffer: 0,
         persist_window: true,

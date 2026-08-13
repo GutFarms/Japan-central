@@ -887,13 +887,14 @@ checksum = "f27ae1dd37df86211c42e150270f82743308803d90a6f6e6651cd730d5e1732f"
 
 [[package]]
 name = "cyd-companion"
-version = "0.8.75"
+version = "0.8.76"
 dependencies = [
  "chrono",
  "eframe",
  "egui",
  "egui_extras",
  "hex",
+ "image",
  "qrcode",
  "rand",
  "serde",
