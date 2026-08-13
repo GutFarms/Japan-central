@@ -75,9 +75,13 @@ static void refreshLabels() {
   g_labelsReady = true;
 }
 
+// Classic ESP32 SHA-256 mining ceiling is ~0.5–1 MH/s in ideal conditions.
+// Anything far above that is a measurement bug (never a real sustained rate).
+static constexpr float kMaxPlausibleHs = 2000000.0f;
+
 static void updateHashrate() {
   // Core-0 SW assist + USB share a core — short windows swing wildly.
-  // ≥1.5s samples + EMA keep LCD/Companion stable.
+  // ≥2s samples + EMA keep LCD/Companion stable; never seed from a wild spike.
   if (!g_jobLoaded || !g_mining) {
     if (g_hashrate > 0.0f) {
       g_hashrate *= 0.82f;
@@ -87,7 +91,7 @@ static void updateHashrate() {
   }
   uint32_t now = millis();
   uint32_t elapsed = now - g_windowStart;
-  if (elapsed < 1500) return;
+  if (elapsed < 2000) return;
   if (elapsed > 8000) {
     g_windowHashesStart = g_hashCounter.load(std::memory_order_relaxed);
     g_windowStart = now;
@@ -96,11 +100,18 @@ static void updateHashrate() {
   uint64_t cur = g_hashCounter.load(std::memory_order_relaxed);
   uint64_t delta = cur - g_windowHashesStart;
   float instant = (float)delta * 1000.0f / (float)elapsed;
+  if (instant > kMaxPlausibleHs) {
+    // Discard impossible samples (e.g. old phantom counter bugs).
+    g_windowHashesStart = cur;
+    g_windowStart = now;
+    return;
+  }
   if (g_hashrate <= 1.0f) {
     g_hashrate = instant;
   } else {
-    g_hashrate = g_hashrate * 0.78f + instant * 0.22f;
+    g_hashrate = g_hashrate * 0.82f + instant * 0.18f;
   }
+  if (g_hashrate > kMaxPlausibleHs) g_hashrate = kMaxPlausibleHs;
   g_windowHashesStart = cur;
   g_windowStart = now;
 }
@@ -213,10 +224,17 @@ static void serviceCompanion() {
 }
 
 static void mineLane(Sha256Miner& m, uint32_t stride, size_t batch) {
+  // Count only hashes the miner actually performed. Adding `batch` blindly
+  // inflated the rate to tens of MH/s whenever mineBatch returned early
+  // (not ready / midstate not set) — ESP32 cannot sustain that.
+  const uint64_t before = m.hashes();
   if (m.mineBatch(batch, stride)) {
     noteShare(m.lastShareNonce());
   }
-  g_hashCounter.fetch_add(batch, std::memory_order_relaxed);
+  const uint64_t after = m.hashes();
+  if (after > before) {
+    g_hashCounter.fetch_add(after - before, std::memory_order_relaxed);
+  }
 }
 
 static void mineTaskA(void*) {
@@ -228,15 +246,14 @@ static void mineTaskA(void*) {
     }
     if (g_hwSha) {
       // Big IRAM batches. Delay rarely — TWDT only needs idle every ~few seconds.
-      // (0.8.17 delayed every 4 batches and cut peak H/s.)
-      mineLane(g_minerA, 1, 32768);
-      if ((++loops & 15u) == 0u) {
+      mineLane(g_minerA, 1, 49152);
+      if ((++loops & 31u) == 0u) {
         vTaskDelay(1);
         esp_task_wdt_reset();
       }
     } else {
       mineLane(g_minerA, 2, 8192);
-      if ((++loops & 7u) == 0u) {
+      if ((++loops & 15u) == 0u) {
         vTaskDelay(1);
         esp_task_wdt_reset();
       }
@@ -254,8 +271,8 @@ static void mineTaskB(void*) {
       vTaskDelay(pdMS_TO_TICKS(2));
       continue;
     }
-    mineLane(g_minerB, 1, g_hwSha ? 4096 : 2048);
-    if ((++loops & 31u) == 0u) {
+    mineLane(g_minerB, 1, g_hwSha ? 6144 : 2048);
+    if ((++loops & 63u) == 0u) {
       vTaskDelay(1);
       esp_task_wdt_reset();
     }

@@ -673,13 +673,17 @@ impl CompanionApp {
     }
 
     fn board_khs(&self) -> f32 {
-        if self.status.hashrate_khs > 0.0 {
-            self.status.hashrate_khs as f32
-        } else if self.status.hashrate_hs > 0.0 {
+        // Prefer hashrate_hs (authoritative). Clamp absurd spikes — ESP32 SHA
+        // mining cannot sustain multi‑MH/s; those readings were counter bugs.
+        const MAX_KHS: f32 = 2000.0; // 2 MH/s hard ceiling for display
+        let khs = if self.status.hashrate_hs > 0.0 {
             (self.status.hashrate_hs / 1000.0) as f32
+        } else if self.status.hashrate_khs > 0.0 {
+            self.status.hashrate_khs as f32
         } else {
             0.0
-        }
+        };
+        khs.clamp(0.0, MAX_KHS)
     }
 
     fn board_hashing(&self) -> bool {
@@ -1245,7 +1249,7 @@ impl CompanionApp {
                         });
                         ui.label(
                             RichText::new(format!(
-                                "SHA path {} · classic ESP32 ceiling is typically ~0.7–0.8 MH/s, not 1 MH/s marketing",
+                                "SHA path {} · realistic CYD rate is ~200–800 kH/s (ESP32 cannot do tens of MH/s)",
                                 self.sha_mode_label()
                             ))
                             .color(C_DIM)
