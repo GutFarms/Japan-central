@@ -1,0 +1,181 @@
+{
+  "meta": {
+    "title": "Island Time Machine",
+    "subtitle": "The history of Borikén told like an areyto—short chapters, living words, honest labels.",
+    "version": "0.3.2",
+    "tone": "playful + respectful",
+    "accuracy_note": "Stories are learner-friendly summaries of ethnohistory and colonial records. They are not a substitute for scholarly sources. Language revival forms are labeled when used.",
+    "disclaimer_en": "Taíno descendants and Caribbean peoples carry living memory. This timeline teaches culture and language reclaiming—not a closed-book 'vanished people' myth.",
+    "disclaimer_es": "Descendientes taínos y pueblos caribeños cargan memoria viva. Esta línea del tiempo enseña cultura y recuperación lingüística—no el mito de un pueblo 'desaparecido'."
+  },
+  "eras": [
+    {
+      "id": "paddle_in",
+      "chapter": 1,
+      "era_label": "Deep Time · The Paddle In",
+      "when": "Centuries before 1493",
+      "title_en": "Kanowa on the horizon",
+      "title_es": "Kanowa en el horizonte",
+      "story_en": "Picture big canoes cutting blue water. Arawakan-speaking voyagers settle the islands, plant gardens, and name places with care. Borikén—'native land'—becomes home. No textbooks yet. Just paddles, stars, and stories sung at night.",
+      "story_es": "Imagina canoas grandes cortando agua azul. Navegantes arawakos se asientan, siembran y nombran el lugar con cariño. Borikén—'tierra nativa'—se hace hogar. Sin libros todavía: remos, estrellas e historias de noche.",
+      "fun_hook": "Your starter pack: a kanowa, a konuko garden, and a name worth defending—Borikén.",
+      "words": ["boriken", "canoa", "konuko"],
+      "mission": "Say Borikén out loud. Feel the land-name land in your mouth.",
+      "quiz": {
+        "question": "What does Borikén roughly mean?",
+        "choices": ["native land", "big storm", "gold mountain"],
+        "answer": "native land",
+        "xp": 10
+      },
+      "honesty": "Exact migration dates and routes are researched from archaeology and comparative linguistics—not one single 'arrival day'."
+    },
+    {
+      "id": "classic_village",
+      "chapter": 2,
+      "era_label": "Classic Borikén · Village Life",
+      "when": "Late pre-contact centuries",
+      "title_en": "Bohío, batey, and the areyto library",
+      "title_es": "Bohío, batey y la biblioteca areyto",
+      "story_en": "Villages (yukayeke) cluster around a batey—the plaza for ball games, meetings, and ceremony. Families sleep in bohíos. When drums start, the areyto begins: history you can dance. Leaders called kasike guide diplomacy; behíke healers tend body and spirit.",
+      "story_es": "Las aldeas (yukayeke) rodean el batey: plaza de juego, reunión y ceremonia. Las familias viven en bohíos. Suenan los tambores y empieza el areyto: historia que se baila. Los kasike guían; los behíke cuidan cuerpo y espíritu.",
+      "fun_hook": "No dusty archive—your Wikipedia was an areyto with ankle rattles.",
+      "words": ["yucayeke", "bohio", "batey", "areito", "cacique", "behique"],
+      "mission": "Match three village words: bohío, batey, areyto.",
+      "quiz": {
+        "question": "Where did communities gather for games and ceremony?",
+        "choices": ["batey", "huracán", "hamaka"],
+        "answer": "batey",
+        "xp": 10
+      },
+      "honesty": "Village terms are widely cited in colonial ethnohistory; orthography here is modern regularized Boriken."
+    },
+    {
+      "id": "spirits_sky",
+      "chapter": 3,
+      "era_label": "Belief · Sky, Sea, Cemí",
+      "when": "Living spiritual world",
+      "title_en": "Atabey, Yúcahu, and the carved cemí",
+      "title_es": "Atabey, Yúcahu y el cemí tallado",
+      "story_en": "Sacred carvings called cemí (semí) held presence and power. Atabey is often linked with fertility and waters; Yúcahu with cassava and vital force. Coabey names a spirit land in ethnohistoric notes. Think less 'museum labels,' more relationships with land and ancestors.",
+      "story_es": "Los cemíes tallados guardaban presencia y poder. Atabey se asocia a fertilidad y aguas; Yúcahu a la yuca y la fuerza vital. Coabey nombra una tierra de espíritus en notas etnohistóricas. Menos museo, más relación con tierra y ancestros.",
+      "fun_hook": "Boss fight? Not really. Side quest: respect the cemí and learn their names.",
+      "words": ["zemi", "atabey", "yocahu", "coabey", "turey"],
+      "mission": "Learn one divine name and one object name (cemí).",
+      "quiz": {
+        "question": "What are sacred carved figures often called?",
+        "choices": ["cemí / semí", "tiburón", "loro"],
+        "answer": "cemí / semí",
+        "xp": 10
+      },
+      "honesty": "Spirit names come from ethnohistoric accounts filtered through Spanish writers—handle with cultural respect, not trivia vibes only."
+    },
+    {
+      "id": "daily_tech",
+      "chapter": 4,
+      "era_label": "Daily Tech · Island Ingenuity",
+      "when": "Everyday genius",
+      "title_en": "Hamaka, kasabi, and the storm word that went global",
+      "title_es": "Hamaka, kasabi y la palabra-tormenta que viajó el mundo",
+      "story_en": "Sleep swinging in a hamaka. Sail a kanowa. Bake kasabi from yuca. Season with ají. When the sky turns wild, call it hurakán—a word that leapt into Spanish and English. Taíno tech was soft power: comfort, food, and vocabulary the world still borrows.",
+      "story_es": "Duerme en hamaka. Navega en kanowa. Hornea kasabi de yuca. Sazona con ají. Si el cielo se enfurece, di hurakán—palabra que saltó al español y al inglés. Tecnología taína: confort, comida y vocabulario que el mundo aún pide prestado.",
+      "fun_hook": "Achievement unlocked: you already know Taíno words if you say hammock, canoe, or hurricane.",
+      "words": ["hamaca", "canoa", "casabe", "yuca", "aji", "huracan", "barbacoa"],
+      "mission": "List three English/Spanish words that came from Taíno.",
+      "quiz": {
+        "question": "Which English word comes from Taíno hurakán?",
+        "choices": ["hurricane", "library", "bicycle"],
+        "answer": "hurricane",
+        "xp": 12
+      },
+      "honesty": "These are among the best-attested Taíno→European loans. Spellings vary in colonial sources."
+    },
+    {
+      "id": "contact_1493",
+      "chapter": 5,
+      "era_label": "1493 · Contact Shock",
+      "when": "November 1493 onward",
+      "title_en": "New sails, new names, old land",
+      "title_es": "Velas nuevas, nombres nuevos, tierra antigua",
+      "story_en": "Columbus's second voyage reaches Borikén. Spanish maps rewrite the island as San Juan Bautista / Puerto Rico. Trade, violence, disease, and forced labor slam into village life. A few spoken Taíno sentences get written down by Spaniards—tiny windows we still study.",
+      "story_es": "El segundo viaje de Colón llega a Borikén. Los mapas españoles rebautizan la isla. Comercio, violencia, enfermedad y trabajo forzado golpean la vida aldeana. Unas pocas oraciones taínas quedan escritas—ventanas pequeñas que aún estudiamos.",
+      "fun_hook": "Side quest: when you say Borikén, you undo a rename with one word.",
+      "words": ["boriken", "guasabara", "naboria", "macana"],
+      "mission": "Learn that colonial renaming never erased the older name.",
+      "quiz": {
+        "question": "What is the Indigenous name this app centers?",
+        "choices": ["Borikén", "New York", "Lisbon"],
+        "answer": "Borikén",
+        "xp": 10
+      },
+      "honesty": "Contact history is traumatic and complex. This chapter is a doorway, not the whole archive."
+    },
+    {
+      "id": "resistance",
+      "chapter": 6,
+      "era_label": "Resistance · Names That Echo",
+      "when": "Early colonial decades",
+      "title_en": "Kasike courage and careful naming",
+      "title_es": "Coraje de kasike y nombres con cuidado",
+      "story_en": "Stories remember leaders who resisted—figures like Agüeybaná in Borikén memory, Hatuey in neighboring islands' chronicles, and Guarocuya (known in Spanish sources by the baptismal name Enriquillo). Remember: Enriquillo is Spanish, not a Taíno vocabulary word.",
+      "story_es": "Las historias recuerdan líderes que resistieron—Agüeybaná en la memoria de Borikén, Hatuey en crónicas vecinas, y Guarocuya (Enriquillo en fuentes españolas). Recuerda: Enriquillo es español, no un lexema taíno.",
+      "fun_hook": "History boss level: keep the names honest. Guarocuya ≠ a dictionary stem.",
+      "words": ["cacique", "enriquillo", "macana", "guasabara"],
+      "mission": "Explain why Enriquillo is not taught as a Taíno lexeme.",
+      "quiz": {
+        "question": "Enriquillo is best described as…",
+        "choices": [
+          "a Spanish baptismal name (person often called Guarocuya)",
+          "the Taíno word for canoe",
+          "a type of cassava bread"
+        ],
+        "answer": "a Spanish baptismal name (person often called Guarocuya)",
+        "xp": 14
+      },
+      "honesty": "Biographies mix chronicle bias and later tradition. We prioritize careful labels over legend-smoothing."
+    },
+    {
+      "id": "language_echo",
+      "chapter": 7,
+      "era_label": "Silence & Echo · The Language Path",
+      "when": "Colonial centuries → today",
+      "title_en": "Classic speech fades on paper; words refuse to leave",
+      "title_es": "El habla clásica se apaga en papel; las palabras no se van",
+      "story_en": "Classic Taíno (ISO tnq) stopped being a community daily language under colonial pressure—documentation is sparse. Yet Taíno words live inside Spanish and English, place names, foods, and family memory. Descendants and learners rebuild with honesty: attested core first, Neo-Taíno clearly labeled.",
+      "story_es": "El taíno clásico (ISO tnq) dejó de ser lengua cotidiana bajo presión colonial—poca documentación. Aun así viven palabras en español e inglés, topónimos, comidas y memoria familiar. Descendientes y aprendices reconstruyen con honestidad: núcleo atestiguado primero; neo-taíno bien etiquetado.",
+      "fun_hook": "Final fantasy plot twist: the language wasn't a museum piece—it's a rebuild-in-progress.",
+      "words": ["taino", "daka", "waiba", "ni", "guey"],
+      "mission": "Open the lexicon and spot one attested word and one revival word.",
+      "quiz": {
+        "question": "What does this toolkit do with uncertain / revival words?",
+        "choices": [
+          "labels them (attested vs reconstructed)",
+          "hides them forever",
+          "claims they are Classical Taíno with no notes"
+        ],
+        "answer": "labels them (attested vs reconstructed)",
+        "xp": 12
+      },
+      "honesty": "Avoid 'extinction = no descendants.' People, culture, and reclaiming continue. The classical language variety is what was sparsely recorded and disrupted."
+    },
+    {
+      "id": "revival_now",
+      "chapter": 8,
+      "era_label": "Now · You Are in the Areyto",
+      "when": "Present tense",
+      "title_en": "Borikenaíki energy: learn, play, label, share",
+      "title_es": "Energía borikenaíki: aprender, jugar, etiquetar, compartir",
+      "story_en": "Community primers, dictionaries, classrooms, apps—and you—keep the areyto going. Greet with taí wey (revival hello). Stand on waibá and daka (colonial anchors). Plant words in kids' mouths. History isn't only behind you; it's the XP bar filling right now.",
+      "story_es": "Cartillas, diccionarios, aulas, apps—y tú—mantienen el areyto. Saluda con taí wey (revival). Apóyate en waibá y daka (anclas coloniales). Siembra palabras. La historia no está solo atrás: es la barra de XP llenándose ahora.",
+      "fun_hook": "You cleared the timeline. Badge energy: Island Chronist. Now go teach one friend 'Waibá.'",
+      "words": ["taiguey", "waiba", "daka", "boriken", "coqui"],
+      "mission": "Teach someone one Boriken word today.",
+      "quiz": {
+        "question": "Which form is a solid colonial-sentence anchor meaning 'let's go'?",
+        "choices": ["waibá", "loro", "tiburón"],
+        "answer": "waibá",
+        "xp": 12
+      },
+      "honesty": "Modern revival projects differ. This app is one transparent toolkit—prefer community authorship and licenses when you expand."
+    }
+  ]
+}

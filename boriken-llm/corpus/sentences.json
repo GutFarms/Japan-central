@@ -1,0 +1,108 @@
+{
+  "meta": {
+    "description": "Attested colonial sentences plus learner Neo-Taíno sentences labeled by structure pattern.",
+    "source": "Colonial transcriptions; regularized after Granberry-style reconstructions",
+    "version": "0.3.1",
+    "accuracy_note": "Only sentences with attested=true are colonial anchors. Learner sentences are pedagogical Neo-Taíno compositions—not Classical Taíno proof. See ACCURACY.md."
+  },
+  "sentences": [
+    {
+      "id": "s1",
+      "original": "O cama, guaxeri, guariquen caona yari.",
+      "boriken": "O kãma, waxeri, warikẽ kawóna yari.",
+      "english": "O hear, sir, we see gold jewels.",
+      "spanish": "Oh oye, señor, vemos joyas de oro.",
+      "attested": true,
+      "pattern_id": "complex_attested",
+      "structure": "CALL + COMMAND + SVO CLAUSE",
+      "breakdown": ["O (vocative call)", "kãma (hear!)", "waxeri (sir)", "wa-rikẽ (we see)", "kawóna yari (gold jewels)"]
+    },
+    {
+      "id": "s2",
+      "original": "Mayani macaná, Juan desquivel daca.",
+      "boriken": "Mayani makana, Juan desquivel daka.",
+      "english": "Do not kill [me], I am Juan de Esquivel.",
+      "spanish": "No me mates, yo soy Juan de Esquivel.",
+      "attested": true,
+      "pattern_id": "negated_clause",
+      "structure": "NEGATION + STEM · IDENTITY",
+      "breakdown": ["mayani (do not kill)", "makana (club)", "Juan desquivel daka (I am Juan de Esquivel)"]
+    },
+    {
+      "id": "s3",
+      "original": "Dios naboría daca.",
+      "boriken": "Dios naboriya daka.",
+      "english": "I am God's worker.",
+      "spanish": "Soy siervo de Dios.",
+      "attested": true,
+      "pattern_id": "identity",
+      "structure": "PREDICATE + daka",
+      "breakdown": ["Dios naboriya (God's worker)", "daka (I am)"]
+    },
+    {
+      "id": "s4",
+      "original": "Ahiacauo, guarocoel.",
+      "boriken": "Ahiyakawo, warokoel.",
+      "english": "Speak to us, our grandfather.",
+      "spanish": "Háblanos, nuestro abuelo.",
+      "attested": true,
+      "pattern_id": "imperative",
+      "structure": "VERB + VOCATIVE",
+      "breakdown": ["ahiyakawo (speak to us)", "waroko-el (our grandfather)"]
+    },
+    {
+      "id": "s5",
+      "original": "Guaibbá, Cynato machabuca guamechina.",
+      "boriken": "Waibá, sinato makabuka wamekina.",
+      "english": "Let's go, it is not important that our master is upset.",
+      "spanish": "Vámonos, no importa que nuestro señor esté enojado.",
+      "attested": true,
+      "pattern_id": "hortative",
+      "structure": "HORTATIVE + COMMENT CLAUSE",
+      "breakdown": ["waibá (let's go)", "sinato (upset)", "makabuka (not important)", "wamekina (our master)"]
+    },
+    {
+      "id": "s6",
+      "original": "Técheta cynato guamechina.",
+      "boriken": "Teketa sinato wamekina.",
+      "english": "Our master is greatly irritated.",
+      "spanish": "Nuestro señor está muy irritado.",
+      "attested": true,
+      "pattern_id": "descriptor",
+      "structure": "ADVERB + ADJECTIVE + NOUN",
+      "breakdown": ["teketa (greatly)", "sinato (irritated)", "wamekina (our master)"]
+    }
+  ],
+  "learner_sentences": [
+    {"boriken": "Taí wey.", "english": "Good day.", "spanish": "Buenos días.", "attested": false, "pattern_id": "imperative", "structure": "GREETING PHRASE"},
+    {"boriken": "Taíno daka.", "english": "I am Taíno.", "spanish": "Soy taíno.", "attested": false, "pattern_id": "identity", "structure": "PREDICATE + daka"},
+    {"boriken": "Naboriya daka.", "english": "I am a worker.", "spanish": "Soy trabajador.", "attested": false, "pattern_id": "identity", "structure": "PREDICATE + daka"},
+    {"boriken": "Wa-borikén taí.", "english": "Our Borikén is good.", "spanish": "Nuestro Borikén es bueno.", "attested": false, "pattern_id": "descriptor", "structure": "POSSESSED NOUN + ADJECTIVE"},
+    {"boriken": "Da-bohío.", "english": "My house.", "spanish": "Mi casa.", "attested": false, "pattern_id": "possessed_noun", "structure": "POSSESSOR-NOUN"},
+    {"boriken": "Da-bohío ka-ni.", "english": "My house has water.", "spanish": "Mi casa tiene agua.", "attested": false, "pattern_id": "attributive", "structure": "POSSESSED NOUN + ka-STEM"},
+    {"boriken": "Waibá batey.", "english": "Let's go to the batey.", "spanish": "Vamos al batey.", "attested": false, "pattern_id": "location_motion", "structure": "MOTION + PLACE"},
+    {"boriken": "Li-kanowa wa.", "english": "His canoe is large.", "spanish": "Su canoa es grande.", "attested": false, "pattern_id": "descriptor", "structure": "POSSESSED NOUN + ADJECTIVE"},
+    {"boriken": "To-isa chali.", "english": "Her child is happy.", "spanish": "Su hijo/a está feliz.", "attested": false, "pattern_id": "descriptor", "structure": "POSSESSED NOUN + ADJECTIVE"},
+    {"boriken": "Da-aka kasabi.", "english": "I eat cassava bread.", "spanish": "Como casabe.", "attested": false, "pattern_id": "svo_present", "structure": "SUBJECT-VERB + OBJECT"},
+    {"boriken": "Wa-sá ni.", "english": "We drink water.", "spanish": "Bebemos agua.", "attested": false, "pattern_id": "svo_present", "structure": "SUBJECT-VERB + OBJECT"},
+    {"boriken": "Li-arika wey.", "english": "He sees the sun.", "spanish": "Él ve el sol.", "attested": false, "pattern_id": "svo_present", "structure": "SUBJECT-VERB + OBJECT"},
+    {"boriken": "To-aka wayaba.", "english": "She eats guava.", "spanish": "Ella come guayaba.", "attested": false, "pattern_id": "svo_present", "structure": "SUBJECT-VERB + OBJECT"},
+    {"boriken": "Da-arika li-kanowa.", "english": "I see his canoe.", "spanish": "Veo su canoa.", "attested": false, "pattern_id": "possessed_object_svo", "structure": "SUBJECT-VERB + POSSESSED OBJECT"},
+    {"boriken": "Ma-hurakán.", "english": "No hurricane / without storm.", "spanish": "Sin huracán.", "attested": false, "pattern_id": "negative_noun", "structure": "ma- + STEM"},
+    {"boriken": "Ma-ni.", "english": "Without water.", "spanish": "Sin agua.", "attested": false, "pattern_id": "negative_noun", "structure": "ma- + STEM"},
+    {"boriken": "Ka-semí yukayeke.", "english": "The village has spirits.", "spanish": "La aldea tiene cemíes.", "attested": false, "pattern_id": "attributive", "structure": "ka-STEM + NOUN"},
+    {"boriken": "Ka-kawóna.", "english": "Having gold.", "spanish": "Con oro.", "attested": false, "pattern_id": "attributive", "structure": "ka- + STEM"},
+    {"boriken": "Ahiya wakía baba.", "english": "Speak, our father.", "spanish": "Habla, nuestro padre.", "attested": false, "pattern_id": "imperative", "structure": "VERB + VOCATIVE"},
+    {"boriken": "Kãma, waxeri.", "english": "Hear, sir.", "spanish": "Oye, señor.", "attested": false, "pattern_id": "imperative", "structure": "VERB + VOCATIVE"},
+    {"boriken": "Da-arika wey.", "english": "I see the sun.", "spanish": "Veo el sol.", "attested": false, "pattern_id": "svo_present", "structure": "SUBJECT-VERB + OBJECT"},
+    {"boriken": "Kokí ahiya.", "english": "The coquí speaks / sings.", "spanish": "El coquí habla / canta.", "attested": false, "pattern_id": "svo_no_object", "structure": "NOUN + VERB"},
+    {"boriken": "Anichi borikén.", "english": "Love Borikén.", "spanish": "Ama a Borikén.", "attested": false, "pattern_id": "imperative", "structure": "VERB + OBJECT"},
+    {"boriken": "Busika wakía.", "english": "Give to us.", "spanish": "Danos.", "attested": false, "pattern_id": "give_dative", "structure": "GIVE + RECIPIENT"},
+    {"boriken": "Waibá.", "english": "Let's go.", "spanish": "Vámonos.", "attested": true, "pattern_id": "hortative", "structure": "wa- + VERB"},
+    {"boriken": "Da-sá ni.", "english": "I drink water.", "spanish": "Yo bebo agua.", "attested": false, "pattern_id": "svo_present", "structure": "SUBJECT-VERB + OBJECT"},
+    {"boriken": "Wa-aka kasabi.", "english": "We eat cassava bread.", "spanish": "Comemos casabe.", "attested": false, "pattern_id": "svo_present", "structure": "SUBJECT-VERB + OBJECT"},
+    {"boriken": "To-bohío chali.", "english": "Her house is joyful/happy.", "spanish": "Su casa es alegre.", "attested": false, "pattern_id": "descriptor", "structure": "POSSESSED NOUN + ADJECTIVE"},
+    {"boriken": "Li-baba ahiya.", "english": "His father speaks.", "spanish": "Su padre habla.", "attested": false, "pattern_id": "svo_no_object", "structure": "POSSESSED NOUN + VERB"},
+    {"boriken": "Wa-kanowa iba bara.", "english": "Our canoe goes to the sea.", "spanish": "Nuestra canoa va al mar.", "attested": false, "pattern_id": "location_motion", "structure": "POSSESSED NOUN + VERB + PLACE"}
+  ]
+}
