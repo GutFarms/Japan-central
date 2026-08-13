@@ -81,18 +81,19 @@ static constexpr float kMaxPlausibleHs = 2000000.0f;
 
 static void updateHashrate() {
   // Core-0 SW assist + USB share a core — short windows swing wildly.
-  // ≥2s samples + EMA keep LCD/Companion stable; never seed from a wild spike.
+  // ≥1s samples + EMA keep LCD/Companion stable; never seed from a wild spike.
   if (!g_jobLoaded || !g_mining) {
     if (g_hashrate > 0.0f) {
-      g_hashrate *= 0.82f;
-      if (g_hashrate < 80.0f) g_hashrate = 0.0f;
+      g_hashrate *= 0.88f;
+      if (g_hashrate < 40.0f) g_hashrate = 0.0f;
     }
     return;
   }
   uint32_t now = millis();
   uint32_t elapsed = now - g_windowStart;
-  if (elapsed < 2000) return;
+  if (elapsed < 1000) return;
   if (elapsed > 8000) {
+    // Stale window (e.g. long stall) — resync baseline without zeroing EMA.
     g_windowHashesStart = g_hashCounter.load(std::memory_order_relaxed);
     g_windowStart = now;
     return;
@@ -106,10 +107,15 @@ static void updateHashrate() {
     g_windowStart = now;
     return;
   }
+  // Ignore empty windows (job switch / USB stall) so EMA doesn't collapse to 0.
+  if (delta == 0) {
+    g_windowStart = now;
+    return;
+  }
   if (g_hashrate <= 1.0f) {
     g_hashrate = instant;
   } else {
-    g_hashrate = g_hashrate * 0.82f + instant * 0.18f;
+    g_hashrate = g_hashrate * 0.75f + instant * 0.25f;
   }
   if (g_hashrate > kMaxPlausibleHs) g_hashrate = kMaxPlausibleHs;
   g_windowHashesStart = cur;
@@ -162,9 +168,13 @@ static void onJob(const UsbJob& job) {
   g_jobLoaded = true;
   g_mining = true;
   refreshLabels();
-  // Keep last EMA across job switches so LCD doesn't drop.
-  g_windowHashesStart = g_hashCounter.load(std::memory_order_relaxed);
-  g_windowStart = millis();
+  // Do NOT reset the hashrate sample window here. Faster pool notifies (0.8.26+)
+  // were restarting the ≥1–2s window every job so the rate never matured and
+  // Companion showed 0 H/s. Keep EMA; the counter keeps rising across jobs.
+  if (g_windowStart == 0) {
+    g_windowStart = millis();
+    g_windowHashesStart = g_hashCounter.load(std::memory_order_relaxed);
+  }
 }
 
 static void onStop() {

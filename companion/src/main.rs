@@ -732,9 +732,19 @@ impl CompanionApp {
         self.grid_phase = (self.grid_phase + dt * grid_speed).rem_euclid(1.0);
 
         let target = self.board_khs();
-        let alpha = 1.0 - (-dt * 3.2).exp();
+        // Hold last rate briefly when a single poll returns 0 while still mining —
+        // avoids the UI slamming to zero between status samples.
+        let target = if target <= 0.0
+            && (self.mining || self.board_hashing())
+            && self.displayed_khs > 1.0
+        {
+            self.displayed_khs * 0.97
+        } else {
+            target
+        };
+        let alpha = 1.0 - (-dt * 2.4).exp();
         self.displayed_khs += (target - self.displayed_khs) * alpha;
-        if self.displayed_khs.abs() < 0.001 {
+        if self.displayed_khs.abs() < 0.05 {
             self.displayed_khs = 0.0;
         }
 
