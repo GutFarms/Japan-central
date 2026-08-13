@@ -98,8 +98,17 @@ Alternates: `public-pool.io:21496`, `pool.nerdminer.io:3333`, `pool.nerdminers.o
 ## USB protocol
 
 ```text
-cmp ping / status / config / clock / reboot / stop / bench
+cmp ping / status / config / clock / reboot / stop / bench / wifi
 cmp jh <160hex> / jt <64hex> / ja job=&en2=&ntime=
 cmp stats accepted=N&rejected=N
 board → CMPSHARE nonce=…&job=…&en2=…&ntime=…
 ```
+
+Same line protocol also runs over **Wi‑Fi TCP :19284**.
+
+## Wi‑Fi workers (0.8.42+)
+
+- Board SoftAP: `Njordr-XXXX` / password `njordrseas` (XXXX from MAC)
+- Optional STA: `cmp wifi ssid=…&pass=…` (saved in NVS)
+- UDP beacon `CYDBOARD|…` on port **19284**; Companion **Find CYD workers** listens and auto-links
+- Join the SoftAP from the PC **or** put the board on your LAN via STA, then scan
