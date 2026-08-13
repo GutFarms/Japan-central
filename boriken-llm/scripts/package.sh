@@ -62,15 +62,54 @@ EOF
   tar -czf "${IOS_NAME}.tar.gz" "$IOS_NAME"
 )
 
-# --- 3) Full toolkit (API + model + corpus + iOS + web) ---
+# --- 3) High-graphics desktop app ---
+DESK_NAME="Boriken-Desktop-${VERSION}-x86_64-linux"
+DESK_DIR="$DIST/$DESK_NAME"
+rm -rf "$DESK_DIR"
+mkdir -p "$DESK_DIR/corpus"
+echo "==> Building high-graphics desktop release"
+(
+  cd desktop
+  cargo build --release
+)
+cp desktop/target/release/boriken-desktop "$DESK_DIR/"
+cp corpus/vocabulary.json corpus/grammar.json corpus/sentences.json "$DESK_DIR/corpus/"
+cat > "$DESK_DIR/RUN.txt" <<EOF
+BORIKÉN Desktop Learner ${VERSION}
+=================================
+
+High-graphics offline classroom (cinematic sun, ocean parallax,
+particle weather, XP games).
+
+Linux:
+  ./boriken-desktop
+
+Ubuntu/Debian once (if the window fails to open):
+  sudo apt install libxkbcommon-x11-0 libxcb-xkb1
+
+Modes: Word of Day · Batey Match · Memory Flip · Konuko Fill ·
+Areyto Quest · Define
+
+Corpus ships beside the binary (corpus/vocabulary.json).
+EOF
+cp desktop/Cargo.toml "$DESK_DIR/BUILD.txt" 2>/dev/null || true
+(
+  cd "$DIST"
+  tar -czf "${DESK_NAME}.tar.gz" "$DESK_NAME"
+  zip -r -q "${DESK_NAME}.zip" "$DESK_NAME"
+)
+
+# --- 4) Full toolkit (API + model + corpus + iOS + web + desktop sources) ---
 TOOL_NAME="BorikenLLM-Toolkit-${VERSION}"
 TOOL_DIR="$DIST/$TOOL_NAME"
 rm -rf "$TOOL_DIR"
 mkdir -p "$TOOL_DIR"
-for item in api corpus engine ios models prompts train tests webapp \
-            requirements.txt README.md Makefile scripts; do
+for item in api corpus engine ios models prompts train tests webapp desktop \
+            requirements.txt README.md DOWNLOAD.md Makefile scripts; do
   cp -R "$item" "$TOOL_DIR/" 2>/dev/null || true
 done
+# drop heavy target/ from toolkit if copied
+rm -rf "$TOOL_DIR/desktop/target"
 # lightweight start helpers
 cat > "$TOOL_DIR/START.txt" <<EOF
 BorikenLLM Toolkit ${VERSION}
@@ -80,18 +119,21 @@ Option A — Offline learner (no install)
   open webapp/index.html
   (on iPhone: copy zip → Files → open index.html → Share → Add to Home Screen)
 
-Option B — Local API for the iOS app
+Option B — High-graphics desktop
+  cd desktop && cargo run --release
+  # or use the prebuilt: dist/Boriken-Desktop-*-linux.tar.gz
+
+Option C — Local API for the iOS app
   python3 -m pip install -r requirements.txt
   python3 -m uvicorn api.server:app --host 0.0.0.0 --port 8080
   # then point BorikenKit at http://<your-lan-ip>:8080
 
-Option C — Rebuild model
+Option D — Rebuild model
   make train
 
 Fun endpoints: http://127.0.0.1:8080/v1/fun/menu
 Definitions:   http://127.0.0.1:8080/v1/define/huracan
 EOF
-cp START.txt "$TOOL_DIR/START.txt" 2>/dev/null || true
 chmod +x "$TOOL_DIR/scripts/"*.sh "$TOOL_DIR/scripts/"*.py 2>/dev/null || true
 (
   cd "$DIST"
@@ -103,15 +145,21 @@ chmod +x "$TOOL_DIR/scripts/"*.sh "$TOOL_DIR/scripts/"*.py 2>/dev/null || true
 cp "$DIST/${WEB_NAME}.zip" "$ART/"
 cp "$DIST/${IOS_NAME}.zip" "$ART/"
 cp "$DIST/${TOOL_NAME}.zip" "$ART/"
+cp "$DIST/${DESK_NAME}.tar.gz" "$ART/"
+cp "$DIST/${DESK_NAME}.zip" "$ART/"
 cp "$DIST/${WEB_NAME}.tar.gz" "$ART/" 2>/dev/null || true
 
 # Stable short names
 cp "$DIST/${WEB_NAME}.zip" "$ART/Boriken-Offline-Learner.zip"
 cp "$DIST/${IOS_NAME}.zip" "$ART/Boriken-iOS-ContentBundle.zip"
 cp "$DIST/${TOOL_NAME}.zip" "$ART/BorikenLLM-Toolkit.zip"
+cp "$DIST/${DESK_NAME}.tar.gz" "$ART/Boriken-Desktop-linux.tar.gz"
+cp "$DIST/${DESK_NAME}.zip" "$ART/Boriken-Desktop-linux.zip"
 cp "$DIST/${WEB_NAME}.zip" "$DIST/Boriken-Offline-Learner.zip"
 cp "$DIST/${IOS_NAME}.zip" "$DIST/Boriken-iOS-ContentBundle.zip"
 cp "$DIST/${TOOL_NAME}.zip" "$DIST/BorikenLLM-Toolkit.zip"
+cp "$DIST/${DESK_NAME}.tar.gz" "$DIST/Boriken-Desktop-linux.tar.gz"
+cp "$DIST/${DESK_NAME}.zip" "$DIST/Boriken-Desktop-linux.zip"
 
 echo "==> Downloadables ready"
-ls -lh "$DIST"/*.zip "$ART"/Boriken*.zip
+ls -lh "$DIST"/Boriken*.{zip,tar.gz} "$ART"/Boriken*.{zip,tar.gz} 2>/dev/null | sed 's|/workspace/boriken-llm/||'

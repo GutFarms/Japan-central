@@ -17,15 +17,22 @@ This is a **community language-rebuilding toolkit**. Attested colonial forms are
 
 # Download BorikenLLM
 
-See **[DOWNLOAD.md](DOWNLOAD.md)** for the three packages:
+See **[DOWNLOAD.md](DOWNLOAD.md)** for packages:
 
 | Package | File |
 |---|---|
-| Offline learner (iPhone/desktop) | `dist/Boriken-Offline-Learner.zip` |
+| **High-graphics desktop** | `dist/Boriken-Desktop-linux.tar.gz` |
+| Offline learner (iPhone) | `dist/Boriken-Offline-Learner.zip` |
 | iOS Xcode content bundle | `dist/Boriken-iOS-ContentBundle.zip` |
 | Full API + model toolkit | `dist/BorikenLLM-Toolkit.zip` |
 
-Rebuild anytime with `./scripts/package.sh`.
+```bash
+# Desktop from source
+cd desktop && cargo run --release
+
+# Or rebuild all downloadables
+./scripts/package.sh
+```
 
 ## Quick start
 

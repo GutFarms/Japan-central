@@ -1,4 +1,4 @@
-.PHONY: dataset train test serve package weball
+.PHONY: dataset train test serve package web desktop all
 
 dataset:
 	python3 train/build_dataset.py
@@ -15,7 +15,10 @@ serve:
 web:
 	python3 scripts/build_webapp.py
 
-package: web
+desktop:
+	cd desktop && cargo build --release
+
+package: web desktop
 	./scripts/package.sh
 
 all: train test serve
