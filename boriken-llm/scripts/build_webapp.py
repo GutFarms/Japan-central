@@ -201,6 +201,7 @@ const state = {
   storyIdx: 0,
   scramble: null,
   historyIdx: 0,
+  histQ: null,
 };
 
 function save() {
@@ -357,14 +358,20 @@ function showStory() {
   stage(`<h3>Areyto Quest · ${b.scene}</h3>
     <p>${b.text}</p>
     <p class="muted">${b.prompt}</p>
-    ${b.choices.map(c => `<button class="choice" onclick="storyPick('${c.replace(/'/g, "\\'")}', '${b.answer.replace(/'/g, "\\'")}')">${c}</button>`).join("")}`);
+    ${b.choices.map((c, i) => `<button class="choice" onclick="storyPickIdx(${i})">${escapeHtml(c)}</button>`).join("")}`);
+}
+
+function storyPickIdx(i) {
+  const b = STORY[state.storyIdx];
+  if (!b) return;
+  storyPick(b.choices[i], b.answer);
 }
 
 function storyPick(choice, answer) {
   const ok = choice === answer;
   addXp(ok ? 10 : 2);
   state.storyIdx += 1;
-  stage(`<p class="${ok ? "ok" : "bad"}">${ok ? "Kasike energy unlocked." : "Remember: " + answer}</p>
+  stage(`<p class="${ok ? "ok" : "bad"}">${ok ? "Kasike energy unlocked." : "Remember: " + escapeHtml(answer)}</p>
     <button class="primary" onclick="showStory()">Continue</button>`);
 }
 
@@ -423,6 +430,15 @@ function historyStart() {
   renderHistory();
 }
 
+function escapeHtml(s) {
+  return String(s)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
 function renderHistory() {
   const eras = HISTORY.eras || [];
   if (state.historyIdx >= eras.length) {
@@ -436,26 +452,32 @@ function renderHistory() {
   const e = eras[state.historyIdx];
   const words = (e.words || []).map(id => {
     const w = LEXICON.find(x => x.id === id);
-    return w ? `<span class="chip">${w.boriken}</span>` : "";
+    return w ? `<span class="chip">${escapeHtml(w.boriken)}</span>` : "";
   }).join(" ");
   const q = e.quiz || {};
   const choices = (q.choices || []).slice().sort(() => Math.random() - 0.5);
+  state.histQ = { choices, answer: q.answer, xp: q.xp || 10 };
   stage(`<h3>Time Machine · Ch. ${e.chapter}</h3>
-    <p class="gold">${e.era_label} · ${e.when}</p>
-    <div class="boriken">${e.title_en}</div>
-    <p>${e.story_en}</p>
-    <p class="gold">✦ ${e.fun_hook || ""}</p>
+    <p class="gold">${escapeHtml(e.era_label)} · ${escapeHtml(e.when)}</p>
+    <div class="boriken">${escapeHtml(e.title_en)}</div>
+    <p>${escapeHtml(e.story_en)}</p>
+    <p class="gold">✦ ${escapeHtml(e.fun_hook || "")}</p>
     <p>${words}</p>
-    <p class="muted">${e.honesty || ""}</p>
-    <p><strong>${q.question || ""}</strong></p>
-    ${choices.map(c => `<button class="choice" onclick="historyPick(${JSON.stringify(c)}, ${JSON.stringify(q.answer)}, ${q.xp || 10})">${c}</button>`).join("")}`);
+    <p class="muted">${escapeHtml(e.honesty || "")}</p>
+    <p><strong>${escapeHtml(q.question || "")}</strong></p>
+    ${choices.map((c, i) => `<button class="choice" onclick="historyPickIdx(${i})">${escapeHtml(c)}</button>`).join("")}`);
+}
+
+function historyPickIdx(i) {
+  const q = state.histQ || { choices: [], answer: "", xp: 10 };
+  historyPick(q.choices[i], q.answer, q.xp);
 }
 
 function historyPick(choice, answer, xp) {
   const ok = choice === answer;
   addXp(ok ? xp : 1);
   state.historyIdx += 1;
-  stage(`<p class="${ok ? "ok" : "bad"}">${ok ? "Timeline unlocked." : "True beat: " + answer}</p>
+  stage(`<p class="${ok ? "ok" : "bad"}">${ok ? "Timeline unlocked." : "True beat: " + escapeHtml(answer)}</p>
     <button class="primary" onclick="renderHistory()">Next chapter</button>`);
 }
 </script>

@@ -167,6 +167,23 @@ class FunTests(unittest.TestCase):
         done = self.fun.history_walk(99)
         self.assertTrue(done["done"])
 
+    def test_history_quiz_answers_in_choices(self) -> None:
+        for era in self.fun.history.eras:
+            quiz = era.get("quiz") or {}
+            self.assertIn(
+                quiz.get("answer"),
+                quiz.get("choices") or [],
+                msg=f"era {era.get('id')} answer missing from choices",
+            )
+
+
+class WebappSafetyTests(unittest.TestCase):
+    def test_history_buttons_not_inline_json(self) -> None:
+        html = (ROOT / "webapp" / "index.html").read_text(encoding="utf-8")
+        self.assertIn("historyPickIdx", html)
+        self.assertNotIn("historyPick(${JSON.stringify", html)
+        self.assertIn("const HISTORY", html)
+
 
 class SentenceStructureTests(unittest.TestCase):
     def setUp(self) -> None:
