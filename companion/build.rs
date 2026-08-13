@@ -32,6 +32,14 @@ fn main() {
     res.set("ProductVersion", &ver);
     res.set_version_info(winres::VersionInfo::FILEVERSION, packed);
     res.set_version_info(winres::VersionInfo::PRODUCTVERSION, packed);
+    // App / Desktop / Start Menu icon (multi-size ICO).
+    let icon = std::path::Path::new("assets").join("cyd-miner.ico");
+    if icon.is_file() {
+        res.set_icon(icon.to_str().unwrap_or("assets/cyd-miner.ico"));
+        println!("cargo:rerun-if-changed=assets/cyd-miner.ico");
+    } else {
+        println!("cargo:warning=missing assets/cyd-miner.ico — PE icon not embedded");
+    }
     // asInvoker — no UAC prompt for normal use; Update board elevates separately if needed.
     res.set_manifest(
         r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>

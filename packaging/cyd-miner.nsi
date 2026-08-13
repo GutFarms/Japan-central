@@ -6,7 +6,7 @@
 
 !define PRODUCT_NAME "Njörðr Seas' CYD miner"
 !define PRODUCT_PUBLISHER "GutFarms"
-!define PRODUCT_VERSION "0.8.69"
+!define PRODUCT_VERSION "0.8.70"
 !define PRODUCT_WEB "https://github.com/GutFarms/Japan-central"
 
 Name "${PRODUCT_NAME} ${PRODUCT_VERSION}"
@@ -29,10 +29,15 @@ VIAddVersionKey /LANG=1033 "ProductVersion" "${PRODUCT_VERSION}"
 VIAddVersionKey /LANG=1033 "OriginalFilename" "CYD-Miner-Setup.exe"
 
 !define MUI_ABORTWARNING
-!define MUI_ICON "${NSISDIR}\Contrib\Graphics\Icons\modern-install.ico"
-!define MUI_UNICON "${NSISDIR}\Contrib\Graphics\Icons\modern-uninstall.ico"
+!define MUI_ICON "icons\cyd-miner.ico"
+!define MUI_UNICON "icons\cyd-miner.ico"
+!define MUI_HEADERIMAGE
+!define MUI_HEADERIMAGE_BITMAP "icons\wizard-header.bmp"
+!define MUI_HEADERIMAGE_RIGHT
+!define MUI_WELCOMEFINISHPAGE_BITMAP "icons\wizard-welcome.bmp"
+!define MUI_UNWELCOMEFINISHPAGE_BITMAP "icons\wizard-welcome.bmp"
 !define MUI_WELCOMEPAGE_TITLE "Njörðr Seas' CYD miner Setup"
-!define MUI_WELCOMEPAGE_TEXT "Install everything needed to run the ESP32-2432S028 (CYD) USB Bitcoin SHA-256 miner on this Windows PC.$\r$\n$\r$\nIncludes:$\r$\n  • Njörðr Seas' CYD miner (pool + USB control)$\r$\n  • In-app Update board (push firmware over USB)$\r$\n  • Firmware image + espflash helper$\r$\n$\r$\nAfter setup: Connect USB → Update board (or flash once) → Start mining."
+!define MUI_WELCOMEPAGE_TEXT "Install everything needed to run the ESP32-2432S028 (CYD) USB Bitcoin SHA-256 miner on this Windows PC.$\r$\n$\r$\nIncludes:$\r$\n  • Njörðr Seas' CYD miner (pool + USB control)$\r$\n  • In-app Update board (flash + verify over USB)$\r$\n  • Firmware image + espflash helper$\r$\n$\r$\nAfter setup: Connect USB → Update board → Start mining."
 !define MUI_FINISHPAGE_RUN "$INSTDIR\cyd-companion.exe"
 !define MUI_FINISHPAGE_RUN_TEXT "Launch Njörðr Seas' CYD miner"
 !define MUI_FINISHPAGE_SHOWREADME "$INSTDIR\START-HERE.txt"
@@ -57,6 +62,7 @@ Section "Njörðr Seas' CYD miner (required)" SecApp
   File "..\dist\cyd-miner-kit\COMPANION.md"
   File "..\dist\cyd-miner-kit\Flash-Firmware.bat"
   File "..\dist\cyd-miner-kit\VERSION.txt"
+  File "icons\cyd-miner.ico"
 
   SetOutPath "$INSTDIR\Firmware"
   File "..\dist\cyd-miner-kit\Firmware\esp32-2432s028-sha256-miner-merged.bin"
@@ -71,6 +77,7 @@ Section "Njörðr Seas' CYD miner (required)" SecApp
   WriteRegStr HKLM "Software\CYDMiner" "Version" "${PRODUCT_VERSION}"
   WriteRegStr HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\CYDMiner" "DisplayName" "${PRODUCT_NAME} ${PRODUCT_VERSION}"
   WriteRegStr HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\CYDMiner" "UninstallString" '"$INSTDIR\Uninstall.exe"'
+  WriteRegStr HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\CYDMiner" "DisplayIcon" "$INSTDIR\cyd-companion.exe,0"
   WriteRegStr HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\CYDMiner" "DisplayVersion" "${PRODUCT_VERSION}"
   WriteRegStr HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\CYDMiner" "Publisher" "${PRODUCT_PUBLISHER}"
   WriteRegStr HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\CYDMiner" "URLInfoAbout" "${PRODUCT_WEB}"
@@ -84,16 +91,17 @@ SectionEnd
 
 Section "Start Menu shortcuts" SecMenu
   CreateDirectory "$SMPROGRAMS\Njordr Seas' CYD miner"
-  CreateShortCut "$SMPROGRAMS\Njordr Seas' CYD miner\Njörðr Seas' CYD miner.lnk" "$INSTDIR\cyd-companion.exe"
-  CreateShortCut "$SMPROGRAMS\Njordr Seas' CYD miner\Flash Firmware.lnk" "$INSTDIR\Flash-Firmware.bat"
+  ; Icon from embedded PE resource (index 0).
+  CreateShortCut "$SMPROGRAMS\Njordr Seas' CYD miner\Njörðr Seas' CYD miner.lnk" "$INSTDIR\cyd-companion.exe" "" "$INSTDIR\cyd-companion.exe" 0
+  CreateShortCut "$SMPROGRAMS\Njordr Seas' CYD miner\Flash Firmware.lnk" "$INSTDIR\Flash-Firmware.bat" "" "$INSTDIR\cyd-miner.ico" 0
   CreateShortCut "$SMPROGRAMS\Njordr Seas' CYD miner\START-HERE.lnk" "$INSTDIR\START-HERE.txt"
   CreateShortCut "$SMPROGRAMS\Njordr Seas' CYD miner\Firmware Folder.lnk" "$INSTDIR\Firmware"
   CreateShortCut "$SMPROGRAMS\Njordr Seas' CYD miner\Uninstall.lnk" "$INSTDIR\Uninstall.exe"
 SectionEnd
 
 Section "Desktop shortcuts" SecDesktop
-  CreateShortCut "$DESKTOP\Njörðr Seas' CYD miner.lnk" "$INSTDIR\cyd-companion.exe"
-  CreateShortCut "$DESKTOP\CYD Flash Firmware.lnk" "$INSTDIR\Flash-Firmware.bat"
+  CreateShortCut "$DESKTOP\Njörðr Seas' CYD miner.lnk" "$INSTDIR\cyd-companion.exe" "" "$INSTDIR\cyd-companion.exe" 0
+  CreateShortCut "$DESKTOP\CYD Flash Firmware.lnk" "$INSTDIR\Flash-Firmware.bat" "" "$INSTDIR\cyd-miner.ico" 0
 SectionEnd
 
 LangString DESC_SecApp ${LANG_ENGLISH} "Companion app, firmware image, and docs (required)."
@@ -107,6 +115,7 @@ LangString DESC_SecDesktop ${LANG_ENGLISH} "Desktop shortcuts for Companion and 
 
 Section "Uninstall"
   Delete "$INSTDIR\cyd-companion.exe"
+  Delete "$INSTDIR\cyd-miner.ico"
   Delete "$INSTDIR\START-HERE.txt"
   Delete "$INSTDIR\FLASH-WINDOWS.txt"
   Delete "$INSTDIR\COMPANION.md"
@@ -120,8 +129,6 @@ Section "Uninstall"
   RMDir "$INSTDIR\Firmware"
   Delete "$INSTDIR\Tools\espflash.exe"
   RMDir "$INSTDIR\Tools"
-  RMDir "$INSTDIR"
-
   Delete "$SMPROGRAMS\Njordr Seas' CYD miner\Njörðr Seas' CYD miner.lnk"
   Delete "$SMPROGRAMS\Njordr Seas' CYD miner\Flash Firmware.lnk"
   Delete "$SMPROGRAMS\Njordr Seas' CYD miner\START-HERE.lnk"
@@ -130,7 +137,7 @@ Section "Uninstall"
   RMDir "$SMPROGRAMS\Njordr Seas' CYD miner"
   Delete "$DESKTOP\Njörðr Seas' CYD miner.lnk"
   Delete "$DESKTOP\CYD Flash Firmware.lnk"
-
   DeleteRegKey HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\CYDMiner"
   DeleteRegKey HKLM "Software\CYDMiner"
+  RMDir "$INSTDIR"
 SectionEnd

@@ -12,6 +12,7 @@ What is installed
 3. Tools\espflash.exe     — used by in-app "Update board"
 4. Flash-Firmware.bat     — optional flash helper
 5. Docs                   — this file + FLASH-WINDOWS.txt
+6. Desktop / Start Menu shortcuts (branded app icon)
 
 First-time setup (about 5 minutes)
 ----------------------------------
@@ -24,15 +25,18 @@ B) Flash / update the board
    Option 2: run "Flash Firmware" (Start Menu) OR Flash-Firmware.bat
    If flash fails: hold BOOT, tap RESET, release BOOT, then retry.
    Image: esp32-2432s028-sha256-miner-merged.bin @ 0x0 (DIO, 4 MB, 40 MHz).
-   After flash, power-cycle without holding BOOT.
+   After a successful write, Companion reconnects and verifies the board
+   over USB (cmp ping + config fw tag) before clearing the update overlay.
+   After flash, power-cycle without holding BOOT if verify keeps failing.
 
 C) Mine
-   1. Run Njörðr Seas' CYD miner.
-   2. Select the COM port → Connect.
-   3. Stratum:  stratum+tcp://btc.hmpool.io:3337
-   4. Worker:   your Bitcoin address
-   5. Password: x
-   6. Start mining.
+   1. Run Njörðr Seas' CYD miner (Desktop shortcut or Start Menu).
+   2. Complete the in-app setup wizard (or Settings → Show setup wizard).
+   3. Select the COM port → Connect.
+   4. Stratum:  stratum+tcp://btc.hmpool.io:3337
+   5. Worker:   your Bitcoin address
+   6. Password: x
+   7. Start mining.
 
 Notes
 -----

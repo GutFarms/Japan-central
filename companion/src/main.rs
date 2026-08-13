@@ -414,6 +414,17 @@ struct ConfigJson {
     mac: String,
 }
 
+#[derive(Clone)]
+struct PostFlashVerify {
+    port: String,
+    /// Remaining OpenUsb / config retries after flash.
+    attempts_left: u8,
+    deadline: Instant,
+}
+
+/// Bump to force the in-app welcome wizard for existing installs after a setup redesign.
+const WIZARD_REV: u32 = 2;
+
 #[derive(Serialize, Deserialize, Default)]
 struct PersistedMine {
     #[serde(default)]
@@ -430,6 +441,9 @@ struct PersistedMine {
     auto_connect: bool,
     #[serde(default)]
     wizard_done: bool,
+    /// Which welcome-wizard revision the user last completed/skipped.
+    #[serde(default)]
+    wizard_rev: u32,
     /// Public install id shown in QR / phone UI (not secret).
     #[serde(default)]
     monitor_install_id: String,
@@ -574,6 +588,8 @@ struct CompanionApp {
     update_confirm: bool,
     /// After a successful board flash: wait until Instant, then CloseUsb + OpenUsb.
     pending_post_flash_reconnect: Option<(Instant, String)>,
+    /// After reconnect: confirm board answers `cmp config` with kit firmware.
+    post_flash_verify: Option<PostFlashVerify>,
     update_busy: bool,
     /// When Update board started — UI watchdog clears spinner if flash never finishes.
     update_busy_since: Option<Instant>,
@@ -679,7 +695,8 @@ impl CompanionApp {
                     };
                     com_port = p.com_port;
                     auto_connect = p.auto_connect;
-                    wizard_done = p.wizard_done;
+                    // Force redesigned wizard once for existing installs.
+                    wizard_done = p.wizard_done && p.wizard_rev >= WIZARD_REV;
                     monitor_install_id = p.monitor_install_id;
                     monitor_token = p.monitor_token;
                     monitor_public_host = p.monitor_public_host;
@@ -763,6 +780,7 @@ impl CompanionApp {
             firmware: find_firmware_image().ok(),
             update_confirm: false,
             pending_post_flash_reconnect: None,
+            post_flash_verify: None,
             update_busy: false,
             update_busy_since: None,
             bench_busy: false,
@@ -1156,6 +1174,11 @@ impl CompanionApp {
             com_port: self.com_port.clone(),
             auto_connect: self.auto_connect,
             wizard_done: self.wizard_step.is_none(),
+            wizard_rev: if self.wizard_step.is_none() {
+                WIZARD_REV
+            } else {
+                0
+            },
             monitor_install_id: self.monitor_install_id.clone(),
             monitor_token: self.monitor_token.clone(),
             monitor_public_host: self.monitor_public_host.clone(),
@@ -1661,6 +1684,7 @@ impl CompanionApp {
         self.update_busy = true;
         self.update_busy_since = Some(Instant::now());
         self.pending_post_flash_reconnect = None;
+        self.post_flash_verify = None;
         self.update_status = format!("Flashing board via {port}…");
         self.last_ok = self.update_status.clone();
         self.last_error.clear();
@@ -1681,6 +1705,100 @@ impl CompanionApp {
             // Always reconnect after a successful flash.
             reopen: true,
         });
+    }
+
+    fn clear_flash_overlay(&mut self) {
+        self.update_busy = false;
+        self.update_busy_since = None;
+        self.pending_post_flash_reconnect = None;
+        self.post_flash_verify = None;
+    }
+
+    fn schedule_post_flash_reconnect(&mut self, port: String, delay: Duration) {
+        self.update_busy = true;
+        if self.update_busy_since.is_none() {
+            self.update_busy_since = Some(Instant::now());
+        }
+        self.com_port = port.clone();
+        self.pending_post_flash_reconnect = Some((Instant::now() + delay, port));
+    }
+
+    fn begin_post_flash_verify(&mut self, port: String) {
+        self.post_flash_verify = Some(PostFlashVerify {
+            port: port.clone(),
+            attempts_left: 3,
+            deadline: Instant::now() + Duration::from_secs(90),
+        });
+        self.update_status = format!("Flash OK — booting board, then verifying on {port}…");
+        self.schedule_post_flash_reconnect(port, Duration::from_millis(2500));
+    }
+
+    fn finish_post_flash_ok(&mut self, board_fw: &str) {
+        let msg = if board_fw.is_empty() {
+            "Flash verified — board responded over USB.".to_string()
+        } else {
+            format!("Flash verified · board fw {board_fw}")
+        };
+        self.last_ok = msg.clone();
+        self.last_error.clear();
+        self.update_status = msg.clone();
+        self.push_log(LogKind::Usb, msg);
+        self.clear_flash_overlay();
+    }
+
+    fn fail_post_flash_verify(&mut self, reason: String) {
+        let tip = format!(
+            "{reason} Hold BOOT, tap RESET, release BOOT, then Update board again."
+        );
+        self.update_status = tip.clone();
+        self.last_error = tip.clone();
+        self.push_log(LogKind::Err, tip);
+        self.clear_flash_overlay();
+    }
+
+    fn retry_post_flash_verify(&mut self, why: &str) {
+        let Some(mut v) = self.post_flash_verify.take() else {
+            return;
+        };
+        if v.attempts_left == 0 || Instant::now() >= v.deadline {
+            self.fail_post_flash_verify(format!(
+                "Flash wrote OK but verify failed ({why})."
+            ));
+            return;
+        }
+        v.attempts_left = v.attempts_left.saturating_sub(1);
+        self.update_status = format!(
+            "Verify retry ({}/3 left): {why} — reconnecting…",
+            v.attempts_left
+        );
+        self.push_log(LogKind::Usb, self.update_status.clone());
+        let port = v.port.clone();
+        self.post_flash_verify = Some(v);
+        self.schedule_post_flash_reconnect(port, Duration::from_secs(2));
+    }
+
+    fn on_post_flash_config(&mut self, board_fw: &str) {
+        if self.post_flash_verify.is_none() {
+            return;
+        }
+        let kit = self
+            .firmware
+            .as_ref()
+            .map(|f| f.version.clone())
+            .unwrap_or_default();
+        if board_fw.is_empty() {
+            self.retry_post_flash_verify("board returned empty fw tag");
+            return;
+        }
+        match update_needed(board_fw, &kit) {
+            Some(true) => {
+                self.retry_post_flash_verify(&format!("board fw {board_fw} != kit {kit}"));
+            }
+            _ => {
+                // Match, or versions unavailable but board answered — treat as verified.
+                self.finish_post_flash_ok(board_fw);
+            }
+        }
     }
 
     #[allow(dead_code)]
@@ -1941,6 +2059,10 @@ impl CompanionApp {
                 };
                 if soft_button(ui, update_app_label, 140.0).clicked() && !self.app_update_busy {
                     self.start_app_update();
+                }
+                if soft_button(ui, "Show setup wizard", 150.0).clicked() {
+                    self.wizard_step = Some(0);
+                    self.tab = Tab::Mine;
                 }
             });
             if let Some(info) = &self.app_remote {
@@ -3177,6 +3299,10 @@ impl App for CompanionApp {
                     let low = s.to_lowercase();
                     if low.contains("usb open") {
                         self.usb_open = true;
+                        if self.post_flash_verify.is_some() {
+                            self.update_status =
+                                "USB linked after flash — reading board config…".into();
+                        }
                     }
                     if low.contains("closed") {
                         self.usb_open = false;
@@ -3212,8 +3338,12 @@ impl App for CompanionApp {
                     if self.bench_busy {
                         self.bench_busy = false;
                     }
-                    self.last_error = e.clone();
-                    self.push_log(LogKind::Err, e);
+                    if self.post_flash_verify.is_some() {
+                        self.retry_post_flash_verify(&e);
+                    } else {
+                        self.last_error = e.clone();
+                        self.push_log(LogKind::Err, e);
+                    }
                 }
                 NetMsg::Status(Ok(s)) => {
                     self.absorb_status(s);
@@ -3243,8 +3373,17 @@ impl App for CompanionApp {
                             if c.mac.is_empty() { "—" } else { &c.mac }
                         ),
                     );
+                    if self.post_flash_verify.is_some() {
+                        self.on_post_flash_config(&c.fw);
+                    }
                 }
-                NetMsg::Config(Err(e)) => self.push_log(LogKind::Warn, format!("config: {e}")),
+                NetMsg::Config(Err(e)) => {
+                    if self.post_flash_verify.is_some() {
+                        self.retry_post_flash_verify(&format!("config: {e}"));
+                    } else {
+                        self.push_log(LogKind::Warn, format!("config: {e}"));
+                    }
+                }
                 NetMsg::MineStats {
                     accepted,
                     rejected,
@@ -3299,37 +3438,24 @@ impl App for CompanionApp {
                     self.update_status = trunc(&line, 140);
                 }
                 NetMsg::FlashDone { result, reopen } => {
-                    self.update_busy_since = None;
                     match result {
                         Ok(s) => {
                             self.last_ok = s.clone();
                             self.last_error.clear();
                             self.push_log(LogKind::Usb, s.clone());
-                            // Clear "Update available" immediately — board may still
-                            // report `-d0` after reconnect; version keys match kit.
-                            if let Some(fw) = &self.firmware {
-                                if !fw.version.is_empty() {
-                                    self.fw_label = fw.version.clone();
-                                }
-                            }
                             let port = reopen
                                 .filter(|p| !p.trim().is_empty())
                                 .unwrap_or_else(|| self.com_port.clone());
                             if port.trim().is_empty() {
-                                self.update_busy = false;
+                                self.clear_flash_overlay();
                                 self.update_status = s;
                             } else {
-                                // Keep spinner up: wait 1s, then disconnect + reconnect.
-                                self.update_busy = true;
-                                self.update_status =
-                                    format!("Flash OK — waiting 1s, then reconnect {port}…");
-                                self.pending_post_flash_reconnect =
-                                    Some((Instant::now() + Duration::from_secs(1), port));
+                                // Keep spinner: reconnect, then verify via cmp ping/config.
+                                self.begin_post_flash_verify(port);
                             }
                         }
                         Err(e) => {
-                            self.update_busy = false;
-                            self.pending_post_flash_reconnect = None;
+                            self.clear_flash_overlay();
                             self.update_status = e.clone();
                             self.last_error = e.clone();
                             self.push_log(LogKind::Err, e);
@@ -3598,33 +3724,52 @@ impl App for CompanionApp {
         if self.update_busy || self.fetch_busy || self.app_update_busy || self.bench_busy {
             ctx.request_repaint();
         }
-        // UI watchdog: flash path has a ~180s budget; unlock overlay if FlashDone never arrives.
+        // UI watchdog: flash (~180s) + verify (~90s). Unlock if FlashDone/verify never finishes.
         if self.update_busy {
-            if let Some(since) = self.update_busy_since {
-                if since.elapsed() > Duration::from_secs(210) {
-                    self.update_busy = false;
-                    self.update_busy_since = None;
-                    self.pending_post_flash_reconnect = None;
-                    let msg = "Board update timed out — try BOOT+RESET, then Update board again."
-                        .to_string();
-                    self.update_status = msg.clone();
-                    self.last_error = msg.clone();
-                    self.push_log(LogKind::Err, msg);
-                }
+            let flash_cap = Duration::from_secs(210);
+            let verify_overdue = self
+                .post_flash_verify
+                .as_ref()
+                .map(|v| Instant::now() >= v.deadline)
+                .unwrap_or(false);
+            let flash_overdue = self
+                .update_busy_since
+                .map(|since| since.elapsed() > flash_cap)
+                .unwrap_or(false);
+            if verify_overdue {
+                self.fail_post_flash_verify(
+                    "Flash wrote OK but verify timed out (board never answered)."
+                        .into(),
+                );
+            } else if flash_overdue && self.post_flash_verify.is_none() {
+                self.clear_flash_overlay();
+                let msg = "Board update timed out — try BOOT+RESET, then Update board again."
+                    .to_string();
+                self.update_status = msg.clone();
+                self.last_error = msg.clone();
+                self.push_log(LogKind::Err, msg);
             }
         }
         if let Some((when, port)) = self.pending_post_flash_reconnect.clone() {
             if Instant::now() >= when {
                 self.pending_post_flash_reconnect = None;
-                self.update_busy = false;
-                self.update_busy_since = None;
+                // Keep overlay up while verifying; only drop busy after verify finishes.
+                self.update_busy = true;
                 self.com_port = port.clone();
-                self.update_status = format!("Disconnect + reconnect {port}…");
+                let verifying = self.post_flash_verify.is_some();
+                self.update_status = if verifying {
+                    format!("Verifying firmware on {port}…")
+                } else {
+                    format!("Disconnect + reconnect {port}…")
+                };
                 self.push_log(
                     LogKind::Usb,
-                    format!("Post-flash: disconnect, then reconnect {port}"),
+                    if verifying {
+                        format!("Post-flash verify: reconnect {port}")
+                    } else {
+                        format!("Post-flash: disconnect, then reconnect {port}")
+                    },
                 );
-                // Ensure a clean disconnect, then open again on the same COM.
                 let _ = self.cmd_tx.send(NetCmd::CloseUsb);
                 self.usb_open = false;
                 let _ = self.cmd_tx.send(NetCmd::OpenUsb(port));
@@ -3634,28 +3779,51 @@ impl App for CompanionApp {
         }
 
         if let Some(step) = self.wizard_step {
-            egui::Window::new("Welcome · Njörðr seas setup")
+            egui::Window::new("Njörðr seas · Setup")
                 .collapsible(false)
                 .resizable(false)
                 .anchor(egui::Align2::CENTER_CENTER, [0.0, -20.0])
                 .show(ctx, |ui| {
-                    ui.set_min_width(460.0);
+                    ui.set_min_width(500.0);
+                    ui.vertical_centered(|ui| {
+                        brand_logo(ui, 72.0);
+                        ui.add_space(8.0);
+                        ui.label(
+                            RichText::new("Njörðr seas CYD miner")
+                                .color(C_LIME)
+                                .font(display_font(26.0)),
+                        );
+                        ui.label(
+                            RichText::new("USB SHA-256 Bitcoin miner · PC owns the pool")
+                                .color(C_MUTED)
+                                .font(mono_ui_font(12.0)),
+                        );
+                    });
+                    ui.add_space(14.0);
                     let title = match step {
-                        0 => "1 · USB driver",
+                        0 => "1 · Plug in & driver",
                         1 => "2 · Select COM & connect",
-                        2 => "3 · Firmware on the board",
+                        2 => "3 · Flash & verify firmware",
                         _ => "4 · Pool worker",
                     };
-                    ui.label(RichText::new(title).color(C_LIME).font(display_font(28.0)));
+                    ui.label(RichText::new(title).color(C_TEXT).font(display_font(22.0)));
                     ui.add_space(8.0);
                     match step {
                         0 => {
                             ui.label(
                                 RichText::new(
-                                    "Most CYD boards use a CH340 USB-serial chip. If Windows shows an unknown device, install a CH340 driver, then plug the board with USB-C.",
+                                    "Use a USB-C data cable. Most CYD boards need a CH340 driver — if Windows shows an unknown device, install CH340, then replug.",
                                 )
                                 .color(C_TEXT)
                                 .size(14.0),
+                            );
+                            ui.add_space(8.0);
+                            ui.label(
+                                RichText::new(
+                                    "Tip: after flashing, Companion verifies the board over USB (cmp ping + config).",
+                                )
+                                .color(C_DIM)
+                                .size(13.0),
                             );
                         }
                         1 => {
@@ -3716,7 +3884,7 @@ impl App for CompanionApp {
                             ui.add_space(8.0);
                             ui.label(
                                 RichText::new(
-                                    "Flash the bundled image once (or when Update available). Hold BOOT + tap RESET if download mode fails.",
+                                    "Update board writes the kit image, then reconnects and verifies fw over USB. Hold BOOT + tap RESET if download mode fails.",
                                 )
                                 .color(C_MUTED)
                                 .size(13.0),
@@ -3733,6 +3901,14 @@ impl App for CompanionApp {
                                     self.start_app_update();
                                 }
                             });
+                            if !self.update_status.is_empty() {
+                                ui.add_space(6.0);
+                                ui.label(
+                                    RichText::new(&self.update_status)
+                                        .color(if self.update_busy { C_WARN } else { C_DIM })
+                                        .font(mono_ui_font(11.0)),
+                                );
+                            }
                         }
                         _ => {
                             ui.label(
@@ -3867,7 +4043,9 @@ impl App for CompanionApp {
                         ui.add(egui::Spinner::new().size(52.0).color(C_LIME));
                         ui.add_space(16.0);
                         ui.label(
-                            RichText::new(if self.pending_post_flash_reconnect.is_some() {
+                            RichText::new(if self.post_flash_verify.is_some() {
+                                "Verifying board firmware"
+                            } else if self.pending_post_flash_reconnect.is_some() {
                                 "Flash complete — reconnecting"
                             } else {
                                 "Flashing board firmware"
@@ -3893,9 +4071,7 @@ impl App for CompanionApp {
                         );
                         ui.add_space(8.0);
                         if soft_button(ui, "Cancel", 120.0).clicked() {
-                            self.update_busy = false;
-                            self.update_busy_since = None;
-                            self.pending_post_flash_reconnect = None;
+                            self.clear_flash_overlay();
                             self.update_status =
                                 "Board update cancelled (flash tool may still exit shortly)."
                                     .into();
