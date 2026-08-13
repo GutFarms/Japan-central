@@ -379,7 +379,7 @@ void CompanionLink::replyConfig(const AppConfig& cfg, const MinerSnapshot& snap)
   copyJsonSafe(wap, sizeof(wap), snap.wifiAp.c_str(), 32);
   char buf[320];
   snprintf(buf, sizeof(buf),
-           "{\"cpu_mhz\":%u,\"hash_focus\":true,\"fw\":\"0.8.44-sha256\",\"mode\":\"usb-wifi-sha256\","
+           "{\"cpu_mhz\":%u,\"hash_focus\":true,\"fw\":\"0.8.45-sha256\",\"mode\":\"usb-wifi-sha256\","
            "\"configured\":true,\"mac\":\"%s\",\"wifi_en\":%s,\"wifi_ssid\":\"%s\","
            "\"wifi_mode\":\"%s\",\"wifi_ip\":\"%s\",\"wifi_ap\":\"%s\",\"wifi_tcp\":%u}",
            (unsigned)cfg.cpuMhz, mac, cfg.wifiEnabled ? "true" : "false", ssid, wmode, wip, wap,

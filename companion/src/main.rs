@@ -29,10 +29,10 @@ use stratum::{
     WorkJob,
 };
 use workers::{
-    list_serial_ports, mac_is_stable, mac_worker_id, normalize_mac, open_usb_serial, open_wifi_tcp,
-    port_names_match, probe_wifi_endpoint, scan_usb_workers_with_progress, BoardWifiDiscovery,
-    DiscoveredWorker, LanDiscovery, PortChoice, WorkerKind, WorkerLive, BOARD_WIFI_PORT,
-    LAN_DISCOVERY_PORT,
+    list_serial_ports, mac_is_stable, mac_worker_id, normalize_mac, open_usb_serial,
+    open_usb_serial_timed, open_wifi_tcp, port_names_match, probe_wifi_endpoint,
+    scan_usb_workers_with_progress, BoardWifiDiscovery, DiscoveredWorker, LanDiscovery, PortChoice,
+    WorkerKind, WorkerLive, BOARD_WIFI_PORT, LAN_DISCOVERY_PORT,
 };
 
 use eframe::egui::{
@@ -1820,7 +1820,7 @@ impl CompanionApp {
         );
         ui.label(
                 RichText::new(format!(
-                    "Scan USB + Bluetooth COM, listen for Wi‑Fi CYD beacons (UDP {BOARD_WIFI_PORT}), and auto-link. SoftAP SSID Njordr-XXXX / pass njordrseas. LAN peers use UDP {LAN_DISCOVERY_PORT}."
+                    "Scan USB serial (skip motherboard PCI), listen for Wi‑Fi CYD beacons (UDP {BOARD_WIFI_PORT}), and auto-link. SoftAP SSID Njordr-XXXX / pass njordrseas. LAN peers use UDP {LAN_DISCOVERY_PORT}."
                 ))
                 .color(C_MUTED)
                 .size(12.0),
@@ -2726,13 +2726,24 @@ impl App for CompanionApp {
                             self.session_started = None;
                         }
                         self.clear_hash_display();
-                    } else if let Some(first) = self.connected_workers.first() {
-                        self.com_port = first.endpoint.clone();
-                        if !first.fw.is_empty() {
-                            self.fw_label = first.fw.clone();
-                        }
-                        if !first.mac.is_empty() {
-                            self.board_mac = first.mac.clone();
+                    } else {
+                        // Keep the user's COM selection when that board is still linked;
+                        // only fall back to the first board if selection is empty / gone.
+                        let selected_live = self
+                            .connected_workers
+                            .iter()
+                            .find(|c| port_names_match(&c.endpoint, &self.com_port));
+                        let live = selected_live.or_else(|| self.connected_workers.first());
+                        if let Some(b) = live {
+                            if selected_live.is_none() {
+                                self.com_port = b.endpoint.clone();
+                            }
+                            if !b.fw.is_empty() {
+                                self.fw_label = b.fw.clone();
+                            }
+                            if !b.mac.is_empty() {
+                                self.board_mac = b.mac.clone();
+                            }
                         }
                     }
                 }
@@ -3855,20 +3866,26 @@ fn mine_worker(cmd_rx: Receiver<NetCmd>, msg_tx: Sender<NetMsg>) {
     }
 
     fn open_board_at(name: &str, baud: u32) -> Result<(UsbBoard, bool), String> {
-        let mut port = BoardIo::Serial(open_usb_serial(name, baud, Duration::from_millis(8))?);
+        // Timed open so a hung motherboard COM cannot stall Add board / auto-link.
+        let mut port = BoardIo::Serial(open_usb_serial_timed(
+            name,
+            baud,
+            Duration::from_millis(8),
+            Duration::from_secs(3),
+        )?);
         let mut rx = String::new();
-        let wait_ms = if baud > 115_200 { 1_400 } else { 2_800 };
+        let wait_ms = if baud > 115_200 { 1_600 } else { 2_800 };
         let mut saw = false;
-        for attempt in 0..2u32 {
+        for attempt in 0..3u32 {
             if attempt > 0 {
-                // UART bridge may still have reset the MCU on open — wait for boot.
-                thread::sleep(Duration::from_millis(1_600));
+                // UART bridge may still have reset the MCU on open — wait for boot + SoftAP.
+                thread::sleep(Duration::from_millis(1_800));
                 port.clear();
                 rx.clear();
             }
             let _ = port.write_all(b"\r\ncmp ping\r\n");
             let _ = port.flush();
-            let deadline = Instant::now() + Duration::from_millis(wait_ms);
+            let deadline = Instant::now() + Duration::from_millis(wait_ms + attempt as u64 * 400);
             while Instant::now() < deadline {
                 port.drain(&mut rx);
                 if rx.lines().any(|l| {
@@ -3884,8 +3901,9 @@ fn mine_worker(cmd_rx: Receiver<NetCmd>, msg_tx: Sender<NetMsg>) {
                 break;
             }
         }
-        if !saw && baud > 115_200 {
-            return Err(format!("no pong @ {baud}"));
+        // Require a real pong at every baud — never "link" a silent / wrong COM.
+        if !saw {
+            return Err(format!("no pong @ {baud} on {name}"));
         }
         Ok((
             UsbBoard {
@@ -3900,7 +3918,7 @@ fn mine_worker(cmd_rx: Receiver<NetCmd>, msg_tx: Sender<NetMsg>) {
                 mining: false,
                 status_fails: 0,
             },
-            saw,
+            true,
         ))
     }
 
@@ -3992,18 +4010,33 @@ fn mine_worker(cmd_rx: Receiver<NetCmd>, msg_tx: Sender<NetMsg>) {
                             &msg_tx_scan,
                             LogKind::Usb,
                             format!(
-                                "USB/BT/Wi‑Fi CYD scan (skipping {} open)…",
+                                "USB CYD scan (skip PCI; skipping {} open)…",
                                 skip.len()
                             ),
                         );
                         let msg_probe = msg_tx_scan.clone();
-                        let mut found = scan_usb_workers_with_progress(&skip, move |port| {
-                            log_msg(
-                                &msg_probe,
-                                LogKind::Usb,
-                                format!("Probing {port}…"),
-                            );
-                        });
+                        let mut found =
+                            scan_usb_workers_with_progress(&skip, move |port, detail| {
+                                if detail == "probing" || detail.starts_with("probing ") {
+                                    log_msg(
+                                        &msg_probe,
+                                        LogKind::Usb,
+                                        format!("Probing {port}…"),
+                                    );
+                                } else if detail.starts_with("ok") {
+                                    log_msg(
+                                        &msg_probe,
+                                        LogKind::Usb,
+                                        format!("{port}: {detail}"),
+                                    );
+                                } else {
+                                    log_msg(
+                                        &msg_probe,
+                                        LogKind::Warn,
+                                        format!("{port}: {detail}"),
+                                    );
+                                }
+                            });
                         // Collect Wi‑Fi board beacons briefly, then TCP-ping each.
                         let mut wifi_disc = BoardWifiDiscovery::start();
                         let deadline = Instant::now() + Duration::from_millis(1_800);

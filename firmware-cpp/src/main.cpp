@@ -383,6 +383,10 @@ void setup() {
   }
 
   g_cmp.begin(460800);
+  // Start USB cmp early — SoftAP / splash can take >1s; Companion probes must get
+  // `CMP ok` even while Wi‑Fi is still coming up (second board after UART reset).
+  xTaskCreatePinnedToCore(usbTask, "usb", 6144, nullptr, 3, &g_usbTask, 0);
+
   g_ui.begin();
   g_ui.showSplash();
 
@@ -407,7 +411,6 @@ void setup() {
   refreshLabels();
 
   // Priorities: mineA (core1 max) > USB (3) > mineB (2) > Arduino loop (1).
-  xTaskCreatePinnedToCore(usbTask, "usb", 6144, nullptr, 3, &g_usbTask, 0);
   xTaskCreatePinnedToCore(mineTaskB, "shaB", 8192, nullptr, 2, &g_mineTaskB, 0);
   xTaskCreatePinnedToCore(mineTaskA, "shaA", 10240, nullptr, configMAX_PRIORITIES - 1, &g_mineTaskA,
                           1);
