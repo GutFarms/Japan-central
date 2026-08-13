@@ -1109,7 +1109,7 @@ impl CompanionApp {
             .map(|fw| fw.path.to_string_lossy().into_owned())
             .unwrap_or_default();
         self.update_busy = true;
-        self.update_status = format!("Updating board via {}…", self.com_port);
+        self.update_status = format!("Erase + flash board via {}…", self.com_port);
         self.last_ok = self.update_status.clone();
         self.last_error.clear();
         self.push_log(
@@ -1370,7 +1370,7 @@ impl CompanionApp {
                     self.start_firmware_fetch();
                 }
                 let update_label = if self.update_busy {
-                    "Flashing…"
+                    "Erase+flash…"
                 } else {
                     "Update board"
                 };

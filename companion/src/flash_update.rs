@@ -338,7 +338,7 @@ fn extract_merged_from_zip(
     })
 }
 
-pub const COMPANION_UA: &str = "CYD-Companion/0.8.26";
+pub const COMPANION_UA: &str = "CYD-Companion/0.8.27";
 const ESPFLASH_VERSION: &str = "4.5.0";
 pub const REPO_OWNER: &str = "GutFarms";
 pub const REPO_NAME: &str = "Japan-central";
@@ -702,17 +702,13 @@ fn which_on_path(name: &str) -> Option<PathBuf> {
     None
 }
 
-fn run_espflash(
+/// Run an espflash subcommand, retrying skip-update-check flag forms for Windows clap quirks.
+fn run_espflash_argv(
     espflash: &Path,
-    port: &str,
-    baud: &str,
-    image: &Path,
+    sub_args: &[&str],
     progress: &dyn Fn(String),
+    label: &str,
 ) -> Result<(), String> {
-    progress(format!(
-        "espflash write-bin → {port} @ {baud} ({})",
-        espflash.display()
-    ));
     // Global skip-update-check must come *before* the subcommand (espflash 4.x).
     // Never set ESPFLASH_SKIP_UPDATE_CHECK=1 — some Windows clap builds only accept
     // true/false and fail with: invalid value '1' for '--skip-update-check'.
@@ -727,19 +723,8 @@ fn run_espflash(
         if set_env_true {
             cmd.env("ESPFLASH_SKIP_UPDATE_CHECK", "true");
         }
-        cmd.args(skip).args([
-            "write-bin",
-            "-p",
-            port,
-            "-B",
-            baud,
-            "-c",
-            "esp32",
-            "--non-interactive",
-            "0x0",
-        ]);
-        cmd.arg(image);
-        match run_streaming(&mut cmd, progress, "espflash") {
+        cmd.args(skip).args(sub_args);
+        match run_streaming(&mut cmd, progress, label) {
             Ok(()) => return Ok(()),
             Err(e) => {
                 let lower = e.to_ascii_lowercase();
@@ -752,14 +737,76 @@ fn run_espflash(
                 {
                     return Err(last);
                 }
-                progress(format!("espflash CLI variant failed — trying next…"));
+                progress("espflash CLI variant failed — trying next…".into());
             }
         }
     }
     Err(last)
 }
 
-/// Flash merged image @ 0x0 (DIO / 4MB / 40MHz layout already inside the merge).
+fn run_espflash_erase(
+    espflash: &Path,
+    port: &str,
+    baud: &str,
+    progress: &dyn Fn(String),
+) -> Result<(), String> {
+    progress(format!(
+        "espflash erase-flash → {port} @ {baud} ({})",
+        espflash.display()
+    ));
+    // Stay in the bootloader so write-bin can follow without another reset dance.
+    run_espflash_argv(
+        espflash,
+        &[
+            "erase-flash",
+            "-p",
+            port,
+            "-B",
+            baud,
+            "-c",
+            "esp32",
+            "--non-interactive",
+            "--after",
+            "no-reset",
+        ],
+        progress,
+        "espflash-erase",
+    )
+}
+
+fn run_espflash_write(
+    espflash: &Path,
+    port: &str,
+    baud: &str,
+    image: &Path,
+    progress: &dyn Fn(String),
+) -> Result<(), String> {
+    progress(format!(
+        "espflash write-bin → {port} @ {baud} ({})",
+        espflash.display()
+    ));
+    let addr = "0x0";
+    let img = image.to_string_lossy();
+    run_espflash_argv(
+        espflash,
+        &[
+            "write-bin",
+            "-p",
+            port,
+            "-B",
+            baud,
+            "-c",
+            "esp32",
+            "--non-interactive",
+            addr,
+            img.as_ref(),
+        ],
+        progress,
+        "espflash",
+    )
+}
+
+/// Full erase, then flash merged image @ 0x0 (DIO / 4MB / 40MHz layout inside the merge).
 pub fn flash_merged_bin(port: &str, image: &Path, progress: &dyn Fn(String)) -> Result<(), String> {
     if port.trim().is_empty() {
         return Err("Select a COM / serial port before updating.".into());
@@ -769,7 +816,7 @@ pub fn flash_merged_bin(port: &str, image: &Path, progress: &dyn Fn(String)) -> 
     }
 
     progress(format!(
-        "Flashing {} ({} bytes) → {} @ 0x0",
+        "Erase + flash {} ({} bytes) → {} @ 0x0",
         image
             .file_name()
             .and_then(|s| s.to_str())
@@ -783,15 +830,25 @@ pub fn flash_merged_bin(port: &str, image: &Path, progress: &dyn Fn(String)) -> 
     let espflash = ensure_espflash(progress)?;
     let mut esp_err = String::new();
     for baud in ["460800", "115200"] {
-        match run_espflash(&espflash, port, baud, image, progress) {
-            Ok(()) => return Ok(()),
-            Err(e) => {
-                esp_err = e;
-                progress(format!("espflash @ {baud} failed: {esp_err}"));
-                if baud == "460800" {
-                    progress("Retrying at 115200…".into());
+        progress(format!("Erasing entire flash @ {baud}…"));
+        match run_espflash_erase(&espflash, port, baud, progress) {
+            Ok(()) => {
+                progress("Erase done — writing firmware…".into());
+                match run_espflash_write(&espflash, port, baud, image, progress) {
+                    Ok(()) => return Ok(()),
+                    Err(e) => {
+                        esp_err = format!("write after erase: {e}");
+                        progress(format!("espflash write @ {baud} failed: {esp_err}"));
+                    }
                 }
             }
+            Err(e) => {
+                esp_err = format!("erase: {e}");
+                progress(format!("espflash erase @ {baud} failed: {esp_err}"));
+            }
+        }
+        if baud == "460800" {
+            progress("Retrying erase+flash at 115200…".into());
         }
     }
 
@@ -803,16 +860,47 @@ pub fn flash_merged_bin(port: &str, image: &Path, progress: &dyn Fn(String)) -> 
         .filter(|p| !is_windows_store_python_stub(p))
         .collect();
     if !py_bins.is_empty() {
-        progress("espflash failed — trying Python esptool…".into());
+        progress("espflash failed — trying Python esptool (erase_flash + write_flash)…".into());
         for baud in ["460800", "115200"] {
             for py in &py_bins {
-                let mut args: Vec<String> = Vec::new();
-                if py
+                let py_launcher = py
                     .file_name()
                     .and_then(|s| s.to_str())
                     .map(|s| s.eq_ignore_ascii_case("py") || s.eq_ignore_ascii_case("py.exe"))
-                    .unwrap_or(false)
-                {
+                    .unwrap_or(false);
+
+                // 1) erase_flash
+                let mut erase_args: Vec<String> = Vec::new();
+                if py_launcher {
+                    erase_args.extend(["-3".into(), "-m".into(), "esptool".into()]);
+                } else {
+                    erase_args.extend(["-m".into(), "esptool".into()]);
+                }
+                erase_args.extend([
+                    "--chip".into(),
+                    "esp32".into(),
+                    "--port".into(),
+                    port.into(),
+                    "--baud".into(),
+                    baud.into(),
+                    "erase_flash".into(),
+                ]);
+                progress(format!("esptool erase_flash via {} @ {baud}…", py.display()));
+                let mut erase_cmd = Command::new(py);
+                erase_cmd.args(&erase_args);
+                if let Err(e) = run_streaming(&mut erase_cmd, progress, "esptool-erase") {
+                    if e.contains("9009") || e.to_ascii_lowercase().contains("microsoft store") {
+                        progress("Skipping Windows Store Python stub…".into());
+                        continue;
+                    }
+                    py_err = e;
+                    progress("esptool erase failed — trying next…".into());
+                    continue;
+                }
+
+                // 2) write_flash
+                let mut args: Vec<String> = Vec::new();
+                if py_launcher {
                     args.extend(["-3".into(), "-m".into(), "esptool".into()]);
                 } else {
                     args.extend(["-m".into(), "esptool".into()]);
@@ -835,20 +923,19 @@ pub fn flash_merged_bin(port: &str, image: &Path, progress: &dyn Fn(String)) -> 
                     "0x0".into(),
                     image.display().to_string(),
                 ]);
-                progress(format!("Trying {} @ {baud}…", py.display()));
+                progress(format!("esptool write_flash via {} @ {baud}…", py.display()));
                 let mut cmd = Command::new(py);
                 cmd.args(&args);
                 match run_streaming(&mut cmd, progress, "esptool") {
                     Ok(()) => return Ok(()),
                     Err(e) => {
-                        // 9009 = Windows Store alias with no real Python installed.
                         if e.contains("9009") || e.to_ascii_lowercase().contains("microsoft store")
                         {
                             progress("Skipping Windows Store Python stub…".into());
                             continue;
                         }
                         py_err = e;
-                        progress("esptool failed — trying next…".into());
+                        progress("esptool write failed — trying next…".into());
                     }
                 }
             }
