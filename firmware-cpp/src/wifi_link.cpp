@@ -67,7 +67,7 @@ void WifiLink::beacon() {
   IPAddress advertise = (WiFi.status() == WL_CONNECTED) ? sta : ap;
   char msg[220];
   snprintf(msg, sizeof(msg),
-           "%s|v=0.8.48|mac=%s|fw=0.8.48-sha256|tcp=%u|ip=%u.%u.%u.%u|ap=%s|mode=%s",
+           "%s|v=0.8.49|mac=%s|fw=0.8.49-sha256|tcp=%u|ip=%u.%u.%u.%u|ap=%s|mode=%s",
            CYD_WIFI_MAGIC, mac_.c_str(), (unsigned)CYD_WIFI_TCP_PORT, advertise[0], advertise[1],
            advertise[2], advertise[3], apSsid_.c_str(), modeLabel());
 

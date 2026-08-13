@@ -431,7 +431,7 @@ void setup() {
     g_ui.showMessage("SHA-256", "USB + WiFi link");
   }
   delay(280);
-  g_ui.showWaitingCompanion();
+  g_ui.showWaitingCompanion(g_snap);
 
   g_windowStart = millis();
   g_windowHashesStart = 0;
@@ -443,23 +443,29 @@ void setup() {
 void loop() {
   syncMinePriorities();
 
-  // Idle: static wait screen (no animated bars).
+  // Idle: logo + link / rate / Wi‑Fi IP (no animated bars).
   if (!g_jobLoaded) {
     uint32_t now = millis();
     if (now - g_lastPaint >= 1000) {
-      g_ui.showWaitingCompanion();
+      fillSnap();
+      g_ui.showWaitingCompanion(g_snap);
       g_lastPaint = now;
     }
     delay(20);
     return;
   }
 
-  // Mining: skip LCD SPI entirely — TFT traffic crushed core-1 H/s.
-  // Paint once when a job arms, then leave the panel alone until stop.
+  // Mining: keep logo static; refresh status strip every ~2s (light SPI only).
   if (g_mining) {
+    uint32_t now = millis();
     if (!g_ui.miningChromeDrawn()) {
       fillSnap();
       g_ui.showMining(g_cfg, g_snap, true);
+      g_lastPaint = now;
+    } else if (now - g_lastPaint >= 2000) {
+      fillSnap();
+      g_ui.showMining(g_cfg, g_snap, false);
+      g_lastPaint = now;
     }
     delay(100);
     return;
