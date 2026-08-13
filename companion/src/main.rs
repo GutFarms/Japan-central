@@ -575,6 +575,8 @@ struct CompanionApp {
     /// After a successful board flash: wait until Instant, then CloseUsb + OpenUsb.
     pending_post_flash_reconnect: Option<(Instant, String)>,
     update_busy: bool,
+    /// When Update board started — UI watchdog clears spinner if flash never finishes.
+    update_busy_since: Option<Instant>,
     /// Manual / UI "Bench boards" in flight (mine-worker retune).
     bench_busy: bool,
     update_status: String,
@@ -762,6 +764,7 @@ impl CompanionApp {
             update_confirm: false,
             pending_post_flash_reconnect: None,
             update_busy: false,
+            update_busy_since: None,
             bench_busy: false,
             update_status: String::new(),
             auto_connect,
@@ -1656,6 +1659,7 @@ impl CompanionApp {
             .map(|fw| fw.path.to_string_lossy().into_owned())
             .unwrap_or_default();
         self.update_busy = true;
+        self.update_busy_since = Some(Instant::now());
         self.pending_post_flash_reconnect = None;
         self.update_status = format!("Flashing board via {port}…");
         self.last_ok = self.update_status.clone();
@@ -3295,6 +3299,7 @@ impl App for CompanionApp {
                     self.update_status = trunc(&line, 140);
                 }
                 NetMsg::FlashDone { result, reopen } => {
+                    self.update_busy_since = None;
                     match result {
                         Ok(s) => {
                             self.last_ok = s.clone();
@@ -3315,6 +3320,7 @@ impl App for CompanionApp {
                                 self.update_status = s;
                             } else {
                                 // Keep spinner up: wait 1s, then disconnect + reconnect.
+                                self.update_busy = true;
                                 self.update_status =
                                     format!("Flash OK — waiting 1s, then reconnect {port}…");
                                 self.pending_post_flash_reconnect =
@@ -3592,10 +3598,26 @@ impl App for CompanionApp {
         if self.update_busy || self.fetch_busy || self.app_update_busy || self.bench_busy {
             ctx.request_repaint();
         }
+        // UI watchdog: flash path has a ~180s budget; unlock overlay if FlashDone never arrives.
+        if self.update_busy {
+            if let Some(since) = self.update_busy_since {
+                if since.elapsed() > Duration::from_secs(210) {
+                    self.update_busy = false;
+                    self.update_busy_since = None;
+                    self.pending_post_flash_reconnect = None;
+                    let msg = "Board update timed out — try BOOT+RESET, then Update board again."
+                        .to_string();
+                    self.update_status = msg.clone();
+                    self.last_error = msg.clone();
+                    self.push_log(LogKind::Err, msg);
+                }
+            }
+        }
         if let Some((when, port)) = self.pending_post_flash_reconnect.clone() {
             if Instant::now() >= when {
                 self.pending_post_flash_reconnect = None;
                 self.update_busy = false;
+                self.update_busy_since = None;
                 self.com_port = port.clone();
                 self.update_status = format!("Disconnect + reconnect {port}…");
                 self.push_log(
@@ -3869,6 +3891,16 @@ impl App for CompanionApp {
                                 .color(C_DIM)
                                 .size(12.0),
                         );
+                        ui.add_space(8.0);
+                        if soft_button(ui, "Cancel", 120.0).clicked() {
+                            self.update_busy = false;
+                            self.update_busy_since = None;
+                            self.pending_post_flash_reconnect = None;
+                            self.update_status =
+                                "Board update cancelled (flash tool may still exit shortly)."
+                                    .into();
+                            self.push_log(LogKind::Usb, self.update_status.clone());
+                        }
                         ui.add_space(8.0);
                     });
                 });

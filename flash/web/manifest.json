@@ -1,6 +1,6 @@
 {
   "name": "ESP32-2432S028 SHA-256 Miner",
-  "version": "0.8.68",
+  "version": "0.8.69",
   "new_install_prompt_erase": false,
   "builds": [
     {

@@ -3,8 +3,9 @@
 
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
-use std::sync::mpsc::Sender;
+use std::process::{Child, Command, Stdio};
+use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
+use std::time::{Duration, Instant};
 
 pub const MERGED_BIN_NAME: &str = "esp32-2432s028-sha256-miner-merged.bin";
 
@@ -371,7 +372,7 @@ fn extract_merged_from_zip(
     })
 }
 
-pub const COMPANION_UA: &str = "Njordr-seas-CYD-miner/0.8.68";
+pub const COMPANION_UA: &str = "Njordr-seas-CYD-miner/0.8.69";
 const ESPFLASH_VERSION: &str = "4.5.0";
 pub const REPO_OWNER: &str = "GutFarms";
 pub const REPO_NAME: &str = "Japan-central";
@@ -777,12 +778,21 @@ fn which_on_path(name: &str) -> Option<PathBuf> {
     None
 }
 
+/// Per-attempt ceilings — espflash can hang forever waiting for serial sync.
+const WRITE_TIMEOUT: Duration = Duration::from_secs(45);
+const ERASE_TIMEOUT: Duration = Duration::from_secs(75);
+const RESET_TIMEOUT: Duration = Duration::from_secs(12);
+const ESPTOOL_TIMEOUT: Duration = Duration::from_secs(90);
+/// Hard wall-clock budget for the whole Update board flash sequence.
+const FLASH_BUDGET: Duration = Duration::from_secs(180);
+
 /// Run an espflash subcommand, retrying skip-update-check flag forms for Windows clap quirks.
 fn run_espflash_argv(
     espflash: &Path,
     sub_args: &[&str],
     progress: &dyn Fn(String),
     label: &str,
+    timeout: Duration,
 ) -> Result<(), String> {
     // Global skip-update-check must come *before* the subcommand (espflash 4.x).
     // Never set ESPFLASH_SKIP_UPDATE_CHECK=1 — some Windows clap builds only accept
@@ -799,16 +809,17 @@ fn run_espflash_argv(
             cmd.env("ESPFLASH_SKIP_UPDATE_CHECK", "true");
         }
         cmd.args(skip).args(sub_args);
-        match run_streaming(&mut cmd, progress, label) {
+        match run_streaming_timeout(&mut cmd, progress, label, timeout) {
             Ok(()) => return Ok(()),
             Err(e) => {
                 let lower = e.to_ascii_lowercase();
                 last = e;
-                // Only rotate skip-flag forms on CLI parse errors; port/flash errors stop here.
-                if !(lower.contains("skip-update-check")
-                    || lower.contains("skip_update_check")
-                    || lower.contains("unexpected argument")
-                    || lower.contains("invalid value"))
+                // Only rotate skip-flag forms on CLI parse errors; port/flash/timeout stop here.
+                if lower.contains("timed out")
+                    || !(lower.contains("skip-update-check")
+                        || lower.contains("skip_update_check")
+                        || lower.contains("unexpected argument")
+                        || lower.contains("invalid value"))
                 {
                     return Err(last);
                 }
@@ -819,15 +830,27 @@ fn run_espflash_argv(
     Err(last)
 }
 
+fn clamp_timeout(cap: Duration, budget: Duration) -> Duration {
+    let t = cap.min(budget);
+    if t < Duration::from_secs(5) {
+        Duration::from_secs(5)
+    } else {
+        t
+    }
+}
+
 fn run_espflash_erase(
     espflash: &Path,
     port: &str,
     baud: &str,
     progress: &dyn Fn(String),
+    budget: Duration,
 ) -> Result<(), String> {
+    let timeout = clamp_timeout(ERASE_TIMEOUT, budget);
     progress(format!(
-        "espflash erase-flash → {port} @ {baud} ({})",
-        espflash.display()
+        "espflash erase-flash → {port} @ {baud} ({}) [timeout {}s]",
+        espflash.display(),
+        timeout.as_secs()
     ));
     // hard-reset after erase — do NOT use no-reset (soft_reset often fails on wiped flash;
     // write-bin is a new process so bootloader state cannot carry over).
@@ -847,6 +870,7 @@ fn run_espflash_erase(
         ],
         progress,
         "espflash-erase",
+        timeout,
     )
 }
 
@@ -857,10 +881,13 @@ fn run_espflash_write(
     before: &str,
     image: &Path,
     progress: &dyn Fn(String),
+    budget: Duration,
 ) -> Result<(), String> {
+    let timeout = clamp_timeout(WRITE_TIMEOUT, budget);
     progress(format!(
-        "espflash write-bin → {port} @ {baud} before={before} ({})",
-        espflash.display()
+        "espflash write-bin → {port} @ {baud} before={before} ({}) [timeout {}s]",
+        espflash.display(),
+        timeout.as_secs()
     ));
     let addr = "0x0";
     let img = image.to_string_lossy();
@@ -882,6 +909,7 @@ fn run_espflash_write(
         ],
         progress,
         "espflash-write",
+        timeout,
     )
 }
 
@@ -889,8 +917,10 @@ fn run_espflash_reset(
     espflash: &Path,
     port: &str,
     progress: &dyn Fn(String),
+    budget: Duration,
 ) -> Result<(), String> {
-    progress(format!("espflash reset → {port}"));
+    let timeout = clamp_timeout(RESET_TIMEOUT, budget);
+    progress(format!("espflash reset → {port} [timeout {}s]", timeout.as_secs()));
     // write-bin does not apply --after reset; reboot so the new image runs.
     run_espflash_argv(
         espflash,
@@ -905,6 +935,7 @@ fn run_espflash_reset(
         ],
         progress,
         "espflash-reset",
+        timeout,
     )
 }
 
@@ -991,123 +1022,160 @@ Available: {hint}. Unplug/replug the CYD, pick the COM again, then Update board.
     };
     let progress = &log_progress;
 
+    let started = Instant::now();
+    let budget_left = || FLASH_BUDGET.saturating_sub(started.elapsed());
+    let ensure_budget = |progress: &dyn Fn(String)| -> Result<(), String> {
+        let left = budget_left();
+        if left.is_zero() {
+            Err(format!(
+                "Flash timed out after {}s overall — hold BOOT, tap RESET, release BOOT, then Update again.",
+                FLASH_BUDGET.as_secs()
+            ))
+        } else {
+            progress(format!(
+                "Flash budget · {}s left",
+                left.as_secs().max(1)
+            ));
+            Ok(())
+        }
+    };
+
     let espflash = ensure_espflash(progress)?;
     let mut esp_err = String::new();
 
-    // 115200 first — CH340 CYD boards often fail sync at 460800.
-    // Try auto DTR/RTS reset, then no-reset (manual download mode).
+    // Few, timed attempts — previously 4 write + 2 erase × 2 write could hang forever
+    // if espflash blocked on serial sync with no timeout.
     let attempts: &[(&str, &str)] = &[
         ("115200", "default-reset"),
         ("115200", "no-reset"),
         ("460800", "default-reset"),
-        ("460800", "no-reset"),
     ];
 
     for &(baud, before) in attempts {
+        ensure_budget(progress)?;
         progress(format!("Writing firmware @ {baud} (before={before})…"));
-        match run_espflash_write(&espflash, &port_arg, baud, before, image, progress) {
+        match run_espflash_write(
+            &espflash,
+            &port_arg,
+            baud,
+            before,
+            image,
+            progress,
+            budget_left(),
+        ) {
             Ok(()) => {
-                let _ = run_espflash_reset(&espflash, &port_arg, progress);
+                let _ = run_espflash_reset(&espflash, &port_arg, progress, budget_left());
                 append_flash_log("success write");
                 return Ok(());
             }
             Err(e) => {
                 esp_err = format!("write {baud}/{before}: {e}");
                 progress(format!("espflash write failed: {esp_err}"));
+                if e.to_ascii_lowercase().contains("timed out") {
+                    progress(
+                        "Timed out waiting for the board — try BOOT+RESET, then no-reset…"
+                            .into(),
+                    );
+                }
             }
         }
     }
 
-    progress("Direct write failed — trying full erase, then write…".into());
-    for baud in ["115200", "460800"] {
-        progress(format!("Erasing entire flash @ {baud}…"));
-        match run_espflash_erase(&espflash, &port_arg, baud, progress) {
+    if budget_left() > Duration::from_secs(30) {
+        ensure_budget(progress)?;
+        progress("Direct write failed — trying full erase @ 115200, then write…".into());
+        match run_espflash_erase(&espflash, &port_arg, "115200", progress, budget_left()) {
             Ok(()) => {
                 progress("Erase done — waiting for COM port to settle…".into());
-                std::thread::sleep(std::time::Duration::from_millis(1200));
+                std::thread::sleep(Duration::from_millis(1000));
                 for before in ["default-reset", "no-reset"] {
-                    progress(format!("Writing after erase @ {baud} (before={before})…"));
+                    ensure_budget(progress)?;
+                    progress(format!("Writing after erase @ 115200 (before={before})…"));
                     match run_espflash_write(
-                        &espflash, &port_arg, baud, before, image, progress,
+                        &espflash,
+                        &port_arg,
+                        "115200",
+                        before,
+                        image,
+                        progress,
+                        budget_left(),
                     ) {
                         Ok(()) => {
-                            let _ = run_espflash_reset(&espflash, &port_arg, progress);
+                            let _ =
+                                run_espflash_reset(&espflash, &port_arg, progress, budget_left());
                             append_flash_log("success erase+write");
                             return Ok(());
                         }
                         Err(e) => {
-                            esp_err = format!("write after erase {baud}/{before}: {e}");
+                            esp_err = format!("write after erase 115200/{before}: {e}");
                             progress(format!("espflash write failed: {esp_err}"));
                         }
                     }
                 }
             }
             Err(e) => {
-                esp_err = format!("erase {baud}: {e}");
+                esp_err = format!("erase 115200: {e}");
                 progress(format!("espflash erase failed: {esp_err}"));
             }
         }
     }
 
-    // Optional Python fallback — skip Windows Store python stubs (exit 9009).
+    // Optional Python fallback — one timed attempt only.
     let mut py_err = String::new();
     let py_bins: Vec<PathBuf> = ["py", "python", "python3"]
         .iter()
         .filter_map(|n| which_on_path(n))
         .filter(|p| !is_windows_store_python_stub(p))
         .collect();
-    if !py_bins.is_empty() {
-        progress("espflash failed — trying Python esptool…".into());
-        for baud in ["115200", "460800"] {
-            for py in &py_bins {
-                let py_launcher = py
-                    .file_name()
-                    .and_then(|s| s.to_str())
-                    .map(|s| s.eq_ignore_ascii_case("py") || s.eq_ignore_ascii_case("py.exe"))
-                    .unwrap_or(false);
+    if !py_bins.is_empty() && budget_left() > Duration::from_secs(20) {
+        progress("espflash failed — trying Python esptool (one timed attempt)…".into());
+        if let Some(py) = py_bins.first() {
+            let py_launcher = py
+                .file_name()
+                .and_then(|s| s.to_str())
+                .map(|s| s.eq_ignore_ascii_case("py") || s.eq_ignore_ascii_case("py.exe"))
+                .unwrap_or(false);
 
-                let mut args: Vec<String> = Vec::new();
-                if py_launcher {
-                    args.extend(["-3".into(), "-m".into(), "esptool".into()]);
-                } else {
-                    args.extend(["-m".into(), "esptool".into()]);
+            let mut args: Vec<String> = Vec::new();
+            if py_launcher {
+                args.extend(["-3".into(), "-m".into(), "esptool".into()]);
+            } else {
+                args.extend(["-m".into(), "esptool".into()]);
+            }
+            args.extend([
+                "--chip".into(),
+                "esp32".into(),
+                "--port".into(),
+                port_arg.clone(),
+                "--baud".into(),
+                "115200".into(),
+                "write_flash".into(),
+                "--erase-all".into(),
+                "-z".into(),
+                "--flash_mode".into(),
+                "dio".into(),
+                "--flash_freq".into(),
+                "40m".into(),
+                "--flash_size".into(),
+                "4MB".into(),
+                "0x0".into(),
+                image.display().to_string(),
+            ]);
+            let py_timeout = clamp_timeout(ESPTOOL_TIMEOUT, budget_left());
+            progress(format!(
+                "esptool write_flash --erase-all via {} @ 115200 [timeout {}s]…",
+                py.display(),
+                py_timeout.as_secs()
+            ));
+            let mut cmd = Command::new(py);
+            cmd.args(&args);
+            match run_streaming_timeout(&mut cmd, progress, "esptool", py_timeout) {
+                Ok(()) => {
+                    append_flash_log("success esptool");
+                    return Ok(());
                 }
-                args.extend([
-                    "--chip".into(),
-                    "esp32".into(),
-                    "--port".into(),
-                    port_arg.clone(),
-                    "--baud".into(),
-                    baud.into(),
-                    "write_flash".into(),
-                    "--erase-all".into(),
-                    "-z".into(),
-                    "--flash_mode".into(),
-                    "dio".into(),
-                    "--flash_freq".into(),
-                    "40m".into(),
-                    "--flash_size".into(),
-                    "4MB".into(),
-                    "0x0".into(),
-                    image.display().to_string(),
-                ]);
-                progress(format!(
-                    "esptool write_flash --erase-all via {} @ {baud}…",
-                    py.display()
-                ));
-                let mut cmd = Command::new(py);
-                cmd.args(&args);
-                match run_streaming(&mut cmd, progress, "esptool") {
-                    Ok(()) => {
-                        append_flash_log("success esptool");
-                        return Ok(());
-                    }
-                    Err(e) => {
-                        if e.contains("9009") || e.to_ascii_lowercase().contains("microsoft store")
-                        {
-                            progress("Skipping Windows Store Python stub…".into());
-                            continue;
-                        }
+                Err(e) => {
+                    if !(e.contains("9009") || e.to_ascii_lowercase().contains("microsoft store")) {
                         py_err = e.clone();
                         progress(format!("esptool failed: {e}"));
                     }
@@ -1117,11 +1185,12 @@ Available: {hint}. Unplug/replug the CYD, pick the COM again, then Update board.
     }
 
     let tip = format!(
-        "Flash failed (espflash: {esp_err}{}). \
+        "Flash failed after {}s (espflash: {esp_err}{}). \
 See last-flash.log next to the app. \
 Hold BOOT, tap RESET, release BOOT, then Update again. \
 Or run Flash-Firmware.bat and enter the COM number. \
 Ensure Tools\\espflash.exe sits next to the app.",
+        started.elapsed().as_secs(),
         if py_err.is_empty() {
             String::new()
         } else {
@@ -1138,26 +1207,84 @@ fn is_windows_store_python_stub(path: &Path) -> bool {
 }
 
 /// Keep flash/update helper processes from popping console windows on Windows.
-/// Prefer DETACHED_PROCESS over CREATE_NO_WINDOW — the latter can break serial
-/// access for some CH340 drivers when stdout is piped.
 fn hide_console_window(cmd: &mut Command) {
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
-        const DETACHED_PROCESS: u32 = 0x0000_0008;
-        const CREATE_NEW_PROCESS_GROUP: u32 = 0x0000_0200;
-        cmd.creation_flags(DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP);
+        // CREATE_NO_WINDOW keeps the child killable and avoids a console flash.
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        cmd.creation_flags(CREATE_NO_WINDOW);
     }
     let _ = cmd;
 }
 
-fn run_streaming(
+fn force_kill(child: &mut Child) {
+    let _ = child.kill();
+    // Prefer try_wait — never block forever if the OS leaves a zombie handle.
+    for _ in 0..40 {
+        match child.try_wait() {
+            Ok(Some(_)) => return,
+            Ok(None) => std::thread::sleep(Duration::from_millis(50)),
+            Err(_) => break,
+        }
+    }
+    let _ = child.kill();
+    let _ = child.try_wait();
+}
+
+fn join_pumps_brief(
+    h1: std::thread::JoinHandle<()>,
+    h2: std::thread::JoinHandle<()>,
+    max_wait: Duration,
+) {
+    let (tx, rx) = mpsc::channel();
+    let tx2 = tx.clone();
+    std::thread::spawn(move || {
+        let _ = h1.join();
+        let _ = tx.send(());
+    });
+    std::thread::spawn(move || {
+        let _ = h2.join();
+        let _ = tx2.send(());
+    });
+    let deadline = Instant::now() + max_wait;
+    let mut got = 0u8;
+    while got < 2 {
+        let left = deadline.saturating_duration_since(Instant::now());
+        if left.is_zero() {
+            break;
+        }
+        match rx.recv_timeout(left) {
+            Ok(()) => got += 1,
+            Err(_) => break,
+        }
+    }
+}
+
+/// Run a flash helper with a hard wall-clock timeout. Kills the child on expiry
+/// so Update board cannot hang forever on a stuck serial sync.
+fn run_streaming_timeout(
     cmd: &mut Command,
     progress: &dyn Fn(String),
     label: &str,
+    timeout: Duration,
 ) -> Result<(), String> {
     hide_console_window(cmd);
     cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
+    // Own process group on Unix so kill reaches helpers if the tool forks.
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        unsafe {
+            cmd.pre_exec(|| {
+                extern "C" {
+                    fn setpgid(pid: i32, pgid: i32) -> i32;
+                }
+                let _ = setpgid(0, 0);
+                Ok(())
+            });
+        }
+    }
     let mut child = cmd
         .spawn()
         .map_err(|e| format!("launch {label}: {e}"))?;
@@ -1165,7 +1292,7 @@ fn run_streaming(
     let stdout = child.stdout.take();
     let stderr = child.stderr.take();
 
-    let (tx, rx) = std::sync::mpsc::channel::<String>();
+    let (tx, rx) = mpsc::channel::<String>();
     let pump = |stream: Option<std::process::ChildStdout>, tx: Sender<String>| {
         if let Some(out) = stream {
             let reader = BufReader::new(out);
@@ -1194,30 +1321,85 @@ fn run_streaming(
     let tx2 = tx;
     let h2 = std::thread::spawn(move || pump_err(stderr, tx2));
 
+    let deadline = Instant::now() + timeout;
     let mut tail = String::new();
-    while let Ok(line) = rx.recv() {
-        if line.contains('%') && line.len() < 8 {
-            continue;
+    let mut last_beat = Instant::now();
+    loop {
+        let wait = deadline
+            .saturating_duration_since(Instant::now())
+            .min(Duration::from_millis(400));
+        if wait.is_zero() {
+            progress(format!(
+                "{label} timed out after {}s — killing stuck flash tool…",
+                timeout.as_secs()
+            ));
+            force_kill(&mut child);
+            // Never join forever — stuck stdout readers must not pin Update board.
+            join_pumps_brief(h1, h2, Duration::from_secs(2));
+            return Err(format!(
+                "{label} timed out after {}s — {}",
+                timeout.as_secs(),
+                if tail.is_empty() {
+                    "no output (board never entered download mode?)".into()
+                } else {
+                    tail
+                }
+            ));
         }
-        progress(line.clone());
-        if tail.len() > 1200 {
-            tail.clear();
-        }
-        if !tail.is_empty() {
-            tail.push(' ');
-        }
-        tail.push_str(&line);
-        if tail.len() > 400 {
-            let keep = tail[tail.len() - 400..].to_string();
-            tail = keep;
+        match rx.recv_timeout(wait) {
+            Ok(line) => {
+                if line.contains('%') && line.len() < 8 {
+                    continue;
+                }
+                progress(line.clone());
+                last_beat = Instant::now();
+                if tail.len() > 1200 {
+                    tail.clear();
+                }
+                if !tail.is_empty() {
+                    tail.push(' ');
+                }
+                tail.push_str(&line);
+                if tail.len() > 400 {
+                    let keep = tail[tail.len() - 400..].to_string();
+                    tail = keep;
+                }
+            }
+            Err(RecvTimeoutError::Timeout) => {
+                match child.try_wait() {
+                    Ok(Some(_)) => break, // exited; drain pumps next
+                    Ok(None) => {
+                        if last_beat.elapsed() >= Duration::from_secs(8) {
+                            progress(format!(
+                                "{label} still running… {}s left",
+                                deadline.saturating_duration_since(Instant::now()).as_secs()
+                            ));
+                            last_beat = Instant::now();
+                        }
+                    }
+                    Err(e) => {
+                        force_kill(&mut child);
+                        join_pumps_brief(h1, h2, Duration::from_secs(2));
+                        return Err(format!("{label} wait: {e}"));
+                    }
+                }
+            }
+            Err(RecvTimeoutError::Disconnected) => break,
         }
     }
-    let _ = h1.join();
-    let _ = h2.join();
+    join_pumps_brief(h1, h2, Duration::from_secs(5));
 
-    let status = child
-        .wait()
-        .map_err(|e| format!("{label} wait: {e}"))?;
+    let status = match child.try_wait() {
+        Ok(Some(s)) => s,
+        Ok(None) => {
+            // Child claimed exit via closed pipes but wait stalled — kill + fail.
+            force_kill(&mut child);
+            return Err(format!(
+                "{label} did not exit cleanly after output closed — killed"
+            ));
+        }
+        Err(e) => return Err(format!("{label} wait: {e}")),
+    };
     if status.success() {
         progress(format!("{label} complete."));
         Ok(())
@@ -1252,9 +1434,9 @@ mod tests {
             Some(false)
         );
         assert_eq!(
-            update_needed("0.8.56-sha256-d0", "0.8.68-sha256"),
+            update_needed("0.8.56-sha256-d0", "0.8.69-sha256"),
             Some(true)
         );
-        assert_eq!(update_needed("", "0.8.68-sha256"), None);
+        assert_eq!(update_needed("", "0.8.69-sha256"), None);
     }
 }
