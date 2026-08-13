@@ -1,1 +1,9 @@
-target/
+**/local.properties
+**/.gradle/
+android/keystore/*.jks
+android/app/build/
+desktop/.gradle/
+desktop/build/
+desktop/dist/
+mail-server/.gradle/
+mail-server/build/

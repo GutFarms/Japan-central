@@ -1,0 +1,6 @@
+{
+  "versionCode": 26,
+  "versionName": "1.21.0",
+  "apkUrl": "https://github.com/GutFarms/Native/releases/latest/download/NativePure-Dispensary.apk",
+  "releaseNotes": "Native Pure 1.21.0 — random one-time admin bootstrap, Windows POS checksums on Releases."
+}
