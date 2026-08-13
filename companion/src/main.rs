@@ -573,6 +573,8 @@ struct CompanionApp {
     /// After a successful board flash: wait until Instant, then CloseUsb + OpenUsb.
     pending_post_flash_reconnect: Option<(Instant, String)>,
     update_busy: bool,
+    /// Manual / UI "Bench boards" in flight (mine-worker retune).
+    bench_busy: bool,
     update_status: String,
     auto_connect: bool,
     auto_connect_attempted: bool,
@@ -719,6 +721,7 @@ impl CompanionApp {
             update_confirm: false,
             pending_post_flash_reconnect: None,
             update_busy: false,
+            bench_busy: false,
             update_status: String::new(),
             auto_connect,
             auto_connect_attempted: false,
@@ -1262,6 +1265,25 @@ impl CompanionApp {
         self.clear_hash_display();
         self.last_ok = "Mining stopped.".into();
         self.push_log(LogKind::Info, "Mining stopped".into());
+    }
+
+    fn request_bench(&mut self) {
+        if self.bench_busy {
+            return;
+        }
+        if !self.usb_open && self.connected_workers.is_empty() {
+            self.last_error = "Link a board before Bench.".into();
+            self.push_log(LogKind::Warn, self.last_error.clone());
+            return;
+        }
+        self.bench_busy = true;
+        self.last_error.clear();
+        self.last_ok = "Bench: tuning HW / HW+ / HW/SW on each linked board…".into();
+        self.push_log(
+            LogKind::Usb,
+            "D0 auto-tune: each board times HW / HW+ / HW/SW and locks the best path…".into(),
+        );
+        let _ = self.cmd_tx.send(NetCmd::Bench);
     }
 
     fn push_board_ticker(&mut self, force: bool) {
@@ -1908,13 +1930,13 @@ impl CompanionApp {
             );
             ui.add_space(12.0);
             ui.horizontal_wrapped(|ui| {
-                if soft_button(ui, "Bench boards (D0)", 168.0).clicked() {
-                    let _ = self.cmd_tx.send(NetCmd::Bench);
-                    self.push_log(
-                        LogKind::Usb,
-                        "D0 auto-tune: each board times HW / HW+ / HW/SW and locks the best path…"
-                            .into(),
-                    );
+                let bench_label = if self.bench_busy {
+                    "Benching…"
+                } else {
+                    "Bench boards (D0)"
+                };
+                if soft_button(ui, bench_label, 168.0).clicked() && !self.bench_busy {
+                    self.request_bench();
                 }
                 let fetch_label = if self.fetch_busy {
                     "Fetching FW…"
@@ -2875,8 +2897,9 @@ impl CompanionApp {
                     self.term_input = "cmp stop".into();
                     self.send_term();
                 }
-                if soft_button(ui, "Bench D0", 96.0).clicked() {
-                    let _ = self.cmd_tx.send(NetCmd::Bench);
+                let bench_label = if self.bench_busy { "Benching…" } else { "Bench D0" };
+                if soft_button(ui, bench_label, 96.0).clicked() && !self.bench_busy {
+                    self.request_bench();
                 }
                 if soft_button(ui, "Reboot", 92.0).clicked() {
                     let _ = self.cmd_tx.send(NetCmd::RebootBoard);
@@ -2976,10 +2999,23 @@ impl App for CompanionApp {
                     if low.contains("usb ← job") || low.contains("usb <- job") {
                         self.last_job_flow_at = Instant::now();
                     }
+                    // Manual Bench completion only (not "Bench running…" ack or connect auto-bench).
+                    if self.bench_busy
+                        && (low.contains(" → ")
+                            || low.contains(" -> ")
+                            || low.contains("bench done")
+                            || low.contains("no boards"))
+                    {
+                        self.bench_busy = false;
+                    }
                     let kind = if low.contains("job") || low.contains("share") || low.contains("pool")
                     {
                         LogKind::Stratum
-                    } else if low.contains("usb") || low.contains("cmp") || low.contains("board") {
+                    } else if low.contains("usb")
+                        || low.contains("cmp")
+                        || low.contains("board")
+                        || low.contains("bench")
+                    {
                         LogKind::Usb
                     } else {
                         LogKind::Info
@@ -2987,6 +3023,9 @@ impl App for CompanionApp {
                     self.push_log(kind, s);
                 }
                 NetMsg::Action(Err(e)) => {
+                    if self.bench_busy {
+                        self.bench_busy = false;
+                    }
                     self.last_error = e.clone();
                     self.push_log(LogKind::Err, e);
                 }
@@ -3361,7 +3400,7 @@ impl App for CompanionApp {
             .collect();
         let host = hostname_fallback();
         self.lan.maybe_beacon(&board_ads, &host);
-        if self.update_busy || self.fetch_busy || self.app_update_busy {
+        if self.update_busy || self.fetch_busy || self.app_update_busy || self.bench_busy {
             ctx.request_repaint();
         }
         if let Some((when, port)) = self.pending_post_flash_reconnect.clone() {
@@ -4823,8 +4862,8 @@ fn mine_worker(cmd_rx: Receiver<NetCmd>, msg_tx: Sender<NetMsg>) {
                 board.name
             ),
         );
-        // Shorter sample than manual Bench — enough to pick a path without wedging the link.
-        let summary = match usb_cmd(&mut board.port, &mut board.rx, "cmp bench tune=1&n=60000") {
+        // Short sample — firmware splits n across HW/HW+/HW/SW (~12k+ each).
+        let summary = match usb_cmd(&mut board.port, &mut board.rx, "cmp bench tune=1&n=36000") {
             Ok(line) => {
                 if let Ok(st_line) = usb_cmd(&mut board.port, &mut board.rx, "cmp status") {
                     if let Ok(st) = parse_cmp_status(&st_line) {
@@ -5445,11 +5484,17 @@ fn mine_worker(cmd_rx: Receiver<NetCmd>, msg_tx: Sender<NetMsg>) {
                     let _ = msg_tx.send(NetMsg::Status(Ok(st)));
                 }
                 NetCmd::Bench => {
+                    // Prefer the user click over any deferred connect auto-bench.
+                    pending_auto_bench.clear();
                     if boards.is_empty() {
                         let _ = msg_tx.send(NetMsg::Action(Err("No boards linked".into())));
                         continue;
                     }
                     let was_mining = mining;
+                    let _ = msg_tx.send(NetMsg::Action(Ok(format!(
+                        "Bench running on {} board(s)…",
+                        boards.len()
+                    ))));
                     // Pause pool hashing so each board can retune HW paths cleanly.
                     if was_mining {
                         for b in boards.iter_mut() {
@@ -5463,10 +5508,21 @@ fn mine_worker(cmd_rx: Receiver<NetCmd>, msg_tx: Sender<NetMsg>) {
                             LogKind::Usb,
                             format!("Tuning {} for max hashrate…", b.name),
                         );
-                        match usb_cmd(&mut b.port, &mut b.rx, "cmp bench tune=1&n=180000") {
+                        // n≈60k → ~20k hashes/path after firmware split (finishes well under USB wait).
+                        match usb_cmd(&mut b.port, &mut b.rx, "cmp bench tune=1&n=60000") {
                             Ok(line) => {
                                 lines.push(format!("{} → {line}", b.name));
                                 log_msg(&msg_tx, LogKind::Usb, format!("{} bench OK: {line}", b.name));
+                                if let Ok(st_line) =
+                                    usb_cmd(&mut b.port, &mut b.rx, "cmp status")
+                                {
+                                    if let Ok(st) = parse_cmp_status(&st_line) {
+                                        b.hashrate_hs = st.hashrate_hs;
+                                        b.hashes = st.hashes;
+                                        b.mining = st.mining;
+                                        let _ = msg_tx.send(NetMsg::Status(Ok(st)));
+                                    }
+                                }
                             }
                             Err(e) => {
                                 lines.push(format!("{} → ERR {e}", b.name));
@@ -5497,6 +5553,7 @@ fn mine_worker(cmd_rx: Receiver<NetCmd>, msg_tx: Sender<NetMsg>) {
                             b.legacy_job = legacy;
                         }
                     }
+                    publish_live(&msg_tx, &boards);
                     let summary = if lines.is_empty() {
                         "Bench done".into()
                     } else {
@@ -5977,8 +6034,8 @@ fn usb_cmd(port: &mut BoardIo, buf: &mut String, cmd: &str) -> Result<String, St
     let mut last_err = String::new();
     // Bigger writes + single flush cut job-push latency a lot vs per-chunk sleeps.
     let (wait_ms, retries, chunk, gap_ms) = if cmd.contains("bench") {
-        // Connect auto-bench uses n=60000; manual Bench may still be longer.
-        (90_000u64, 2usize, 128usize, 1u64)
+        // One long wait — retrying restarts a board that may still be mid-tune.
+        (180_000u64, 1usize, 128usize, 1u64)
     } else if cmd.contains("status") {
         // Board may be mid mineB batch; firmware yields on RX, but allow headroom.
         (2_800u64, 3usize, 256usize, 0u64)

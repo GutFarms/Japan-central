@@ -497,7 +497,7 @@ extern "C" float cyd_run_bench(uint32_t n, bool tune) {
   memset(tgt, 0xFF, 32);
 
   uint32_t hashes = n;
-  if (hashes < 20000) hashes = 20000;
+  if (hashes < 12000) hashes = 12000;
   if (hashes > 400000) hashes = 400000;
 
   if (tune && g_hwSha) {
@@ -513,10 +513,11 @@ extern "C" float cyd_run_bench(uint32_t n, bool tune) {
         cyd_sha_hw::Mode::HwSwSecond,
         cyd_sha_hw::Mode::MidHw,
     };
-    // Per-path sample — enough to rank stably without a long stall.
+    // Per-path sample — enough to rank stably; keep short so USB wait never
+    // looks like a dead "Bench boards" click (Companion ~120s budget).
     uint32_t per = hashes / 3;
-    if (per < 40000) per = 40000;
-    if (per > 160000) per = 160000;
+    if (per < 12000) per = 12000;
+    if (per > 80000) per = 80000;
 
     for (cyd_sha_hw::Mode m : candidates) {
       if (m == cyd_sha_hw::Mode::MidHw && !cyd_sha_hw::midstate_ok()) continue;
