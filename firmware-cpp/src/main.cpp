@@ -216,9 +216,9 @@ static void noteShare(uint32_t nonce) {
 }
 
 static void serviceCompanion() {
-  // Snapshot less often while hashing hard — USB/status must not starve mineB.
+  // Snapshot often enough for live H/s without starving USB replies.
   uint32_t now = millis();
-  const uint32_t snapMs = g_mining ? 450u : 220u;
+  const uint32_t snapMs = g_mining ? 320u : 220u;
   if (now - g_lastSnapMs >= snapMs) {
     fillSnap();
     g_lastSnapMs = now;
@@ -245,9 +245,10 @@ static void serviceCompanion() {
 static void syncMinePriorities() {
   if (!g_mineTaskB || !g_usbTask) return;
   if (g_mining && g_jobLoaded) {
-    // Prefer SW assist over USB polling while hashing toward ~1 MH/s.
-    vTaskPrioritySet(g_mineTaskB, 4);
-    vTaskPrioritySet(g_usbTask, 2);
+    // Same priority: FreeRTOS time-slices core-0 so USB can ACK status/jobs
+    // while SW assist still runs large batches (see mineTaskB Serial yield).
+    vTaskPrioritySet(g_mineTaskB, 3);
+    vTaskPrioritySet(g_usbTask, 3);
   } else {
     vTaskPrioritySet(g_usbTask, 3);
     vTaskPrioritySet(g_mineTaskB, 2);
@@ -293,8 +294,8 @@ static void mineTaskA(void*) {
 }
 
 // Core-0 SW assist — dedicated task so LCD/Arduino loop cannot starve hashing.
-// vTaskDelay is required (taskYIELD never runs idle / TWDT), but only every
-// many batches so assist H/s stays close to peak.
+// vTaskDelay is required (taskYIELD never runs idle / TWDT). Yield promptly when
+// Companion has RX pending so `cmp status` / job ACKs are not starved.
 static void mineTaskB(void*) {
   uint32_t loops = 0;
   for (;;) {
@@ -303,19 +304,25 @@ static void mineTaskB(void*) {
       continue;
     }
     mineLane(g_minerB, 1, g_hwSha ? 12288 : 4096);
-    if ((++loops & 127u) == 0u) {
+    // Pending USB bytes: step aside so usbTask can drain + reply.
+    if (Serial.available() > 0) {
+      vTaskDelay(1);
+      esp_task_wdt_reset();
+      continue;
+    }
+    if ((++loops & 31u) == 0u) {
       vTaskDelay(1);
       esp_task_wdt_reset();
     }
   }
 }
 
-// USB — yield harder to mineB while hashing; stay snappy when Companion is talking.
+// USB — stay responsive under hash load; mineB yields when RX is pending.
 static void usbTask(void*) {
   for (;;) {
     serviceCompanion();
     const bool talk = Serial.available() > 0;
-    const uint32_t ms = talk ? 1u : (g_mining ? 10u : 3u);
+    const uint32_t ms = talk ? 1u : (g_mining ? 4u : 3u);
     vTaskDelay(pdMS_TO_TICKS(ms));
     esp_task_wdt_reset();
   }

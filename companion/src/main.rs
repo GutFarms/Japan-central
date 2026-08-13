@@ -2593,7 +2593,7 @@ impl App for CompanionApp {
             }
         }
 
-        if self.usb_open && self.last_poll.elapsed() > Duration::from_millis(400) {
+        if self.usb_open && self.last_poll.elapsed() > Duration::from_millis(750) {
             let _ = self.cmd_tx.send(NetCmd::PollStatus);
             self.last_poll = Instant::now();
         }
@@ -4070,24 +4070,33 @@ fn mine_worker(cmd_rx: Receiver<NetCmd>, msg_tx: Sender<NetMsg>) {
                                 }
                                 Err(e) => {
                                     b.status_fails = b.status_fails.saturating_add(1);
-                                    log_msg(
-                                        &msg_tx,
-                                        LogKind::Warn,
-                                        format!("status {}: {e}", b.name),
-                                    );
-                                    if b.status_fails >= 5 {
+                                    if b.status_fails == 1 || b.status_fails % 3 == 0 {
+                                        log_msg(
+                                            &msg_tx,
+                                            LogKind::Warn,
+                                            format!("status {}: {e}", b.name),
+                                        );
+                                    }
+                                    if b.status_fails >= 8 {
                                         drop_names.push(b.name.clone());
                                     }
                                 }
                             },
                             Err(e) => {
                                 b.status_fails = b.status_fails.saturating_add(1);
-                                log_msg(
-                                    &msg_tx,
-                                    LogKind::Warn,
-                                    format!("status soft-fail {}: {e}", b.name),
-                                );
-                                if b.status_fails >= 5 {
+                                // Soft-fails are common under hash load; only log first + every 3rd.
+                                if b.status_fails == 1 || b.status_fails % 3 == 0 {
+                                    log_msg(
+                                        &msg_tx,
+                                        LogKind::Warn,
+                                        format!(
+                                            "status soft-fail {} (#{}) : {e}",
+                                            b.name, b.status_fails
+                                        ),
+                                    );
+                                }
+                                // Need a longer streak before dropping — USB can stall briefly.
+                                if b.status_fails >= 8 {
                                     drop_names.push(b.name.clone());
                                 }
                             }
@@ -4601,13 +4610,14 @@ fn usb_cmd(port: &mut dyn SerialPort, buf: &mut String, cmd: &str) -> Result<Str
     let (wait_ms, retries, chunk, gap_ms) = if cmd.contains("bench") {
         (60_000u64, 2usize, 128usize, 1u64)
     } else if cmd.contains("status") {
-        (900u64, 2usize, 256usize, 0u64)
+        // Board may be mid mineB batch; firmware yields on RX, but allow headroom.
+        (2_800u64, 3usize, 256usize, 0u64)
     } else if cmd.contains(" jh") || cmd.contains(" jt") || cmd.contains(" ja") {
-        (2_000u64, 2usize, 256usize, 0u64)
+        (3_000u64, 3usize, 256usize, 0u64)
     } else if cmd.contains(" job ") {
         (4_000u64, 2usize, 128usize, 1u64)
     } else {
-        (2_000u64, 2usize, 256usize, 0u64)
+        (2_500u64, 3usize, 256usize, 0u64)
     };
     for _ in 0..retries {
         drain_serial(port, buf);

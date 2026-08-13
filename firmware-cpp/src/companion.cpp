@@ -296,7 +296,7 @@ void CompanionLink::replyConfig(const AppConfig& cfg, const MinerSnapshot& snap)
   copyJsonSafe(mac, sizeof(mac), snap.mac.length() ? snap.mac.c_str() : "", 17);
   char buf[160];
   snprintf(buf, sizeof(buf),
-           "{\"cpu_mhz\":%u,\"hash_focus\":true,\"fw\":\"0.8.37-sha256\",\"mode\":\"usb-sha256\","
+           "{\"cpu_mhz\":%u,\"hash_focus\":true,\"fw\":\"0.8.38-sha256\",\"mode\":\"usb-sha256\","
            "\"configured\":true,\"mac\":\"%s\"}",
            (unsigned)cfg.cpuMhz, mac);
   Serial.print("CMPCONFIG ");
