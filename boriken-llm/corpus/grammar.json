@@ -1,10 +1,11 @@
 {
   "meta": {
     "name": "Boriken Reconstruction Grammar",
-    "version": "0.3.0",
-    "word_order": "SVO (learner-friendly Neo-Taíno; classical may have been freer / SOV-leaning)",
+    "version": "0.3.1",
+    "word_order": "SVO (learner-friendly Neo-Taíno only; classical word order is poorly attested and may have been freer / SOV-leaning)",
     "family": "Ta-Arawakan",
-    "sentence_structure_ready": true
+    "sentence_structure_ready": true,
+    "accuracy_note": "Do not present SVO or reconstructed sentences as proven Classical Taíno. Prefer the six colonial spoken anchors when teaching historical structure. See ACCURACY.md."
   },
   "phonology": {
     "consonants": ["p", "t", "k", "b", "d", "g", "s", "sh", "h", "m", "n", "w", "y", "l", "r"],
@@ -44,8 +45,8 @@
   },
   "sentence_structure": {
     "overview": {
-      "english": "Neo-Taíno Boriken for learners usually follows Subject–Verb–Object (SVO). Person is often marked on the verb with the same prefixes used for possession (da-/wa-/li-/to-). Identity sentences use daka ('I am').",
-      "spanish": "El boriken neo-taíno para aprendices suele seguir Sujeto–Verbo–Objeto (SVO). La persona se marca en el verbo con los mismos prefijos de posesión (da-/wa-/li-/to-). Las oraciones de identidad usan daka ('yo soy')."
+      "english": "Neo-Taíno Boriken for learners usually follows Subject–Verb–Object (SVO) as a teaching default—not a proven Classical Taíno word order. Person is often marked on the verb with the same prefixes used for possession (da-/wa-/li-/to-). Identity sentences use daka ('I am'), which is colonially attested.",
+      "spanish": "El boriken neo-taíno para aprendices suele seguir Sujeto–Verbo–Objeto (SVO) como valor pedagógico—no como orden clásico demostrado. La persona se marca en el verbo con los mismos prefijos de posesión (da-/wa-/li-/to-). Las oraciones de identidad usan daka ('yo soy'), forma atestiguada en crónicas."
     },
     "slot_guide": [
       {"slot": "SUBJECT", "how": "Use an independent noun/pronoun, OR mark person on the verb with da-/wa-/li-/to-.", "example": "da- (I) · wa- (we)"},
@@ -249,6 +250,14 @@
     {
       "id": "svo_default",
       "rule": "Default learner sentence order is SVO unless teaching an attested historical string."
+    },
+    {
+      "id": "accuracy_transparency",
+      "rule": "Never upgrade community_revival or caribbean_spanish_uncertain forms to attested without a colonial citation. Expose ACCURACY.md /accuracy_note to learners."
+    },
+    {
+      "id": "classical_order_unknown",
+      "rule": "Classical Taíno syntax is sparsely attested; do not claim SVO (or any fixed order) as historical fact."
     }
   ],
   "pronunciation_guide": {

@@ -39,6 +39,32 @@ class CorpusTests(unittest.TestCase):
         self.assertTrue(hits)
         self.assertTrue(hits[0].attested)
 
+    def test_enriquillo_not_taino_lexeme(self) -> None:
+        hits = self.corpus.lookup("enriquillo") or self.corpus.lookup("Guarocuya")
+        self.assertTrue(hits)
+        entry = hits[0]
+        self.assertFalse(entry.attested)
+        self.assertIn("not_taino_lexeme", entry.tags)
+        self.assertNotEqual(entry.confidence, "high")
+        self.assertTrue(entry.accuracy_note)
+
+    def test_community_water_not_overclaimed(self) -> None:
+        hits = self.corpus.lookup("ni")
+        water = next(e for e in hits if e.id == "ni")
+        self.assertFalse(water.attested)
+        self.assertEqual(water.source, "community_revival")
+        self.assertEqual(water.confidence, "medium")
+
+    def test_loro_flagged_spanish(self) -> None:
+        loro = next(e for e in self.corpus.entries if e.id == "loro")
+        self.assertFalse(loro.attested)
+        self.assertEqual(loro.confidence, "low")
+
+
+class AccuracyDocTests(unittest.TestCase):
+    def test_accuracy_md_exists(self) -> None:
+        self.assertTrue((ROOT / "ACCURACY.md").exists())
+
 
 class ReconstructionTests(unittest.TestCase):
     def setUp(self) -> None:

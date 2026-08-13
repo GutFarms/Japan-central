@@ -28,6 +28,10 @@ def main() -> None:
                 "spanish": e["spanish"],
                 "pos": e.get("pos", ""),
                 "attested": bool(e.get("attested")),
+                "confidence": e.get("confidence")
+                or ("high" if e.get("attested") else "medium"),
+                "source": e.get("source"),
+                "accuracy_note": e.get("accuracy_note"),
                 "definition_en": e.get("definition_en", ""),
                 "definition_es": e.get("definition_es", ""),
                 "fun_fact": e.get("fun_fact", ""),
@@ -42,11 +46,20 @@ def main() -> None:
     patterns_json = json.dumps(patterns, ensure_ascii=False)
     learner_json = json.dumps(learner, ensure_ascii=False)
     overview = json.dumps(grammar.get("sentence_structure", {}).get("overview", {}), ensure_ascii=False)
+    accuracy_banner = json.dumps(
+        {
+            "version": data.get("meta", {}).get("version"),
+            "disclaimer": data.get("meta", {}).get("disclaimer")
+            or "Prefer colonial anchors; Neo-Taíno is labeled.",
+        },
+        ensure_ascii=False,
+    )
     html = (
         HTML_TEMPLATE.replace("__LEXICON_JSON__", payload)
         .replace("__PATTERNS_JSON__", patterns_json)
         .replace("__LEARNER_JSON__", learner_json)
         .replace("__OVERVIEW_JSON__", overview)
+        .replace("__ACCURACY_JSON__", accuracy_banner)
     )
     OUT_DIR.mkdir(parents=True, exist_ok=True)
     OUT_HTML.write_text(html, encoding="utf-8")
@@ -136,6 +149,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
   <div class="wrap">
     <h1>BORIKÉN</h1>
     <p class="sub">Offline learner — rebuild the language of the native land.</p>
+    <p class="muted" id="accuracyBanner"></p>
     <div class="hud">
       <div class="chip">XP <strong id="xp">0</strong></div>
       <div class="chip">Streak <strong id="streak">1</strong></div>
@@ -163,7 +177,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
     </div>
 
     <footer>
-      Attested forms preferred. Reconstructions are labeled. Made for iOS &amp; desktop download.
+      Attested colonial forms preferred. Revival / uncertain etymologies stay labeled. See ACCURACY.md.
     </footer>
   </div>
 
@@ -172,6 +186,7 @@ const LEXICON = __LEXICON_JSON__;
 const PATTERNS = __PATTERNS_JSON__;
 const LEARNER = __LEARNER_JSON__;
 const OVERVIEW = __OVERVIEW_JSON__;
+const ACCURACY = __ACCURACY_JSON__;
 const state = {
   xp: Number(localStorage.getItem("boriken_xp") || 0),
   streak: Number(localStorage.getItem("boriken_streak") || 1),
@@ -192,6 +207,10 @@ function save() {
   document.getElementById("level").textContent = titles[Math.min(level,5)] || "Island Elder";
 }
 save();
+const banner = document.getElementById("accuracyBanner");
+if (banner && ACCURACY) {
+  banner.textContent = `Accuracy ${ACCURACY.version || ""} — ${ACCURACY.disclaimer || ""}`;
+}
 
 function stage(html) {
   document.getElementById("searchPanel").classList.add("hidden");
@@ -211,11 +230,18 @@ function pick(n=1, filter=null) {
 }
 
 function wordCard(w) {
+  const label = w.attested
+    ? "· attested"
+    : `· reconstructed${w.confidence ? " · " + w.confidence : ""}`;
+  const note = w.accuracy_note
+    ? `<p class="muted">Accuracy: ${w.accuracy_note}</p>`
+    : "";
   return `<div class="boriken">${w.boriken}</div>
     <div>${w.english} · <span class="muted">${w.spanish}</span></div>
     <p>${w.definition_en || ""}</p>
     <p class="gold">✦ ${w.fun_fact || ""}</p>
-    <p class="muted">Example: ${w.example || w.boriken} ${w.attested ? "· attested" : "· reconstructed"}</p>`;
+    <p class="muted">Example: ${w.example || w.boriken} ${label}</p>
+    ${note}`;
 }
 
 function wordOfDay() {

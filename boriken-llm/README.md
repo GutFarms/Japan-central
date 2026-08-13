@@ -15,6 +15,8 @@ A language reconstruction **LLM + API + iOS client** for rebuilding **Borikén T
 
 This is a **community language-rebuilding toolkit**. Attested colonial forms are preferred and labeled `attested`. Neo-Taíno / comparative reconstructions are labeled clearly so the app never pretends certainty.
 
+**Accuracy:** see **[ACCURACY.md](ACCURACY.md)** and `GET /v1/accuracy`. Classic Taíno is sparsely documented; learner SVO and many everyday words are Neo-Taíno unless marked attested.
+
 # Download BorikenLLM
 
 See **[DOWNLOAD.md](DOWNLOAD.md)** for packages:
@@ -111,12 +113,12 @@ For production iOS, keep the deterministic engine as source of truth for flashca
 ## Grammar anchors taught by the model
 - `da-` my/I · `wa-` our/we · `li-` his · `to-` her
 - `ma-` without/not · `ka-` having/with
-- Default learner **sentence structure = SVO** (`da-sá ni` = I drink water)
+- Default learner **sentence structure = SVO** (`da-sá ni` = I drink water) — pedagogical Neo-Taíno, not proven classical order
 - `taíno daka` — I am good / I am Taíno
 - `waibá` — let’s go
 - `wa-borikén` — our native land
 
-API: `GET /v1/sentences/structure`, `GET /v1/sentences/patterns`, `POST /v1/sentences/build`
+API: `GET /v1/sentences/structure`, `GET /v1/sentences/patterns`, `POST /v1/sentences/build`, `GET /v1/accuracy`
 
 ## Expanding the lexicon
 

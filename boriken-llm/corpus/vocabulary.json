@@ -4,9 +4,11 @@
     "iso": "tnq",
     "dialect": "Classic Taíno / Borikén reconstruction",
     "orthography": "modern regularized Latin (Granberry-style)",
-    "notes": "Entries marked attested=true are documented in colonial Spanish records or widely accepted loanwords. Entries marked attested=false are Neo-Taíno reconstructions using Ta-Arawakan comparative patterns (Lokono/Garifuna-informed), labeled for community language rebuilding—not classical certainty.",
-    "version": "0.2.0",
-    "has_definitions": true
+    "notes": "attested=true means documented in colonial Spanish records as Taíno/Antillean, or a widely accepted Taíno→Spanish loan (hamaca, canoa, huracán, etc.). attested=false covers Neo-Taíno/community revival forms, comparative reconstructions, disputed Caribbean Spanish etymologies, and ethnohistoric names that are not Taíno lexemes. Classic Taíno is extinct (ISO tnq); revival mixes ages and invents forms—see ACCURACY.md. Learner SVO is pedagogical Neo-Taíno, not proven classical word order.",
+    "version": "0.3.1",
+    "has_definitions": true,
+    "accuracy_audit": "2026-08",
+    "disclaimer": "This toolkit prefers colonial anchors and labels uncertainty. It is not a claim that reconstructed forms are Classical Taíno."
   },
   "entries": [
     {
@@ -84,7 +86,9 @@
       "definition_en": "A round thatched house—the classic Taíno family dwelling.",
       "definition_es": "Casa redonda de techo de paja—la vivienda familiar taína clásica.",
       "fun_fact": "Walk into a bohío and you're inside island architecture 101.",
-      "example": "da-bohío"
+      "example": "da-bohío",
+      "accuracy_note": "Ethnohistoric / colonial lexical item widely cited for Taíno culture; orthography regularized.",
+      "confidence": "high"
     },
     {
       "id": "canoa",
@@ -339,17 +343,22 @@
     {
       "id": "tiburon",
       "boriken": "tiburón",
-      "english": "shark",
-      "spanish": "tiburón",
+      "english": "shark (Caribbean Spanish; Taíno origin uncertain)",
+      "spanish": "tiburón (origen taíno incierto)",
       "pos": "noun",
-      "attested": true,
+      "attested": false,
       "tags": [
-        "animal"
+        "animal",
+        "accuracy_flag",
+        "etymology_uncertain"
       ],
-      "definition_en": "A noun meaning 'shark'. This form is attested in colonial records.",
-      "definition_es": "Sustantivo que significa 'tiburón'. Forma atestiguada en crónicas coloniales.",
-      "fun_fact": "Nature bingo: spot it, say it.",
-      "example": "da-tiburón"
+      "definition_en": "Shark (Caribbean Spanish tiburón; Taíno origin uncertain—low confidence).",
+      "definition_es": "Tiburón (español caribeño; origen taíno incierto—baja confianza).",
+      "fun_fact": "Useful island vocabulary—don't present it as a proven colonial Taíno citation.",
+      "example": "da-tiburón",
+      "source": "caribbean_spanish_uncertain",
+      "confidence": "low",
+      "accuracy_note": "Spanish tiburón 'shark'. Indigenous Antillean origin is sometimes claimed but not securely demonstrated as a Classic Taíno lexeme in this corpus."
     },
     {
       "id": "caiman",
@@ -484,7 +493,9 @@
       "definition_en": "A sacred figure or spirit presence—carved, kept, and honored in the home and ceremony.",
       "definition_es": "Figura o presencia sagrada—tallada, guardada y honrada en el hogar y la ceremonia.",
       "fun_fact": "Every family could keep semí that protected health, harvest, and journeys.",
-      "example": "da-semí"
+      "example": "da-semí",
+      "accuracy_note": "Ethnohistoric / colonial lexical item widely cited for Taíno culture; orthography regularized.",
+      "confidence": "high"
     },
     {
       "id": "atabey",
@@ -499,7 +510,9 @@
       "definition_en": "Mother spirit of fresh water, fertility, and the moon—source of life on the islands.",
       "definition_es": "Espíritu madre del agua dulce, la fertilidad y la luna—fuente de vida en las islas.",
       "fun_fact": "She is often honored as the feminine counterpart to Yokahú.",
-      "example": "atabey"
+      "example": "atabey",
+      "accuracy_note": "Ethnohistoric / colonial lexical item widely cited for Taíno culture; orthography regularized.",
+      "confidence": "high"
     },
     {
       "id": "yocahu",
@@ -514,7 +527,9 @@
       "definition_en": "Spirit associated with cassava and the sky—provider of staple food and life.",
       "definition_es": "Espíritu asociado a la yuca y el cielo—proveedor de alimento y vida.",
       "fun_fact": "When you eat kasabi, you're tasting a story older than the colony.",
-      "example": "yokahú"
+      "example": "yokahú",
+      "accuracy_note": "Ethnohistoric / colonial lexical item widely cited for Taíno culture; orthography regularized.",
+      "confidence": "high"
     },
     {
       "id": "guasabara",
@@ -559,7 +574,9 @@
       "definition_en": "A communal ceremony of song, dance, and storytelling that preserved history.",
       "definition_es": "Ceremonia comunal de canto, baile y relato que preservaba la historia.",
       "fun_fact": "Areytos were living libraries—history you could dance.",
-      "example": "da-areyto"
+      "example": "da-areyto",
+      "accuracy_note": "Ethnohistoric / colonial lexical item widely cited for Taíno culture; orthography regularized.",
+      "confidence": "high"
     },
     {
       "id": "batey",
@@ -575,7 +592,9 @@
       "definition_en": "The village plaza and ceremonial ball court—where community, sport, and ritual met.",
       "definition_es": "La plaza y cancha ceremonial del pueblo—donde se unían comunidad, deporte y rito.",
       "fun_fact": "Think town square + sacred arena in one word.",
-      "example": "da-batey"
+      "example": "da-batey",
+      "accuracy_note": "Ethnohistoric / colonial lexical item widely cited for Taíno culture; orthography regularized.",
+      "confidence": "high"
     },
     {
       "id": "guanin",
@@ -628,14 +647,19 @@
       "english": "sky; heaven",
       "spanish": "cielo",
       "pos": "noun",
-      "attested": true,
+      "attested": false,
       "tags": [
-        "nature"
+        "nature",
+        "accuracy_flag",
+        "community_revival"
       ],
-      "definition_en": "A noun meaning 'sky'. This form is attested in colonial records.",
-      "definition_es": "Sustantivo que significa 'cielo'. Forma atestiguada en crónicas coloniales.",
-      "fun_fact": "High-confidence classic—flashcard gold.",
-      "example": "da-turey"
+      "definition_en": "Sky or heaven in community Neo-Taíno materials (medium confidence).",
+      "definition_es": "Cielo en materiales neo-taínos comunitarios (confianza media).",
+      "fun_fact": "Use turey in poems and prayers—and keep the revival label visible.",
+      "example": "da-turey",
+      "source": "community_revival",
+      "confidence": "medium",
+      "accuracy_note": "Sky/heaven form common in revival materials; not a colonial-sentence anchor here."
     },
     {
       "id": "guey",
@@ -643,14 +667,19 @@
       "english": "sun",
       "spanish": "sol",
       "pos": "noun",
-      "attested": true,
+      "attested": false,
       "tags": [
-        "nature"
+        "nature",
+        "accuracy_flag",
+        "community_revival"
       ],
-      "definition_en": "A noun meaning 'sun'. This form is attested in colonial records.",
-      "definition_es": "Sustantivo que significa 'sol'. Forma atestiguada en crónicas coloniales.",
-      "fun_fact": "High-confidence classic—flashcard gold.",
-      "example": "da-wey"
+      "definition_en": "Sun in community Neo-Taíno (wey/guey). Medium confidence revival form.",
+      "definition_es": "Sol en neo-taíno comunitario (wey/guey). Forma de revival de confianza media.",
+      "fun_fact": "Taí wey ('good day') is a modern greeting built on this community form.",
+      "example": "da-wey",
+      "source": "community_revival",
+      "confidence": "medium",
+      "accuracy_note": "wey/guey 'sun' is frequent in Neo-Taíno greetings (e.g. taí wey) but is not itself one of the six colonial spoken sentence anchors."
     },
     {
       "id": "karaya",
@@ -674,14 +703,19 @@
       "english": "rain",
       "spanish": "lluvia",
       "pos": "noun",
-      "attested": true,
+      "attested": false,
       "tags": [
-        "nature"
+        "nature",
+        "accuracy_flag",
+        "community_revival"
       ],
-      "definition_en": "A noun meaning 'rain'. This form is attested in colonial records.",
-      "definition_es": "Sustantivo que significa 'lluvia'. Forma atestiguada en crónicas coloniales.",
-      "fun_fact": "High-confidence classic—flashcard gold.",
-      "example": "da-yukubiya"
+      "definition_en": "Rain in community Neo-Taíno usage (medium confidence).",
+      "definition_es": "Lluvia en uso neo-taíno comunitario (confianza media).",
+      "fun_fact": "Great weather vocabulary for learners—label it reconstructed.",
+      "example": "da-yukubiya",
+      "source": "community_revival",
+      "confidence": "medium",
+      "accuracy_note": "Rain gloss appears in community lists; treat as revival, not colonial certainty."
     },
     {
       "id": "bara",
@@ -689,14 +723,19 @@
       "english": "sea; ocean",
       "spanish": "mar",
       "pos": "noun",
-      "attested": true,
+      "attested": false,
       "tags": [
-        "nature"
+        "nature",
+        "accuracy_flag",
+        "community_revival"
       ],
-      "definition_en": "A noun meaning 'sea'. This form is attested in colonial records.",
-      "definition_es": "Sustantivo que significa 'mar'. Forma atestiguada en crónicas coloniales.",
-      "fun_fact": "High-confidence classic—flashcard gold.",
-      "example": "da-bara"
+      "definition_en": "Sea or ocean in community Neo-Taíno usage—medium confidence, not classical proof.",
+      "definition_es": "Mar u océano en uso neo-taíno comunitario: confianza media, no prueba clásica.",
+      "fun_fact": "Pair with kanowa (canoe)—a firmly attested loan—when talking about the sea.",
+      "example": "da-bara",
+      "source": "community_revival",
+      "confidence": "medium",
+      "accuracy_note": "Sea/ocean gloss circulates in community dictionaries; not anchored in the six colonial spoken sentences. Keep for learning; label as revival."
     },
     {
       "id": "ni",
@@ -704,14 +743,19 @@
       "english": "water",
       "spanish": "agua",
       "pos": "noun",
-      "attested": true,
+      "attested": false,
       "tags": [
-        "nature"
+        "nature",
+        "accuracy_flag",
+        "community_revival"
       ],
-      "definition_en": "A noun meaning 'water'. This form is attested in colonial records.",
-      "definition_es": "Sustantivo que significa 'agua'. Forma atestiguada en crónicas coloniales.",
-      "fun_fact": "High-confidence classic—flashcard gold.",
-      "example": "da-ni"
+      "definition_en": "Water (Neo-Taíno / community form). Used widely in modern Boriken learning materials; not a high-certainty Classic Taíno colonial citation in this toolkit.",
+      "definition_es": "Agua (forma neo-taína / comunitaria). Muy usada en materiales modernos de Boriken; no es una cita colonial clásica de alta certeza en este kit.",
+      "fun_fact": "Learners still practice ma-ni ('without water')—just remember the label is reconstructed.",
+      "example": "da-ni",
+      "source": "community_revival",
+      "confidence": "medium",
+      "accuracy_note": "Common in Neo-Taíno / community primers for 'water'. Not among the six best-attested colonial spoken sentences; treat as revival lexicon, not classical certainty."
     },
     {
       "id": "konuko",
@@ -761,18 +805,25 @@
     },
     {
       "id": "enriquillo",
-      "boriken": "enrikíyo",
-      "english": "Enriquillo (historical leader name form)",
-      "spanish": "Enriquillo",
+      "boriken": "Guarocuya",
+      "english": "Guarocuya (cacique; Spanish baptismal name Enriquillo)",
+      "spanish": "Guarocuya (cacique; nombre de bautismo español Enriquillo)",
       "pos": "proper_noun",
-      "attested": true,
+      "attested": false,
       "tags": [
-        "identity"
+        "identity",
+        "historical_note",
+        "not_taino_lexeme",
+        "accuracy_flag"
       ],
-      "definition_en": "A proper name for 'Enriquillo (historical leader name form)'. This form is attested in colonial records.",
-      "definition_es": "Nombre propio para 'Enriquillo'. Forma atestiguada en crónicas coloniales.",
-      "fun_fact": "High-confidence classic—flashcard gold.",
-      "example": "enrikíyo"
+      "definition_en": "Historical cacique of Hispaniola known in Spanish sources as Enriquillo (a baptismal name). His Indigenous name is often given as Guarocuya. This is ethnohistory, not a Taíno dictionary word.",
+      "definition_es": "Cacique histórico de La Española conocido en fuentes españolas como Enriquillo (nombre de bautismo). Su nombre indígena suele darse como Guarocuya. Es etnohistoria, no un lexema taíno de diccionario.",
+      "fun_fact": "Teaching tip: say Guarocuya for the person; never list Enriquillo as a Taíno stem.",
+      "example": "Guarocuya (Enriquillo)",
+      "source": "ethnohistoric_spanish_name",
+      "confidence": "medium",
+      "accuracy_note": "Enriquillo / enrikíyo is a Spanish baptismal name, not a Taíno lexeme. Later tradition often gives the Indigenous name Guarocuya. Do not teach 'enrikíyo' as a Boriken vocabulary word.",
+      "etymology": "Spanish Enrique + diminutive; Indigenous name traditionally Guarocuya"
     },
     {
       "id": "guarico",
@@ -1484,14 +1535,17 @@
       "english": "mother (alt. attested root in names)",
       "spanish": "madre",
       "pos": "noun",
-      "attested": true,
+      "attested": false,
       "tags": [
         "kinship"
       ],
       "definition_en": "A noun meaning 'mother (alt. attested root in names)'. This form is attested in colonial records.",
       "definition_es": "Sustantivo que significa 'madre'. Forma atestiguada en crónicas coloniales.",
       "fun_fact": "High-confidence classic—flashcard gold.",
-      "example": "da-toa"
+      "example": "da-toa",
+      "accuracy_note": "Mother root often cited from personal names / comparative notes; treat as medium unless citing a specific colonial passage.",
+      "confidence": "medium",
+      "source": "name_element_uncertain"
     },
     {
       "id": "one",
@@ -2055,17 +2109,23 @@
     {
       "id": "loro",
       "boriken": "loro",
-      "english": "parrot",
-      "spanish": "loro",
+      "english": "parrot (Spanish; not Taíno)",
+      "spanish": "loro (español; no taíno)",
       "pos": "noun",
-      "attested": true,
+      "attested": false,
       "tags": [
-        "animal"
+        "animal",
+        "accuracy_flag",
+        "etymology_uncertain",
+        "not_taino_lexeme"
       ],
-      "definition_en": "A noun meaning 'parrot'. This form is attested in colonial records.",
-      "definition_es": "Sustantivo que significa 'loro'. Forma atestiguada en crónicas coloniales.",
-      "fun_fact": "Nature bingo: spot it, say it.",
-      "example": "da-loro"
+      "definition_en": "Parrot (Spanish loro—not a Taíno word; kept only as regional vocabulary caution).",
+      "definition_es": "Loro (español—no es palabra taína; se conserva solo como aviso de vocabulario regional).",
+      "fun_fact": "If you need a bird word for drills, prefer clearly labeled reconstructed forms.",
+      "example": "da-loro",
+      "source": "caribbean_spanish_uncertain",
+      "confidence": "low",
+      "accuracy_note": "Spanish loro 'parrot' (ultimately Latin/Romance). Not a Taíno lexeme."
     },
     {
       "id": "mucaro",
@@ -2131,32 +2191,42 @@
     {
       "id": "mangles",
       "boriken": "manglar",
-      "english": "mangrove",
+      "english": "mangrove (Caribbean Spanish; origin uncertain)",
       "spanish": "manglar",
       "pos": "noun",
-      "attested": true,
+      "attested": false,
       "tags": [
-        "plant"
+        "plant",
+        "accuracy_flag",
+        "etymology_uncertain"
       ],
-      "definition_en": "A noun meaning 'mangrove'. This form is attested in colonial records.",
-      "definition_es": "Sustantivo que significa 'manglar'. Forma atestiguada en crónicas coloniales.",
-      "fun_fact": "High-confidence classic—flashcard gold.",
-      "example": "da-manglar"
+      "definition_en": "Mangrove (Caribbean Spanish manglar; Indigenous origin uncertain).",
+      "definition_es": "Manglar (español caribeño; origen indígena incierto).",
+      "fun_fact": "Coastal ecology word—keep the uncertain label on.",
+      "example": "da-manglar",
+      "source": "caribbean_spanish_uncertain",
+      "confidence": "low",
+      "accuracy_note": "Mangrove (mangle/manglar): Caribbean Spanish; Indigenous etymology uncertain."
     },
     {
       "id": "cimarron",
       "boriken": "simarón",
-      "english": "wild; runaway",
+      "english": "wild; runaway (etymology disputed)",
       "spanish": "cimarrón",
       "pos": "adjective",
-      "attested": true,
+      "attested": false,
       "tags": [
-        "society"
+        "society",
+        "accuracy_flag",
+        "etymology_uncertain"
       ],
-      "definition_en": "An adjective meaning 'wild'. This form is attested in colonial records.",
-      "definition_es": "Adjetivo que significa 'cimarrón'. Forma atestiguada en crónicas coloniales.",
-      "fun_fact": "High-confidence classic—flashcard gold.",
-      "example": "simarón"
+      "definition_en": "Wild / runaway (Spanish cimarrón; possible Taíno link disputed—low confidence).",
+      "definition_es": "Cimarrón / salvaje (vínculo taíno disputado—baja confianza).",
+      "fun_fact": "Historically powerful word in the Caribbean—etymology remains debated.",
+      "example": "simarón",
+      "source": "etymology_disputed",
+      "confidence": "low",
+      "accuracy_note": "Spanish cimarrón. Sometimes linked to a Taíno form; etymology is disputed. Do not present simarón as a secure Classic Taíno citation."
     },
     {
       "id": "xaguey",
@@ -2186,7 +2256,9 @@
       "definition_en": "A noun meaning 'sword (from Spanish espada)'. This form is attested in colonial records.",
       "definition_es": "Sustantivo que significa 'espada'. Forma atestiguada en crónicas coloniales.",
       "fun_fact": "High-confidence classic—flashcard gold.",
-      "example": "da-isúbara"
+      "example": "da-isúbara",
+      "accuracy_note": "Attested colonial-era adaptation of a Spanish loan into Taíno phonology (espada→isúbara, espejo→isíbuse).",
+      "confidence": "high"
     },
     {
       "id": "isibuse",
@@ -2201,7 +2273,9 @@
       "definition_en": "A noun meaning 'mirror (from Spanish espejo)'. This form is attested in colonial records.",
       "definition_es": "Sustantivo que significa 'espejo'. Forma atestiguada en crónicas coloniales.",
       "fun_fact": "High-confidence classic—flashcard gold.",
-      "example": "da-isíbuse"
+      "example": "da-isíbuse",
+      "accuracy_note": "Attested colonial-era adaptation of a Spanish loan into Taíno phonology (espada→isúbara, espejo→isíbuse).",
+      "confidence": "high"
     },
     {
       "id": "tanama",
@@ -2278,7 +2352,9 @@
       "definition_en": "A noun meaning 'shaman'. This form is attested in colonial records. It belongs to the spiritual and ceremonial vocabulary of the islands.",
       "definition_es": "Sustantivo que significa 'behíque'. Forma atestiguada en crónicas coloniales. It belongs to the spiritual and ceremonial vocabulary of the islands.",
       "fun_fact": "High-confidence classic—flashcard gold.",
-      "example": "da-behíke"
+      "example": "da-behíke",
+      "accuracy_note": "Ethnohistoric / colonial lexical item widely cited for Taíno culture; orthography regularized.",
+      "confidence": "high"
     },
     {
       "id": "caney",
@@ -2293,7 +2369,9 @@
       "definition_en": "A noun meaning 'rectangular chiefly house'. This form is attested in colonial records.",
       "definition_es": "Sustantivo que significa 'caney'. Forma atestiguada en crónicas coloniales.",
       "fun_fact": "High-confidence classic—flashcard gold.",
-      "example": "da-kaney"
+      "example": "da-kaney",
+      "accuracy_note": "Ethnohistoric / colonial lexical item widely cited for Taíno culture; orthography regularized.",
+      "confidence": "high"
     },
     {
       "id": "cobo",
@@ -2374,49 +2452,64 @@
     {
       "id": "quenepa",
       "boriken": "kenepa",
-      "english": "Spanish lime",
+      "english": "Spanish lime (Caribbean Spanish; Taíno link uncertain)",
       "spanish": "quenepa",
       "pos": "noun",
-      "attested": true,
+      "attested": false,
       "tags": [
-        "food"
+        "food",
+        "accuracy_flag",
+        "etymology_uncertain"
       ],
-      "definition_en": "A noun meaning 'Spanish lime'. This form is attested in colonial records.",
-      "definition_es": "Sustantivo que significa 'quenepa'. Forma atestiguada en crónicas coloniales.",
-      "fun_fact": "Flavor unlock: say it before your next bite.",
-      "example": "da-kenepa"
+      "definition_en": "Spanish lime / genip (Caribbean Spanish quenepa; Taíno link uncertain).",
+      "definition_es": "Quenepa (español caribeño; vínculo taíno incierto).",
+      "fun_fact": "Delicious island fruit—etymology still soft.",
+      "example": "da-kenepa",
+      "source": "caribbean_spanish_uncertain",
+      "confidence": "low",
+      "accuracy_note": "Quenepa/kenepa is Caribbean Spanish for Spanish lime; Taíno attribution uncertain."
     },
     {
       "id": "coqui",
       "boriken": "kokí",
-      "english": "coquí frog",
+      "english": "coquí frog (Puerto Rican Spanish; etymology uncertain)",
       "spanish": "coquí",
       "pos": "noun",
-      "attested": true,
+      "attested": false,
       "tags": [
         "animal",
-        "boriken"
+        "boriken",
+        "accuracy_flag",
+        "etymology_uncertain"
       ],
-      "definition_en": "The tiny frog whose night song is the soundtrack of Borikén.",
-      "definition_es": "La ranita cuyo canto nocturno es la banda sonora de Borikén.",
-      "fun_fact": "If you can hear 'ko-KEE', you're home.",
-      "example": "da-kokí"
+      "definition_en": "Coquí frog (Puerto Rican Spanish; Indigenous etymology uncertain in this corpus).",
+      "definition_es": "Rana coquí (español puertorriqueño; etimología indígena incierta en este corpus).",
+      "fun_fact": "Island mascot energy—still label etymology as uncertain here.",
+      "example": "da-kokí",
+      "source": "caribbean_spanish_uncertain",
+      "confidence": "low",
+      "accuracy_note": "Coquí is iconic Puerto Rican Spanish for the frog; often assumed Indigenous but not securely attested as Classic Taíno in colonial lexical lists used here."
     },
     {
       "id": "pitirre",
       "boriken": "pitirre",
-      "english": "gray kingbird",
+      "english": "gray kingbird (Puerto Rican Spanish; origin uncertain)",
       "spanish": "pitirre",
       "pos": "noun",
-      "attested": true,
+      "attested": false,
       "tags": [
         "animal",
-        "boriken"
+        "boriken",
+        "accuracy_flag",
+        "etymology_uncertain"
       ],
-      "definition_en": "A noun meaning 'gray kingbird'. This form is attested in colonial records.",
-      "definition_es": "Sustantivo que significa 'pitirre'. Forma atestiguada en crónicas coloniales.",
-      "fun_fact": "Nature bingo: spot it, say it.",
-      "example": "da-pitirre"
+      "definition_en": "Gray kingbird (Puerto Rican Spanish pitirre; Taíno origin not shown here).",
+      "definition_es": "Pitirre (español puertorriqueño; origen taíno no demostrado aquí).",
+      "fun_fact": "Fierce little bird—soft etymology label.",
+      "example": "da-pitirre",
+      "source": "caribbean_spanish_uncertain",
+      "confidence": "low",
+      "accuracy_note": "Pitirre (gray kingbird) is Puerto Rican Spanish; Taíno origin not demonstrated here."
     },
     {
       "id": "carey",
@@ -2569,7 +2662,9 @@
       "definition_en": "A set phrase meaning 'island of blood'. This form is attested in colonial records.",
       "definition_es": "Frase hecha que significa 'isla de sangre'. Forma atestiguada en crónicas coloniales.",
       "fun_fact": "High-confidence classic—flashcard gold.",
-      "example": "oubao moín"
+      "example": "oubao moín",
+      "accuracy_note": "Phrase reported in Spanish chronicles for Hispaniola naming traditions; gloss 'island of blood' follows common modern rendering and may be interpretive.",
+      "confidence": "medium"
     },
     {
       "id": "lord_earth_waters",

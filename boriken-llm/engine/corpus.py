@@ -50,19 +50,36 @@ class Lexeme:
     definition_es: str = ""
     fun_fact: str = ""
     example: str = ""
+    confidence_override: str | None = None
+    accuracy_note: str | None = None
 
     @property
     def confidence(self) -> str:
+        if self.confidence_override in {"high", "medium", "low"}:
+            return self.confidence_override
         if self.attested:
             return "high"
-        if self.source in {"neo_from_warike", "neo_from_waiba", "grammar_demo", "composition"}:
+        if self.source in {
+            "neo_from_warike",
+            "neo_from_waiba",
+            "grammar_demo",
+            "composition",
+            "community_revival",
+            "ethnohistoric_spanish_name",
+            "name_element_uncertain",
+        }:
             return "medium"
+        if self.source in {
+            "caribbean_spanish_uncertain",
+            "etymology_disputed",
+        }:
+            return "low"
         if self.source:
             return "medium"
         return "low"
 
     def to_dict(self) -> dict[str, Any]:
-        return {
+        payload = {
             "id": self.id,
             "boriken": self.boriken,
             "english": self.english,
@@ -78,6 +95,9 @@ class Lexeme:
             "fun_fact": self.fun_fact,
             "example": self.example or self.boriken,
         }
+        if self.accuracy_note:
+            payload["accuracy_note"] = self.accuracy_note
+        return payload
 
 
 class Corpus:
@@ -87,6 +107,9 @@ class Corpus:
         self.meta = raw.get("meta", {})
         self.entries: list[Lexeme] = []
         for item in raw["entries"]:
+            conf = item.get("confidence")
+            if conf not in {"high", "medium", "low"}:
+                conf = None
             self.entries.append(
                 Lexeme(
                     id=item["id"],
@@ -102,6 +125,8 @@ class Corpus:
                     definition_es=item.get("definition_es", ""),
                     fun_fact=item.get("fun_fact", ""),
                     example=item.get("example", item["boriken"]),
+                    confidence_override=conf,
+                    accuracy_note=item.get("accuracy_note"),
                 )
             )
         self.grammar = json.loads((self.root / "grammar.json").read_text(encoding="utf-8"))

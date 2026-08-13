@@ -2,7 +2,8 @@
   "meta": {
     "description": "Attested colonial sentences plus learner Neo-Taíno sentences labeled by structure pattern.",
     "source": "Colonial transcriptions; regularized after Granberry-style reconstructions",
-    "version": "0.3.0"
+    "version": "0.3.1",
+    "accuracy_note": "Only sentences with attested=true are colonial anchors. Learner sentences are pedagogical Neo-Taíno compositions—not Classical Taíno proof. See ACCURACY.md."
   },
   "sentences": [
     {

@@ -61,9 +61,9 @@ iwana :: iguana / iguana
 manatee = manatí
 manatí = manatí
 manatí :: manatee / manatí
-shark = tiburón
-tiburón = tiburón
-tiburón :: shark / tiburón
+shark (Caribbean Spanish; Taíno origin uncertain) = tiburón
+tiburón (origen taíno incierto) = tiburón
+tiburón :: shark (Caribbean Spanish; Taíno origin uncertain) / tiburón (origen taíno incierto)
 caiman; alligator = kaymán
 caimán = kaymán
 kaymán :: caiman; alligator / caimán
@@ -145,9 +145,9 @@ wayakán :: lignum vitae tree / guayacán
 mabi drink (tree bark beverage) = mabí
 mabí = mabí
 mabí :: mabi drink (tree bark beverage) / mabí
-Enriquillo (historical leader name form) = enrikíyo
-Enriquillo = enrikíyo
-enrikíyo :: Enriquillo (historical leader name form) / Enriquillo
+Guarocuya (cacique; Spanish baptismal name Enriquillo) = Guarocuya
+Guarocuya (cacique; nombre de bautismo español Enriquillo) = Guarocuya
+Guarocuya :: Guarocuya (cacique; Spanish baptismal name Enriquillo) / Guarocuya (cacique; nombre de bautismo español Enriquillo)
 come! = wariko
 ¡ven! = wariko
 wariko :: come! / ¡ven!
@@ -391,9 +391,9 @@ warawáo :: red-tailed hawk / guaraguao
 river crab = haíba
 jaiba = haíba
 haíba :: river crab / jaiba
-parrot = loro
-loro = loro
-loro :: parrot / loro
+parrot (Spanish; not Taíno) = loro
+loro (español; no taíno) = loro
+loro :: parrot (Spanish; not Taíno) / loro (español; no taíno)
 owl = múcaro
 múcaro = múcaro
 múcaro :: owl / múcaro
@@ -406,12 +406,12 @@ wanábana :: soursop / guanábana
 pumpkin; squash = auyama
 auyama = auyama
 auyama :: pumpkin; squash / auyama
-mangrove = manglar
+mangrove (Caribbean Spanish; origin uncertain) = manglar
 manglar = manglar
-manglar :: mangrove / manglar
-wild; runaway = simarón
+manglar :: mangrove (Caribbean Spanish; origin uncertain) / manglar
+wild; runaway (etymology disputed) = simarón
 cimarrón = simarón
-simarón :: wild; runaway / cimarrón
+simarón :: wild; runaway (etymology disputed) / cimarrón
 cave = shagüey
 cueva = shagüey
 shagüey :: cave / cueva
@@ -454,15 +454,15 @@ mamey :: mamey fruit / mamey
 sugar apple = anón
 anón = anón
 anón :: sugar apple / anón
-Spanish lime = kenepa
+Spanish lime (Caribbean Spanish; Taíno link uncertain) = kenepa
 quenepa = kenepa
-kenepa :: Spanish lime / quenepa
-coquí frog = kokí
+kenepa :: Spanish lime (Caribbean Spanish; Taíno link uncertain) / quenepa
+coquí frog (Puerto Rican Spanish; etymology uncertain) = kokí
 coquí = kokí
-kokí :: coquí frog / coquí
-gray kingbird = pitirre
+kokí :: coquí frog (Puerto Rican Spanish; etymology uncertain) / coquí
+gray kingbird (Puerto Rican Spanish; origin uncertain) = pitirre
 pitirre = pitirre
-pitirre :: gray kingbird / pitirre
+pitirre :: gray kingbird (Puerto Rican Spanish; origin uncertain) / pitirre
 sea turtle = karey
 carey = karey
 karey :: sea turtle / carey

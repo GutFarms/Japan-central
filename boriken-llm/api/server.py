@@ -23,7 +23,7 @@ from engine.tutor import TutorEngine  # noqa: E402
 app = FastAPI(
     title="BorikenLLM API",
     description="Fun Boriken language reconstruction & learning API for iOS",
-    version="0.3.0",
+    version="0.3.1",
 )
 app.add_middleware(
     CORSMiddleware,
@@ -97,9 +97,42 @@ def health() -> dict[str, Any]:
         "has_definitions": bool(getattr(corpus.entries[0], "definition_en", "")),
         "sentence_patterns": len(corpus.grammar.get("sentence_patterns", [])),
         "llm": llm.info(),
-        "version": "0.3.0",
+        "version": "0.3.1",
         "play": "/v1/fun/menu",
         "sentence_structure": "/v1/sentences/structure",
+        "accuracy": "/v1/accuracy",
+    }
+
+
+@app.get("/v1/accuracy")
+def accuracy_report() -> dict[str, Any]:
+    """Live attestation summary for clients (see ACCURACY.md)."""
+    attested = [e for e in corpus.entries if e.attested]
+    reconstructed = [e for e in corpus.entries if not e.attested]
+    flagged = [e.to_dict() for e in corpus.entries if "accuracy_flag" in e.tags]
+    by_conf = {"high": 0, "medium": 0, "low": 0}
+    for e in corpus.entries:
+        by_conf[e.confidence] = by_conf.get(e.confidence, 0) + 1
+    doc = (ROOT / "ACCURACY.md").read_text(encoding="utf-8") if (ROOT / "ACCURACY.md").exists() else ""
+    return {
+        "version": corpus.meta.get("version", "0.3.1"),
+        "accuracy_audit": corpus.meta.get("accuracy_audit"),
+        "disclaimer": corpus.meta.get("disclaimer")
+        or "Prefer colonial anchors; label Neo-Taíno and uncertain Caribbean Spanish clearly.",
+        "notes": corpus.meta.get("notes"),
+        "counts": {
+            "lexicon": len(corpus.entries),
+            "attested": len(attested),
+            "reconstructed_or_uncertain": len(reconstructed),
+            "accuracy_flagged": len(flagged),
+            "by_confidence": by_conf,
+            "colonial_sentences": len(corpus.sentences.get("sentences", [])),
+            "learner_sentences": len(corpus.sentences.get("learner_sentences", [])),
+        },
+        "flagged_ids": [e["id"] for e in flagged],
+        "flagged": flagged[:40],
+        "word_order_policy": corpus.grammar.get("meta", {}).get("word_order"),
+        "doc_excerpt": "\n".join(doc.splitlines()[:24]),
     }
 
 
