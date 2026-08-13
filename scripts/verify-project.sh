@@ -86,7 +86,7 @@ sums = Path("flash/downloads/SHA256SUMS.txt")
 if not sums.is_file():
     print("ERROR: missing flash/downloads/SHA256SUMS.txt", file=sys.stderr); ok = False
 else:
-    import hashlib, re
+    import hashlib
     text = sums.read_text()
     entries = {}
     for line in text.splitlines():
