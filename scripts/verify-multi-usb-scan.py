@@ -117,10 +117,13 @@ def main() -> int:
     # 2) Hold A open (linked COM6), still talk to B (second USB).
     # Keep reading A so the fake thread does not block on a full PTY buffer.
     stop = threading.Event()
+    a_lock = threading.Lock()
 
     def hold_a() -> None:
         while not stop.is_set():
-            drain(m1, 0.1)
+            with a_lock:
+                drain(m1, 0.05)
+            time.sleep(0.02)
 
     holder = threading.Thread(target=hold_a, daemon=True)
     holder.start()
@@ -132,8 +135,9 @@ def main() -> int:
         return 1
     print(f"ok · board B answers while A held open · {p2b}")
 
-    # 3) Re-ping A under hold — still alive.
-    p1b = wait_pong(m1)
+    # 3) Re-ping A under hold — still alive (serialize against the drain thread).
+    with a_lock:
+        p1b = wait_pong(m1)
     if not p1b or mac1 not in p1b:
         print(f"FAIL: board A lost while held ({p1b!r})", file=sys.stderr)
         return 1
