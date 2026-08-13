@@ -174,11 +174,31 @@ pub fn fetch_latest_firmware(
 
 fn raw_firmware_candidate_urls() -> Vec<String> {
     let mut out = Vec::new();
+    // Prefer commit-pinned raw for ~1MB bins — Contents API is flaky at the 1MB cap
+    // and a long timeout on a stuck GET looks like “Fetching…” forever.
     for p in [
         "flash/downloads/esp32-2432s028-sha256-miner-merged.bin",
+        "flash/downloads/esp32-2432s028-sha256-miner-d0-merged.bin",
         "flash/esp32-2432s028-sha256-miner-merged.bin",
     ] {
-        out.extend(repo_file_urls(p));
+        out.extend(repo_bin_urls(p));
+    }
+    out
+}
+
+/// Large binaries: commit-pinned raw first, then branch raw (skip Contents API).
+pub fn repo_bin_urls(path: &str) -> Vec<String> {
+    let path = path.trim_start_matches('/');
+    let mut out = Vec::new();
+    for r in REPO_REFS {
+        if let Some(sha) = resolve_ref_commit(r) {
+            out.push(format!(
+                "https://raw.githubusercontent.com/{REPO_OWNER}/{REPO_NAME}/{sha}/{path}"
+            ));
+        }
+        out.push(format!(
+            "https://raw.githubusercontent.com/{REPO_OWNER}/{REPO_NAME}/{r}/{path}"
+        ));
     }
     out
 }
@@ -338,7 +358,7 @@ fn extract_merged_from_zip(
     })
 }
 
-pub const COMPANION_UA: &str = "Njordr-seas-CYD-miner/0.8.56";
+pub const COMPANION_UA: &str = "Njordr-seas-CYD-miner/0.8.57";
 const ESPFLASH_VERSION: &str = "4.5.0";
 pub const REPO_OWNER: &str = "GutFarms";
 pub const REPO_NAME: &str = "Japan-central";
@@ -609,9 +629,11 @@ fn find_release_firmware_url() -> Result<(String, String), String> {
 }
 
 fn download_to(url: &str, dest: &Path, progress: &dyn Fn(String)) -> Result<(), String> {
+    // Keep read timeout modest so a dead mirror fails fast and the next URL is tried.
+    // Streaming downloads reset the idle timer on each chunk, so ~1MB bins still finish.
     let agent = ureq::AgentBuilder::new()
-        .timeout_connect(std::time::Duration::from_secs(15))
-        .timeout_read(std::time::Duration::from_secs(240))
+        .timeout_connect(std::time::Duration::from_secs(8))
+        .timeout_read(std::time::Duration::from_secs(45))
         .user_agent(COMPANION_UA)
         .build();
     let mut req = agent.get(url);
@@ -619,6 +641,7 @@ fn download_to(url: &str, dest: &Path, progress: &dyn Fn(String)) -> Result<(), 
     if url.contains("api.github.com/repos/") && url.contains("/contents/") {
         req = req.set("Accept", "application/vnd.github.raw");
     }
+    progress("Connecting…".into());
     let resp = req.call().map_err(|e| format!("http: {e}"))?;
     let status = resp.status();
     if !(200..300).contains(&status) {
@@ -629,6 +652,7 @@ fn download_to(url: &str, dest: &Path, progress: &dyn Fn(String)) -> Result<(), 
     let mut file = std::fs::File::create(&tmp).map_err(|e| format!("create: {e}"))?;
     let mut buf = [0u8; 64 * 1024];
     let mut total = 0u64;
+    let mut last_report = 0u64;
     loop {
         let n = std::io::Read::read(&mut reader, &mut buf).map_err(|e| format!("read: {e}"))?;
         if n == 0 {
@@ -636,11 +660,16 @@ fn download_to(url: &str, dest: &Path, progress: &dyn Fn(String)) -> Result<(), 
         }
         std::io::Write::write_all(&mut file, &buf[..n]).map_err(|e| format!("write: {e}"))?;
         total += n as u64;
-        if total % (512 * 1024) < n as u64 {
+        if total.saturating_sub(last_report) >= 128 * 1024 {
+            last_report = total;
             progress(format!("Downloaded {} KB…", total / 1024));
         }
     }
     drop(file);
+    if total < 1024 {
+        let _ = std::fs::remove_file(&tmp);
+        return Err(format!("download too small ({total} bytes) from {url}"));
+    }
     std::fs::rename(&tmp, dest).map_err(|e| format!("rename: {e}"))?;
     progress(format!("Saved {} ({} KB)", dest.display(), total / 1024));
     Ok(())

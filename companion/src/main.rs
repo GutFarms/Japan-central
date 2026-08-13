@@ -551,6 +551,8 @@ struct CompanionApp {
     last_error: String,
     last_ok: String,
     cmd_tx: Sender<NetCmd>,
+    /// Clone for UI-side background work (fetch/update) that must not wait on mine_worker.
+    msg_tx: Sender<NetMsg>,
     msg_rx: Receiver<NetMsg>,
     last_poll: Instant,
     pulse: f32,
@@ -630,6 +632,7 @@ impl CompanionApp {
     fn new(storage: Option<&dyn eframe::Storage>) -> Self {
         let (cmd_tx, cmd_rx) = mpsc::channel::<NetCmd>();
         let (msg_tx, msg_rx) = mpsc::channel::<NetMsg>();
+        let msg_tx_ui = msg_tx.clone();
         thread::spawn(move || mine_worker(cmd_rx, msg_tx));
         let _ = cmd_tx.send(NetCmd::ListPorts);
 
@@ -702,6 +705,7 @@ impl CompanionApp {
             last_ok: "Connect USB-C, enter BTC address, Start mining. SHA-256 on board · pool on PC."
                 .into(),
             cmd_tx,
+            msg_tx: msg_tx_ui,
             msg_rx,
             last_poll: Instant::now() - Duration::from_secs(10),
             pulse: 0.0,
@@ -781,8 +785,8 @@ impl CompanionApp {
             LogKind::Info,
             format!("Njörðr seas CYD miner {} ready", running_version()),
         );
-        // Soft check for a newer Companion build (non-blocking).
-        let _ = app.cmd_tx.send(NetCmd::CheckAppUpdate);
+        // Soft check for a newer Companion build — never queue behind USB/bench.
+        app.spawn_app_update_check();
         if let Some(fw) = &app.firmware {
             app.push_log(
                 LogKind::Info,
@@ -1456,7 +1460,30 @@ impl CompanionApp {
         self.fetch_busy = true;
         self.update_status = "Fetching latest board firmware…".into();
         self.push_log(LogKind::Info, "Fetching latest board firmware…".into());
-        let _ = self.cmd_tx.send(NetCmd::FetchFirmware);
+        let tx = self.msg_tx.clone();
+        thread::spawn(move || {
+            let progress = {
+                let tx = tx.clone();
+                move |line: String| {
+                    let _ = tx.send(NetMsg::FlashProgress(line.clone()));
+                    log_msg(&tx, LogKind::Info, line);
+                }
+            };
+            let result = fetch_latest_firmware(&progress);
+            let _ = tx.send(NetMsg::FirmwareFetched(result));
+        });
+    }
+
+    fn spawn_app_update_check(&mut self) {
+        let tx = self.msg_tx.clone();
+        thread::spawn(move || {
+            let progress = {
+                let tx = tx.clone();
+                move |line: String| log_msg(&tx, LogKind::Info, line)
+            };
+            let result = check_app_update(&progress);
+            let _ = tx.send(NetMsg::AppUpdate(result));
+        });
     }
 
     fn start_app_update_check(&mut self) {
@@ -1466,7 +1493,7 @@ impl CompanionApp {
         self.app_update_busy = true;
         self.update_status = "Checking for Companion updates…".into();
         self.push_log(LogKind::Info, "Checking for Companion updates…".into());
-        let _ = self.cmd_tx.send(NetCmd::CheckAppUpdate);
+        self.spawn_app_update_check();
     }
 
     fn start_app_update(&mut self) {
@@ -1480,7 +1507,18 @@ impl CompanionApp {
         self.update_status = format!("Updating Companion {}…", running_version());
         self.last_ok = self.update_status.clone();
         self.push_log(LogKind::Info, self.update_status.clone());
-        let _ = self.cmd_tx.send(NetCmd::UpdateApp);
+        let tx = self.msg_tx.clone();
+        thread::spawn(move || {
+            let progress = {
+                let tx = tx.clone();
+                move |line: String| {
+                    let _ = tx.send(NetMsg::FlashProgress(line.clone()));
+                    log_msg(&tx, LogKind::Info, line);
+                }
+            };
+            let result = update_companion_app(&progress);
+            let _ = tx.send(NetMsg::AppUpdate(result));
+        });
     }
 
     fn begin_board_update(&mut self) {
@@ -5658,39 +5696,14 @@ fn mine_worker(cmd_rx: Receiver<NetCmd>, msg_tx: Sender<NetMsg>) {
                         let _ = msg_tx.send(NetMsg::Action(Err("USB not open".into())));
                     }
                 }
-                NetCmd::FetchFirmware => {
-                    // HTTP must not block USB / stratum — run off the mine worker.
-                    let tx = msg_tx.clone();
-                    thread::spawn(move || {
-                        let progress = {
-                            let tx = tx.clone();
-                            move |line: String| log_msg(&tx, LogKind::Info, line)
-                        };
-                        let result = fetch_latest_firmware(&progress);
-                        let _ = tx.send(NetMsg::FirmwareFetched(result));
-                    });
-                }
-                NetCmd::CheckAppUpdate => {
-                    let tx = msg_tx.clone();
-                    thread::spawn(move || {
-                        let progress = {
-                            let tx = tx.clone();
-                            move |line: String| log_msg(&tx, LogKind::Info, line)
-                        };
-                        let result = check_app_update(&progress);
-                        let _ = tx.send(NetMsg::AppUpdate(result));
-                    });
-                }
-                NetCmd::UpdateApp => {
-                    let tx = msg_tx.clone();
-                    thread::spawn(move || {
-                        let progress = {
-                            let tx = tx.clone();
-                            move |line: String| log_msg(&tx, LogKind::Info, line)
-                        };
-                        let result = update_companion_app(&progress);
-                        let _ = tx.send(NetMsg::AppUpdate(result));
-                    });
+                // FetchFirmware / CheckAppUpdate / UpdateApp spawn from the UI
+                // thread (msg_tx) so they never sit behind USB auto-bench.
+                NetCmd::FetchFirmware | NetCmd::CheckAppUpdate | NetCmd::UpdateApp => {
+                    log_msg(
+                        &msg_tx,
+                        LogKind::Warn,
+                        "Ignoring stale update cmd on mine-worker (use UI spawn path)",
+                    );
                 }
                 NetCmd::PullApiFeed(feed) => {
                     let outcome = pull_feed(&feed);
