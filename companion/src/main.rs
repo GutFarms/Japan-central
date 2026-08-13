@@ -7,6 +7,7 @@ mod api_feeds;
 mod app_update;
 mod flash_update;
 mod live_bar;
+mod monitor_api;
 mod stratum;
 mod workers;
 
@@ -14,6 +15,7 @@ use std::collections::VecDeque;
 use std::io::{Read, Write};
 use std::net::TcpStream;
 use std::sync::mpsc::{self, Receiver, Sender};
+use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -27,6 +29,10 @@ use flash_update::{
     update_needed, FirmwareImage,
 };
 use live_bar::{format_change, format_usd, LiveFeed};
+use monitor_api::{
+    new_shared as new_monitor_shared, publish as publish_monitor, start as start_monitor_api,
+    MonitorBoard, MonitorShared, MonitorSnapshot, MONITOR_PORT,
+};
 use stratum::{
     encode_job_cmd, encode_job_parts, expected_shares_per_hour, urlenc, ShareOutcome, StratumClient,
     WorkJob,
@@ -585,6 +591,9 @@ struct CompanionApp {
     worker_scan_busy: bool,
     lan: LanDiscovery,
     board_wifi: BoardWifiDiscovery,
+    /// Shared snapshot for the phone monitor HTTP API (:19285).
+    monitor: MonitorShared,
+    monitor_addr: String,
 }
 
 impl CompanionApp {
@@ -699,7 +708,23 @@ impl CompanionApp {
             worker_scan_busy: false,
             lan: LanDiscovery::start(),
             board_wifi: BoardWifiDiscovery::start(),
+            monitor: new_monitor_shared(),
+            monitor_addr: format!("0.0.0.0:{MONITOR_PORT}"),
         };
+        match start_monitor_api(Arc::clone(&app.monitor)) {
+            Ok(addr) => {
+                app.monitor_addr = addr.to_string();
+                app.push_log(
+                    LogKind::Info,
+                    format!(
+                        "Phone monitor API on http://<pc-lan-ip>:{MONITOR_PORT} (JSON /api/status)"
+                    ),
+                );
+            }
+            Err(e) => {
+                app.push_log(LogKind::Warn, format!("Phone monitor API: {e}"));
+            }
+        }
         app.push_log(
             LogKind::Info,
             format!("Njörðr seas CYD miner {} ready", running_version()),
@@ -723,6 +748,57 @@ impl CompanionApp {
             );
         }
         app
+    }
+
+    fn publish_phone_monitor(&self) {
+        let (acc, rej) = if self.stratum_live.authorized {
+            if self.session_started.is_some() {
+                (self.session_accepted, self.session_rejected)
+            } else {
+                (self.accepted, self.rejected)
+            }
+        } else {
+            (0, 0)
+        };
+        let boards: Vec<MonitorBoard> = self
+            .connected_workers
+            .iter()
+            .map(|w| MonitorBoard {
+                endpoint: w.endpoint.clone(),
+                mac: w.mac.clone(),
+                fw: w.fw.clone(),
+                hashrate_hs: w.hashrate_hs,
+                hashes: w.hashes,
+                mining: w.mining,
+            })
+            .collect();
+        let snap = MonitorSnapshot {
+            version: running_version().into(),
+            product: "Njörðr Seas' CYD miner".into(),
+            mining: self.mining,
+            usb_open: self.usb_open,
+            pool_phase: if self.stratum_live.phase.is_empty() {
+                self.pool_phase.clone()
+            } else {
+                self.stratum_live.phase.clone()
+            },
+            pool_authorized: self.stratum_live.authorized,
+            hashrate_hs: if self.displayed_khs > 0.5 {
+                self.displayed_khs as f64 * 1000.0
+            } else {
+                self.status.hashrate_hs
+            },
+            hashes: self.status.hashes,
+            accepted: acc,
+            rejected: rej,
+            boards,
+            host: local_host_hint(),
+            updated_ms: SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .map(|d| d.as_millis() as u64)
+                .unwrap_or(0),
+        };
+        publish_monitor(&self.monitor, snap);
     }
 
     fn board_khs(&self) -> f32 {
@@ -1591,6 +1667,35 @@ impl CompanionApp {
                         .font(mono_ui_font(11.0)),
                 );
             }
+        });
+
+        ui.add_space(14.0);
+        soft_panel(ui, "Phone monitor", |ui| {
+            ui.label(
+                RichText::new(format!(
+                    "iPhone / Android: open http://<this-pc-lan-ip>:{MONITOR_PORT} on the same Wi‑Fi, or use the Expo app in mobile/. Live JSON: /api/status"
+                ))
+                .color(C_MUTED)
+                .size(13.0),
+            );
+            ui.add_space(8.0);
+            ui.label(
+                RichText::new(format!(
+                    "API listening · {} · host {}",
+                    self.monitor_addr,
+                    local_host_hint()
+                ))
+                .color(C_LIME)
+                .font(mono_ui_font(11.0)),
+            );
+            ui.add_space(6.0);
+            ui.label(
+                RichText::new(
+                    "Tip: on the phone, enter this PC’s LAN IP (ipconfig / ifconfig). Port is always 19285.",
+                )
+                .color(C_DIM)
+                .font(mono_ui_font(10.0)),
+            );
         });
 
         ui.add_space(14.0);
@@ -3418,6 +3523,7 @@ impl App for CompanionApp {
 
         // Keep animation continuous (~60 fps). 40 ms made looping motion feel stepped.
         ctx.request_repaint_after(Duration::from_millis(16));
+        self.publish_phone_monitor();
     }
 }
 
@@ -3425,6 +3531,10 @@ fn hostname_fallback() -> String {
     std::env::var("COMPUTERNAME")
         .or_else(|_| std::env::var("HOSTNAME"))
         .unwrap_or_else(|_| "cyd-pc".into())
+}
+
+fn local_host_hint() -> String {
+    hostname_fallback()
 }
 
 fn trunc(s: &str, n: usize) -> String {

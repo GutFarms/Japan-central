@@ -1,0 +1,36 @@
+{
+  "expo": {
+    "name": "Njörðr Seas' Monitor",
+    "slug": "njordr-seas-cyd-monitor",
+    "version": "0.8.50",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "userInterfaceStyle": "dark",
+    "scheme": "njordrseas",
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "com.njordrseas.cydmonitor",
+      "infoPlist": {
+        "NSLocalNetworkUsageDescription": "Find the Njörðr Seas' Companion PC on your Wi‑Fi to show miner status.",
+        "NSAppTransportSecurity": {
+          "NSAllowsLocalNetworking": true,
+          "NSAllowsArbitraryLoads": true
+        }
+      }
+    },
+    "android": {
+      "package": "com.njordrseas.cydmonitor",
+      "usesCleartextTraffic": true,
+      "adaptiveIcon": {
+        "backgroundColor": "#020A16",
+        "foregroundImage": "./assets/android-icon-foreground.png",
+        "backgroundImage": "./assets/android-icon-background.png",
+        "monochromeImage": "./assets/android-icon-monochrome.png"
+      },
+      "predictiveBackGestureEnabled": false
+    },
+    "web": {
+      "favicon": "./assets/favicon.png"
+    }
+  }
+}

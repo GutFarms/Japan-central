@@ -20,5 +20,9 @@
 # API feed File downloads (runtime)
 ApiDownloads/
 **/ApiDownloads/
+# Expo / mobile
+mobile/node_modules/
+mobile/.expo/
+mobile/dist/
 hardware/esp32-asic-controller/firmware-stub/target/
 packaging/cyd-miner-build.nsi
