@@ -2663,7 +2663,7 @@ impl App for CompanionApp {
         }
 
         if let Some(step) = self.wizard_step {
-            egui::Window::new("Welcome · CYD setup")
+            egui::Window::new("Welcome · Njörðr seas setup")
                 .collapsible(false)
                 .resizable(false)
                 .anchor(egui::Align2::CENTER_CENTER, [0.0, -20.0])
