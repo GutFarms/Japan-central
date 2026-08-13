@@ -77,6 +77,8 @@ static void refreshLabels() {
   g_labelsReady = true;
 }
 
+static void syncMinePriorities();
+
 // Classic ESP32 SHA-256 mining ceiling is ~0.5–1 MH/s in ideal conditions.
 // Anything far above that is a measurement bug (never a real sustained rate).
 static constexpr float kMaxPlausibleHs = 2000000.0f;
@@ -171,6 +173,7 @@ static void onJob(const UsbJob& job) {
   g_minerB.setJob(job.header, job.target, start ^ 0x80000000u);
   g_jobLoaded = true;
   g_mining = true;
+  syncMinePriorities();
   refreshLabels();
   // Do NOT reset the hashrate sample window here. Faster pool notifies (0.8.26+)
   // were restarting the ≥1–2s window every job so the rate never matured and
@@ -185,6 +188,7 @@ static void onStop() {
   g_jobLoaded = false;
   g_mining = false;
   g_hashrate = 0;
+  syncMinePriorities();
   refreshLabels();
 }
 
@@ -212,9 +216,10 @@ static void noteShare(uint32_t nonce) {
 }
 
 static void serviceCompanion() {
-  // Snapshot ~4 Hz when Companion is polling — less stale hashrate/nonce.
+  // Snapshot less often while hashing hard — USB/status must not starve mineB.
   uint32_t now = millis();
-  if (now - g_lastSnapMs >= 220) {
+  const uint32_t snapMs = g_mining ? 450u : 220u;
+  if (now - g_lastSnapMs >= snapMs) {
     fillSnap();
     g_lastSnapMs = now;
   }
@@ -234,6 +239,18 @@ static void serviceCompanion() {
     g_sharePending = false;
     portEXIT_CRITICAL(&g_mux);
     g_cmp.emitShare(s);
+  }
+}
+
+static void syncMinePriorities() {
+  if (!g_mineTaskB || !g_usbTask) return;
+  if (g_mining && g_jobLoaded) {
+    // Prefer SW assist over USB polling while hashing toward ~1 MH/s.
+    vTaskPrioritySet(g_mineTaskB, 4);
+    vTaskPrioritySet(g_usbTask, 2);
+  } else {
+    vTaskPrioritySet(g_usbTask, 3);
+    vTaskPrioritySet(g_mineTaskB, 2);
   }
 }
 
@@ -260,14 +277,14 @@ static void mineTaskA(void*) {
     }
     if (g_hwSha) {
       // Big IRAM batches. Delay rarely — TWDT only needs idle every ~few seconds.
-      mineLane(g_minerA, 1, 49152);
-      if ((++loops & 31u) == 0u) {
+      mineLane(g_minerA, 1, 65536);
+      if ((++loops & 127u) == 0u) {
         vTaskDelay(1);
         esp_task_wdt_reset();
       }
     } else {
-      mineLane(g_minerA, 2, 8192);
-      if ((++loops & 15u) == 0u) {
+      mineLane(g_minerA, 2, 12288);
+      if ((++loops & 31u) == 0u) {
         vTaskDelay(1);
         esp_task_wdt_reset();
       }
@@ -277,7 +294,7 @@ static void mineTaskA(void*) {
 
 // Core-0 SW assist — dedicated task so LCD/Arduino loop cannot starve hashing.
 // vTaskDelay is required (taskYIELD never runs idle / TWDT), but only every
-// ~32 batches so assist H/s stays close to early peak speeds.
+// many batches so assist H/s stays close to peak.
 static void mineTaskB(void*) {
   uint32_t loops = 0;
   for (;;) {
@@ -285,19 +302,21 @@ static void mineTaskB(void*) {
       vTaskDelay(pdMS_TO_TICKS(2));
       continue;
     }
-    mineLane(g_minerB, 1, g_hwSha ? 6144 : 2048);
-    if ((++loops & 63u) == 0u) {
+    mineLane(g_minerB, 1, g_hwSha ? 12288 : 4096);
+    if ((++loops & 127u) == 0u) {
       vTaskDelay(1);
       esp_task_wdt_reset();
     }
   }
 }
 
-// USB — snappy RX drain; short quiet delay still yields to mineB.
+// USB — yield harder to mineB while hashing; stay snappy when Companion is talking.
 static void usbTask(void*) {
   for (;;) {
     serviceCompanion();
-    vTaskDelay(pdMS_TO_TICKS(Serial.available() > 0 ? 1 : 3));
+    const bool talk = Serial.available() > 0;
+    const uint32_t ms = talk ? 1u : (g_mining ? 10u : 3u);
+    vTaskDelay(pdMS_TO_TICKS(ms));
     esp_task_wdt_reset();
   }
 }
@@ -392,6 +411,8 @@ void setup() {
 }
 
 void loop() {
+  syncMinePriorities();
+
   // Idle: static wait screen (no animated bars).
   if (!g_jobLoaded) {
     uint32_t now = millis();
@@ -403,7 +424,17 @@ void loop() {
     return;
   }
 
-  // Mining: rare static LCD — hashing lives in mineTaskA/B.
+  // Mining: skip LCD SPI entirely — TFT traffic crushed core-1 H/s.
+  // Paint once when a job arms, then leave the panel alone until stop.
+  if (g_mining) {
+    if (!g_ui.miningChromeDrawn()) {
+      fillSnap();
+      g_ui.showMining(g_cfg, g_snap, true);
+    }
+    delay(100);
+    return;
+  }
+
   uint32_t now = millis();
   if (now - g_lastPaint >= 2000) {
     fillSnap();

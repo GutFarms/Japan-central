@@ -35,13 +35,13 @@ void DisplayUi::showSplash() {
 
   tft_.setTextDatum(TL_DATUM);
   tft_.setTextColor(cLime_, cBg_);
-  tft_.drawString("CYD", 24, 48, 4);
+  tft_.drawString("Njordr", 24, 48, 4);
   tft_.setTextColor(cMuted_, cBg_);
-  tft_.drawString("Companion", 24, 100, 2);
+  tft_.drawString("seas CYD miner", 24, 100, 2);
   tft_.setTextColor(cText_, cBg_);
   tft_.drawString("SHA-256", 24, 132, 4);
   tft_.setTextColor(cMuted_, cBg_);
-  tft_.drawString("USB miner · hash focus", 24, 188, 2);
+  tft_.drawString("USB miner · ~1020 kH/s target", 24, 188, 2);
 }
 
 void DisplayUi::drawWaitAnim(uint8_t /*frame*/) {
@@ -60,13 +60,13 @@ void DisplayUi::showWaitingCompanion() {
 
   tft_.setTextDatum(TL_DATUM);
   tft_.setTextColor(cLime_, cBg_);
-  tft_.drawString("CYD", 24, 20, 4);
+  tft_.drawString("Njordr", 24, 20, 4);
   tft_.setTextColor(cMuted_, cBg_);
-  tft_.drawString("Companion", 24, 68, 2);
+  tft_.drawString("seas CYD miner", 24, 68, 2);
   tft_.setTextColor(cText_, cBg_);
   tft_.drawString("Waiting for USB", 24, 100, 2);
   tft_.setTextColor(cMuted_, cBg_);
-  tft_.drawString("Open Companion · Connect", 24, 132, 2);
+  tft_.drawString("Open app · Connect", 24, 132, 2);
   tft_.drawString("Board hashes only", 24, 156, 2);
   lastAnim_ = 0xFE;
 }
@@ -82,9 +82,9 @@ void DisplayUi::drawMiningChrome() {
 
   tft_.setTextDatum(TL_DATUM);
   tft_.setTextColor(cLime_, cBg_);
-  tft_.drawString("CYD", 24, 12, 2);
+  tft_.drawString("Njordr", 24, 12, 2);
   tft_.setTextColor(cMuted_, cBg_);
-  tft_.drawString("hash focus · SHA-256", 70, 16, 1);
+  tft_.drawString("seas · SHA-256", 78, 16, 1);
 
   tft_.setTextColor(cMuted_, cBg_);
   tft_.drawString("ACCEPT", 24, 150, 1);
@@ -224,7 +224,7 @@ void DisplayUi::showMessage(const char* title, const char* detail) {
   tft_.fillRect(0, 24, 6, 192, cLime_);
   tft_.setTextDatum(TL_DATUM);
   tft_.setTextColor(cLime_, cBg_);
-  tft_.drawString("CYD", 24, 48, 4);
+  tft_.drawString("Njordr", 24, 48, 4);
   tft_.setTextColor(cText_, cBg_);
   tft_.drawString(title, 24, 110, 2);
   tft_.setTextColor(cMuted_, cBg_);

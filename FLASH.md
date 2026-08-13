@@ -26,4 +26,4 @@
 
 Hold **BOOT** + **RESET** if the port will not enter download mode. Install CH340 drivers on Windows if needed.
 
-After flash, power on **without** holding BOOT. Mine with **CYD Companion** over USB (Bitcoin SHA-256).
+After flash, power on **without** holding BOOT. Mine with **Njörðr seas CYD miner** over USB (Bitcoin SHA-256).

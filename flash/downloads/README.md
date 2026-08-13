@@ -1,4 +1,4 @@
-# CYD Companion downloads (`0.8.35`)
+# Njörðr seas CYD miner downloads (`0.8.36`)
 
 | File | What it is |
 |------|------------|

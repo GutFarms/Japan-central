@@ -11,6 +11,7 @@ class DisplayUi {
   void showWaitingCompanion();
   void showMining(const AppConfig& cfg, const MinerSnapshot& snap, bool forceFull = false);
   void showMessage(const char* title, const char* detail);
+  bool miningChromeDrawn() const { return miningDrawn_; }
 
  private:
   TFT_eSPI tft_;

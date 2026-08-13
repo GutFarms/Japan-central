@@ -1,4 +1,4 @@
-CYD Companion — USB SHA-256 Bitcoin miner (app-only notes)
+Njörðr seas CYD miner — USB SHA-256 Bitcoin miner (app-only notes)
 ==========================================================
 
 Prefer the full kit installer when possible:

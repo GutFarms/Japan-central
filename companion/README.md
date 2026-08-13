@@ -1,4 +1,4 @@
-# CYD Companion
+# Njörðr seas CYD miner
 
 USB SHA-256 Bitcoin mining control for the ESP32-2432S028.
 

@@ -1,7 +1,7 @@
 CYD Miner Kit
 =============
 
-This installer provides the CYD Companion app and ESP32-2432S028 firmware
+This installer provides the Njörðr seas CYD miner app and ESP32-2432S028 firmware
 for USB Bitcoin SHA-256 mining. Pool traffic runs on your PC; the board
 only hashes work received over USB-C.
 

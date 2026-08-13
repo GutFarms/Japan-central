@@ -20,8 +20,8 @@ constexpr esp_sha_type kSha = SHA2_256;
 
 // SHA-256 block is typically done well under this many CPU cycles @ 240 MHz.
 // Pace with ccount so we don't hammer DPORT busy reads.
-// Tight pace — SHA block finishes well under this @ 240 MHz; lower = more H/s.
-constexpr uint32_t kShaPaceCycles = 48;
+// Tuned for ~1 MH/s class HW lane — lower pace = less idle wait before busy poll.
+constexpr uint32_t kShaPaceCycles = 28;
 
 IRAM_ATTR inline uint32_t ccount() { return esp_cpu_get_ccount(); }
 

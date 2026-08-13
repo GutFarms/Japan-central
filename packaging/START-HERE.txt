@@ -7,7 +7,7 @@ USB Bitcoin SHA-256 miner from a Windows PC.
 
 What is installed
 -----------------
-1. CYD Companion          — pool + USB mining control app
+1. Njörðr seas CYD miner          — pool + USB mining control app
 2. Firmware\*.merged.bin  — board firmware (flash @ 0x0)
 3. Tools\espflash.exe     — used by in-app "Update board"
 4. Flash-Firmware.bat     — optional flash helper
@@ -20,14 +20,14 @@ A) USB driver (if Windows does not see a COM port)
    - Install a CH340 driver if Device Manager shows an unknown device.
 
 B) Flash / update the board
-   Option 1 (recommended): open CYD Companion → select COM → Update board
+   Option 1 (recommended): open Njörðr seas CYD miner → select COM → Update board
    Option 2: run "Flash Firmware" (Start Menu) OR Flash-Firmware.bat
    If flash fails: hold BOOT, tap RESET, release BOOT, then retry.
    Image: esp32-2432s028-sha256-miner-merged.bin @ 0x0 (DIO, 4 MB, 40 MHz).
    After flash, power-cycle without holding BOOT.
 
 C) Mine
-   1. Run CYD Companion.
+   1. Run Njörðr seas CYD miner.
    2. Select the COM port → Connect.
    3. Stratum:  stratum+tcp://public-pool.io:21496
    4. Worker:   your Bitcoin address

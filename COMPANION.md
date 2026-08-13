@@ -1,4 +1,4 @@
-# CYD Companion (Windows)
+# Njörðr seas CYD miner (Windows)
 
 USB mining control for the ESP32-2432S028. The **PC** talks to a Bitcoin stratum pool; the **board** only SHA-256 hashes work received over USB-C.
 
@@ -6,7 +6,7 @@ USB mining control for the ESP32-2432S028. The **PC** talks to a Bitcoin stratum
 
 **[`CYD-Miner-Setup.exe`](flash/downloads/CYD-Miner-Setup.exe)** — Windows setup wizard with:
 
-- CYD Companion app
+- Njörðr seas CYD miner app
 - Firmware `esp32-2432s028-sha256-miner-merged.bin`
 - `Flash-Firmware.bat` helper + flash docs
 - Start Menu / Desktop shortcuts
@@ -32,7 +32,7 @@ See [`flash/downloads/README.md`](flash/downloads/README.md) for checksums.
 ## Use
 
 1. Run **CYD-Miner-Setup.exe** (or unpack the portable kit)
-2. Open **CYD Companion** → select COM → **Update board** (pushes bundled firmware over USB @ **0x0**)  
+2. Open **Njörðr seas CYD miner** → select COM → **Update board** (pushes bundled firmware over USB @ **0x0**)  
    — or run `Flash-Firmware.bat` once if you prefer
 3. **Connect** USB → enter stratum / **Bitcoin address** / password → **Start mining**
 
@@ -59,6 +59,7 @@ In **Settings**:
 - **0.8.22** — fix Windows self-update bat (retry while `.new` remains; do not relaunch a locked old exe)
 - **0.8.23** — fetch updates via GitHub API / commit-pinned raw (branch raw CDN can serve stale VERSION/bins)
 - **0.8.24** — fix Update board: espflash reject `ESPFLASH_SKIP_UPDATE_CHECK=1` (needs true/false); skip Windows Store python stubs
+- **0.8.36** — push board H/s toward ~1020 kH/s (real hashes); rename product to **Njörðr seas CYD miner**; skip LCD SPI while mining
 - **0.8.35** — brand logo replaces large CYD title; workers identified by board MAC; COM list shows every OS serial port with USB chip details
 - **0.8.34** — fix phantom hashrate when USB disconnected; drop dead boards; report real mining flag; OpenUsb no longer wipes multi-board fleet (SHA256d verify scripts PASS)
 - **0.8.33** — Njörðr theme (deep blues + lightning); hide Windows console windows for flash/update exes

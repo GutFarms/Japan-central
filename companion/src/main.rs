@@ -1,4 +1,4 @@
-//! CYD Companion — USB-only mining control.
+//! Njörðr seas CYD miner — USB-only mining control.
 //! PC owns stratum/WiFi; board only hashes work received over USB-C.
 
 #![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
@@ -46,7 +46,7 @@ fn main() -> eframe::Result<()> {
             .with_inner_size([1200.0, 820.0])
             .with_min_inner_size([1020.0, 700.0])
             .with_title(format!(
-                "CYD Companion {} · Njörðr · USB SHA-256 Miner",
+                "Njörðr seas CYD miner {}",
                 env!("CARGO_PKG_VERSION")
             )),
         multisampling: 8,
@@ -55,7 +55,7 @@ fn main() -> eframe::Result<()> {
         ..Default::default()
     };
     eframe::run_native(
-        "CYD Companion",
+        "Njörðr seas CYD miner",
         options,
         Box::new(|cc| {
             egui_extras::install_image_loaders(&cc.egui_ctx);
@@ -674,7 +674,7 @@ impl CompanionApp {
         };
         app.push_log(
             LogKind::Info,
-            format!("CYD Companion {} ready", running_version()),
+            format!("Njörðr seas CYD miner {} ready", running_version()),
         );
         // Soft check for a newer Companion build (non-blocking).
         let _ = app.cmd_tx.send(NetCmd::CheckAppUpdate);
@@ -1254,14 +1254,14 @@ impl CompanionApp {
                             ui.add_space(10.0);
                             ui.vertical(|ui| {
                                 ui.label(
-                                    RichText::new("Companion")
+                                    RichText::new("Njörðr seas")
                                         .color(C_LIME)
                                         .font(display_font(28.0)),
                                 );
                                 ui.label(
-                                    RichText::new("USB SHA-256 miner · Njörðr seas")
+                                    RichText::new("CYD miner · USB SHA-256 · ~1020 kH/s target")
                                         .color(C_TEXT)
-                                        .font(display_font(18.0)),
+                                        .font(display_font(16.0)),
                                 );
                             });
                         });
@@ -1315,7 +1315,7 @@ impl CompanionApp {
                         });
                         ui.label(
                             RichText::new(format!(
-                                "SHA path {} · realistic CYD rate is ~200–800 kH/s (ESP32 cannot do tens of MH/s)",
+                                "SHA path {} · target ~1020 kH/s (real board measure; ESP32 cannot do tens of MH/s)",
                                 self.sha_mode_label()
                             ))
                             .color(C_DIM)
@@ -2947,7 +2947,7 @@ impl App for CompanionApp {
                         ui.add_space(10.0);
                         ui.vertical(|ui| {
                             ui.label(
-                                RichText::new("Companion · Njörðr")
+                                RichText::new("Njörðr seas CYD miner")
                                     .color(C_MUTED)
                                     .font(mono_ui_font(12.0)),
                             );

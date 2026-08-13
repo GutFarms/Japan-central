@@ -32,6 +32,6 @@ Use SPIDownload, pick the merged.bin at offset 0x0, ESP32, DIO, 40 MHz, 4 MB.
 After flash
 -----------
 Unplug / replug (do not hold BOOT). LCD shows Waiting for USB.
-Then open CYD Companion → Connect → Start mining.
+Then open Njörðr seas CYD miner → Connect → Start mining.
 
 Checksums: Firmware\SHA256SUMS.txt
