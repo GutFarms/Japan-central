@@ -59,6 +59,7 @@ In **Settings**:
 - **0.8.22** — fix Windows self-update bat (retry while `.new` remains; do not relaunch a locked old exe)
 - **0.8.23** — fetch updates via GitHub API / commit-pinned raw (branch raw CDN can serve stale VERSION/bins)
 - **0.8.24** — fix Update board: espflash reject `ESPFLASH_SKIP_UPDATE_CHECK=1` (needs true/false); skip Windows Store python stubs
+- **0.8.86** — Remove connect auto-bench (USB/Wi‑Fi link only; use Bench boards manually)
 - **0.8.85** — Post-flash: no Close+Open bounce / skip auto-bench on verify; UNDER DEVELOPMENT behind UI and more faded
 - **0.8.84** — UX rework: brand-first Mine hero, Board & pool / telemetry / events only; tips+feeds+updates in Settings; lighter panels; UNDER DEVELOPMENT watermarks kept
 - **0.8.83** — Project-wide clean/debug: sync firmware tags, dynamic UA, COM10+ bat fix, Wi‑Fi docs, unified Desktop shortcut, verify embedded fw tag

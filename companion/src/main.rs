@@ -539,8 +539,6 @@ enum NetCmd {
     ListPorts,
     OpenUsb {
         name: String,
-        /// Skip connect auto-bench (post-flash verify must not thrash the COM port).
-        skip_bench: bool,
     },
     CloseUsb,
     StartMine {
@@ -1367,7 +1365,6 @@ impl CompanionApp {
         } else {
             let _ = self.cmd_tx.send(NetCmd::OpenUsb {
                 name: self.com_port.clone(),
-                skip_bench: false,
             });
             self.last_ok = format!("Opening {}…", self.com_port);
             self.push_log(LogKind::Usb, format!("Opening {}", self.com_port));
@@ -3558,7 +3555,7 @@ impl App for CompanionApp {
                     if low.contains("usb ← job") || low.contains("usb <- job") {
                         self.last_job_flow_at = Instant::now();
                     }
-                    // Manual Bench completion only (not "Bench running…" ack or connect auto-bench).
+                    // Manual Bench completion only (not the "Bench running…" ack).
                     if self.bench_busy
                         && (low.contains(" → ")
                             || low.contains(" -> ")
@@ -4032,7 +4029,6 @@ impl App for CompanionApp {
                     );
                     let _ = self.cmd_tx.send(NetCmd::OpenUsb {
                         name: port,
-                        skip_bench: true,
                     });
                 }
             } else {
@@ -5643,70 +5639,7 @@ fn mine_worker(cmd_rx: Receiver<NetCmd>, msg_tx: Sender<NetMsg>) {
         }
     }
 
-    /// Run D0 path auto-tune on a linked board. Caller owns timing (deferred, never on
-    /// the critical connect path — blocking here freezes USB + update cmds).
-    fn auto_bench_board(
-        board: &mut UsbBoard,
-        msg_tx: &Sender<NetMsg>,
-        resume_mining: bool,
-    ) -> String {
-        let _ = usb_cmd(&mut board.port, &mut board.rx, "cmp stop");
-        log_msg(
-            msg_tx,
-            LogKind::Usb,
-            format!(
-                "Auto-bench {} (HW / HW+ / HW/SW → lock best)…",
-                board.name
-            ),
-        );
-        // Short sample — firmware splits n across HW/HW+/HW/SW (~12k+ each).
-        let summary = match usb_cmd(&mut board.port, &mut board.rx, "cmp bench tune=1&n=36000") {
-            Ok(line) => {
-                if let Ok(st_line) = usb_cmd(&mut board.port, &mut board.rx, "cmp status") {
-                    if let Ok(st) = parse_cmp_status(&st_line) {
-                        board.hashrate_hs = st.hashrate_hs;
-                        board.hashes = st.hashes;
-                        board.mining = st.mining;
-                        let _ = msg_tx.send(NetMsg::Status(Ok(st)));
-                    }
-                }
-                log_msg(
-                    msg_tx,
-                    LogKind::Usb,
-                    format!("{} auto-bench OK: {line}", board.name),
-                );
-                line
-            }
-            Err(e) => {
-                log_msg(
-                    msg_tx,
-                    LogKind::Warn,
-                    format!("{} auto-bench failed (board stays linked): {e}", board.name),
-                );
-                format!("ERR {e}")
-            }
-        };
-        if resume_mining {
-            let mut legacy = board.legacy_job;
-            let _ = usb_cmd(
-                &mut board.port,
-                &mut board.rx,
-                "cmp stats accepted=0&rejected=0",
-            );
-            let _ = usb_push_job(
-                &mut board.port,
-                &mut board.rx,
-                &warmup_job(),
-                &mut legacy,
-                msg_tx,
-            );
-            board.legacy_job = legacy;
-            board.mining = true;
-        }
-        summary
-    }
-
-    /// Arm mining job on a newly linked board without waiting for auto-bench.
+    /// Arm mining job on a newly linked board.
     fn arm_mining_if_needed(
         board: &mut UsbBoard,
         msg_tx: &Sender<NetMsg>,
@@ -5733,7 +5666,6 @@ fn mine_worker(cmd_rx: Receiver<NetCmd>, msg_tx: Sender<NetMsg>) {
     }
 
     let mut boards: Vec<UsbBoard> = Vec::new();
-    let mut pending_auto_bench: VecDeque<String> = VecDeque::new();
     let mut stratum: Option<StratumClient> = None;
     let mut mining = false;
     let mut recent_jobs: VecDeque<WorkJob> = VecDeque::new();
@@ -5757,7 +5689,6 @@ fn mine_worker(cmd_rx: Receiver<NetCmd>, msg_tx: Sender<NetMsg>) {
             }
         };
 
-        let had_cmd = cmd.is_some();
         if let Some(cmd) = cmd {
             match cmd {
                 NetCmd::ListPorts => {
@@ -5842,7 +5773,7 @@ fn mine_worker(cmd_rx: Receiver<NetCmd>, msg_tx: Sender<NetMsg>) {
                         let _ = msg_tx_scan.send(NetMsg::WorkersFound(found));
                     });
                 }
-                NetCmd::OpenUsb { name, skip_bench } => {
+                NetCmd::OpenUsb { name } => {
                     // Do not wipe the whole fleet — reconnect/replace this port only
                     // so multi-board setups survive a primary Connect click.
                     if let Some(idx) = boards
@@ -5852,30 +5783,18 @@ fn mine_worker(cmd_rx: Receiver<NetCmd>, msg_tx: Sender<NetMsg>) {
                         let mut old = boards.remove(idx);
                         let _ = usb_cmd(&mut old.port, &mut old.rx, "cmp stop");
                     }
-                    // Drop any queued auto-bench for this port (reconnect).
-                    pending_auto_bench.retain(|n| !port_names_match(n, &name));
                     log_msg(&msg_tx, LogKind::Usb, format!("Opening {name} (460800→115200)"));
                     match open_board(&name) {
                         Ok((mut board, saw)) => {
                             configure_board(&mut board, &msg_tx);
                             arm_mining_if_needed(&mut board, &msg_tx, mining);
-                            let endpoint = board.name.clone();
                             boards.push(board);
                             publish_live(&msg_tx, &boards);
-                            if skip_bench {
-                                let _ = msg_tx.send(NetMsg::Action(Ok(format!(
-                                    "USB open {name}{} · {} board(s)",
-                                    if saw { " (pong)" } else { "" },
-                                    boards.len()
-                                ))));
-                            } else {
-                                pending_auto_bench.push_back(endpoint);
-                                let _ = msg_tx.send(NetMsg::Action(Ok(format!(
-                                    "USB open {name}{} · {} board(s) · auto-bench queued",
-                                    if saw { " (pong)" } else { "" },
-                                    boards.len()
-                                ))));
-                            }
+                            let _ = msg_tx.send(NetMsg::Action(Ok(format!(
+                                "USB open {name}{} · {} board(s)",
+                                if saw { " (pong)" } else { "" },
+                                boards.len()
+                            ))));
                         }
                         Err(e) => {
                             publish_live(&msg_tx, &boards);
@@ -5902,7 +5821,6 @@ fn mine_worker(cmd_rx: Receiver<NetCmd>, msg_tx: Sender<NetMsg>) {
                                         && normalize_mac(&b.mac) == normalize_mac(&board.mac)
                                 }) {
                                     let old = boards.remove(idx);
-                                    pending_auto_bench.retain(|n| !port_names_match(n, &old.name));
                                     log_msg(
                                         &msg_tx,
                                         LogKind::Usb,
@@ -5914,12 +5832,10 @@ fn mine_worker(cmd_rx: Receiver<NetCmd>, msg_tx: Sender<NetMsg>) {
                                 }
                             }
                             arm_mining_if_needed(&mut board, &msg_tx, mining);
-                            let endpoint = board.name.clone();
                             boards.push(board);
                             publish_live(&msg_tx, &boards);
-                            pending_auto_bench.push_back(endpoint);
                             let _ = msg_tx.send(NetMsg::Action(Ok(format!(
-                                "Worker linked {name}{} · {} total · auto-bench queued",
+                                "Worker linked {name}{} · {} total",
                                 if saw { " (pong)" } else { "" },
                                 boards.len()
                             ))));
@@ -5953,7 +5869,6 @@ fn mine_worker(cmd_rx: Receiver<NetCmd>, msg_tx: Sender<NetMsg>) {
                                         && normalize_mac(&b.mac) == normalize_mac(&board.mac)
                                 }) {
                                     let old = boards.remove(idx);
-                                    pending_auto_bench.retain(|n| n != &old.name);
                                     log_msg(
                                         &msg_tx,
                                         LogKind::Usb,
@@ -5965,12 +5880,10 @@ fn mine_worker(cmd_rx: Receiver<NetCmd>, msg_tx: Sender<NetMsg>) {
                                 }
                             }
                             arm_mining_if_needed(&mut board, &msg_tx, mining);
-                            let ep = board.name.clone();
                             boards.push(board);
                             publish_live(&msg_tx, &boards);
-                            pending_auto_bench.push_back(ep);
                             let _ = msg_tx.send(NetMsg::Action(Ok(format!(
-                                "Wi‑Fi worker linked {endpoint}{} · {} total · auto-bench queued",
+                                "Wi‑Fi worker linked {endpoint}{} · {} total",
                                 if saw { " (pong)" } else { "" },
                                 boards.len()
                             ))));
@@ -5983,7 +5896,6 @@ fn mine_worker(cmd_rx: Receiver<NetCmd>, msg_tx: Sender<NetMsg>) {
                     }
                 }
                 NetCmd::DisconnectWorker(name) => {
-                    pending_auto_bench.retain(|n| !port_names_match(n, &name));
                     if let Some(idx) = boards
                         .iter()
                         .position(|b| port_names_match(&b.name, &name))
@@ -6010,7 +5922,6 @@ fn mine_worker(cmd_rx: Receiver<NetCmd>, msg_tx: Sender<NetMsg>) {
                     mining = false;
                     reconnect_at = None;
                     mine_endpoint.clear();
-                    pending_auto_bench.clear();
                     if let Some(mut s) = stratum.take() {
                         s.disconnect();
                     }
@@ -6289,8 +6200,6 @@ fn mine_worker(cmd_rx: Receiver<NetCmd>, msg_tx: Sender<NetMsg>) {
                     let _ = msg_tx.send(NetMsg::Status(Ok(st)));
                 }
                 NetCmd::Bench => {
-                    // Prefer the user click over any deferred connect auto-bench.
-                    pending_auto_bench.clear();
                     if boards.is_empty() {
                         let _ = msg_tx.send(NetMsg::Action(Err("No boards linked".into())));
                         continue;
@@ -6472,24 +6381,6 @@ fn mine_worker(cmd_rx: Receiver<NetCmd>, msg_tx: Sender<NetMsg>) {
                 NetCmd::PullApiFeed(feed) => {
                     let outcome = pull_feed(&feed);
                     let _ = msg_tx.send(NetMsg::ApiFeedResult(outcome));
-                }
-            }
-        }
-
-        // Deferred connect auto-bench — only when the cmd queue is idle so USB
-        // link / update checks are never stuck behind a multi-minute tune.
-        if !had_cmd {
-            if let Some(name) = pending_auto_bench.pop_front() {
-                if let Some(b) = boards
-                    .iter_mut()
-                    .find(|b| port_names_match(&b.name, &name) || b.name == name)
-                {
-                    let was_mining = mining;
-                    let summary = auto_bench_board(b, &msg_tx, was_mining);
-                    publish_live(&msg_tx, &boards);
-                    let _ = msg_tx.send(NetMsg::Action(Ok(format!(
-                        "Auto-bench {name} done · {summary}"
-                    ))));
                 }
             }
         }
