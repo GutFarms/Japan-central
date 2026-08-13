@@ -198,9 +198,9 @@ static void noteShare(uint32_t nonce) {
 }
 
 static void serviceCompanion() {
-  // Snapshot ~1.5 Hz — enough for Companion UI, less core-0 churn while hashing.
+  // Snapshot ~4 Hz when Companion is polling — less stale hashrate/nonce.
   uint32_t now = millis();
-  if (now - g_lastSnapMs >= 650) {
+  if (now - g_lastSnapMs >= 220) {
     fillSnap();
     g_lastSnapMs = now;
   }
@@ -279,11 +279,11 @@ static void mineTaskB(void*) {
   }
 }
 
-// USB — snappy when RX has data; longer quiet delay frees core-0 for mineB.
+// USB — snappy RX drain; short quiet delay still yields to mineB.
 static void usbTask(void*) {
   for (;;) {
     serviceCompanion();
-    vTaskDelay(pdMS_TO_TICKS(Serial.available() > 0 ? 2 : 8));
+    vTaskDelay(pdMS_TO_TICKS(Serial.available() > 0 ? 1 : 3));
     esp_task_wdt_reset();
   }
 }
@@ -320,7 +320,7 @@ void setup() {
   (void)esp_wifi_stop();
   (void)esp_wifi_deinit();
 
-  g_cmp.begin(115200);
+  g_cmp.begin(460800);
   g_ui.begin();
   g_ui.showSplash();
 

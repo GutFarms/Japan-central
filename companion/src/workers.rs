@@ -40,8 +40,17 @@ pub struct WorkerLive {
 
 /// Probe a serial port for CYD companion firmware (`cmp ping` → `CMP ok`).
 pub fn probe_usb_port(name: &str) -> Option<DiscoveredWorker> {
-    let mut port = serialport::new(name, 115_200)
-        .timeout(Duration::from_millis(80))
+    for baud in [460_800u32, 115_200] {
+        if let Some(w) = probe_usb_port_at(name, baud) {
+            return Some(w);
+        }
+    }
+    None
+}
+
+fn probe_usb_port_at(name: &str, baud: u32) -> Option<DiscoveredWorker> {
+    let mut port = serialport::new(name, baud)
+        .timeout(Duration::from_millis(40))
         .open()
         .ok()?;
     let _ = port.clear(serialport::ClearBuffer::All);
@@ -49,7 +58,7 @@ pub fn probe_usb_port(name: &str) -> Option<DiscoveredWorker> {
     let _ = port.flush();
 
     let mut buf = String::new();
-    let deadline = Instant::now() + Duration::from_millis(700);
+    let deadline = Instant::now() + Duration::from_millis(if baud > 115_200 { 450 } else { 700 });
     let mut saw_pong = false;
     while Instant::now() < deadline {
         drain(&mut *port, &mut buf);
@@ -60,7 +69,7 @@ pub fn probe_usb_port(name: &str) -> Option<DiscoveredWorker> {
             saw_pong = true;
             break;
         }
-        std::thread::sleep(Duration::from_millis(25));
+        std::thread::sleep(Duration::from_millis(15));
     }
     if !saw_pong {
         return None;
@@ -70,7 +79,7 @@ pub fn probe_usb_port(name: &str) -> Option<DiscoveredWorker> {
     let mut mode = String::new();
     let _ = port.write_all(b"cmp config\r\n");
     let _ = port.flush();
-    let cfg_deadline = Instant::now() + Duration::from_millis(900);
+    let cfg_deadline = Instant::now() + Duration::from_millis(700);
     while Instant::now() < cfg_deadline {
         drain(&mut *port, &mut buf);
         if let Some(line) = buf.lines().rev().find(|l| l.trim().starts_with('{')) {
@@ -88,15 +97,15 @@ pub fn probe_usb_port(name: &str) -> Option<DiscoveredWorker> {
                 break;
             }
         }
-        std::thread::sleep(Duration::from_millis(25));
+        std::thread::sleep(Duration::from_millis(15));
     }
 
     let detail = if fw.is_empty() {
-        "CYD companion USB · pong".into()
+        format!("CYD companion USB · pong @ {baud}")
     } else if mode.is_empty() {
-        format!("fw {fw}")
+        format!("fw {fw} @ {baud}")
     } else {
-        format!("fw {fw} · {mode}")
+        format!("fw {fw} · {mode} @ {baud}")
     };
 
     Some(DiscoveredWorker {

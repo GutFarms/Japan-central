@@ -2431,7 +2431,7 @@ impl App for CompanionApp {
             }
         }
 
-        if self.usb_open && self.last_poll.elapsed() > Duration::from_millis(1200) {
+        if self.usb_open && self.last_poll.elapsed() > Duration::from_millis(400) {
             let _ = self.cmd_tx.send(NetCmd::PollStatus);
             self.last_poll = Instant::now();
         }
@@ -3284,15 +3284,27 @@ fn mine_worker(cmd_rx: Receiver<NetCmd>, msg_tx: Sender<NetMsg>) {
     }
 
     fn open_board(name: &str) -> Result<(UsbBoard, bool), String> {
-        let mut port = serialport::new(name, 115_200)
-            .timeout(Duration::from_millis(40))
+        // Prefer 460800 for faster job/share traffic; fall back to 115200 for older FW.
+        let mut last_err = String::new();
+        for baud in [460_800u32, 115_200] {
+            match open_board_at(name, baud) {
+                Ok(v) => return Ok(v),
+                Err(e) => last_err = e,
+            }
+        }
+        Err(last_err)
+    }
+
+    fn open_board_at(name: &str, baud: u32) -> Result<(UsbBoard, bool), String> {
+        let mut port = serialport::new(name, baud)
+            .timeout(Duration::from_millis(8))
             .open()
-            .map_err(|e| format!("USB open failed: {e}"))?;
+            .map_err(|e| format!("USB open failed @ {baud}: {e}"))?;
         let _ = port.clear(serialport::ClearBuffer::All);
         let mut rx = String::new();
         let _ = port.write_all(b"\r\ncmp ping\r\n");
         let _ = port.flush();
-        let deadline = Instant::now() + Duration::from_millis(3500);
+        let deadline = Instant::now() + Duration::from_millis(if baud > 115_200 { 900 } else { 2500 });
         let mut saw = false;
         while Instant::now() < deadline {
             drain_serial(port.as_mut(), &mut rx);
@@ -3300,7 +3312,10 @@ fn mine_worker(cmd_rx: Receiver<NetCmd>, msg_tx: Sender<NetMsg>) {
                 saw = true;
                 break;
             }
-            thread::sleep(Duration::from_millis(30));
+            thread::sleep(Duration::from_millis(15));
+        }
+        if !saw && baud > 115_200 {
+            return Err(format!("no pong @ {baud}"));
         }
         Ok((
             UsbBoard {
@@ -3396,16 +3411,16 @@ fn mine_worker(cmd_rx: Receiver<NetCmd>, msg_tx: Sender<NetMsg>) {
                         s.disconnect();
                     }
                     boards.clear();
-                    log_msg(&msg_tx, LogKind::Usb, format!("Opening {name} @ 115200"));
+                    log_msg(&msg_tx, LogKind::Usb, format!("Opening {name} (460800→115200)"));
                     match open_board(&name) {
                         Ok((mut board, saw)) => {
                             configure_board(&mut board, &msg_tx);
                             boards.push(board);
                             publish_live(&msg_tx, &boards);
                             let _ = msg_tx.send(NetMsg::Action(Ok(if saw {
-                                format!("USB open {name} @ 115200 (pong)")
+                                format!("USB open {name} (pong)")
                             } else {
-                                format!("USB open {name} @ 115200 (no pong yet)")
+                                format!("USB open {name} (no pong yet)")
                             })));
                         }
                         Err(e) => {
@@ -3804,10 +3819,35 @@ fn mine_worker(cmd_rx: Receiver<NetCmd>, msg_tx: Sender<NetMsg>) {
             }
         }
 
+        // Pull board shares BEFORE polling the pool so submits leave ASAP
+        // (cuts measured share→accept latency).
+        if !boards.is_empty() {
+            for b in boards.iter_mut() {
+                harvest_shares(
+                    b.port.as_mut(),
+                    &mut b.rx,
+                    stratum.as_mut(),
+                    &recent_jobs,
+                    &msg_tx,
+                );
+            }
+        }
+
         if let Some(client) = stratum.as_mut() {
             let was_authorized = client.authorized();
-            match client.poll() {
-                Ok(()) => {
+            // Drain pool socket aggressively — short read timeout, multiple passes.
+            let mut poll_err: Option<String> = None;
+            for _ in 0..4 {
+                match client.poll() {
+                    Ok(()) => {}
+                    Err(e) => {
+                        poll_err = Some(e);
+                        break;
+                    }
+                }
+            }
+            match poll_err {
+                None => {
                     if client.authorized() && !was_authorized {
                         push_stratum_live(&msg_tx, client);
                         let _ = msg_tx.send(NetMsg::MineStats {
@@ -3855,7 +3895,7 @@ fn mine_worker(cmd_rx: Receiver<NetCmd>, msg_tx: Sender<NetMsg>) {
                         }
                         if pushed > 0 {
                             recent_jobs.push_back(job.clone());
-                            while recent_jobs.len() > 24 {
+                            while recent_jobs.len() > 32 {
                                 recent_jobs.pop_front();
                             }
                             let _ = msg_tx.send(NetMsg::Action(Ok(format!(
@@ -3864,7 +3904,7 @@ fn mine_worker(cmd_rx: Receiver<NetCmd>, msg_tx: Sender<NetMsg>) {
                             ))));
                         }
                     }
-                    if last_stats_push.elapsed() > Duration::from_secs(3) {
+                    if last_stats_push.elapsed() > Duration::from_secs(1) {
                         let (a, r) = if client.authorized() {
                             (client.accepted, client.rejected)
                         } else {
@@ -3877,7 +3917,7 @@ fn mine_worker(cmd_rx: Receiver<NetCmd>, msg_tx: Sender<NetMsg>) {
                         last_stats_push = Instant::now();
                     }
                 }
-                Err(e) => {
+                Some(e) => {
                     log_msg(&msg_tx, LogKind::Err, format!("Pool: {e}"));
                     if let Some(mut s) = stratum.take() {
                         s.disconnect();
@@ -3895,11 +3935,11 @@ fn mine_worker(cmd_rx: Receiver<NetCmd>, msg_tx: Sender<NetMsg>) {
                         reconnect_backoff =
                             (reconnect_backoff * 2).min(Duration::from_secs(60));
                     }
-                    thread::sleep(Duration::from_millis(200));
+                    thread::sleep(Duration::from_millis(100));
                 }
             }
             if let Some(client) = stratum.as_mut() {
-                if last_stratum_ui.elapsed() > Duration::from_millis(250) {
+                if last_stratum_ui.elapsed() > Duration::from_millis(150) {
                     push_stratum_live(&msg_tx, client);
                     let _ = msg_tx.send(NetMsg::MineStats {
                         accepted: if client.authorized() {
@@ -3959,19 +3999,12 @@ fn mine_worker(cmd_rx: Receiver<NetCmd>, msg_tx: Sender<NetMsg>) {
             }
         }
 
-        if !boards.is_empty() {
-            for b in boards.iter_mut() {
-                harvest_shares(
-                    b.port.as_mut(),
-                    &mut b.rx,
-                    stratum.as_mut(),
-                    &recent_jobs,
-                    &msg_tx,
-                );
-            }
+        // Idle pause only — keep the hot path tight while mining / boards linked.
+        if mining || stratum.is_some() || !boards.is_empty() {
+            thread::sleep(Duration::from_millis(1));
+        } else {
+            thread::sleep(Duration::from_millis(8));
         }
-
-        thread::sleep(Duration::from_millis(8));
     }
 }
 
@@ -4073,14 +4106,14 @@ fn harvest_shares(
 }
 
 fn drain_serial(port: &mut dyn SerialPort, buf: &mut String) {
-    let mut tmp = [0u8; 512];
-    for _ in 0..40 {
+    let mut tmp = [0u8; 2048];
+    for _ in 0..64 {
         match port.read(&mut tmp) {
             Ok(0) | Err(_) => break,
             Ok(n) => {
                 buf.push_str(&String::from_utf8_lossy(&tmp[..n]));
-                if buf.len() > 12288 {
-                    *buf = buf[buf.len() - 4096..].to_string();
+                if buf.len() > 24576 {
+                    *buf = buf[buf.len() - 8192..].to_string();
                 }
             }
         }
@@ -4112,16 +4145,17 @@ fn cmp_reply_line(buf: &str) -> Option<String> {
 
 fn usb_cmd(port: &mut dyn SerialPort, buf: &mut String, cmd: &str) -> Result<String, String> {
     let mut last_err = String::new();
+    // Bigger writes + single flush cut job-push latency a lot vs per-chunk sleeps.
     let (wait_ms, retries, chunk, gap_ms) = if cmd.contains("bench") {
-        (60_000u64, 2usize, 32usize, 3u64)
+        (60_000u64, 2usize, 128usize, 1u64)
     } else if cmd.contains("status") {
-        (1_800u64, 2usize, 64usize, 2u64)
+        (900u64, 2usize, 256usize, 0u64)
     } else if cmd.contains(" jh") || cmd.contains(" jt") || cmd.contains(" ja") {
-        (3_500u64, 3usize, 32usize, 4u64)
+        (2_000u64, 2usize, 256usize, 0u64)
     } else if cmd.contains(" job ") {
-        (6_000u64, 2usize, 32usize, 4u64)
+        (4_000u64, 2usize, 128usize, 1u64)
     } else {
-        (3_500u64, 3usize, 64usize, 2u64)
+        (2_000u64, 2usize, 256usize, 0u64)
     };
     for _ in 0..retries {
         drain_serial(port, buf);
@@ -4137,9 +4171,11 @@ fn usb_cmd(port: &mut dyn SerialPort, buf: &mut String, cmd: &str) -> Result<Str
         for piece in line.as_bytes().chunks(chunk) {
             port.write_all(piece)
                 .map_err(|e| format!("USB write: {e}"))?;
-            let _ = port.flush();
-            thread::sleep(Duration::from_millis(gap_ms));
+            if gap_ms > 0 {
+                thread::sleep(Duration::from_millis(gap_ms));
+            }
         }
+        let _ = port.flush();
         let deadline = Instant::now() + Duration::from_millis(wait_ms);
         while Instant::now() < deadline {
             drain_serial(port, buf);
@@ -4161,13 +4197,13 @@ fn usb_cmd(port: &mut dyn SerialPort, buf: &mut String, cmd: &str) -> Result<Str
                 }
                 return Ok(reply);
             }
-            thread::sleep(Duration::from_millis(10));
+            thread::sleep(Duration::from_millis(2));
         }
         last_err = format!(
             "USB timeout waiting for reply to `{}`",
             cmd.chars().take(56).collect::<String>()
         );
-        thread::sleep(Duration::from_millis(30));
+        thread::sleep(Duration::from_millis(15));
     }
     Err(last_err)
 }

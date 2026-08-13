@@ -132,10 +132,10 @@ impl StratumClient {
         let stream = TcpStream::connect_timeout(&addr, Duration::from_secs(8))
             .map_err(|e| format!("stratum connect: {e}"))?;
         stream
-            .set_read_timeout(Some(Duration::from_millis(50)))
+            .set_read_timeout(Some(Duration::from_millis(5)))
             .ok();
         stream
-            .set_write_timeout(Some(Duration::from_secs(5)))
+            .set_write_timeout(Some(Duration::from_secs(3)))
             .ok();
         stream.set_nodelay(true).ok();
         let reader = BufReader::new(stream.try_clone().map_err(|e| e.to_string())?);
@@ -366,6 +366,8 @@ impl StratumClient {
         stream
             .write_all(s.as_bytes())
             .map_err(|e| format!("stratum write: {e}"))?;
+        // Push immediately — nodelay alone still buffers on some stacks.
+        stream.flush().map_err(|e| format!("stratum flush: {e}"))?;
         self.lines_tx += 1;
         let trimmed = s.trim().to_string();
         self.last_tx = trimmed.clone();

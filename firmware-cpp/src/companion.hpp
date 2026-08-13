@@ -56,7 +56,7 @@ class CompanionLink {
   using StopFn = std::function<void()>;
   using StatsFn = std::function<void(uint32_t accepted, uint32_t rejected)>;
 
-  void begin(uint32_t baud = 115200);
+  void begin(uint32_t baud = 460800);
   bool poll(AppConfig& cfg, const MinerSnapshot& snap, ApplyFn onApply, NetFeed* net, JobFn onJob,
             StopFn onStop, StatsFn onStats);
 

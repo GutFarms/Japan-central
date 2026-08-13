@@ -5,8 +5,8 @@
 extern "C" float cyd_run_bench(uint32_t n);
 
 void CompanionLink::begin(uint32_t baud) {
-  Serial.setRxBufferSize(8192);
-  Serial.setTxBufferSize(2048);
+  Serial.setRxBufferSize(16384);
+  Serial.setTxBufferSize(4096);
   Serial.begin(baud);
   Serial.setTimeout(0);
   lineLen_ = 0;
@@ -18,7 +18,7 @@ bool CompanionLink::poll(AppConfig& cfg, const MinerSnapshot& snap, ApplyFn onAp
                          JobFn onJob, StopFn onStop, StatsFn onStats) {
   bool applied = false;
   // Drain aggressively — long job traffic must not wait on mining.
-  int budget = 4096;
+  int budget = 8192;
   while (budget-- > 0 && Serial.available() > 0) {
     char c = (char)Serial.read();
     if (c == '\n' || c == '\r') {
@@ -288,7 +288,7 @@ void CompanionLink::replyStatus(const AppConfig& cfg, const MinerSnapshot& snap)
 void CompanionLink::replyConfig(const AppConfig& cfg) {
   char buf[128];
   snprintf(buf, sizeof(buf),
-           "{\"cpu_mhz\":%u,\"hash_focus\":true,\"fw\":\"0.8.25-sha256\",\"mode\":\"usb-sha256\","
+           "{\"cpu_mhz\":%u,\"hash_focus\":true,\"fw\":\"0.8.26-sha256\",\"mode\":\"usb-sha256\","
            "\"configured\":true}",
            (unsigned)cfg.cpuMhz);
   Serial.print("CMPCONFIG ");
