@@ -173,71 +173,62 @@ pub fn fetch_latest_firmware(
 }
 
 fn raw_firmware_candidate_urls() -> Vec<String> {
-    const REFS: &[&str] = &[
-        "cursor/esp32-cyd-cpp-firmware-e801",
-        "master",
-        "main",
-    ];
-    const PATHS: &[&str] = &[
+    let mut out = Vec::new();
+    for p in [
         "flash/downloads/esp32-2432s028-sha256-miner-merged.bin",
         "flash/esp32-2432s028-sha256-miner-merged.bin",
-    ];
-    let mut out = Vec::new();
-    for r in REFS {
-        for p in PATHS {
-            out.push(format!(
-                "https://raw.githubusercontent.com/GutFarms/Japan-central/{r}/{p}"
-            ));
-        }
+    ] {
+        out.extend(repo_file_urls(p));
     }
     out
 }
 
 fn fetch_nearby_version_hint(bin_url: &str) -> Option<String> {
-    let ver_url = bin_url.rsplit_once('/')?.0.to_string() + "/VERSION.txt";
+    // Prefer the same fresh URL set used for app update checks.
+    let mut candidates = repo_file_urls("flash/downloads/VERSION.txt");
+    if let Some((base, _)) = bin_url.rsplit_once('/') {
+        candidates.insert(0, format!("{base}/VERSION.txt"));
+    }
     let agent = ureq::AgentBuilder::new()
         .timeout_connect(std::time::Duration::from_secs(6))
         .timeout_read(std::time::Duration::from_secs(10))
         .user_agent(COMPANION_UA)
         .build();
-    let txt = agent.get(&ver_url).call().ok()?.into_string().ok()?;
-    for line in txt.lines() {
-        let t = line.trim();
-        if t.is_empty() || t.starts_with('#') {
-            continue;
+    for ver_url in candidates {
+        let mut req = agent.get(&ver_url);
+        if ver_url.contains("api.github.com/repos/") && ver_url.contains("/contents/") {
+            req = req.set("Accept", "application/vnd.github.raw");
         }
-        if let Some(rest) = t.split(':').nth(1) {
-            let v = normalize_fw_version(rest);
+        let Ok(resp) = req.call() else { continue };
+        let Ok(txt) = resp.into_string() else { continue };
+        for line in txt.lines() {
+            let t = line.trim();
+            if t.is_empty() || t.starts_with('#') {
+                continue;
+            }
+            if let Some(rest) = t.split(':').nth(1) {
+                let v = normalize_fw_version(rest);
+                if !v.is_empty() {
+                    return Some(v);
+                }
+            }
+            let v = normalize_fw_version(t);
             if !v.is_empty() {
                 return Some(v);
             }
-        }
-        let v = normalize_fw_version(t);
-        if !v.is_empty() {
-            return Some(v);
         }
     }
     None
 }
 
 fn portable_zip_candidate_urls() -> Vec<String> {
-    const REFS: &[&str] = &[
-        "cursor/esp32-cyd-cpp-firmware-e801",
-        "master",
-        "main",
-    ];
-    const NAMES: &[&str] = &[
+    let mut out = Vec::new();
+    for n in [
         "CYD-Miner-Portable.zip",
         "CYD-Companion-Portable.zip",
         "CYD-Companion-App-Only.zip",
-    ];
-    let mut out = Vec::new();
-    for r in REFS {
-        for n in NAMES {
-            out.push(format!(
-                "https://raw.githubusercontent.com/GutFarms/Japan-central/{r}/flash/downloads/{n}"
-            ));
-        }
+    ] {
+        out.extend(repo_file_urls(&format!("flash/downloads/{n}")));
     }
     out
 }
@@ -347,8 +338,91 @@ fn extract_merged_from_zip(
     })
 }
 
-const COMPANION_UA: &str = "CYD-Companion/0.8.22";
+pub const COMPANION_UA: &str = "CYD-Companion/0.8.23";
 const ESPFLASH_VERSION: &str = "4.5.0";
+pub const REPO_OWNER: &str = "GutFarms";
+pub const REPO_NAME: &str = "Japan-central";
+pub const REPO_REFS: &[&str] = &[
+    "cursor/esp32-cyd-cpp-firmware-e801",
+    "master",
+    "main",
+];
+
+fn urlencode_ref(ref_name: &str) -> String {
+    ref_name
+        .bytes()
+        .map(|b| match b {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' => (b as char).to_string(),
+            _ => format!("%{b:02X}"),
+        })
+        .collect()
+}
+
+/// Resolve a branch/tag to a commit SHA (avoids stale raw.githubusercontent.com branch CDN).
+pub fn resolve_ref_commit(ref_name: &str) -> Option<String> {
+    use std::collections::HashMap;
+    use std::sync::Mutex;
+    static CACHE: Mutex<Option<HashMap<String, String>>> = Mutex::new(None);
+
+    if let Ok(guard) = CACHE.lock() {
+        if let Some(map) = guard.as_ref() {
+            if let Some(sha) = map.get(ref_name) {
+                return Some(sha.clone());
+            }
+        }
+    }
+
+    let url = format!(
+        "https://api.github.com/repos/{REPO_OWNER}/{REPO_NAME}/commits/{}",
+        urlencode_ref(ref_name)
+    );
+    let agent = ureq::AgentBuilder::new()
+        .timeout_connect(std::time::Duration::from_secs(8))
+        .timeout_read(std::time::Duration::from_secs(15))
+        .user_agent(COMPANION_UA)
+        .build();
+    let resp = agent
+        .get(&url)
+        .set("Accept", "application/vnd.github+json")
+        .call()
+        .ok()?;
+    #[derive(serde::Deserialize)]
+    struct Commit {
+        sha: String,
+    }
+    let c: Commit = resp.into_json().ok()?;
+    if c.sha.len() < 7 {
+        return None;
+    }
+    if let Ok(mut guard) = CACHE.lock() {
+        let map = guard.get_or_insert_with(HashMap::new);
+        map.insert(ref_name.to_string(), c.sha.clone());
+    }
+    Some(c.sha)
+}
+
+/// Candidate URLs for a repo path: GitHub Contents API (fresh) → commit-pinned raw → branch raw.
+pub fn repo_file_urls(path: &str) -> Vec<String> {
+    let path = path.trim_start_matches('/');
+    let mut out = Vec::new();
+    for r in REPO_REFS {
+        let enc = urlencode_ref(r);
+        // Contents API with Accept: raw bypasses the branch CDN (see download_to).
+        // Works for files ≤1MB; larger files fall through to commit-pinned raw.
+        out.push(format!(
+            "https://api.github.com/repos/{REPO_OWNER}/{REPO_NAME}/contents/{path}?ref={enc}"
+        ));
+        if let Some(sha) = resolve_ref_commit(r) {
+            out.push(format!(
+                "https://raw.githubusercontent.com/{REPO_OWNER}/{REPO_NAME}/{sha}/{path}"
+            ));
+        }
+        out.push(format!(
+            "https://raw.githubusercontent.com/{REPO_OWNER}/{REPO_NAME}/{r}/{path}"
+        ));
+    }
+    out
+}
 
 fn firmware_writable_dir() -> Result<PathBuf, String> {
     if let Ok(exe) = std::env::current_exe() {
@@ -373,18 +447,8 @@ fn tools_writable_dir() -> Result<PathBuf, String> {
 }
 
 fn espflash_download_urls() -> Vec<String> {
-    // Prefer our tracked copy (no GitHub Releases redirect), then upstream zip.
-    const REFS: &[&str] = &[
-        "cursor/esp32-cyd-cpp-firmware-e801",
-        "master",
-        "main",
-    ];
-    let mut out = Vec::new();
-    for r in REFS {
-        out.push(format!(
-            "https://raw.githubusercontent.com/GutFarms/Japan-central/{r}/flash/downloads/espflash.exe"
-        ));
-    }
+    // Prefer our tracked copy (API / commit-pinned), then upstream zip.
+    let mut out = repo_file_urls("flash/downloads/espflash.exe");
     out.push(format!(
         "https://github.com/esp-rs/espflash/releases/download/v{ESPFLASH_VERSION}/espflash-x86_64-pc-windows-msvc.zip"
     ));
@@ -550,7 +614,12 @@ fn download_to(url: &str, dest: &Path, progress: &dyn Fn(String)) -> Result<(), 
         .timeout_read(std::time::Duration::from_secs(240))
         .user_agent(COMPANION_UA)
         .build();
-    let resp = agent.get(url).call().map_err(|e| format!("http: {e}"))?;
+    let mut req = agent.get(url);
+    // GitHub Contents API: ask for raw bytes (avoids base64 JSON + stale branch CDN).
+    if url.contains("api.github.com/repos/") && url.contains("/contents/") {
+        req = req.set("Accept", "application/vnd.github.raw");
+    }
+    let resp = req.call().map_err(|e| format!("http: {e}"))?;
     let status = resp.status();
     if !(200..300).contains(&status) {
         return Err(format!("http {status} for {url}"));

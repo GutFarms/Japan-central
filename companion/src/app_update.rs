@@ -5,14 +5,7 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
-use crate::flash_update::normalize_fw_version;
-
-const COMPANION_UA: &str = "CYD-Companion/0.8.22";
-const REFS: &[&str] = &[
-    "cursor/esp32-cyd-cpp-firmware-e801",
-    "master",
-    "main",
-];
+use crate::flash_update::{normalize_fw_version, repo_file_urls, COMPANION_UA};
 
 #[derive(Clone, Debug)]
 pub struct AppRemoteInfo {
@@ -50,39 +43,19 @@ pub fn is_newer(remote: &str, local: &str) -> bool {
 }
 
 fn version_urls() -> Vec<String> {
-    let mut out = Vec::new();
-    for r in REFS {
-        out.push(format!(
-            "https://raw.githubusercontent.com/GutFarms/Japan-central/{r}/flash/downloads/VERSION.txt"
-        ));
-        out.push(format!(
-            "https://raw.githubusercontent.com/GutFarms/Japan-central/{r}/flash/VERSION.txt"
-        ));
-    }
+    let mut out = repo_file_urls("flash/downloads/VERSION.txt");
+    out.extend(repo_file_urls("flash/VERSION.txt"));
     out
 }
 
 fn app_zip_urls() -> Vec<String> {
-    let mut out = Vec::new();
-    for r in REFS {
-        out.push(format!(
-            "https://raw.githubusercontent.com/GutFarms/Japan-central/{r}/flash/downloads/CYD-Companion-App-Only.zip"
-        ));
-        out.push(format!(
-            "https://raw.githubusercontent.com/GutFarms/Japan-central/{r}/flash/downloads/CYD-Miner-Portable.zip"
-        ));
-    }
+    let mut out = repo_file_urls("flash/downloads/CYD-Companion-App-Only.zip");
+    out.extend(repo_file_urls("flash/downloads/CYD-Miner-Portable.zip"));
     out
 }
 
 fn app_exe_urls() -> Vec<String> {
-    let mut out = Vec::new();
-    for r in REFS {
-        out.push(format!(
-            "https://raw.githubusercontent.com/GutFarms/Japan-central/{r}/flash/downloads/cyd-companion.exe"
-        ));
-    }
-    out
+    repo_file_urls("flash/downloads/cyd-companion.exe")
 }
 
 fn http_get_text(url: &str) -> Result<String, String> {
@@ -91,7 +64,11 @@ fn http_get_text(url: &str) -> Result<String, String> {
         .timeout_read(std::time::Duration::from_secs(20))
         .user_agent(COMPANION_UA)
         .build();
-    let resp = agent.get(url).call().map_err(|e| format!("http: {e}"))?;
+    let mut req = agent.get(url);
+    if url.contains("api.github.com/repos/") && url.contains("/contents/") {
+        req = req.set("Accept", "application/vnd.github.raw");
+    }
+    let resp = req.call().map_err(|e| format!("http: {e}"))?;
     if !(200..300).contains(&resp.status()) {
         return Err(format!("http {} for {url}", resp.status()));
     }
@@ -104,7 +81,11 @@ fn http_download(url: &str, dest: &Path, progress: &dyn Fn(String)) -> Result<()
         .timeout_read(std::time::Duration::from_secs(300))
         .user_agent(COMPANION_UA)
         .build();
-    let resp = agent.get(url).call().map_err(|e| format!("http: {e}"))?;
+    let mut req = agent.get(url);
+    if url.contains("api.github.com/repos/") && url.contains("/contents/") {
+        req = req.set("Accept", "application/vnd.github.raw");
+    }
+    let resp = req.call().map_err(|e| format!("http: {e}"))?;
     if !(200..300).contains(&resp.status()) {
         return Err(format!("http {} for {url}", resp.status()));
     }
@@ -185,6 +166,7 @@ mod tests {
 
     #[test]
     fn version_compare_numeric() {
+        assert!(is_newer("0.8.23", "0.8.21"));
         assert!(is_newer("0.8.22", "0.8.21"));
         assert!(!is_newer("0.8.21", "0.8.21"));
         assert!(!is_newer("0.8.21-sha256", "0.8.21"));
@@ -195,12 +177,12 @@ mod tests {
     #[test]
     fn parse_version_lines() {
         assert_eq!(
-            parse_version_text("0.8.22-sha256\n").as_deref(),
-            Some("0.8.22")
+            parse_version_text("0.8.23-sha256\n").as_deref(),
+            Some("0.8.23")
         );
         assert_eq!(
-            parse_version_text("# comment\nfw: 0.8.22-sha256\n").as_deref(),
-            Some("0.8.22")
+            parse_version_text("# comment\nfw: 0.8.23-sha256\n").as_deref(),
+            Some("0.8.23")
         );
     }
 }
@@ -318,7 +300,7 @@ fn schedule_windows_replace_and_restart(install: &Path) -> Result<(), String> {
     );
     std::fs::write(&bat_path, bat).map_err(|e| format!("write updater bat: {e}"))?;
 
-    // Detached cmd so this process can exit and release the .exe lock.
+    // Detached is so this process can exit and release the .exe lock.
     Command::new("cmd.exe")
         .args(["/C", "start", "", &bat_path.to_string_lossy()])
         .stdin(Stdio::null())
