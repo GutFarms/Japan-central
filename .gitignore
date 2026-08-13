@@ -6,10 +6,11 @@
 # Fetch-latest / web install need these on GitHub (raw.githubusercontent.com).
 !flash/downloads/esp32-2432s028-sha256-miner.bin
 !flash/downloads/esp32-2432s028-sha256-miner-merged.bin
-# Windows Companion downloads (installer + standalone app).
+# Windows Companion downloads (installer + standalone app + flasher).
 !flash/downloads/CYD-Miner-Setup.exe
 !flash/downloads/CYD-Companion-Setup.exe
 !flash/downloads/cyd-companion.exe
+!flash/downloads/espflash.exe
 .idea/
 .vscode/
 **/firmware-cpp/.pio/

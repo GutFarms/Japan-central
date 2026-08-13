@@ -115,6 +115,9 @@ cp -f "$KIT_ZIP" flash/downloads/ 2>/dev/null || true
 # Standalone app exe for direct download (no unzip).
 cp -f dist/cyd-companion-windows/cyd-companion.exe flash/downloads/cyd-companion.exe
 cp -f dist/cyd-companion-windows/cyd-companion.exe /opt/cursor/artifacts/ 2>/dev/null || true
+# Tracked flasher so Update board can auto-download espflash.exe from the repo.
+cp -f "$ESPFLASH_EXE" flash/downloads/espflash.exe
+cp -f "$ESPFLASH_EXE" /opt/cursor/artifacts/ 2>/dev/null || true
 if [[ -f "$SETUP_EXE" ]]; then
   cp -f "$SETUP_EXE" dist/CYD-Companion-Setup.exe /opt/cursor/artifacts/
   cp -f "$SETUP_EXE" dist/CYD-Companion-Setup.exe flash/downloads/ 2>/dev/null || true
