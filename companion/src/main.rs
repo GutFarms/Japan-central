@@ -1149,6 +1149,7 @@ impl CompanionApp {
         });
     }
 
+    #[allow(dead_code)]
     fn send_term(&mut self) {
         let cmd = self.term_input.trim().to_string();
         if cmd.is_empty() {
@@ -1179,8 +1180,7 @@ impl CompanionApp {
         ui.add_space(16.0);
         self.ui_api_feeds_mine(ui);
         self.ui_stratum_panel(ui);
-        ui.add_space(12.0);
-        self.ui_logs_panel(ui);
+        // Event log / Debug terminal UIs are hidden (0.8.31+).
     }
 
     fn ui_mining_hero(&mut self, ui: &mut egui::Ui) {
@@ -2034,6 +2034,7 @@ impl CompanionApp {
         });
     }
 
+    #[allow(dead_code)]
     fn ui_logs_panel(&mut self, ui: &mut egui::Ui) {
         soft_panel(ui, "Event log", |ui| {
             ui.horizontal(|ui| {
@@ -2087,6 +2088,7 @@ impl CompanionApp {
         });
     }
 
+    #[allow(dead_code)]
     fn ui_debug(&mut self, ui: &mut egui::Ui) {
         if self.update_busy {
             soft_panel(ui, "Board update", |ui| {
@@ -2846,9 +2848,7 @@ impl App for CompanionApp {
                     if nav_button(ui, "Settings", self.tab == Tab::Settings).clicked() {
                         self.tab = Tab::Settings;
                     }
-                    if nav_button(ui, "Debug / Terminal", self.tab == Tab::Debug).clicked() {
-                        self.tab = Tab::Debug;
-                    }
+                    // Debug / Terminal tab hidden — keep Tab::Debug for persistence compat.
                     ui.label(
                         RichText::new(format!("fw {}", self.fw_label))
                             .color(C_DIM)
@@ -2866,7 +2866,7 @@ impl App for CompanionApp {
                 });
                 ui.add_space(14.0);
 
-                // Outer scroll so Mine/Debug content is fully reachable on short screens.
+                // Outer scroll so Mine/Settings content is fully reachable on short screens.
                 ScrollArea::vertical()
                     .id_source("main_app_scroll")
                     .auto_shrink([false, false])
@@ -2874,9 +2874,8 @@ impl App for CompanionApp {
                     .show(ui, |ui| {
                         ui.set_min_width(ui.available_width());
                         match self.tab {
-                            Tab::Mine => self.ui_mine(ui),
+                            Tab::Mine | Tab::Debug => self.ui_mine(ui),
                             Tab::Settings => self.ui_settings(ui),
-                            Tab::Debug => self.ui_debug(ui),
                         }
                         ui.add_space(28.0);
                     });

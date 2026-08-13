@@ -288,7 +288,7 @@ void CompanionLink::replyStatus(const AppConfig& cfg, const MinerSnapshot& snap)
 void CompanionLink::replyConfig(const AppConfig& cfg) {
   char buf[128];
   snprintf(buf, sizeof(buf),
-           "{\"cpu_mhz\":%u,\"hash_focus\":true,\"fw\":\"0.8.30-sha256\",\"mode\":\"usb-sha256\","
+           "{\"cpu_mhz\":%u,\"hash_focus\":true,\"fw\":\"0.8.31-sha256\",\"mode\":\"usb-sha256\","
            "\"configured\":true}",
            (unsigned)cfg.cpuMhz);
   Serial.print("CMPCONFIG ");
