@@ -25,6 +25,9 @@ B) Flash / update the board
    Option 1 (recommended): open Njörðr Seas' CYD miner → select COM → Update board
    Option 2: run "Flash Firmware" (Start Menu) OR Flash-Firmware.bat
    If flash fails: hold BOOT, tap RESET, release BOOT, then retry.
+   SAFETY: if erase ran but rewrite failed, the board may be blank — keep USB
+   plugged in and Update / Flash-Firmware.bat again until it succeeds.
+   Browser fallback: https://espressif.github.io/esptool-js/ (merged.bin @ 0x0).
    Image: esp32-2432s028-sha256-miner-merged.bin @ 0x0 (DIO, 4 MB, 40 MHz).
    After a successful write, Companion reconnects and verifies the board
    over USB (cmp ping + config fw tag) before clearing the update overlay.
