@@ -1,6 +1,6 @@
 # Njörðr Seas' CYD miner downloads (`0.8.86`)
 
-Primary firmware is the **ESP32-D0** auto-tune build (`esp32-2432s028-sha256-miner-d0-merged.bin`, also the canonical `esp32-2432s028-sha256-miner-merged.bin`). Use **Bench boards (D0)** anytime to pick/lock the best HW path.
+Primary firmware is the **ESP32-D0** auto-tune build (`esp32-2432s028-sha256-miner-d0-merged.bin`, also the canonical `esp32-2432s028-sha256-miner-merged.bin`). Each board auto-benches on connect; **Bench boards (D0)** re-runs the path pick anytime.
 
 | File | What it is |
 |------|------------|
