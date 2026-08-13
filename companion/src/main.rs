@@ -1,5 +1,5 @@
-//! Njörðr seas CYD miner — USB-only mining control.
-//! PC owns stratum/WiFi; board only hashes work received over USB-C.
+//! Njörðr seas CYD miner — USB / Wi‑Fi / Bluetooth worker control.
+//! PC owns stratum; boards hash work received over USB-C or Wi‑Fi TCP.
 
 #![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
 
@@ -11,7 +11,8 @@ mod stratum;
 mod workers;
 
 use std::collections::VecDeque;
-use std::io::Write;
+use std::io::{Read, Write};
+use std::net::TcpStream;
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -28,9 +29,10 @@ use stratum::{
     WorkJob,
 };
 use workers::{
-    list_serial_ports, mac_is_stable, mac_worker_id, normalize_mac, open_usb_serial, port_names_match,
-    scan_usb_workers_with_progress, DiscoveredWorker,
-    LanDiscovery, PortChoice, WorkerKind, WorkerLive, LAN_DISCOVERY_PORT,
+    list_serial_ports, mac_is_stable, mac_worker_id, normalize_mac, open_usb_serial, open_wifi_tcp,
+    port_names_match, probe_wifi_endpoint, scan_usb_workers_with_progress, BoardWifiDiscovery,
+    DiscoveredWorker, LanDiscovery, PortChoice, WorkerKind, WorkerLive, BOARD_WIFI_PORT,
+    LAN_DISCOVERY_PORT,
 };
 
 use eframe::egui::{
@@ -487,10 +489,12 @@ enum NetCmd {
     UpdateApp,
     /// Pull one user-configured API feed in the worker thread.
     PullApiFeed(ApiFeed),
-    /// Probe USB (+ report) for CYD companion firmwares.
+    /// Probe USB / Bluetooth / Wi‑Fi for CYD companion firmwares.
     ScanWorkers,
-    /// Open an additional CYD USB worker without dropping existing ones.
+    /// Open an additional CYD USB/BT worker without dropping existing ones.
     ConnectWorker(String),
+    /// Open a Wi‑Fi CYD worker (`host:port` TCP cmp).
+    ConnectWifi(String),
     /// Drop one connected USB worker by COM port name.
     DisconnectWorker(String),
 }
@@ -567,6 +571,7 @@ struct CompanionApp {
     connected_workers: Vec<WorkerLive>,
     worker_scan_busy: bool,
     lan: LanDiscovery,
+    board_wifi: BoardWifiDiscovery,
 }
 
 impl CompanionApp {
@@ -673,6 +678,7 @@ impl CompanionApp {
             connected_workers: Vec::new(),
             worker_scan_busy: false,
             lan: LanDiscovery::start(),
+            board_wifi: BoardWifiDiscovery::start(),
         };
         app.push_log(
             LogKind::Info,
@@ -1811,7 +1817,7 @@ impl CompanionApp {
         );
         ui.label(
                 RichText::new(format!(
-                    "Find CYD boards on every COM port and auto-link them (MAC identity). Already-open ports stay linked. LAN peers use UDP {LAN_DISCOVERY_PORT}."
+                    "Scan USB + Bluetooth COM, listen for Wi‑Fi CYD beacons (UDP {BOARD_WIFI_PORT}), and auto-link. SoftAP SSID Njordr-XXXX / pass njordrseas. LAN peers use UDP {LAN_DISCOVERY_PORT}."
                 ))
                 .color(C_MUTED)
                 .size(12.0),
@@ -1874,7 +1880,13 @@ impl CompanionApp {
         let usb_found: Vec<_> = self
             .discovered_workers
             .iter()
-            .filter(|w| w.kind == WorkerKind::Usb)
+            .filter(|w| w.kind == WorkerKind::Usb || w.kind == WorkerKind::Bluetooth)
+            .cloned()
+            .collect();
+        let wifi_found: Vec<_> = self
+            .discovered_workers
+            .iter()
+            .filter(|w| w.kind == WorkerKind::Wifi)
             .cloned()
             .collect();
         let lan_found: Vec<_> = self
@@ -1886,14 +1898,23 @@ impl CompanionApp {
 
         if !usb_found.is_empty() {
             ui.add_space(8.0);
-            ui.label(RichText::new("USB CYD boards").color(C_MUTED).size(12.0));
+            ui.label(
+                RichText::new("USB / Bluetooth CYD boards")
+                    .color(C_MUTED)
+                    .size(12.0),
+            );
             for w in usb_found {
                 let already = self.worker_already_linked(&w.endpoint);
                 ui.horizontal(|ui| {
                     ui.label(
                         RichText::new({
                             let mac = if w.mac.is_empty() { "mac?" } else { &w.mac };
-                            format!("{mac} · {} · {}", w.endpoint, w.detail)
+                            let tag = if w.kind == WorkerKind::Bluetooth {
+                                "BT"
+                            } else {
+                                "USB"
+                            };
+                            format!("{tag} · {mac} · {} · {}", w.endpoint, w.detail)
                         })
                         .color(C_TEXT)
                         .font(mono_ui_font(11.0)),
@@ -1908,6 +1929,33 @@ impl CompanionApp {
                         self.push_log(
                             LogKind::Usb,
                             format!("Connecting worker {}", w.endpoint),
+                        );
+                    }
+                });
+            }
+        }
+
+        if !wifi_found.is_empty() {
+            ui.add_space(8.0);
+            ui.label(RichText::new("Wi‑Fi CYD boards").color(C_MUTED).size(12.0));
+            for w in wifi_found {
+                let already = self.worker_already_linked(&w.endpoint);
+                ui.horizontal(|ui| {
+                    ui.label(
+                        RichText::new({
+                            let mac = if w.mac.is_empty() { "mac?" } else { &w.mac };
+                            format!("WiFi · {mac} · {} · {}", w.endpoint, w.detail)
+                        })
+                        .color(C_TEXT)
+                        .font(mono_ui_font(11.0)),
+                    );
+                    if already {
+                        ui.label(RichText::new("linked").color(C_LIME).size(11.0));
+                    } else if soft_button(ui, "Connect", 88.0).clicked() {
+                        let _ = self.cmd_tx.send(NetCmd::ConnectWifi(w.endpoint.clone()));
+                        self.push_log(
+                            LogKind::Usb,
+                            format!("Connecting Wi‑Fi worker {}", w.endpoint),
                         );
                     }
                 });
@@ -2593,25 +2641,42 @@ impl App for CompanionApp {
                 }
                 NetMsg::WorkersFound(found) => {
                     self.worker_scan_busy = false;
-                    let mut auto_link: Vec<String> = Vec::new();
+                    let mut auto_usb: Vec<String> = Vec::new();
+                    let mut auto_wifi: Vec<String> = Vec::new();
                     for w in found {
-                        if w.kind == WorkerKind::Usb && !self.worker_already_linked(&w.endpoint) {
-                            auto_link.push(w.endpoint.clone());
+                        if !self.worker_already_linked(&w.endpoint) {
+                            match w.kind {
+                                WorkerKind::Usb | WorkerKind::Bluetooth => {
+                                    auto_usb.push(w.endpoint.clone());
+                                }
+                                WorkerKind::Wifi => auto_wifi.push(w.endpoint.clone()),
+                                WorkerKind::Lan => {}
+                            }
                         }
                         self.merge_discovered(w);
                     }
                     // Always surface already-linked boards in the found list too.
                     for live in self.connected_workers.clone() {
+                        let kind = if live.endpoint.contains(':') && !live.endpoint.starts_with("COM")
+                        {
+                            WorkerKind::Wifi
+                        } else {
+                            WorkerKind::Usb
+                        };
                         self.merge_discovered(DiscoveredWorker {
                             id: {
                                 let mid = mac_worker_id(&live.mac);
                                 if mid.is_empty() {
-                                    format!("usb:{}", live.endpoint)
+                                    format!(
+                                        "{}:{}",
+                                        if kind == WorkerKind::Wifi { "wifi" } else { "usb" },
+                                        live.endpoint
+                                    )
                                 } else {
                                     mid
                                 }
                             },
-                            kind: WorkerKind::Usb,
+                            kind,
                             endpoint: live.endpoint.clone(),
                             mac: live.mac.clone(),
                             fw: live.fw.clone(),
@@ -2620,17 +2685,24 @@ impl App for CompanionApp {
                             last_seen_ms: 0,
                         });
                     }
-                    for endpoint in auto_link {
+                    for endpoint in auto_usb {
                         self.push_log(
                             LogKind::Usb,
-                            format!("Auto-linking CYD worker {endpoint}"),
+                            format!("Auto-linking serial CYD {endpoint}"),
                         );
                         let _ = self.cmd_tx.send(NetCmd::ConnectWorker(endpoint));
+                    }
+                    for endpoint in auto_wifi {
+                        self.push_log(
+                            LogKind::Usb,
+                            format!("Auto-linking Wi‑Fi CYD {endpoint}"),
+                        );
+                        let _ = self.cmd_tx.send(NetCmd::ConnectWifi(endpoint));
                     }
                     self.push_log(
                         LogKind::Usb,
                         format!(
-                            "Worker scan done · {} USB/LAN entries · {} linked",
+                            "Worker scan done · {} entries · {} linked",
                             self.discovered_workers.len(),
                             self.connected_workers.len()
                         ),
@@ -2699,6 +2771,9 @@ impl App for CompanionApp {
         // LAN peer discovery / advertise local CYD USB fleet.
         for peer in self.lan.poll_peers() {
             self.merge_discovered(peer);
+        }
+        for board in self.board_wifi.poll_boards() {
+            self.merge_discovered(board);
         }
         let board_ads: Vec<(String, String, String)> = self
             .connected_workers
@@ -3639,10 +3714,57 @@ fn push_stratum_live(tx: &Sender<NetMsg>, client: &StratumClient) {
     }));
 }
 
+enum BoardIo {
+    Serial(Box<dyn SerialPort>),
+    Tcp(TcpStream),
+}
+
+impl BoardIo {
+    fn drain(&mut self, buf: &mut String) {
+        let mut tmp = [0u8; 2048];
+        for _ in 0..64 {
+            let n = match self {
+                BoardIo::Serial(p) => p.read(&mut tmp),
+                BoardIo::Tcp(p) => p.read(&mut tmp),
+            };
+            match n {
+                Ok(0) | Err(_) => break,
+                Ok(n) => {
+                    buf.push_str(&String::from_utf8_lossy(&tmp[..n]));
+                    if buf.len() > 24576 {
+                        *buf = buf[buf.len() - 8192..].to_string();
+                    }
+                }
+            }
+        }
+    }
+
+    fn write_all(&mut self, data: &[u8]) -> Result<(), String> {
+        match self {
+            BoardIo::Serial(p) => p.write_all(data).map_err(|e| format!("write: {e}")),
+            BoardIo::Tcp(p) => p.write_all(data).map_err(|e| format!("write: {e}")),
+        }
+    }
+
+    fn flush(&mut self) -> Result<(), String> {
+        match self {
+            BoardIo::Serial(p) => p.flush().map_err(|e| format!("flush: {e}")),
+            BoardIo::Tcp(p) => p.flush().map_err(|e| format!("flush: {e}")),
+        }
+    }
+
+    fn clear(&mut self) {
+        if let BoardIo::Serial(p) = self {
+            let _ = p.clear(serialport::ClearBuffer::All);
+        }
+    }
+}
+
+
 fn mine_worker(cmd_rx: Receiver<NetCmd>, msg_tx: Sender<NetMsg>) {
     struct UsbBoard {
         name: String,
-        port: Box<dyn SerialPort>,
+        port: BoardIo,
         rx: String,
         legacy_job: bool,
         fw: String,
@@ -3685,8 +3807,47 @@ fn mine_worker(cmd_rx: Receiver<NetCmd>, msg_tx: Sender<NetMsg>) {
         Err(last_err)
     }
 
+    fn open_wifi_board(endpoint: &str) -> Result<(UsbBoard, bool), String> {
+        let stream = open_wifi_tcp(endpoint)?;
+        let mut rx = String::new();
+        let mut port = BoardIo::Tcp(stream);
+        let _ = port.write_all(b"\r\ncmp ping\r\n");
+        let _ = port.flush();
+        let deadline = Instant::now() + Duration::from_millis(2_500);
+        let mut saw = false;
+        while Instant::now() < deadline {
+            port.drain(&mut rx);
+            if rx.lines().any(|l| {
+                let t = l.trim();
+                t.starts_with("CMP ok") || t.eq_ignore_ascii_case("CMPACK ping")
+            }) {
+                saw = true;
+                break;
+            }
+            thread::sleep(Duration::from_millis(20));
+        }
+        if !saw {
+            return Err(format!("no pong from Wi‑Fi {endpoint}"));
+        }
+        Ok((
+            UsbBoard {
+                name: endpoint.to_string(),
+                port,
+                rx,
+                legacy_job: false,
+                fw: String::new(),
+                mac: String::new(),
+                hashrate_hs: 0.0,
+                hashes: 0,
+                mining: false,
+                status_fails: 0,
+            },
+            true,
+        ))
+    }
+
     fn open_board_at(name: &str, baud: u32) -> Result<(UsbBoard, bool), String> {
-        let mut port = open_usb_serial(name, baud, Duration::from_millis(8))?;
+        let mut port = BoardIo::Serial(open_usb_serial(name, baud, Duration::from_millis(8))?);
         let mut rx = String::new();
         let wait_ms = if baud > 115_200 { 1_400 } else { 2_800 };
         let mut saw = false;
@@ -3694,14 +3855,14 @@ fn mine_worker(cmd_rx: Receiver<NetCmd>, msg_tx: Sender<NetMsg>) {
             if attempt > 0 {
                 // UART bridge may still have reset the MCU on open — wait for boot.
                 thread::sleep(Duration::from_millis(1_600));
-                let _ = port.clear(serialport::ClearBuffer::All);
+                port.clear();
                 rx.clear();
             }
             let _ = port.write_all(b"\r\ncmp ping\r\n");
             let _ = port.flush();
             let deadline = Instant::now() + Duration::from_millis(wait_ms);
             while Instant::now() < deadline {
-                drain_serial(port.as_mut(), &mut rx);
+                port.drain(&mut rx);
                 if rx.lines().any(|l| {
                     let t = l.trim();
                     t.starts_with("CMP ok") || t.eq_ignore_ascii_case("CMPACK ping")
@@ -3736,7 +3897,7 @@ fn mine_worker(cmd_rx: Receiver<NetCmd>, msg_tx: Sender<NetMsg>) {
     }
 
     fn configure_board(board: &mut UsbBoard, msg_tx: &Sender<NetMsg>) {
-        if let Ok(line) = usb_cmd(board.port.as_mut(), &mut board.rx, "cmp config") {
+        if let Ok(line) = usb_cmd(&mut board.port, &mut board.rx, "cmp config") {
             if let Ok(cfg) = parse_cmp_config(&line) {
                 board.legacy_job = !fw_supports_split_jobs(&cfg.fw);
                 board.fw = cfg.fw.clone();
@@ -3758,7 +3919,7 @@ fn mine_worker(cmd_rx: Receiver<NetCmd>, msg_tx: Sender<NetMsg>) {
                 let _ = msg_tx.send(NetMsg::Config(parse_cmp_config(&line)));
             }
         }
-        if let Ok(line) = usb_cmd(board.port.as_mut(), &mut board.rx, "cmp status") {
+        if let Ok(line) = usb_cmd(&mut board.port, &mut board.rx, "cmp status") {
             if let Ok(st) = parse_cmp_status(&line) {
                 board.hashrate_hs = st.hashrate_hs;
                 board.hashes = st.hashes;
@@ -3823,22 +3984,53 @@ fn mine_worker(cmd_rx: Receiver<NetCmd>, msg_tx: Sender<NetMsg>) {
                             &msg_tx_scan,
                             LogKind::Usb,
                             format!(
-                                "USB CYD scan (skipping {} open port(s))…",
+                                "USB/BT/Wi‑Fi CYD scan (skipping {} open)…",
                                 skip.len()
                             ),
                         );
-                        let found = scan_usb_workers_with_progress(&skip, |port| {
+                        let msg_probe = msg_tx_scan.clone();
+                        let mut found = scan_usb_workers_with_progress(&skip, move |port| {
                             log_msg(
-                                &msg_tx_scan,
+                                &msg_probe,
                                 LogKind::Usb,
                                 format!("Probing {port}…"),
                             );
                         });
+                        // Collect Wi‑Fi board beacons briefly, then TCP-ping each.
+                        let mut wifi_disc = BoardWifiDiscovery::start();
+                        let deadline = Instant::now() + Duration::from_millis(1_800);
+                        let mut wifi_eps = Vec::new();
+                        while Instant::now() < deadline {
+                            for w in wifi_disc.poll_boards() {
+                                if !skip.iter().any(|s| s == &w.endpoint)
+                                    && !wifi_eps.iter().any(|e| e == &w.endpoint)
+                                {
+                                    wifi_eps.push(w.endpoint.clone());
+                                    found.push(w);
+                                }
+                            }
+                            thread::sleep(Duration::from_millis(80));
+                        }
+                        for ep in wifi_eps {
+                            if skip.iter().any(|s| s == &ep) {
+                                continue;
+                            }
+                            log_msg(
+                                &msg_tx_scan,
+                                LogKind::Usb,
+                                format!("Probing Wi‑Fi {ep}…"),
+                            );
+                            if let Some(w) = probe_wifi_endpoint(&ep) {
+                                // Replace beacon stub with live probe result.
+                                found.retain(|x| x.endpoint != ep);
+                                found.push(w);
+                            }
+                        }
                         log_msg(
                             &msg_tx_scan,
                             LogKind::Usb,
                             format!(
-                                "USB probe finished · {} CYD board(s) answering",
+                                "Probe finished · {} CYD worker(s) answering",
                                 found.len()
                             ),
                         );
@@ -3853,7 +4045,7 @@ fn mine_worker(cmd_rx: Receiver<NetCmd>, msg_tx: Sender<NetMsg>) {
                         .position(|b| port_names_match(&b.name, &name))
                     {
                         let mut old = boards.remove(idx);
-                        let _ = usb_cmd(old.port.as_mut(), &mut old.rx, "cmp stop");
+                        let _ = usb_cmd(&mut old.port, &mut old.rx, "cmp stop");
                     }
                     log_msg(&msg_tx, LogKind::Usb, format!("Opening {name} (460800→115200)"));
                     match open_board(&name) {
@@ -3862,12 +4054,12 @@ fn mine_worker(cmd_rx: Receiver<NetCmd>, msg_tx: Sender<NetMsg>) {
                             if mining {
                                 let mut legacy = board.legacy_job;
                                 let _ = usb_cmd(
-                                    board.port.as_mut(),
+                                    &mut board.port,
                                     &mut board.rx,
                                     "cmp stats accepted=0&rejected=0",
                                 );
                                 let _ = usb_push_job(
-                                    board.port.as_mut(),
+                                    &mut board.port,
                                     &mut board.rx,
                                     &warmup_job(),
                                     &mut legacy,
@@ -3924,12 +4116,12 @@ fn mine_worker(cmd_rx: Receiver<NetCmd>, msg_tx: Sender<NetMsg>) {
                             if mining {
                                 let mut legacy = board.legacy_job;
                                 let _ = usb_cmd(
-                                    board.port.as_mut(),
+                                    &mut board.port,
                                     &mut board.rx,
                                     "cmp stats accepted=0&rejected=0",
                                 );
                                 let _ = usb_push_job(
-                                    board.port.as_mut(),
+                                    &mut board.port,
                                     &mut board.rx,
                                     &warmup_job(),
                                     &mut legacy,
@@ -3955,13 +4147,82 @@ fn mine_worker(cmd_rx: Receiver<NetCmd>, msg_tx: Sender<NetMsg>) {
                         }
                     }
                 }
+                NetCmd::ConnectWifi(endpoint) => {
+                    if boards.iter().any(|b| b.name == endpoint) {
+                        let _ = msg_tx.send(NetMsg::Action(Ok(format!(
+                            "Wi‑Fi worker {endpoint} already linked"
+                        ))));
+                        publish_live(&msg_tx, &boards);
+                        continue;
+                    }
+                    log_msg(
+                        &msg_tx,
+                        LogKind::Usb,
+                        format!("Connecting Wi‑Fi worker {endpoint}"),
+                    );
+                    match open_wifi_board(&endpoint) {
+                        Ok((mut board, saw)) => {
+                            configure_board(&mut board, &msg_tx);
+                            if mac_is_stable(&board.mac) {
+                                if let Some(idx) = boards.iter().position(|b| {
+                                    mac_is_stable(&b.mac)
+                                        && normalize_mac(&b.mac) == normalize_mac(&board.mac)
+                                }) {
+                                    let old = boards.remove(idx);
+                                    log_msg(
+                                        &msg_tx,
+                                        LogKind::Usb,
+                                        format!(
+                                            "Replaced {} with {} (same MAC {})",
+                                            old.name, endpoint, board.mac
+                                        ),
+                                    );
+                                }
+                            }
+                            if mining {
+                                let mut legacy = board.legacy_job;
+                                let _ = usb_cmd(
+                                    &mut board.port,
+                                    &mut board.rx,
+                                    "cmp stats accepted=0&rejected=0",
+                                );
+                                let _ = usb_push_job(
+                                    &mut board.port,
+                                    &mut board.rx,
+                                    &warmup_job(),
+                                    &mut legacy,
+                                    &msg_tx,
+                                );
+                                board.legacy_job = legacy;
+                            }
+                            boards.push(board);
+                            publish_live(&msg_tx, &boards);
+                            let _ = msg_tx.send(NetMsg::Action(Ok(if saw {
+                                format!(
+                                    "Wi‑Fi worker linked {endpoint} (pong) · {} total",
+                                    boards.len()
+                                )
+                            } else {
+                                format!(
+                                    "Wi‑Fi worker linked {endpoint} · {} total",
+                                    boards.len()
+                                )
+                            })));
+                        }
+                        Err(e) => {
+                            let _ = msg_tx.send(NetMsg::Action(Err(format!(
+                                "Wi‑Fi link {endpoint} failed: {e}"
+                            ))));
+                        }
+                    }
+                }
                 NetCmd::DisconnectWorker(name) => {
                     if let Some(idx) = boards
                         .iter()
                         .position(|b| port_names_match(&b.name, &name))
                     {
                         let mut b = boards.remove(idx);
-                        let _ = usb_cmd(b.port.as_mut(), &mut b.rx, "cmp stop");
+                        let _ = usb_cmd(&mut b.port, &mut b.rx, "cmp stop");
                         publish_live(&msg_tx, &boards);
                         let _ = msg_tx.send(NetMsg::Action(Ok(format!(
                             "Worker dropped {name} · {} remain",
@@ -3986,7 +4247,7 @@ fn mine_worker(cmd_rx: Receiver<NetCmd>, msg_tx: Sender<NetMsg>) {
                         s.disconnect();
                     }
                     for b in boards.iter_mut() {
-                        let _ = usb_cmd(b.port.as_mut(), &mut b.rx, "cmp stop");
+                        let _ = usb_cmd(&mut b.port, &mut b.rx, "cmp stop");
                         b.mining = false;
                         b.hashrate_hs = 0.0;
                     }
@@ -4011,13 +4272,13 @@ fn mine_worker(cmd_rx: Receiver<NetCmd>, msg_tx: Sender<NetMsg>) {
                     reconnect_at = None;
                     for b in boards.iter_mut() {
                         let _ = usb_cmd(
-                            b.port.as_mut(),
+                            &mut b.port,
                             &mut b.rx,
                             "cmp stats accepted=0&rejected=0",
                         );
                         let mut legacy = b.legacy_job;
                         match usb_push_job(
-                            b.port.as_mut(),
+                            &mut b.port,
                             &mut b.rx,
                             &warmup_job(),
                             &mut legacy,
@@ -4083,7 +4344,7 @@ fn mine_worker(cmd_rx: Receiver<NetCmd>, msg_tx: Sender<NetMsg>) {
                         }
                     }
                     for b in boards.iter_mut() {
-                        let _ = usb_cmd(b.port.as_mut(), &mut b.rx, "cmp stop");
+                        let _ = usb_cmd(&mut b.port, &mut b.rx, "cmp stop");
                         b.mining = false;
                         b.hashrate_hs = 0.0;
                     }
@@ -4110,7 +4371,7 @@ fn mine_worker(cmd_rx: Receiver<NetCmd>, msg_tx: Sender<NetMsg>) {
                     let mut any = false;
                     for b in boards.iter_mut() {
                         let cmd = format!("cmp clock cpu_mhz={mhz}");
-                        if usb_cmd(b.port.as_mut(), &mut b.rx, &cmd).is_ok() {
+                        if usb_cmd(&mut b.port, &mut b.rx, &cmd).is_ok() {
                             any = true;
                         }
                     }
@@ -4132,13 +4393,13 @@ fn mine_worker(cmd_rx: Receiver<NetCmd>, msg_tx: Sender<NetMsg>) {
                     let mut drop_names: Vec<String> = Vec::new();
                     for b in boards.iter_mut() {
                         harvest_shares(
-                            b.port.as_mut(),
+                            &mut b.port,
                             &mut b.rx,
                             stratum.as_mut(),
                             &recent_jobs,
                             &msg_tx,
                         );
-                        match usb_cmd(b.port.as_mut(), &mut b.rx, "cmp status") {
+                        match usb_cmd(&mut b.port, &mut b.rx, "cmp status") {
                             Ok(line) => match parse_cmp_status(&line) {
                                 Ok(st) => {
                                     b.status_fails = 0;
@@ -4197,7 +4458,7 @@ fn mine_worker(cmd_rx: Receiver<NetCmd>, msg_tx: Sender<NetMsg>) {
                     for name in drop_names {
                         if let Some(idx) = boards.iter().position(|b| b.name == name) {
                             let mut dead = boards.remove(idx);
-                            let _ = usb_cmd(dead.port.as_mut(), &mut dead.rx, "cmp stop");
+                            let _ = usb_cmd(&mut dead.port, &mut dead.rx, "cmp stop");
                             log_msg(
                                 &msg_tx,
                                 LogKind::Err,
@@ -4236,7 +4497,7 @@ fn mine_worker(cmd_rx: Receiver<NetCmd>, msg_tx: Sender<NetMsg>) {
                 }
                 NetCmd::Bench => {
                     if let Some(b) = boards.first_mut() {
-                        match usb_cmd(b.port.as_mut(), &mut b.rx, "cmp bench n=8") {
+                        match usb_cmd(&mut b.port, &mut b.rx, "cmp bench n=8") {
                             Ok(line) => {
                                 let _ = msg_tx.send(NetMsg::Action(Ok(line)));
                             }
@@ -4250,7 +4511,7 @@ fn mine_worker(cmd_rx: Receiver<NetCmd>, msg_tx: Sender<NetMsg>) {
                 }
                 NetCmd::UsbRaw(cmd) => {
                     if let Some(b) = boards.first_mut() {
-                        match usb_cmd(b.port.as_mut(), &mut b.rx, &cmd) {
+                        match usb_cmd(&mut b.port, &mut b.rx, &cmd) {
                             Ok(line) => {
                                 let _ = msg_tx.send(NetMsg::Terminal(line));
                             }
@@ -4272,7 +4533,7 @@ fn mine_worker(cmd_rx: Receiver<NetCmd>, msg_tx: Sender<NetMsg>) {
                         s.disconnect();
                     }
                     for b in boards.iter_mut() {
-                        let _ = usb_cmd(b.port.as_mut(), &mut b.rx, "cmp stop");
+                        let _ = usb_cmd(&mut b.port, &mut b.rx, "cmp stop");
                     }
                     // Drop serial handles so Windows releases the COM port for espflash.
                     boards.clear();
@@ -4326,12 +4587,12 @@ fn mine_worker(cmd_rx: Receiver<NetCmd>, msg_tx: Sender<NetMsg>) {
                 NetCmd::PushNet { text } => {
                     for b in boards.iter_mut() {
                         let cmd = format!("cmp netdata text={}", urlenc(&text));
-                        let _ = usb_cmd(b.port.as_mut(), &mut b.rx, &cmd);
+                        let _ = usb_cmd(&mut b.port, &mut b.rx, &cmd);
                     }
                 }
                 NetCmd::RebootBoard => {
                     if let Some(b) = boards.first_mut() {
-                        match usb_cmd(b.port.as_mut(), &mut b.rx, "cmp reboot") {
+                        match usb_cmd(&mut b.port, &mut b.rx, "cmp reboot") {
                             Ok(line) => {
                                 let _ = msg_tx.send(NetMsg::Action(Ok(format!(
                                     "Board reboot queued ({line})"
@@ -4381,7 +4642,7 @@ fn mine_worker(cmd_rx: Receiver<NetCmd>, msg_tx: Sender<NetMsg>) {
         if !boards.is_empty() {
             for b in boards.iter_mut() {
                 harvest_shares(
-                    b.port.as_mut(),
+                    &mut b.port,
                     &mut b.rx,
                     stratum.as_mut(),
                     &recent_jobs,
@@ -4414,7 +4675,7 @@ fn mine_worker(cmd_rx: Receiver<NetCmd>, msg_tx: Sender<NetMsg>) {
                         });
                         for b in boards.iter_mut() {
                             let _ = usb_cmd(
-                                b.port.as_mut(),
+                                &mut b.port,
                                 &mut b.rx,
                                 "cmp stats accepted=0&rejected=0",
                             );
@@ -4431,7 +4692,7 @@ fn mine_worker(cmd_rx: Receiver<NetCmd>, msg_tx: Sender<NetMsg>) {
                         for b in boards.iter_mut() {
                             let mut legacy = b.legacy_job;
                             match usb_push_job(
-                                b.port.as_mut(),
+                                &mut b.port,
                                 &mut b.rx,
                                 &job,
                                 &mut legacy,
@@ -4469,7 +4730,7 @@ fn mine_worker(cmd_rx: Receiver<NetCmd>, msg_tx: Sender<NetMsg>) {
                         };
                         let cmd = format!("cmp stats accepted={a}&rejected={r}");
                         for b in boards.iter_mut() {
-                            let _ = usb_cmd(b.port.as_mut(), &mut b.rx, &cmd);
+                            let _ = usb_cmd(&mut b.port, &mut b.rx, &cmd);
                         }
                         last_stats_push = Instant::now();
                     }
@@ -4566,13 +4827,13 @@ fn mine_worker(cmd_rx: Receiver<NetCmd>, msg_tx: Sender<NetMsg>) {
 }
 
 fn harvest_shares(
-    port: &mut dyn SerialPort,
+    port: &mut BoardIo,
     buf: &mut String,
     stratum: Option<&mut StratumClient>,
     recent_jobs: &VecDeque<WorkJob>,
     msg_tx: &Sender<NetMsg>,
 ) {
-    drain_serial(port, buf);
+    port.drain(buf);
     let mut keep = String::new();
     let mut shares: Vec<(String, String, String, String)> = Vec::new();
     for line in buf.lines() {
@@ -4662,21 +4923,6 @@ fn harvest_shares(
     }
 }
 
-fn drain_serial(port: &mut dyn SerialPort, buf: &mut String) {
-    let mut tmp = [0u8; 2048];
-    for _ in 0..64 {
-        match port.read(&mut tmp) {
-            Ok(0) | Err(_) => break,
-            Ok(n) => {
-                buf.push_str(&String::from_utf8_lossy(&tmp[..n]));
-                if buf.len() > 24576 {
-                    *buf = buf[buf.len() - 8192..].to_string();
-                }
-            }
-        }
-    }
-}
-
 fn cmp_reply_line(buf: &str) -> Option<String> {
     for raw in buf.lines() {
         let t = raw.trim();
@@ -4700,7 +4946,7 @@ fn cmp_reply_line(buf: &str) -> Option<String> {
     None
 }
 
-fn usb_cmd(port: &mut dyn SerialPort, buf: &mut String, cmd: &str) -> Result<String, String> {
+fn usb_cmd(port: &mut BoardIo, buf: &mut String, cmd: &str) -> Result<String, String> {
     let mut last_err = String::new();
     // Bigger writes + single flush cut job-push latency a lot vs per-chunk sleeps.
     let (wait_ms, retries, chunk, gap_ms) = if cmd.contains("bench") {
@@ -4716,7 +4962,7 @@ fn usb_cmd(port: &mut dyn SerialPort, buf: &mut String, cmd: &str) -> Result<Str
         (2_500u64, 3usize, 256usize, 0u64)
     };
     for _ in 0..retries {
-        drain_serial(port, buf);
+        port.drain(buf);
         let mut keep = String::new();
         for line in buf.lines() {
             if line.trim().starts_with("CMPSHARE ") {
@@ -4727,8 +4973,7 @@ fn usb_cmd(port: &mut dyn SerialPort, buf: &mut String, cmd: &str) -> Result<Str
         *buf = keep;
         let line = format!("\r\n{cmd}\r\n");
         for piece in line.as_bytes().chunks(chunk) {
-            port.write_all(piece)
-                .map_err(|e| format!("USB write: {e}"))?;
+            port.write_all(piece)?;
             if gap_ms > 0 {
                 thread::sleep(Duration::from_millis(gap_ms));
             }
@@ -4736,7 +4981,7 @@ fn usb_cmd(port: &mut dyn SerialPort, buf: &mut String, cmd: &str) -> Result<Str
         let _ = port.flush();
         let deadline = Instant::now() + Duration::from_millis(wait_ms);
         while Instant::now() < deadline {
-            drain_serial(port, buf);
+            port.drain(buf);
             if let Some(reply) = cmp_reply_line(buf) {
                 if let Some(pos) = buf.find(&reply) {
                     let end = pos + reply.len();
@@ -4780,7 +5025,7 @@ fn fw_supports_split_jobs(fw: &str) -> bool {
 }
 
 fn usb_push_job(
-    port: &mut dyn SerialPort,
+    port: &mut BoardIo,
     buf: &mut String,
     job: &stratum::WorkJob,
     legacy_job: &mut bool,

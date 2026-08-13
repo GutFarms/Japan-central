@@ -2,10 +2,13 @@
 #include <Arduino.h>
 #include <Preferences.h>
 
-// Board settings only — pool/WiFi live on the PC companion.
+// Board settings — SoftAP Wi‑Fi is on by default; optional STA credentials.
 struct AppConfig {
   uint8_t cpuMhz = 240;
   bool hashFocus = true;
+  bool wifiEnabled = true;
+  String wifiSsid;
+  String wifiPass;
 
   uint8_t normalizeCpu(uint8_t mhz) const {
     if (mhz == 0 || mhz >= 200) return 240;

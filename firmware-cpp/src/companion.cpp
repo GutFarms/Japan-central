@@ -10,22 +10,46 @@ void CompanionLink::begin(uint32_t baud) {
   Serial.begin(baud);
   Serial.setTimeout(0);
   lineLen_ = 0;
+  tcpLineLen_ = 0;
   haveHeader_ = false;
   haveTarget_ = false;
+  out_ = &Serial;
+  activeLineBuf_ = lineBuf_;
+  activeLineLen_ = &lineLen_;
 }
 
 bool CompanionLink::poll(AppConfig& cfg, const MinerSnapshot& snap, ApplyFn onApply, NetFeed* net,
                          JobFn onJob, StopFn onStop, StatsFn onStats) {
+  activeLineBuf_ = lineBuf_;
+  activeLineLen_ = &lineLen_;
+  return pollStream(Serial, Serial, cfg, snap, onApply, net, onJob, onStop, onStats);
+}
+
+bool CompanionLink::pollTcp(Stream& in, Print& out, AppConfig& cfg, const MinerSnapshot& snap,
+                            ApplyFn onApply, NetFeed* net, JobFn onJob, StopFn onStop,
+                            StatsFn onStats) {
+  activeLineBuf_ = tcpLineBuf_;
+  activeLineLen_ = &tcpLineLen_;
+  bool ok = pollStream(in, out, cfg, snap, onApply, net, onJob, onStop, onStats);
+  activeLineBuf_ = lineBuf_;
+  activeLineLen_ = &lineLen_;
+  return ok;
+}
+
+bool CompanionLink::pollStream(Stream& in, Print& out, AppConfig& cfg, const MinerSnapshot& snap,
+                               ApplyFn onApply, NetFeed* net, JobFn onJob, StopFn onStop,
+                               StatsFn onStats) {
+  Print* prev = out_;
+  out_ = &out;
   bool applied = false;
-  // Drain aggressively — long job traffic must not wait on mining.
   int budget = 8192;
-  while (budget-- > 0 && Serial.available() > 0) {
-    char c = (char)Serial.read();
+  while (budget-- > 0 && in.available() > 0) {
+    char c = (char)in.read();
     if (c == '\n' || c == '\r') {
-      if (lineLen_ > 0) {
-        lineBuf_[lineLen_] = 0;
-        String cmd(lineBuf_);
-        lineLen_ = 0;
+      if (*activeLineLen_ > 0) {
+        activeLineBuf_[*activeLineLen_] = 0;
+        String cmd(activeLineBuf_);
+        *activeLineLen_ = 0;
         cmd.trim();
         if (cmd.length() == 0) continue;
         handleLine(cmd, cfg, snap,
@@ -37,33 +61,34 @@ bool CompanionLink::poll(AppConfig& cfg, const MinerSnapshot& snap, ApplyFn onAp
                    net, onJob, onStop, onStats);
       }
     } else if (c >= 32 && c < 127) {
-      if (lineLen_ + 1 < kLineCap) {
-        lineBuf_[lineLen_++] = c;
+      if (*activeLineLen_ + 1 < kLineCap) {
+        activeLineBuf_[(*activeLineLen_)++] = c;
       } else {
-        // Overflow — drop line so a bad frame can't wedge the parser.
-        lineLen_ = 0;
+        *activeLineLen_ = 0;
       }
     }
   }
+  out_ = prev;
   return applied;
 }
 
 void CompanionLink::emitShare(const PendingShare& share) {
   if (!share.pending) return;
   char nonceHex[9];
-  // Stratum mining.submit nonce matches cgminer: printf("%08x", nonce_uint32)
-  // where nonce_uint32 is the LE reading of the wire header bytes (getwork order).
-  // Do NOT emit the raw wire byte hex (that rejects on every pool).
   snprintf(nonceHex, sizeof(nonceHex), "%08x", (unsigned)share.nonce);
-  Serial.print("CMPSHARE nonce=");
-  Serial.print(nonceHex);
-  Serial.print("&job=");
-  Serial.print(share.jobId);
-  Serial.print("&en2=");
-  Serial.print(share.extranonce2);
-  Serial.print("&ntime=");
-  Serial.println(share.ntime);
-  Serial.flush();
+  auto writeShare = [&](Print& p) {
+    p.print("CMPSHARE nonce=");
+    p.print(nonceHex);
+    p.print("&job=");
+    p.print(share.jobId);
+    p.print("&en2=");
+    p.print(share.extranonce2);
+    p.print("&ntime=");
+    p.println(share.ntime);
+    p.flush();
+  };
+  writeShare(Serial);
+  if (shareMirror_) writeShare(*shareMirror_);
 }
 
 void CompanionLink::handleLine(const String& line, AppConfig& cfg, const MinerSnapshot& snap,
@@ -98,20 +123,20 @@ void CompanionLink::handleLine(const String& line, AppConfig& cfg, const MinerSn
 
   if (verb == "ping") {
     char buf[48];
-    snprintf(buf, sizeof(buf), "CMP ok usb mac=%s",
+    snprintf(buf, sizeof(buf), "CMP ok cmp mac=%s",
              snap.mac.length() ? snap.mac.c_str() : "unknown");
-    Serial.println(buf);
-    Serial.flush();
+    out_->println(buf);
+    out_->flush();
     return;
   }
   if (verb == "status") {
     replyStatus(cfg, snap);
-    Serial.flush();
+    out_->flush();
     return;
   }
   if (verb == "config") {
     replyConfig(cfg, snap);
-    Serial.flush();
+    out_->flush();
     return;
   }
 
@@ -126,13 +151,13 @@ void CompanionLink::handleLine(const String& line, AppConfig& cfg, const MinerSn
     if (eq >= 0) hex = hex.substring(eq + 1);
     hex.trim();
     if (!hexDecodeFixed(hex, stagedHeader_, 80)) {
-      Serial.println("CMPERR jh need 160 hex");
-      Serial.flush();
+      out_->println("CMPERR jh need 160 hex");
+      out_->flush();
       return;
     }
     haveHeader_ = true;
-    Serial.println("CMPACK jh");
-    Serial.flush();
+    out_->println("CMPACK jh");
+    out_->flush();
     return;
   }
   if (verb == "jt" || verb == "jobtgt" || verb == "target") {
@@ -141,33 +166,33 @@ void CompanionLink::handleLine(const String& line, AppConfig& cfg, const MinerSn
     if (eq >= 0) hex = hex.substring(eq + 1);
     hex.trim();
     if (!hexDecodeFixed(hex, stagedTarget_, 32)) {
-      Serial.println("CMPERR jt need 64 hex");
-      Serial.flush();
+      out_->println("CMPERR jt need 64 hex");
+      out_->flush();
       return;
     }
     haveTarget_ = true;
-    Serial.println("CMPACK jt");
-    Serial.flush();
+    out_->println("CMPACK jt");
+    out_->flush();
     return;
   }
   if (verb == "ja" || verb == "jobarm" || verb == "arm") {
     if (!haveHeader_ || !haveTarget_) {
-      Serial.println("CMPERR ja need jh+jt first");
-      Serial.flush();
+      out_->println("CMPERR ja need jh+jt first");
+      out_->flush();
       return;
     }
     UsbJob job;
     if (!parseJobMeta(args, job)) {
-      Serial.println("CMPERR ja bad meta");
-      Serial.flush();
+      out_->println("CMPERR ja bad meta");
+      out_->flush();
       return;
     }
     memcpy(job.header, stagedHeader_, 80);
     memcpy(job.target, stagedTarget_, 32);
     job.valid = true;
     job.fresh = true;
-    Serial.println("CMPACK ja");
-    Serial.flush();
+    out_->println("CMPACK ja");
+    out_->flush();
     if (onJob) onJob(job);
     return;
   }
@@ -176,19 +201,19 @@ void CompanionLink::handleLine(const String& line, AppConfig& cfg, const MinerSn
   if (verb == "job") {
     UsbJob job;
     if (!parseJob(args, job)) {
-      Serial.println("CMPERR job header+target required");
-      Serial.flush();
+      out_->println("CMPERR job header+target required");
+      out_->flush();
       return;
     }
-    Serial.println("CMPACK job");
-    Serial.flush();
+    out_->println("CMPACK job");
+    out_->flush();
     if (onJob) onJob(job);
     return;
   }
   if (verb == "stop") {
     if (onStop) onStop();
-    Serial.println("CMPACK stop");
-    Serial.flush();
+    out_->println("CMPACK stop");
+    out_->flush();
     return;
   }
   if (verb == "bench") {
@@ -203,7 +228,7 @@ void CompanionLink::handleLine(const String& line, AppConfig& cfg, const MinerSn
     char line[96];
     snprintf(line, sizeof(line), "CMPBENCH hashes=%u hs=%.4f khs=%.6f", (unsigned)n, hs,
              hs / 1000.0f);
-    Serial.println(line);
+    out_->println(line);
     return;
   }
   if (verb == "stats") {
@@ -222,14 +247,14 @@ void CompanionLink::handleLine(const String& line, AppConfig& cfg, const MinerSn
       start = amp + 1;
     }
     if (onStats) onStats(acc, rej);
-    Serial.println("CMPACK stats");
+    out_->println("CMPACK stats");
     return;
   }
   if (verb == "netdata" || verb == "net" || verb == "push") {
     // ACK for Companion compatibility — LCD ticker is disabled in hash-focus builds.
     (void)net;
     (void)args;
-    Serial.println("CMPACK net");
+    out_->println("CMPACK net");
     return;
   }
   if (verb == "set" || verb == "clock" || verb == "reboot") {
@@ -237,15 +262,41 @@ void CompanionLink::handleLine(const String& line, AppConfig& cfg, const MinerSn
     bool reboot = (verb == "reboot");
     parseBody(args, updated, reboot);
     if (verb == "clock" && args.indexOf("cpu_mhz") < 0 && args.indexOf("clock") < 0) {
-      Serial.println("CMPERR cpu_mhz required");
+      out_->println("CMPERR cpu_mhz required");
       return;
     }
-    Serial.println("CMPACK queued");
-    if (reboot) Serial.flush();
+    out_->println("CMPACK queued");
+    if (reboot) out_->flush();
     (void)onApply(updated, reboot);
     return;
   }
-  Serial.println("CMPERR unknown (ping|status|config|jh|jt|ja|job|stop|stats|bench|clock|reboot|netdata)");
+  
+  if (verb == "wifi") {
+    if (args.length() == 0 || args.equalsIgnoreCase("status")) {
+      char buf[160];
+      snprintf(buf, sizeof(buf),
+               "CMPACK wifi en=%u ssid=%s",
+               cfg.wifiEnabled ? 1u : 0u,
+               cfg.wifiSsid.length() ? cfg.wifiSsid.c_str() : "-");
+      out_->println(buf);
+      out_->flush();
+      return;
+    }
+    if (args.equalsIgnoreCase("clear") || args.indexOf("clear=1") >= 0) {
+      cfg.wifiSsid = "";
+      cfg.wifiPass = "";
+      out_->println("CMPACK wifi cleared");
+      out_->flush();
+      if (onWifi_) onWifi_();
+      return;
+    }
+    parseWifiBody(args, cfg);
+    out_->println("CMPACK wifi");
+    out_->flush();
+    if (onWifi_) onWifi_();
+    return;
+  }
+  out_->println("CMPERR unknown (ping|status|config|wifi|jh|jt|ja|job|stop|stats|bench|clock|reboot|netdata)");
 }
 
 static void copyJsonSafe(char* dst, size_t dstLen, const char* src, size_t maxCopy) {
@@ -278,7 +329,7 @@ void CompanionLink::replyStatus(const AppConfig& cfg, const MinerSnapshot& snap)
       buf, sizeof(buf),
       "{\"hashrate_hs\":%.0f,\"hashrate_khs\":%.3f,\"shares\":%llu,\"hashes\":%llu,"
       "\"mining\":%s,\"accepted\":%u,\"rejected\":%u,\"pool\":\"%s\",\"connected\":%s,"
-      "\"link\":\"usb\",\"difficulty\":0,\"uptime_secs\":%u,\"cpu_mhz\":%u,"
+      "\"link\":\"cmp\",\"difficulty\":0,\"uptime_secs\":%u,\"cpu_mhz\":%u,"
       "\"hash_focus\":true,\"net_ticker\":\"\",\"job\":\"%s\",\"sha_mode\":\"%s\","
       "\"full_v\":true,\"bench_hs\":%.0f,\"nonce\":\"%s\",\"mac\":\"%s\"}",
       (double)snap.hashrateHs, (double)(snap.hashrateHs / 1000.0f),
@@ -287,20 +338,30 @@ void CompanionLink::replyStatus(const AppConfig& cfg, const MinerSnapshot& snap)
       snap.connected ? "true" : "false", (unsigned)(millis() / 1000),
       (unsigned)(snap.cpuMhz ? snap.cpuMhz : cfg.cpuMhz), job, sha, (double)snap.benchHs, nonceHex,
       mac);
-  Serial.print("CMPSTATUS ");
-  Serial.println(buf);
+  out_->print("CMPSTATUS ");
+  out_->println(buf);
 }
 
 void CompanionLink::replyConfig(const AppConfig& cfg, const MinerSnapshot& snap) {
   char mac[20];
   copyJsonSafe(mac, sizeof(mac), snap.mac.length() ? snap.mac.c_str() : "", 17);
-  char buf[160];
+  char ssid[36];
+  copyJsonSafe(ssid, sizeof(ssid), cfg.wifiSsid.c_str(), 32);
+  char wmode[12];
+  copyJsonSafe(wmode, sizeof(wmode), snap.wifiMode.c_str(), 10);
+  char wip[20];
+  copyJsonSafe(wip, sizeof(wip), snap.wifiIp.c_str(), 18);
+  char wap[36];
+  copyJsonSafe(wap, sizeof(wap), snap.wifiAp.c_str(), 32);
+  char buf[320];
   snprintf(buf, sizeof(buf),
-           "{\"cpu_mhz\":%u,\"hash_focus\":true,\"fw\":\"0.8.41-sha256\",\"mode\":\"usb-sha256\","
-           "\"configured\":true,\"mac\":\"%s\"}",
-           (unsigned)cfg.cpuMhz, mac);
-  Serial.print("CMPCONFIG ");
-  Serial.println(buf);
+           "{\"cpu_mhz\":%u,\"hash_focus\":true,\"fw\":\"0.8.42-sha256\",\"mode\":\"usb-wifi-sha256\","
+           "\"configured\":true,\"mac\":\"%s\",\"wifi_en\":%s,\"wifi_ssid\":\"%s\","
+           "\"wifi_mode\":\"%s\",\"wifi_ip\":\"%s\",\"wifi_ap\":\"%s\",\"wifi_tcp\":%u}",
+           (unsigned)cfg.cpuMhz, mac, cfg.wifiEnabled ? "true" : "false", ssid, wmode, wip, wap,
+           19284u);
+  out_->print("CMPCONFIG ");
+  out_->println(buf);
 }
 
 String CompanionLink::urlDecode(const String& in) {
@@ -319,6 +380,30 @@ String CompanionLink::urlDecode(const String& in) {
     }
   }
   return out;
+}
+
+
+void CompanionLink::parseWifiBody(const String& body, AppConfig& cfg) {
+  int start = 0;
+  while (start < (int)body.length()) {
+    int amp = body.indexOf('&', start);
+    String pair = (amp < 0) ? body.substring(start) : body.substring(start, amp);
+    int eq = pair.indexOf('=');
+    String key = (eq < 0) ? pair : pair.substring(0, eq);
+    String val = (eq < 0) ? "" : urlDecode(pair.substring(eq + 1));
+    key.toLowerCase();
+    if (key == "ssid") {
+      if (val.length() > 32) val = val.substring(0, 32);
+      cfg.wifiSsid = val;
+    } else if (key == "pass" || key == "password" || key == "psk") {
+      if (val.length() > 63) val = val.substring(0, 63);
+      cfg.wifiPass = val;
+    } else if (key == "en" || key == "enable" || key == "wifi") {
+      cfg.wifiEnabled = !(val == "0" || val.equalsIgnoreCase("false") || val.equalsIgnoreCase("off"));
+    }
+    if (amp < 0) break;
+    start = amp + 1;
+  }
 }
 
 void CompanionLink::parseBody(const String& body, AppConfig& cfg, bool& reboot) {

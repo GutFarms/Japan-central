@@ -18,10 +18,13 @@ struct MinerSnapshot {
   bool hashFocus = true;
   String netTicker;
   String jobId;
-  String shaMode;  // HW / HW+ / HW/SW / SW
+  String shaMode;
   float benchHs = 0;
   bool fullV = false;
-  String mac;  // STA eFuse MAC, aa:bb:cc:dd:ee:ff
+  String mac;
+  String wifiMode;   // off / ap / sta / apsta
+  String wifiAp;     // SoftAP SSID
+  String wifiIp;     // best client IP for TCP
 };
 
 struct NetFeed {
@@ -50,17 +53,25 @@ struct PendingShare {
   bool pending = false;
 };
 
-// UART0 companion protocol — board mines only; PC owns pool + WiFi.
+// Line companion protocol — USB Serial and/or Wi‑Fi TCP (same verbs).
 class CompanionLink {
  public:
   using ApplyFn = std::function<bool(AppConfig& updated, bool& reboot)>;
   using JobFn = std::function<void(const UsbJob& job)>;
   using StopFn = std::function<void()>;
   using StatsFn = std::function<void(uint32_t accepted, uint32_t rejected)>;
+  using WifiFn = std::function<void()>;  // notify Wi‑Fi settings changed
 
   void begin(uint32_t baud = 460800);
+  void setShareMirror(Print* mirror) { shareMirror_ = mirror; }
+  void setWifiApply(WifiFn fn) { onWifi_ = std::move(fn); }
+
   bool poll(AppConfig& cfg, const MinerSnapshot& snap, ApplyFn onApply, NetFeed* net, JobFn onJob,
             StopFn onStop, StatsFn onStats);
+  bool pollStream(Stream& in, Print& out, AppConfig& cfg, const MinerSnapshot& snap, ApplyFn onApply,
+                  NetFeed* net, JobFn onJob, StopFn onStop, StatsFn onStats);
+  bool pollTcp(Stream& in, Print& out, AppConfig& cfg, const MinerSnapshot& snap, ApplyFn onApply,
+               NetFeed* net, JobFn onJob, StopFn onStop, StatsFn onStats);
 
   void emitShare(const PendingShare& share);
 
@@ -68,12 +79,20 @@ class CompanionLink {
   static constexpr size_t kLineCap = 768;
   char lineBuf_[kLineCap]{};
   size_t lineLen_ = 0;
+  char tcpLineBuf_[kLineCap]{};
+  size_t tcpLineLen_ = 0;
 
-  // Staged multi-part job (short USB lines — avoids one huge `cmp job …` timeout).
   uint8_t stagedHeader_[80]{};
   uint8_t stagedTarget_[32]{};
   bool haveHeader_ = false;
   bool haveTarget_ = false;
+
+  Print* out_ = &Serial;
+  Print* shareMirror_ = nullptr;
+  WifiFn onWifi_;
+
+  char* activeLineBuf_ = lineBuf_;
+  size_t* activeLineLen_ = &lineLen_;
 
   void handleLine(const String& line, AppConfig& cfg, const MinerSnapshot& snap, ApplyFn onApply,
                   NetFeed* net, JobFn onJob, StopFn onStop, StatsFn onStats);
@@ -81,6 +100,7 @@ class CompanionLink {
   void replyConfig(const AppConfig& cfg, const MinerSnapshot& snap);
   static String urlDecode(const String& in);
   static void parseBody(const String& body, AppConfig& cfg, bool& reboot);
+  static void parseWifiBody(const String& body, AppConfig& cfg);
   static void parseNetData(const String& body, NetFeed& net);
   static bool parseJob(const String& body, UsbJob& job);
   static bool parseJobMeta(const String& body, UsbJob& job);

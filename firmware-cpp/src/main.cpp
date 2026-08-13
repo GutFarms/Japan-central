@@ -3,6 +3,7 @@
 #include "display_ui.hpp"
 #include "sha256_hw.hpp"
 #include "sha256_miner.hpp"
+#include "wifi_link.hpp"
 
 #include <atomic>
 #include <cstdio>
@@ -13,10 +14,12 @@
 #include <esp_mac.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
+#include <WiFi.h>
 
 static ConfigStore g_store;
 static AppConfig g_cfg;
 static CompanionLink g_cmp;
+static WifiLink g_wifi;
 static DisplayUi g_ui;
 static Sha256Miner g_minerA;  // core 1 (HW SHA owner, or primary SW lane)
 static Sha256Miner g_minerB;  // core 0 SW assist (disjoint nonce range)
@@ -147,6 +150,13 @@ static void fillSnap() {
   g_snap.fullV = true;
   g_snap.benchHs = cyd_last_bench_hs();
   g_snap.mac = g_macStr;
+  g_snap.wifiMode = g_wifi.modeLabel();
+  g_snap.wifiAp = g_wifi.softApSsid();
+  if (WiFi.status() == WL_CONNECTED) {
+    g_snap.wifiIp = WiFi.localIP().toString();
+  } else {
+    g_snap.wifiIp = g_wifi.softApIp().toString();
+  }
   // Ticker disabled while hashing — net pushes are ACK'd but not painted.
   if (!g_mining) g_snap.netTicker = g_net.ticker;
 }
@@ -156,6 +166,7 @@ static bool applyConfig(AppConfig& updated, bool& reboot) {
   updated.hashFocus = true;
   g_cfg = updated;
   g_store.save(g_cfg);
+  g_wifi.applyConfig(g_cfg);
   if (reboot) {
     Serial.flush();
     delay(60);
@@ -224,9 +235,14 @@ static void serviceCompanion() {
     fillSnap();
     g_lastSnapMs = now;
   }
-  g_cmp.poll(g_cfg, g_snap, applyConfig, &g_net, onJob, onStop, onStats);
+  auto onApply = applyConfig;
+  auto job = onJob;
+  auto stop = onStop;
+  auto stats = onStats;
+  g_cmp.poll(g_cfg, g_snap, onApply, &g_net, job, stop, stats);
+  g_wifi.poll(g_cmp, g_cfg, g_snap, onApply, &g_net, job, stop, stats);
   if (g_net.fresh) {
-    g_net.fresh = false;  // Accept but do not paint ticker while mining.
+    g_net.fresh = false;
     if (!g_mining) g_snap.netTicker = g_net.ticker;
   }
   if (g_sharePending) {
@@ -366,9 +382,6 @@ void setup() {
     snprintf(g_macStr, sizeof(g_macStr), "unknown");
   }
 
-  (void)esp_wifi_stop();
-  (void)esp_wifi_deinit();
-
   g_cmp.begin(460800);
   g_ui.begin();
   g_ui.showSplash();
@@ -376,7 +389,13 @@ void setup() {
   g_store.load(g_cfg);
   g_cfg.cpuMhz = 240;
   g_cfg.hashFocus = true;
+  g_cfg.wifiEnabled = true;
   applyCpu(240);
+  g_wifi.begin(g_macStr, g_cfg);
+  g_cmp.setWifiApply([]() {
+    g_store.save(g_cfg);
+    g_wifi.applyConfig(g_cfg);
+  });
 
   g_minerA.begin();
   g_minerB.begin();
@@ -403,10 +422,10 @@ void setup() {
     g_minerA.setJob(hdr, tgt, 1);
     refreshLabels();
     char line[28];
-    snprintf(line, sizeof(line), "%s · USB link", cyd_sha_hw::mode_label());
+    snprintf(line, sizeof(line), "%s · USB/WiFi", cyd_sha_hw::mode_label());
     g_ui.showMessage("SHA-256 MAX", line);
   } else {
-    g_ui.showMessage("SHA-256", "hash focus · USB");
+    g_ui.showMessage("SHA-256", "USB + WiFi link");
   }
   delay(280);
   g_ui.showWaitingCompanion();

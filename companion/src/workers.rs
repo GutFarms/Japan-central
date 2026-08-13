@@ -1,17 +1,23 @@
-//! Discover CYD workers on USB (cmp ping/config) and Companion peers on the LAN.
+//! Discover CYD workers on USB / Bluetooth serial, Wi‑Fi (UDP beacon + TCP cmp),
+//! and Companion peers on the LAN.
 
 use serde::{Deserialize, Serialize};
 use serialport::{SerialPort, SerialPortType};
-use std::io::Write;
-use std::net::{SocketAddr, UdpSocket};
+use std::io::{Read, Write};
+use std::net::{SocketAddr, TcpStream, ToSocketAddrs, UdpSocket};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 pub const LAN_DISCOVERY_PORT: u16 = 19283;
 pub const LAN_MAGIC: &str = "CYDCOMPANION";
+pub const BOARD_WIFI_PORT: u16 = 19284;
+pub const BOARD_WIFI_MAGIC: &str = "CYDBOARD";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum WorkerKind {
     Usb,
+    Bluetooth,
+    Wifi,
     Lan,
 }
 
@@ -19,7 +25,7 @@ pub enum WorkerKind {
 pub struct DiscoveredWorker {
     pub id: String,
     pub kind: WorkerKind,
-    /// COM port path, or `host:port` for LAN peers.
+    /// COM port path, or `host:port` for Wi‑Fi / LAN peers.
     pub endpoint: String,
     /// Board eFuse Wi‑Fi STA MAC (`aa:bb:…`) when known — stable board identity.
     #[serde(default)]
@@ -274,28 +280,27 @@ fn probe_usb_port_at(name: &str, baud: u32) -> Option<DiscoveredWorker> {
     })
 }
 
-/// Ports worth probing for CYD boards (USB first; skip Bluetooth).
-fn scan_candidate_ports() -> Vec<String> {
+/// Ports worth probing for CYD boards (USB first, then BT / unknown / PCI).
+fn scan_candidate_ports() -> Vec<(String, WorkerKind)> {
     let mut infos = serialport::available_ports().unwrap_or_default();
     infos.sort_by(|a, b| {
         let rank = |p: &serialport::SerialPortInfo| match p.port_type {
             SerialPortType::UsbPort(_) => 0,
-            SerialPortType::Unknown => 1,
-            SerialPortType::PciPort => 2,
-            SerialPortType::BluetoothPort => 9,
+            SerialPortType::BluetoothPort => 1,
+            SerialPortType::Unknown => 2,
+            SerialPortType::PciPort => 3,
         };
         rank(a).cmp(&rank(b)).then_with(|| a.port_name.cmp(&b.port_name))
     });
     infos
         .into_iter()
-        .filter(|p| {
-            // Skip Bluetooth/PCI — motherboard COM1 often hangs and is never a CYD.
-            matches!(
-                p.port_type,
-                SerialPortType::UsbPort(_) | SerialPortType::Unknown
-            )
+        .map(|p| {
+            let kind = match p.port_type {
+                SerialPortType::BluetoothPort => WorkerKind::Bluetooth,
+                _ => WorkerKind::Usb,
+            };
+            (p.port_name, kind)
         })
-        .map(|p| p.port_name)
         .collect()
 }
 
@@ -304,22 +309,261 @@ pub fn scan_usb_workers(skip: &[String]) -> Vec<DiscoveredWorker> {
     scan_usb_workers_with_progress(skip, |_| {})
 }
 
-/// Like [`scan_usb_workers`], with a per-port progress callback (Event log).
+/// Parallel USB/BT/PCI probe with per-port progress callback.
 pub fn scan_usb_workers_with_progress(
     skip: &[String],
-    mut on_port: impl FnMut(&str),
+    on_port: impl Fn(&str) + Send + Sync + 'static,
 ) -> Vec<DiscoveredWorker> {
-    let mut out = Vec::new();
-    for name in scan_candidate_ports() {
-        if skip.iter().any(|s| port_names_match(s, &name)) {
-            continue;
+    let candidates: Vec<(String, WorkerKind)> = scan_candidate_ports()
+        .into_iter()
+        .filter(|(name, _)| !skip.iter().any(|s| port_names_match(s, name)))
+        .collect();
+    let on_port = Arc::new(on_port);
+    let out = Arc::new(Mutex::new(Vec::new()));
+    let mut handles = Vec::new();
+    // Bound concurrency so Windows COM opens don't stampede.
+    let slots = Arc::new(Mutex::new(0usize));
+    const MAX_PARALLEL: usize = 4;
+    for (name, kind) in candidates {
+        let out = Arc::clone(&out);
+        let on_port = Arc::clone(&on_port);
+        let slots = Arc::clone(&slots);
+        handles.push(std::thread::spawn(move || {
+            loop {
+                let mut n = slots.lock().unwrap();
+                if *n < MAX_PARALLEL {
+                    *n += 1;
+                    break;
+                }
+                drop(n);
+                std::thread::sleep(Duration::from_millis(30));
+            }
+            on_port(&name);
+            if let Some(mut w) = probe_usb_port(&name) {
+                w.kind = kind;
+                if kind == WorkerKind::Bluetooth {
+                    w.detail = format!("Bluetooth serial · {}", w.detail);
+                    if w.id.starts_with("usb:") {
+                        w.id = w.id.replacen("usb:", "bt:", 1);
+                    }
+                }
+                out.lock().unwrap().push(w);
+            }
+            *slots.lock().unwrap() -= 1;
+        }));
+    }
+    for h in handles {
+        let _ = h.join();
+    }
+    let mut found = out.lock().unwrap().clone();
+    found.sort_by(|a, b| a.endpoint.cmp(&b.endpoint));
+    found
+}
+
+/// Probe a Wi‑Fi board over TCP using the same `cmp` line protocol.
+pub fn probe_wifi_endpoint(endpoint: &str) -> Option<DiscoveredWorker> {
+    let mut stream = TcpStream::connect_timeout(
+        &endpoint
+            .to_socket_addrs()
+            .ok()?
+            .next()?,
+        Duration::from_secs(2),
+    )
+    .ok()?;
+    let _ = stream.set_read_timeout(Some(Duration::from_millis(800)));
+    let _ = stream.set_write_timeout(Some(Duration::from_millis(800)));
+    let _ = stream.set_nodelay(true);
+    let _ = stream.write_all(b"\r\ncmp ping\r\n");
+    let _ = stream.flush();
+    let mut buf = String::new();
+    let deadline = Instant::now() + Duration::from_millis(2_000);
+    let mut mac = String::new();
+    let mut saw = false;
+    while Instant::now() < deadline {
+        let mut tmp = [0u8; 512];
+        match stream.read(&mut tmp) {
+            Ok(0) => break,
+            Ok(n) => buf.push_str(&String::from_utf8_lossy(&tmp[..n])),
+            Err(_) => std::thread::sleep(Duration::from_millis(20)),
         }
-        on_port(&name);
-        if let Some(w) = probe_usb_port(&name) {
-            out.push(w);
+        if let Some(line) = buf.lines().find(|l| {
+            let t = l.trim();
+            t.starts_with("CMP ok") || t.eq_ignore_ascii_case("CMPACK ping")
+        }) {
+            saw = true;
+            if let Some(rest) = line.trim().split_once("mac=") {
+                mac = normalize_mac(rest.1.trim());
+            }
+            break;
         }
     }
-    out
+    if !saw {
+        return None;
+    }
+    let _ = stream.write_all(b"cmp config\r\n");
+    let _ = stream.flush();
+    let mut fw = String::new();
+    let cfg_deadline = Instant::now() + Duration::from_millis(1_500);
+    while Instant::now() < cfg_deadline {
+        let mut tmp = [0u8; 512];
+        match stream.read(&mut tmp) {
+            Ok(0) => break,
+            Ok(n) => buf.push_str(&String::from_utf8_lossy(&tmp[..n])),
+            Err(_) => std::thread::sleep(Duration::from_millis(20)),
+        }
+        if let Some(line) = buf
+            .lines()
+            .rev()
+            .find(|l| l.trim().starts_with('{') || l.trim().starts_with("CMPCONFIG "))
+        {
+            let json = line
+                .trim()
+                .strip_prefix("CMPCONFIG ")
+                .unwrap_or(line.trim());
+            if let Ok(v) = serde_json::from_str::<serde_json::Value>(json) {
+                fw = v
+                    .get("fw")
+                    .and_then(|x| x.as_str())
+                    .unwrap_or("")
+                    .to_string();
+                if let Some(m) = v.get("mac").and_then(|x| x.as_str()) {
+                    if !m.is_empty() {
+                        mac = normalize_mac(m);
+                    }
+                }
+                break;
+            }
+        }
+    }
+    let id = {
+        let mid = mac_worker_id(&mac);
+        if mid.is_empty() {
+            format!("wifi:{endpoint}")
+        } else {
+            mid
+        }
+    };
+    Some(DiscoveredWorker {
+        id,
+        kind: WorkerKind::Wifi,
+        endpoint: endpoint.to_string(),
+        mac,
+        fw: fw.clone(),
+        detail: if fw.is_empty() {
+            format!("Wi‑Fi TCP :{BOARD_WIFI_PORT}")
+        } else {
+            format!("fw {fw} · Wi‑Fi TCP")
+        },
+        host: endpoint.split(':').next().unwrap_or(endpoint).into(),
+        last_seen_ms: now_ms(),
+    })
+}
+
+pub fn open_wifi_tcp(endpoint: &str) -> Result<TcpStream, String> {
+    let addr = endpoint
+        .to_socket_addrs()
+        .map_err(|e| format!("resolve {endpoint}: {e}"))?
+        .next()
+        .ok_or_else(|| format!("no address for {endpoint}"))?;
+    let stream = TcpStream::connect_timeout(&addr, Duration::from_secs(3))
+        .map_err(|e| format!("TCP connect {endpoint}: {e}"))?;
+    let _ = stream.set_nodelay(true);
+    let _ = stream.set_read_timeout(Some(Duration::from_millis(50)));
+    let _ = stream.set_write_timeout(Some(Duration::from_millis(2_000)));
+    Ok(stream)
+}
+
+/// Listen for board Wi‑Fi UDP beacons (`CYDBOARD|…`).
+pub struct BoardWifiDiscovery {
+    sock: Option<UdpSocket>,
+}
+
+impl BoardWifiDiscovery {
+    pub fn start() -> Self {
+        let sock = UdpSocket::bind(format!("0.0.0.0:{BOARD_WIFI_PORT}"))
+            .or_else(|_| UdpSocket::bind("0.0.0.0:0"))
+            .ok()
+            .and_then(|s| {
+                s.set_broadcast(true).ok()?;
+                s.set_nonblocking(true).ok()?;
+                Some(s)
+            });
+        Self { sock }
+    }
+
+    pub fn poll_boards(&mut self) -> Vec<DiscoveredWorker> {
+        let Some(sock) = self.sock.as_ref() else {
+            return Vec::new();
+        };
+        let mut out = Vec::new();
+        let mut buf = [0u8; 1500];
+        loop {
+            match sock.recv_from(&mut buf) {
+                Ok((n, addr)) => {
+                    if let Some(w) = parse_board_beacon(&String::from_utf8_lossy(&buf[..n]), addr) {
+                        out.push(w);
+                    }
+                }
+                Err(_) => break,
+            }
+        }
+        out
+    }
+}
+
+fn parse_board_beacon(raw: &str, addr: SocketAddr) -> Option<DiscoveredWorker> {
+    let line = raw.trim();
+    if !line.starts_with(BOARD_WIFI_MAGIC) {
+        return None;
+    }
+    let mut mac = String::new();
+    let mut fw = String::new();
+    let mut tcp = BOARD_WIFI_PORT;
+    let mut ip = addr.ip().to_string();
+    let mut ap = String::new();
+    let mut mode = String::new();
+    for part in line.split('|').skip(1) {
+        if let Some((k, v)) = part.split_once('=') {
+            match k {
+                "mac" => mac = normalize_mac(v),
+                "fw" => fw = v.to_string(),
+                "tcp" => tcp = v.parse().unwrap_or(BOARD_WIFI_PORT),
+                "ip" => {
+                    if !v.is_empty() {
+                        ip = v.to_string();
+                    }
+                }
+                "ap" => ap = v.to_string(),
+                "mode" => mode = v.to_string(),
+                _ => {}
+            }
+        }
+    }
+    let endpoint = format!("{ip}:{tcp}");
+    let id = {
+        let mid = mac_worker_id(&mac);
+        if mid.is_empty() {
+            format!("wifi:{endpoint}")
+        } else {
+            mid
+        }
+    };
+    let detail = match (fw.is_empty(), ap.is_empty()) {
+        (false, false) => format!("fw {fw} · Wi‑Fi {mode} · AP {ap}"),
+        (false, true) => format!("fw {fw} · Wi‑Fi {mode}"),
+        (true, false) => format!("Wi‑Fi board · AP {ap}"),
+        _ => "Wi‑Fi CYD board".into(),
+    };
+    Some(DiscoveredWorker {
+        id,
+        kind: WorkerKind::Wifi,
+        endpoint,
+        mac,
+        fw,
+        detail,
+        host: ip,
+        last_seen_ms: now_ms(),
+    })
 }
 
 fn drain(port: &mut dyn SerialPort, buf: &mut String) {
