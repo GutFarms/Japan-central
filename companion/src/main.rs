@@ -283,6 +283,8 @@ fn format_hashrate_parts(hs: f64) -> (String, &'static str) {
 enum Tab {
     Mine,
     Settings,
+    /// Hidden from nav (0.8.31+); kept so older persisted state still loads.
+    #[allow(dead_code)]
     Debug,
 }
 
