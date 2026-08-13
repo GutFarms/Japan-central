@@ -273,7 +273,6 @@ fn schedule_windows_replace_and_restart(install: &Path) -> Result<(), String> {
         "@echo off\r\n\
          setlocal\r\n\
          cd /d \"{dir}\"\r\n\
-         echo Updating CYD Companion…\r\n\
          timeout /t 2 /nobreak >nul\r\n\
          set /a tries=0\r\n\
          :retry\r\n\
@@ -281,17 +280,11 @@ fn schedule_windows_replace_and_restart(install: &Path) -> Result<(), String> {
          if exist \"{exe}\" del /f /q \"{exe}\" >nul 2>nul\r\n\
          move /y \"{new}\" \"{exe}\" >nul 2>nul\r\n\
          if exist \"{new}\" (\r\n\
-           if %tries% geq 40 (\r\n\
-             echo Update failed — close Companion and rename {new} to {exe}\r\n\
-             exit /b 1\r\n\
-           )\r\n\
+           if %tries% geq 40 exit /b 1\r\n\
            timeout /t 1 /nobreak >nul\r\n\
            goto retry\r\n\
          )\r\n\
-         if not exist \"{exe}\" (\r\n\
-           echo Update failed — {exe} missing after replace\r\n\
-           exit /b 1\r\n\
-         )\r\n\
+         if not exist \"{exe}\" exit /b 1\r\n\
          start \"\" \"{exe}\"\r\n\
          del \"%~f0\"\r\n",
         dir = install.display(),
@@ -300,13 +293,20 @@ fn schedule_windows_replace_and_restart(install: &Path) -> Result<(), String> {
     );
     std::fs::write(&bat_path, bat).map_err(|e| format!("write updater bat: {e}"))?;
 
-    // Detached is so this process can exit and release the .exe lock.
-    Command::new("cmd.exe")
-        .args(["/C", "start", "", &bat_path.to_string_lossy()])
+    // Detached + no console so the updater bat never flashes a terminal window.
+    let mut cmd = Command::new("cmd.exe");
+    cmd.args(["/C", &bat_path.to_string_lossy()])
         .stdin(Stdio::null())
         .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()
+        .stderr(Stdio::null());
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        const DETACHED_PROCESS: u32 = 0x0000_0008;
+        cmd.creation_flags(CREATE_NO_WINDOW | DETACHED_PROCESS);
+    }
+    cmd.spawn()
         .map_err(|e| format!("launch updater: {e}"))?;
     Ok(())
 }

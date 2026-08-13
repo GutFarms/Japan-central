@@ -45,7 +45,7 @@ fn main() -> eframe::Result<()> {
             .with_inner_size([1200.0, 820.0])
             .with_min_inner_size([1020.0, 700.0])
             .with_title(format!(
-                "CYD Companion {} · USB SHA-256 Miner",
+                "CYD Companion {} · Njörðr · USB SHA-256 Miner",
                 env!("CARGO_PKG_VERSION")
             )),
         multisampling: 8,
@@ -65,19 +65,21 @@ fn main() -> eframe::Result<()> {
     )
 }
 
-const C_BG: Color32 = Color32::from_rgb(5, 8, 10);
-const C_BG_2: Color32 = Color32::from_rgb(10, 16, 18);
-const C_PANEL: Color32 = Color32::from_rgb(14, 22, 24);
-const C_PANEL_SOFT: Color32 = Color32::from_rgb(22, 34, 36);
-const C_PANEL_QUIET: Color32 = Color32::from_rgb(11, 18, 20);
-const C_STROKE: Color32 = Color32::from_rgb(43, 63, 62);
-const C_BUBBLE: Color32 = Color32::from_rgb(30, 49, 48);
-const C_BUBBLE_HI: Color32 = Color32::from_rgb(113, 153, 141);
-const C_LIME: Color32 = Color32::from_rgb(198, 255, 64);
-const C_LIME_SOFT: Color32 = Color32::from_rgb(130, 210, 52);
-const C_TEXT: Color32 = Color32::from_rgb(235, 244, 238);
-const C_MUTED: Color32 = Color32::from_rgb(134, 154, 148);
-const C_DIM: Color32 = Color32::from_rgb(82, 103, 99);
+const C_BG: Color32 = Color32::from_rgb(2, 10, 22); // deep Njörðr sea
+const C_BG_2: Color32 = Color32::from_rgb(6, 28, 48);
+const C_PANEL: Color32 = Color32::from_rgb(8, 22, 40);
+const C_PANEL_SOFT: Color32 = Color32::from_rgb(12, 34, 58);
+const C_PANEL_QUIET: Color32 = Color32::from_rgb(5, 18, 34);
+const C_STROKE: Color32 = Color32::from_rgb(36, 78, 118);
+const C_BUBBLE: Color32 = Color32::from_rgb(14, 42, 72);
+const C_BUBBLE_HI: Color32 = Color32::from_rgb(88, 168, 210);
+// Accent kept as C_LIME for call sites — electric ice / lightning, not chartreuse.
+const C_LIME: Color32 = Color32::from_rgb(126, 220, 255);
+const C_LIME_SOFT: Color32 = Color32::from_rgb(64, 160, 220);
+const C_BOLT: Color32 = Color32::from_rgb(232, 246, 255);
+const C_TEXT: Color32 = Color32::from_rgb(230, 242, 252);
+const C_MUTED: Color32 = Color32::from_rgb(120, 158, 186);
+const C_DIM: Color32 = Color32::from_rgb(70, 108, 138);
 const C_WARN: Color32 = Color32::from_rgb(255, 196, 91);
 const C_ERR: Color32 = Color32::from_rgb(255, 108, 91);
 const MAX_LOGS: usize = 500;
@@ -145,16 +147,16 @@ fn apply_theme(ctx: &egui::Context) {
     style.visuals.dark_mode = true;
     style.visuals.panel_fill = C_BG;
     style.visuals.window_fill = C_PANEL;
-    style.visuals.extreme_bg_color = Color32::from_rgb(8, 13, 14);
+    style.visuals.extreme_bg_color = Color32::from_rgb(3, 14, 28);
     style.visuals.override_text_color = Some(C_TEXT);
     style.visuals.widgets.inactive.bg_fill = C_BUBBLE;
-    style.visuals.widgets.hovered.bg_fill = Color32::from_rgb(42, 70, 66);
+    style.visuals.widgets.hovered.bg_fill = Color32::from_rgb(24, 64, 98);
     style.visuals.widgets.active.bg_fill = C_LIME;
     style.visuals.widgets.inactive.fg_stroke = Stroke::new(1.0_f32, C_TEXT);
     style.visuals.widgets.hovered.fg_stroke = Stroke::new(1.0_f32, C_TEXT);
     style.visuals.widgets.active.fg_stroke =
-        Stroke::new(1.0_f32, Color32::from_rgb(8, 16, 10));
-    style.visuals.selection.bg_fill = Color32::from_rgba_unmultiplied(198, 255, 64, 72);
+        Stroke::new(1.0_f32, Color32::from_rgb(4, 18, 36));
+    style.visuals.selection.bg_fill = Color32::from_rgba_unmultiplied(126, 220, 255, 72);
     style.visuals.widgets.inactive.rounding = Rounding::same(16.0);
     style.visuals.widgets.hovered.rounding = Rounding::same(16.0);
     style.visuals.widgets.active.rounding = Rounding::same(16.0);
@@ -177,9 +179,9 @@ fn apply_theme(ctx: &egui::Context) {
 fn bubble(ui: &mut egui::Ui, label: &str, lime: bool) -> egui::Response {
     let fill = if lime { C_LIME } else { C_BUBBLE_HI };
     let text = if lime {
-        Color32::from_rgb(16, 28, 12)
+        Color32::from_rgb(4, 18, 36)
     } else {
-        Color32::from_rgb(12, 20, 28)
+        Color32::from_rgb(8, 24, 44)
     };
     ui.add(
         egui::Button::new(RichText::new(label).strong().color(text).size(14.0))
@@ -1194,11 +1196,11 @@ impl CompanionApp {
             20
         };
         Frame::none()
-            .fill(Color32::from_rgba_unmultiplied(10, 18, 17, 232))
+            .fill(Color32::from_rgba_unmultiplied(6, 20, 38, 236))
             .rounding(Rounding::same(28.0))
             .stroke(Stroke::new(
                 1.0_f32,
-                Color32::from_rgba_unmultiplied(198, 255, 64, pulse_alpha),
+                Color32::from_rgba_unmultiplied(126, 220, 255, pulse_alpha),
             ))
             .inner_margin(Margin::symmetric(28.0, 24.0))
             .show(ui, |ui| {
@@ -1214,7 +1216,7 @@ impl CompanionApp {
                                 .font(display_font(54.0)),
                         );
                         ui.label(
-                            RichText::new("USB SHA-256 miner")
+                            RichText::new("USB SHA-256 miner · Njörðr seas")
                                 .color(C_TEXT)
                                 .font(display_font(22.0)),
                         );
@@ -1522,7 +1524,7 @@ impl CompanionApp {
             let pulling = self.api_pulling_id;
             for feed in &mut self.api_feeds {
                 Frame::none()
-                    .fill(Color32::from_rgba_unmultiplied(4, 8, 9, 160))
+                    .fill(Color32::from_rgba_unmultiplied(3, 12, 26, 170))
                     .rounding(Rounding::same(12.0))
                     .inner_margin(Margin::same(12.0))
                     .show(ui, |ui| {
@@ -1929,7 +1931,7 @@ impl CompanionApp {
                         .font(mono_ui_font(10.0)),
                 );
                 Frame::none()
-                    .fill(Color32::from_rgba_unmultiplied(4, 8, 9, 160))
+                    .fill(Color32::from_rgba_unmultiplied(3, 12, 26, 170))
                     .rounding(Rounding::same(10.0))
                     .inner_margin(Margin::same(8.0))
                     .show(ui, |ui| {
@@ -2050,11 +2052,11 @@ impl CompanionApp {
                 }
             });
             Frame::none()
-                .fill(Color32::from_rgba_unmultiplied(4, 8, 9, 202))
+                .fill(Color32::from_rgba_unmultiplied(3, 12, 24, 210))
                 .rounding(Rounding::same(16.0))
                 .stroke(Stroke::new(
                     1.0_f32,
-                    Color32::from_rgba_unmultiplied(198, 255, 64, 18),
+                    Color32::from_rgba_unmultiplied(126, 220, 255, 22),
                 ))
                 .inner_margin(Margin::same(10.0))
                 .show(ui, |ui| {
@@ -2168,7 +2170,7 @@ impl CompanionApp {
             });
             ui.add_space(10.0);
             Frame::none()
-                .fill(Color32::from_rgba_unmultiplied(4, 8, 9, 224))
+                .fill(Color32::from_rgba_unmultiplied(3, 12, 26, 230))
                 .rounding(Rounding::same(18.0))
                 .stroke(Stroke::new(1.0_f32, C_STROKE))
                 .inner_margin(Margin::same(14.0))
@@ -2822,8 +2824,8 @@ impl App for CompanionApp {
             .exact_height(36.0)
             .frame(
                 Frame::none()
-                    .fill(Color32::from_rgb(8, 14, 16))
-                    .stroke(Stroke::new(1.0_f32, Color32::from_rgb(32, 48, 46)))
+                    .fill(Color32::from_rgb(3, 14, 28))
+                    .stroke(Stroke::new(1.0_f32, Color32::from_rgb(28, 64, 98)))
                     .inner_margin(Margin::symmetric(16.0, 0.0)),
             )
             .show(ctx, |ui| {
@@ -2838,7 +2840,7 @@ impl App for CompanionApp {
                     ui.vertical(|ui| {
                         ui.label(RichText::new("CYD").color(C_LIME).font(display_font(64.0)));
                         ui.label(
-                            RichText::new("Companion · SHA-256")
+                            RichText::new("Companion · Njörðr")
                                 .color(C_MUTED)
                                 .font(mono_ui_font(12.0)),
                         );
@@ -2987,7 +2989,8 @@ fn paint_background(ui: &mut egui::Ui, rect: Rect, pulse: f32, grid_phase: f32, 
         let t = i as f32 / (bands - 1) as f32;
         let y0 = rect.top() + rect.height() * t;
         let y1 = rect.top() + rect.height() * ((i + 1) as f32 / bands as f32) + 1.0;
-        let c = lerp_color(C_BG, C_BG_2, t);
+        // Deep sea → shallower teal horizon.
+        let c = lerp_color(C_BG, C_BG_2, t * 0.85 + 0.08 * (pulse * 0.35).sin());
         painter.rect_filled(
             Rect::from_min_max(Pos2::new(rect.left(), y0), Pos2::new(rect.right(), y1)),
             0.0,
@@ -2996,23 +2999,29 @@ fn paint_background(ui: &mut egui::Ui, rect: Rect, pulse: f32, grid_phase: f32, 
     }
 
     let glow = if mining {
-        (42.0 + pulse.sin().max(0.0) * 58.0) as u8
+        (36.0 + pulse.sin().max(0.0) * 52.0) as u8
     } else {
-        28
+        22
     };
+    // Soft aurora / storm glow orbs.
     painter.circle_filled(
-        Pos2::new(rect.left() + rect.width() * 0.22, rect.top() + rect.height() * 0.18),
-        360.0,
+        Pos2::new(rect.left() + rect.width() * 0.18, rect.top() + rect.height() * 0.16),
+        380.0,
         rgba(C_LIME, glow / 3),
     );
     painter.circle_filled(
-        Pos2::new(rect.right() - rect.width() * 0.12, rect.bottom() - rect.height() * 0.12),
-        280.0,
-        rgba(C_LIME_SOFT, 18),
+        Pos2::new(rect.right() - rect.width() * 0.10, rect.bottom() - rect.height() * 0.14),
+        300.0,
+        rgba(C_LIME_SOFT, 16),
+    );
+    painter.circle_filled(
+        Pos2::new(rect.left() + rect.width() * 0.72, rect.top() + rect.height() * 0.08),
+        160.0,
+        rgba(C_BOLT, glow / 5),
     );
 
-    // Drift wraps by exactly one line spacing — no hitch when phase resets.
-    let step = 34.0;
+    // Slow current lines (wave diagonals).
+    let step = 38.0;
     let drift = grid_phase * step;
     let mut x = rect.left() - rect.height() + drift;
     while x < rect.right() + rect.height() {
@@ -3021,21 +3030,84 @@ fn paint_background(ui: &mut egui::Ui, rect: Rect, pulse: f32, grid_phase: f32, 
                 Pos2::new(x, rect.bottom()),
                 Pos2::new(x + rect.height() * 0.66, rect.top()),
             ],
-            Stroke::new(
-                1.0_f32,
-                Color32::from_rgba_unmultiplied(198, 255, 64, 10),
-            ),
+            Stroke::new(1.0_f32, rgba(C_LIME, 12)),
         );
         x += step;
+    }
+
+    paint_lightning_storm(&painter, rect, pulse, mining);
+}
+
+/// Njörðr storm — rare sharp lightning bolts across the deep.
+fn paint_lightning_storm(painter: &egui::Painter, rect: Rect, pulse: f32, mining: bool) {
+    let base = if mining { 1.0 } else { 0.55 };
+    let flashes = [
+        ((pulse * 1.15).sin().max(0.0).powf(10.0) * base, 0.18, 0.05, 1.05),
+        (((pulse * 0.82) + 1.7).sin().max(0.0).powf(12.0) * base, 0.62, 0.12, 0.92),
+        (((pulse * 1.55) + 3.1).sin().max(0.0).powf(14.0) * base * 0.85, 0.42, 0.0, 0.78),
+    ];
+    for (intensity, x_frac, y_frac, scale) in flashes {
+        if intensity < 0.08 {
+            continue;
+        }
+        let origin = Pos2::new(
+            rect.left() + rect.width() * x_frac,
+            rect.top() + rect.height() * y_frac,
+        );
+        let a = (intensity * 220.0) as u8;
+        let glow_a = (intensity * 70.0) as u8;
+        paint_lightning_bolt(
+            painter,
+            origin,
+            rect.height() * 0.55 * scale,
+            rgba(C_BOLT, a),
+            rgba(C_LIME, glow_a),
+            1.6 + intensity * 1.8,
+        );
+    }
+}
+
+fn paint_lightning_bolt(
+    painter: &egui::Painter,
+    origin: Pos2,
+    length: f32,
+    core: Color32,
+    glow: Color32,
+    width: f32,
+) {
+    // Jagged relative polyline (x,y) in unit space down the bolt.
+    let segs: [(f32, f32); 7] = [
+        (0.00, 0.00),
+        (0.14, 0.16),
+        (-0.08, 0.28),
+        (0.18, 0.44),
+        (-0.06, 0.58),
+        (0.12, 0.76),
+        (0.02, 1.00),
+    ];
+    let mut pts: Vec<Pos2> = Vec::with_capacity(segs.len());
+    for (dx, dy) in segs {
+        pts.push(Pos2::new(origin.x + dx * length * 0.55, origin.y + dy * length));
+    }
+    for pair in pts.windows(2) {
+        painter.line_segment([pair[0], pair[1]], Stroke::new(width * 3.2, glow));
+        painter.line_segment([pair[0], pair[1]], Stroke::new(width, core));
+    }
+    // Small fork near mid.
+    if pts.len() >= 4 {
+        let mid = pts[3];
+        let fork = Pos2::new(mid.x + length * 0.12, mid.y + length * 0.14);
+        painter.line_segment([mid, fork], Stroke::new(width * 2.4, glow));
+        painter.line_segment([mid, fork], Stroke::new(width * 0.75, core));
     }
 }
 
 fn paint_hero_wash(ui: &mut egui::Ui, rect: Rect, pulse: f32, mining: bool) {
     let painter = ui.painter();
     let alpha = if mining {
-        (26.0 + (0.5 + 0.5 * pulse.sin()) * 48.0) as u8
+        (22.0 + (0.5 + 0.5 * pulse.sin()) * 44.0) as u8
     } else {
-        16
+        14
     };
     painter.circle_filled(
         Pos2::new(rect.left() + 110.0, rect.top() + 78.0),
@@ -3045,25 +3117,44 @@ fn paint_hero_wash(ui: &mut egui::Ui, rect: Rect, pulse: f32, mining: bool) {
     painter.circle_filled(
         Pos2::new(rect.right() - 80.0, rect.bottom() - 40.0),
         120.0,
-        rgba(C_LIME_SOFT, if mining { 22 } else { 12 }),
+        rgba(C_LIME_SOFT, if mining { 20 } else { 10 }),
     );
 
-    // Slow diagonal sweep — fade at loop edges so the reset is invisible.
+    // Storm sweep — electric arc across the hero.
     let sweep = (pulse * 0.12).rem_euclid(1.0);
     let edge = loop_edge_fade(sweep, 0.14);
     let x = rect.left() + rect.width() * sweep;
-    let sweep_a = ((if mining { 28.0 } else { 12.0 }) * edge) as u8;
+    let sweep_a = ((if mining { 36.0 } else { 14.0 }) * edge) as u8;
     if sweep_a > 0 {
         painter.line_segment(
             [
                 Pos2::new(x, rect.bottom() - 18.0),
                 Pos2::new(x + rect.height() * 0.55, rect.top() + 18.0),
             ],
-            Stroke::new(
-                2.0_f32,
-                Color32::from_rgba_unmultiplied(198, 255, 64, sweep_a),
-            ),
+            Stroke::new(2.2_f32, rgba(C_BOLT, sweep_a)),
         );
+        painter.line_segment(
+            [
+                Pos2::new(x + 8.0, rect.bottom() - 28.0),
+                Pos2::new(x + rect.height() * 0.42, rect.top() + 36.0),
+            ],
+            Stroke::new(1.0_f32, rgba(C_LIME, sweep_a / 2)),
+        );
+    }
+
+    // Occasional hero bolt when hashing.
+    if mining {
+        let flash = (pulse * 1.4 + 0.6).sin().max(0.0).powf(11.0);
+        if flash > 0.12 {
+            paint_lightning_bolt(
+                &painter,
+                Pos2::new(rect.right() - 140.0, rect.top() + 12.0),
+                rect.height() * 0.85,
+                rgba(C_BOLT, (flash * 210.0) as u8),
+                rgba(C_LIME, (flash * 80.0) as u8),
+                1.4 + flash,
+            );
+        }
     }
 }
 
@@ -3101,14 +3192,11 @@ fn sparkline(ui: &mut egui::Ui, values: &VecDeque<f32>, pulse: f32, history_phas
     let desired = Vec2::new((ui.available_width() * 0.72).clamp(320.0, 620.0), 86.0);
     let (rect, _) = ui.allocate_exact_size(desired, Sense::hover());
     let painter = ui.painter_at(rect);
-    painter.rect_filled(rect, Rounding::same(18.0), Color32::from_rgba_unmultiplied(5, 10, 11, 170));
+    painter.rect_filled(rect, Rounding::same(18.0), Color32::from_rgba_unmultiplied(3, 12, 26, 180));
     painter.rect_stroke(
         rect,
         Rounding::same(18.0),
-        Stroke::new(
-            1.0_f32,
-            Color32::from_rgba_unmultiplied(198, 255, 64, 24),
-        ),
+        Stroke::new(1.0_f32, rgba(C_LIME, 28)),
     );
 
     for i in 1..4 {
@@ -3157,10 +3245,7 @@ fn sparkline(ui: &mut egui::Ui, values: &VecDeque<f32>, pulse: f32, history_phas
     if scan_a > 0 {
         painter.line_segment(
             [Pos2::new(scan_x, inner.top()), Pos2::new(scan_x, inner.bottom())],
-            Stroke::new(
-                1.0_f32,
-                Color32::from_rgba_unmultiplied(198, 255, 64, scan_a),
-            ),
+            Stroke::new(1.0_f32, rgba(C_BOLT, scan_a)),
         );
     }
     if let Some(last) = points.last() {
@@ -3200,12 +3285,12 @@ fn soft_panel(ui: &mut egui::Ui, title: &str, add: impl FnOnce(&mut egui::Ui)) {
 
 fn nav_button(ui: &mut egui::Ui, label: &str, selected: bool) -> egui::Response {
     let fill = if selected {
-        Color32::from_rgba_unmultiplied(198, 255, 64, 48)
+        Color32::from_rgba_unmultiplied(126, 220, 255, 42)
     } else {
-        Color32::from_rgba_unmultiplied(22, 34, 36, 128)
+        Color32::from_rgba_unmultiplied(12, 34, 58, 128)
     };
     let stroke = if selected {
-        Stroke::new(1.0_f32, rgba(C_LIME, 112))
+        Stroke::new(1.0_f32, rgba(C_LIME, 120))
     } else {
         Stroke::new(1.0_f32, C_STROKE)
     };
@@ -3223,9 +3308,9 @@ fn nav_button(ui: &mut egui::Ui, label: &str, selected: bool) -> egui::Response 
 }
 
 fn cta_button(ui: &mut egui::Ui, label: &str, lime: bool, width: f32) -> egui::Response {
-    let fill = if lime { C_LIME } else { Color32::from_rgb(42, 61, 57) };
+    let fill = if lime { C_LIME } else { Color32::from_rgb(18, 48, 78) };
     let text = if lime {
-        Color32::from_rgb(7, 14, 8)
+        Color32::from_rgb(4, 18, 36)
     } else {
         C_TEXT
     };
@@ -3234,7 +3319,7 @@ fn cta_button(ui: &mut egui::Ui, label: &str, lime: bool, width: f32) -> egui::R
             .fill(fill)
             .stroke(Stroke::new(
                 1.0_f32,
-                rgba(C_LIME, if lime { 100 } else { 38 }),
+                rgba(C_LIME, if lime { 110 } else { 42 }),
             ))
             .rounding(Rounding::same(20.0))
             .min_size(Vec2::new(width, 46.0)),
@@ -3276,7 +3361,7 @@ fn clock_chip(ui: &mut egui::Ui, mhz: u8, selected: bool) -> egui::Response {
     ui.add(
         egui::Button::new(
             RichText::new(format!("{mhz}"))
-                .color(if selected { Color32::from_rgb(8, 16, 10) } else { C_TEXT })
+                .color(if selected { Color32::from_rgb(4, 18, 36) } else { C_TEXT })
                 .font(mono_ui_font(12.0)),
         )
         .fill(if selected { C_LIME } else { C_BUBBLE })

@@ -338,7 +338,7 @@ fn extract_merged_from_zip(
     })
 }
 
-pub const COMPANION_UA: &str = "CYD-Companion/0.8.32";
+pub const COMPANION_UA: &str = "CYD-Companion/0.8.33";
 const ESPFLASH_VERSION: &str = "4.5.0";
 pub const REPO_OWNER: &str = "GutFarms";
 pub const REPO_NAME: &str = "Japan-central";
@@ -957,11 +957,23 @@ fn is_windows_store_python_stub(path: &Path) -> bool {
     s.contains("windowsapps") || s.contains("\\windowsapps\\")
 }
 
+/// Keep flash/update helper processes from popping console windows on Windows.
+fn hide_console_window(cmd: &mut Command) {
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        cmd.creation_flags(CREATE_NO_WINDOW);
+    }
+    let _ = cmd;
+}
+
 fn run_streaming(
     cmd: &mut Command,
     progress: &dyn Fn(String),
     label: &str,
 ) -> Result<(), String> {
+    hide_console_window(cmd);
     cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
     let mut child = cmd
         .spawn()
