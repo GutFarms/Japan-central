@@ -3,9 +3,10 @@ import { CameraView, useCameraPermissions } from "expo-camera";
 import * as Linking from "expo-linking";
 import { LinearGradient } from "expo-linear-gradient";
 import { StatusBar } from "expo-status-bar";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ActivityIndicator,
+  Animated,
   Modal,
   Pressable,
   SafeAreaView,
@@ -15,6 +16,11 @@ import {
   TextInput,
   View,
 } from "react-native";
+
+const NEON = "#00e5ff";
+const NEON_DEEP = "#1478ff";
+const NEON_HOT = "#b4f5ff";
+const ICE = "#7edcff";
 
 const DEFAULT_PORT = 19285;
 const HOST_KEY = "cyd_monitor_host";
@@ -291,15 +297,37 @@ export default function App() {
     ? "AUTHORIZED"
     : (snap?.pool_phase || "IDLE").toUpperCase();
 
+  const mining = !!snap?.mining;
+
   return (
-    <LinearGradient colors={["#031428", "#020a16", "#01060e"]} style={styles.root}>
+    <LinearGradient
+      colors={["#031428", "#02122a", "#020a16", "#01060e"]}
+      locations={[0, 0.28, 0.65, 1]}
+      style={styles.root}
+    >
       <StatusBar style="light" />
+      <NeonAtmosphere active={mining} />
       <SafeAreaView style={styles.safe}>
         <ScrollView contentContainerStyle={styles.scroll} keyboardShouldPersistTaps="handled">
-          <Text style={styles.brand}>Njörðr Seas'</Text>
+          <View style={styles.brandRow}>
+            <View style={styles.brandGlow} />
+            <Text style={styles.brand}>Njörðr Seas'</Text>
+            <NeonBoltMark />
+          </View>
           <Text style={styles.tag}>CYD miner · personal phone monitor</Text>
 
           <View style={styles.hero}>
+            <LinearGradient
+              colors={[
+                "rgba(0,229,255,0.18)",
+                "rgba(20,120,255,0.08)",
+                "transparent",
+              ]}
+              start={{ x: 0, y: 0 }}
+              end={{ x: 1, y: 1 }}
+              style={styles.heroNeonWash}
+            />
+            <LightningDecor active={mining || !!snap?.usb_open} />
             <Text style={styles.rate}>{host && token ? rateNum : "—"}</Text>
             <Text style={styles.unit}>
               {rateUnit}
@@ -434,32 +462,258 @@ function Chip({
   );
 }
 
+/** Soft neon orbs behind the whole screen. */
+function NeonAtmosphere({ active }: { active: boolean }) {
+  const pulse = useRef(new Animated.Value(0.35)).current;
+  useEffect(() => {
+    const loop = Animated.loop(
+      Animated.sequence([
+        Animated.timing(pulse, {
+          toValue: active ? 0.85 : 0.5,
+          duration: active ? 900 : 2200,
+          useNativeDriver: true,
+        }),
+        Animated.timing(pulse, {
+          toValue: active ? 0.4 : 0.28,
+          duration: active ? 1100 : 2400,
+          useNativeDriver: true,
+        }),
+      ]),
+    );
+    loop.start();
+    return () => loop.stop();
+  }, [active, pulse]);
+
+  return (
+    <View pointerEvents="none" style={StyleSheet.absoluteFill}>
+      <Animated.View style={[styles.neonOrbA, { opacity: pulse }]} />
+      <Animated.View
+        style={[
+          styles.neonOrbB,
+          {
+            opacity: pulse.interpolate({
+              inputRange: [0, 1],
+              outputRange: [0.15, 0.55],
+            }),
+          },
+        ]}
+      />
+      <View style={styles.neonOrbC} />
+    </View>
+  );
+}
+
+function NeonBoltMark() {
+  return (
+    <View style={styles.boltMark}>
+      <View style={[styles.boltSeg, styles.boltSegA]} />
+      <View style={[styles.boltSeg, styles.boltSegB]} />
+      <View style={[styles.boltSeg, styles.boltSegC]} />
+      <View style={styles.boltCore} />
+    </View>
+  );
+}
+
+/** Jagged neon lightning accents inside the hero card. */
+function LightningDecor({ active }: { active: boolean }) {
+  const flash = useRef(new Animated.Value(0.2)).current;
+  useEffect(() => {
+    const loop = Animated.loop(
+      Animated.sequence([
+        Animated.timing(flash, {
+          toValue: active ? 1 : 0.35,
+          duration: active ? 180 : 1400,
+          useNativeDriver: true,
+        }),
+        Animated.timing(flash, {
+          toValue: active ? 0.15 : 0.18,
+          duration: active ? 420 : 1600,
+          useNativeDriver: true,
+        }),
+        Animated.delay(active ? 700 : 1800),
+      ]),
+    );
+    loop.start();
+    return () => loop.stop();
+  }, [active, flash]);
+
+  return (
+    <Animated.View pointerEvents="none" style={[styles.lightningLayer, { opacity: flash }]}>
+      <View style={[styles.boltPath, styles.boltPath1]} />
+      <View style={[styles.boltPath, styles.boltPath1Glow]} />
+      <View style={[styles.boltPath, styles.boltPath2]} />
+      <View style={[styles.boltPath, styles.boltPath2Glow]} />
+      <View style={styles.boltSplash} />
+      <View style={styles.boltSplashHot} />
+    </Animated.View>
+  );
+}
+
 const styles = StyleSheet.create({
   root: { flex: 1 },
   safe: { flex: 1 },
   scroll: { paddingHorizontal: 18, paddingTop: 18, paddingBottom: 40 },
+  brandRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+    position: "relative",
+  },
+  brandGlow: {
+    position: "absolute",
+    left: -8,
+    top: -10,
+    width: 160,
+    height: 52,
+    borderRadius: 40,
+    backgroundColor: "rgba(0,229,255,0.14)",
+  },
   brand: {
     fontSize: 30,
     fontWeight: "700",
-    color: "#7edcff",
+    color: ICE,
     letterSpacing: 0.3,
+    textShadowColor: "rgba(0,229,255,0.65)",
+    textShadowOffset: { width: 0, height: 0 },
+    textShadowRadius: 12,
+  },
+  boltMark: {
+    width: 18,
+    height: 28,
+    marginLeft: 2,
+    justifyContent: "center",
+  },
+  boltSeg: {
+    position: "absolute",
+    height: 3,
+    borderRadius: 2,
+    backgroundColor: NEON,
+    shadowColor: NEON,
+    shadowOpacity: 0.9,
+    shadowRadius: 6,
+  },
+  boltSegA: { width: 14, top: 4, left: 2, transform: [{ rotate: "28deg" }] },
+  boltSegB: { width: 16, top: 12, left: 0, backgroundColor: NEON_HOT, transform: [{ rotate: "-32deg" }] },
+  boltSegC: { width: 12, top: 20, left: 4, transform: [{ rotate: "24deg" }] },
+  boltCore: {
+    position: "absolute",
+    top: 10,
+    left: 6,
+    width: 5,
+    height: 5,
+    borderRadius: 3,
+    backgroundColor: NEON_HOT,
   },
   tag: { marginTop: 6, marginBottom: 20, color: "#789eba", fontSize: 14 },
   hero: {
     borderRadius: 22,
     borderWidth: 1,
-    borderColor: "rgba(126,220,255,0.28)",
+    borderColor: "rgba(0,229,255,0.38)",
     backgroundColor: "rgba(6,20,38,0.88)",
     paddingHorizontal: 16,
     paddingVertical: 20,
+    overflow: "hidden",
+    shadowColor: NEON,
+    shadowOpacity: 0.35,
+    shadowRadius: 18,
+    shadowOffset: { width: 0, height: 0 },
+  },
+  heroNeonWash: {
+    ...StyleSheet.absoluteFill,
+  },
+  lightningLayer: {
+    ...StyleSheet.absoluteFill,
+  },
+  boltPath: {
+    position: "absolute",
+    width: 3,
+    borderRadius: 2,
+  },
+  boltPath1: {
+    right: 36,
+    top: 8,
+    height: 92,
+    backgroundColor: NEON_HOT,
+    transform: [{ rotate: "12deg" }],
+  },
+  boltPath1Glow: {
+    right: 34,
+    top: 6,
+    height: 96,
+    width: 7,
+    backgroundColor: "rgba(0,229,255,0.35)",
+    transform: [{ rotate: "12deg" }],
+  },
+  boltPath2: {
+    right: 68,
+    top: 28,
+    height: 54,
+    backgroundColor: NEON,
+    transform: [{ rotate: "-18deg" }],
+  },
+  boltPath2Glow: {
+    right: 66,
+    top: 26,
+    height: 58,
+    width: 6,
+    backgroundColor: "rgba(20,120,255,0.4)",
+    transform: [{ rotate: "-18deg" }],
+  },
+  boltSplash: {
+    position: "absolute",
+    right: 28,
+    top: 4,
+    width: 22,
+    height: 22,
+    borderRadius: 11,
+    backgroundColor: "rgba(0,229,255,0.28)",
+  },
+  boltSplashHot: {
+    position: "absolute",
+    right: 34,
+    top: 10,
+    width: 10,
+    height: 10,
+    borderRadius: 5,
+    backgroundColor: "rgba(180,245,255,0.7)",
+  },
+  neonOrbA: {
+    position: "absolute",
+    top: -40,
+    left: -30,
+    width: 220,
+    height: 220,
+    borderRadius: 110,
+    backgroundColor: "rgba(0,229,255,0.16)",
+  },
+  neonOrbB: {
+    position: "absolute",
+    top: 120,
+    right: -50,
+    width: 180,
+    height: 180,
+    borderRadius: 90,
+    backgroundColor: "rgba(20,120,255,0.18)",
+  },
+  neonOrbC: {
+    position: "absolute",
+    bottom: 40,
+    left: 40,
+    width: 140,
+    height: 140,
+    borderRadius: 70,
+    backgroundColor: "rgba(0,229,255,0.06)",
   },
   rate: {
     fontSize: 56,
     fontWeight: "700",
     color: "#e6f2fc",
     letterSpacing: -1,
+    textShadowColor: "rgba(0,229,255,0.45)",
+    textShadowOffset: { width: 0, height: 0 },
+    textShadowRadius: 16,
   },
-  unit: { marginTop: 8, color: "#7edcff", fontSize: 16 },
+  unit: { marginTop: 8, color: NEON, fontSize: 16 },
   row: { flexDirection: "row", gap: 10, marginTop: 18, flexWrap: "wrap" },
   chip: {
     flexGrow: 1,
@@ -469,7 +723,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 12,
     backgroundColor: "rgba(8,28,48,0.95)",
     borderWidth: 1,
-    borderColor: "rgba(36,78,118,0.7)",
+    borderColor: "rgba(0,229,255,0.28)",
   },
   chipLabel: {
     color: "#466c8a",
@@ -479,7 +733,7 @@ const styles = StyleSheet.create({
     fontWeight: "600",
   },
   chipValue: { marginTop: 6, color: "#e6f2fc", fontSize: 17, fontWeight: "600" },
-  ok: { color: "#7edcff" },
+  ok: { color: NEON },
   warn: { color: "#ffc45b" },
   boards: { marginTop: 16 },
   board: { color: "#789eba", fontSize: 13 },
@@ -489,7 +743,7 @@ const styles = StyleSheet.create({
     borderRadius: 14,
     backgroundColor: "rgba(5,18,34,0.9)",
     borderWidth: 1,
-    borderColor: "rgba(36,78,118,0.55)",
+    borderColor: "rgba(20,120,255,0.35)",
   },
   boardTitle: { color: "#e6f2fc", fontWeight: "600", fontSize: 14 },
   boardMeta: { marginTop: 4, color: "#789eba", fontSize: 12 },
@@ -508,20 +762,24 @@ const styles = StyleSheet.create({
   button: {
     marginTop: 16,
     borderRadius: 12,
-    backgroundColor: "#7edcff",
+    backgroundColor: NEON,
     paddingVertical: 13,
     alignItems: "center",
+    shadowColor: NEON,
+    shadowOpacity: 0.55,
+    shadowRadius: 12,
+    shadowOffset: { width: 0, height: 0 },
   },
   buttonText: { color: "#031018", fontWeight: "700", fontSize: 15 },
   buttonSecondary: {
     marginTop: 10,
     borderRadius: 12,
     borderWidth: 1,
-    borderColor: "#7edcff",
+    borderColor: NEON,
     paddingVertical: 12,
     alignItems: "center",
   },
-  buttonSecondaryText: { color: "#7edcff", fontWeight: "700", fontSize: 15 },
+  buttonSecondaryText: { color: NEON, fontWeight: "700", fontSize: 15 },
   linkBtn: { marginTop: 14, alignItems: "center" },
   linkText: { color: "#789eba", fontSize: 13 },
   metaRow: { marginTop: 16, flexDirection: "row", gap: 10, alignItems: "center" },
@@ -538,6 +796,9 @@ const styles = StyleSheet.create({
     fontSize: 22,
     fontWeight: "700",
     marginBottom: 8,
+    textShadowColor: "rgba(0,229,255,0.5)",
+    textShadowOffset: { width: 0, height: 0 },
+    textShadowRadius: 10,
   },
   scanHint: { color: "#789eba", fontSize: 14, marginBottom: 12, lineHeight: 20 },
 });

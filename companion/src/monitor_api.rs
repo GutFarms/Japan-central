@@ -413,41 +413,76 @@ const MONITOR_HTML: &str = r##"<!DOCTYPE html>
 <style>
   :root {
     --bg:#020a16; --panel:#08162a; --line:#244e76;
-    --ice:#7edcff; --text:#e6f2fc; --muted:#789ebA; --dim:#466c8a; --warn:#ffc45b; --err:#ff6c5b;
+    --ice:#7edcff; --neon:#00e5ff; --neon-deep:#1478ff; --neon-hot:#b4f5ff;
+    --text:#e6f2fc; --muted:#789ebA; --dim:#466c8a; --warn:#ffc45b; --err:#ff6c5b;
   }
   *{box-sizing:border-box}
   body{
     margin:0; min-height:100vh; color:var(--text);
     background:
-      radial-gradient(1200px 600px at 20% -10%, rgba(126,220,255,.16), transparent 55%),
-      radial-gradient(900px 500px at 100% 10%, rgba(36,78,118,.35), transparent 50%),
+      radial-gradient(900px 520px at 12% -8%, rgba(0,229,255,.22), transparent 55%),
+      radial-gradient(700px 420px at 92% 8%, rgba(20,120,255,.28), transparent 52%),
+      radial-gradient(500px 280px at 70% 0%, rgba(180,245,255,.10), transparent 50%),
       linear-gradient(180deg,#031428 0%, var(--bg) 55%, #01060e 100%);
     font-family:"Segoe UI",system-ui,sans-serif;
   }
-  .wrap{max-width:520px;margin:0 auto;padding:28px 18px 48px}
-  .brand{font-size:28px;font-weight:700;letter-spacing:.02em;color:var(--ice);margin:0}
+  .wrap{max-width:520px;margin:0 auto;padding:28px 18px 48px;position:relative}
+  .brand-row{display:flex;align-items:center;gap:10px}
+  .brand{
+    font-size:28px;font-weight:700;letter-spacing:.02em;color:var(--ice);margin:0;
+    text-shadow:0 0 18px rgba(0,229,255,.55);
+  }
+  .bolt{
+    width:16px;height:26px;position:relative;filter:drop-shadow(0 0 8px rgba(0,229,255,.85));
+  }
+  .bolt i{
+    position:absolute;display:block;height:3px;border-radius:2px;background:var(--neon);
+  }
+  .bolt i:nth-child(1){width:13px;top:3px;left:2px;transform:rotate(28deg)}
+  .bolt i:nth-child(2){width:15px;top:11px;left:0;background:var(--neon-hot);transform:rotate(-32deg)}
+  .bolt i:nth-child(3){width:11px;top:19px;left:4px;transform:rotate(24deg)}
   .tag{margin:6px 0 22px;color:var(--muted);font-size:14px}
   .hero{
-    border:1px solid rgba(126,220,255,.28); border-radius:22px; padding:22px 18px;
-    background:rgba(6,20,38,.82); backdrop-filter:blur(8px);
+    position:relative;overflow:hidden;
+    border:1px solid rgba(0,229,255,.38); border-radius:22px; padding:22px 18px;
+    background:
+      linear-gradient(135deg, rgba(0,229,255,.14), transparent 42%),
+      rgba(6,20,38,.82);
+    backdrop-filter:blur(8px);
+    box-shadow:0 0 28px rgba(0,229,255,.18);
   }
-  .rate{font-size:56px;line-height:1;font-weight:700;letter-spacing:-.03em}
-  .unit{color:var(--ice);font-size:18px;margin-top:8px}
+  .hero::before,.hero::after{
+    content:"";position:absolute;pointer-events:none;border-radius:2px;
+    background:linear-gradient(180deg,var(--neon-hot),var(--neon),transparent);
+    opacity:.55;animation:flash 2.8s ease-in-out infinite;
+  }
+  .hero::before{right:34px;top:6px;width:3px;height:96px;transform:rotate(12deg)}
+  .hero::after{
+    right:62px;top:28px;width:2px;height:56px;transform:rotate(-18deg);
+    background:linear-gradient(180deg,var(--neon),var(--neon-deep),transparent);
+    animation-delay:.9s;
+  }
+  @keyframes flash{0%,100%{opacity:.2}40%{opacity:.85}55%{opacity:.25}70%{opacity:.7}}
+  .rate{
+    font-size:56px;line-height:1;font-weight:700;letter-spacing:-.03em;
+    text-shadow:0 0 22px rgba(0,229,255,.4);
+  }
+  .unit{color:var(--neon);font-size:18px;margin-top:8px}
   .row{display:flex;justify-content:space-between;gap:12px;margin-top:18px;flex-wrap:wrap}
   .chip{
     flex:1 1 120px; border-radius:14px; padding:12px 14px;
-    background:rgba(8,28,48,.9); border:1px solid rgba(36,78,118,.7);
+    background:rgba(8,28,48,.9); border:1px solid rgba(0,229,255,.28);
   }
   .chip b{display:block;color:var(--dim);font-size:11px;letter-spacing:.08em;text-transform:uppercase}
   .chip span{display:block;margin-top:6px;font-size:18px;font-weight:600}
   .boards{margin-top:18px}
   .board{
     margin-top:10px;padding:12px 14px;border-radius:14px;
-    background:rgba(5,18,34,.88);border:1px solid rgba(36,78,118,.55);
+    background:rgba(5,18,34,.88);border:1px solid rgba(20,120,255,.35);
     font-size:13px;color:var(--muted)
   }
   .board strong{color:var(--text)}
-  .ok{color:var(--ice)} .warn{color:var(--warn)} .err{color:var(--err)}
+  .ok{color:var(--neon)} .warn{color:var(--warn)} .err{color:var(--err)}
   .foot{margin-top:22px;color:var(--dim);font-size:12px;line-height:1.45}
   input{
     width:100%;margin-top:10px;padding:12px 14px;border-radius:12px;border:1px solid var(--line);
@@ -455,13 +490,17 @@ const MONITOR_HTML: &str = r##"<!DOCTYPE html>
   }
   button{
     margin-top:10px;width:100%;padding:12px;border:0;border-radius:12px;
-    background:linear-gradient(180deg,#9ae6ff,#5ec4ef);color:#031018;font-weight:700;font-size:15px
+    background:linear-gradient(180deg,#7af0ff,#00c8e6);color:#031018;font-weight:700;font-size:15px;
+    box-shadow:0 0 18px rgba(0,229,255,.35);
   }
 </style>
 </head>
 <body>
   <div class="wrap">
-    <p class="brand">Njörðr Seas'</p>
+    <div class="brand-row">
+      <p class="brand">Njörðr Seas'</p>
+      <span class="bolt" aria-hidden="true"><i></i><i></i><i></i></span>
+    </div>
     <p class="tag">CYD miner · personal phone monitor</p>
     <div class="hero">
       <div class="rate" id="rate">—</div>

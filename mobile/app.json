@@ -2,7 +2,7 @@
   "expo": {
     "name": "Njörðr Seas' Monitor",
     "slug": "njordr-seas-cyd-monitor",
-    "version": "0.8.51",
+    "version": "0.8.52",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "dark",

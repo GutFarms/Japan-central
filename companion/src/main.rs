@@ -91,6 +91,10 @@ const C_BUBBLE_HI: Color32 = Color32::from_rgb(88, 168, 210);
 const C_LIME: Color32 = Color32::from_rgb(126, 220, 255);
 const C_LIME_SOFT: Color32 = Color32::from_rgb(64, 160, 220);
 const C_BOLT: Color32 = Color32::from_rgb(232, 246, 255);
+/// Hot neon cyan — splash bloom around lightning strikes.
+const C_NEON: Color32 = Color32::from_rgb(0, 229, 255);
+const C_NEON_DEEP: Color32 = Color32::from_rgb(20, 120, 255);
+const C_NEON_HOT: Color32 = Color32::from_rgb(180, 245, 255);
 const C_TEXT: Color32 = Color32::from_rgb(230, 242, 252);
 const C_MUTED: Color32 = Color32::from_rgb(120, 158, 186);
 const C_DIM: Color32 = Color32::from_rgb(70, 108, 138);
@@ -101,11 +105,21 @@ const HASH_HISTORY_SAMPLES: usize = 90;
 const LOGO_PNG: egui::ImageSource<'static> = egui::include_image!("../assets/cyd-logo.png");
 
 fn brand_logo(ui: &mut egui::Ui, height: f32) {
-    ui.add(
-        egui::Image::new(LOGO_PNG)
-            .fit_to_exact_size(Vec2::splat(height))
-            .rounding(Rounding::same((height * 0.18).clamp(6.0, 14.0))),
+    let size = Vec2::splat(height);
+    let (rect, _) = ui.allocate_exact_size(size, Sense::hover());
+    let painter = ui.painter_at(rect.expand(height * 0.22));
+    // Neon blue splash halo behind the logo.
+    painter.circle_filled(rect.center(), height * 0.62, rgba(C_NEON_DEEP, 28));
+    painter.circle_filled(rect.center(), height * 0.48, rgba(C_NEON, 18));
+    painter.circle_stroke(
+        rect.center(),
+        height * 0.52,
+        Stroke::new(1.4, rgba(C_NEON, 55)),
     );
+    egui::Image::new(LOGO_PNG)
+        .fit_to_exact_size(size)
+        .rounding(Rounding::same((height * 0.18).clamp(6.0, 14.0)))
+        .paint_at(ui, rect);
 }
 
 fn install_fonts(ctx: &egui::Context) {
@@ -3825,28 +3839,38 @@ fn paint_background(ui: &mut egui::Ui, rect: Rect, pulse: f32, grid_phase: f32, 
     }
 
     let glow = if mining {
-        (36.0 + pulse.sin().max(0.0) * 52.0) as u8
+        (48.0 + pulse.sin().max(0.0) * 72.0) as u8
     } else {
-        22
+        28
     };
-    // Soft aurora / storm glow orbs.
+    // Soft aurora / neon storm glow orbs.
     painter.circle_filled(
         Pos2::new(rect.left() + rect.width() * 0.18, rect.top() + rect.height() * 0.16),
         380.0,
-        rgba(C_LIME, glow / 3),
+        rgba(C_NEON_DEEP, glow / 4),
+    );
+    painter.circle_filled(
+        Pos2::new(rect.left() + rect.width() * 0.22, rect.top() + rect.height() * 0.20),
+        220.0,
+        rgba(C_NEON, glow / 5),
     );
     painter.circle_filled(
         Pos2::new(rect.right() - rect.width() * 0.10, rect.bottom() - rect.height() * 0.14),
         300.0,
-        rgba(C_LIME_SOFT, 16),
+        rgba(C_LIME_SOFT, 18),
     );
     painter.circle_filled(
         Pos2::new(rect.left() + rect.width() * 0.72, rect.top() + rect.height() * 0.08),
-        160.0,
-        rgba(C_BOLT, glow / 5),
+        180.0,
+        rgba(C_NEON, glow / 4),
+    );
+    painter.circle_filled(
+        Pos2::new(rect.left() + rect.width() * 0.48, rect.top() + rect.height() * 0.02),
+        90.0,
+        rgba(C_NEON_HOT, glow / 6),
     );
 
-    // Slow current lines (wave diagonals).
+    // Slow current lines (wave diagonals) — neon-tinted.
     let step = 38.0;
     let drift = grid_phase * step;
     let mut x = rect.left() - rect.height() + drift;
@@ -3856,7 +3880,7 @@ fn paint_background(ui: &mut egui::Ui, rect: Rect, pulse: f32, grid_phase: f32, 
                 Pos2::new(x, rect.bottom()),
                 Pos2::new(x + rect.height() * 0.66, rect.top()),
             ],
-            Stroke::new(1.0_f32, rgba(C_LIME, 12)),
+            Stroke::new(1.0_f32, rgba(C_NEON, 14)),
         );
         x += step;
     }
@@ -3864,31 +3888,29 @@ fn paint_background(ui: &mut egui::Ui, rect: Rect, pulse: f32, grid_phase: f32, 
     paint_lightning_storm(&painter, rect, pulse, mining);
 }
 
-/// Njörðr storm — rare sharp lightning bolts across the deep.
+/// Njörðr storm — rare sharp neon-blue lightning bolts across the deep.
 fn paint_lightning_storm(painter: &egui::Painter, rect: Rect, pulse: f32, mining: bool) {
-    let base = if mining { 1.0 } else { 0.55 };
+    let base = if mining { 1.15 } else { 0.65 };
     let flashes = [
-        ((pulse * 1.15).sin().max(0.0).powf(10.0) * base, 0.18, 0.05, 1.05),
-        (((pulse * 0.82) + 1.7).sin().max(0.0).powf(12.0) * base, 0.62, 0.12, 0.92),
-        (((pulse * 1.55) + 3.1).sin().max(0.0).powf(14.0) * base * 0.85, 0.42, 0.0, 0.78),
+        ((pulse * 1.15).sin().max(0.0).powf(9.0) * base, 0.18, 0.05, 1.05),
+        (((pulse * 0.82) + 1.7).sin().max(0.0).powf(11.0) * base, 0.62, 0.12, 0.92),
+        (((pulse * 1.55) + 3.1).sin().max(0.0).powf(13.0) * base * 0.9, 0.42, 0.0, 0.78),
+        (((pulse * 0.95) + 4.4).sin().max(0.0).powf(15.0) * base * 0.7, 0.78, 0.08, 0.7),
     ];
     for (intensity, x_frac, y_frac, scale) in flashes {
-        if intensity < 0.08 {
+        if intensity < 0.07 {
             continue;
         }
         let origin = Pos2::new(
             rect.left() + rect.width() * x_frac,
             rect.top() + rect.height() * y_frac,
         );
-        let a = (intensity * 220.0) as u8;
-        let glow_a = (intensity * 70.0) as u8;
         paint_lightning_bolt(
             painter,
             origin,
             rect.height() * 0.55 * scale,
-            rgba(C_BOLT, a),
-            rgba(C_LIME, glow_a),
-            1.6 + intensity * 1.8,
+            intensity,
+            1.6 + intensity * 2.0,
         );
     }
 }
@@ -3897,8 +3919,7 @@ fn paint_lightning_bolt(
     painter: &egui::Painter,
     origin: Pos2,
     length: f32,
-    core: Color32,
-    glow: Color32,
+    intensity: f32,
     width: f32,
 ) {
     // Jagged relative polyline (x,y) in unit space down the bolt.
@@ -3915,70 +3936,133 @@ fn paint_lightning_bolt(
     for (dx, dy) in segs {
         pts.push(Pos2::new(origin.x + dx * length * 0.55, origin.y + dy * length));
     }
+
+    let i = intensity.clamp(0.0, 1.0);
+    let bloom_a = (i * 55.0) as u8;
+    let neon_a = (i * 160.0) as u8;
+    let core_a = (i * 245.0) as u8;
+    let hot_a = (i * 220.0) as u8;
+
+    // Neon splash bloom at strike origin.
+    painter.circle_filled(origin, length * 0.14 * i + 10.0, rgba(C_NEON_DEEP, bloom_a));
+    painter.circle_filled(origin, length * 0.07 * i + 5.0, rgba(C_NEON, neon_a / 2));
+
     for pair in pts.windows(2) {
-        painter.line_segment([pair[0], pair[1]], Stroke::new(width * 3.2, glow));
-        painter.line_segment([pair[0], pair[1]], Stroke::new(width, core));
+        // Wide deep-blue halo → neon cyan → ice-hot core.
+        painter.line_segment(
+            [pair[0], pair[1]],
+            Stroke::new(width * 7.5, rgba(C_NEON_DEEP, bloom_a)),
+        );
+        painter.line_segment(
+            [pair[0], pair[1]],
+            Stroke::new(width * 4.2, rgba(C_NEON, neon_a)),
+        );
+        painter.line_segment(
+            [pair[0], pair[1]],
+            Stroke::new(width * 2.0, rgba(C_LIME, neon_a.saturating_add(20))),
+        );
+        painter.line_segment(
+            [pair[0], pair[1]],
+            Stroke::new(width * 0.85, rgba(C_NEON_HOT, hot_a)),
+        );
+        painter.line_segment(
+            [pair[0], pair[1]],
+            Stroke::new(width * 0.35, rgba(C_BOLT, core_a)),
+        );
     }
-    // Small fork near mid.
+    // Small fork near mid — neon splash.
     if pts.len() >= 4 {
         let mid = pts[3];
         let fork = Pos2::new(mid.x + length * 0.12, mid.y + length * 0.14);
-        painter.line_segment([mid, fork], Stroke::new(width * 2.4, glow));
-        painter.line_segment([mid, fork], Stroke::new(width * 0.75, core));
+        painter.line_segment([mid, fork], Stroke::new(width * 5.0, rgba(C_NEON_DEEP, bloom_a)));
+        painter.line_segment([mid, fork], Stroke::new(width * 2.6, rgba(C_NEON, neon_a)));
+        painter.line_segment([mid, fork], Stroke::new(width * 0.7, rgba(C_NEON_HOT, hot_a)));
+        painter.circle_filled(fork, 4.0 + 6.0 * i, rgba(C_NEON, neon_a / 2));
+    }
+    // Tip splash.
+    if let Some(tip) = pts.last() {
+        painter.circle_filled(*tip, 8.0 + 10.0 * i, rgba(C_NEON, neon_a / 3));
+        painter.circle_filled(*tip, 3.0 + 4.0 * i, rgba(C_NEON_HOT, hot_a / 2));
     }
 }
 
 fn paint_hero_wash(ui: &mut egui::Ui, rect: Rect, pulse: f32, mining: bool) {
     let painter = ui.painter();
     let alpha = if mining {
-        (22.0 + (0.5 + 0.5 * pulse.sin()) * 44.0) as u8
+        (28.0 + (0.5 + 0.5 * pulse.sin()) * 52.0) as u8
     } else {
-        14
+        16
     };
     painter.circle_filled(
         Pos2::new(rect.left() + 110.0, rect.top() + 78.0),
-        190.0,
-        rgba(C_LIME, alpha),
+        200.0,
+        rgba(C_NEON_DEEP, alpha / 2),
+    );
+    painter.circle_filled(
+        Pos2::new(rect.left() + 130.0, rect.top() + 90.0),
+        120.0,
+        rgba(C_NEON, alpha / 3),
     );
     painter.circle_filled(
         Pos2::new(rect.right() - 80.0, rect.bottom() - 40.0),
-        120.0,
-        rgba(C_LIME_SOFT, if mining { 20 } else { 10 }),
+        130.0,
+        rgba(C_LIME_SOFT, if mining { 22 } else { 12 }),
+    );
+    painter.circle_filled(
+        Pos2::new(rect.right() - 160.0, rect.top() + 36.0),
+        70.0,
+        rgba(C_NEON, if mining { alpha / 3 } else { 10 }),
     );
 
-    // Storm sweep — electric arc across the hero.
+    // Storm sweep — neon electric arc across the hero.
     let sweep = (pulse * 0.12).rem_euclid(1.0);
     let edge = loop_edge_fade(sweep, 0.14);
     let x = rect.left() + rect.width() * sweep;
-    let sweep_a = ((if mining { 36.0 } else { 14.0 }) * edge) as u8;
+    let sweep_a = ((if mining { 48.0 } else { 18.0 }) * edge) as u8;
     if sweep_a > 0 {
         painter.line_segment(
             [
                 Pos2::new(x, rect.bottom() - 18.0),
                 Pos2::new(x + rect.height() * 0.55, rect.top() + 18.0),
             ],
-            Stroke::new(2.2_f32, rgba(C_BOLT, sweep_a)),
+            Stroke::new(5.0_f32, rgba(C_NEON_DEEP, sweep_a / 2)),
+        );
+        painter.line_segment(
+            [
+                Pos2::new(x, rect.bottom() - 18.0),
+                Pos2::new(x + rect.height() * 0.55, rect.top() + 18.0),
+            ],
+            Stroke::new(2.4_f32, rgba(C_NEON, sweep_a)),
         );
         painter.line_segment(
             [
                 Pos2::new(x + 8.0, rect.bottom() - 28.0),
                 Pos2::new(x + rect.height() * 0.42, rect.top() + 36.0),
             ],
-            Stroke::new(1.0_f32, rgba(C_LIME, sweep_a / 2)),
+            Stroke::new(1.1_f32, rgba(C_NEON_HOT, sweep_a / 2)),
         );
     }
 
-    // Occasional hero bolt when hashing.
+    // Occasional hero bolt when hashing — neon splash.
     if mining {
-        let flash = (pulse * 1.4 + 0.6).sin().max(0.0).powf(11.0);
-        if flash > 0.12 {
+        let flash = (pulse * 1.4 + 0.6).sin().max(0.0).powf(10.0);
+        if flash > 0.10 {
             paint_lightning_bolt(
                 &painter,
                 Pos2::new(rect.right() - 140.0, rect.top() + 12.0),
                 rect.height() * 0.85,
-                rgba(C_BOLT, (flash * 210.0) as u8),
-                rgba(C_LIME, (flash * 80.0) as u8),
-                1.4 + flash,
+                flash,
+                1.5 + flash * 1.2,
+            );
+        }
+        let flash2 = (pulse * 1.05 + 2.3).sin().max(0.0).powf(12.0);
+        if flash2 > 0.14 {
+            paint_lightning_bolt(
+                &painter,
+                Pos2::new(rect.left() + 90.0, rect.top() + 8.0),
+                rect.height() * 0.7,
+                flash2 * 0.85,
+                1.2 + flash2,
             );
         }
     }
@@ -4002,15 +4086,33 @@ fn hash_activity_bars(ui: &mut egui::Ui, khs: f32, pulse: f32, hashing: bool) {
         let h = rect.height() * level;
         let x = rect.left() + i as f32 * (bar_w + gap);
         let y = rect.bottom() - h;
+        let color = if hashing {
+            // Alternate neon cyan / ice blue for electric hash bars.
+            if i % 3 == 0 {
+                rgba(C_NEON, (90.0 + level * 150.0) as u8)
+            } else if i % 3 == 1 {
+                rgba(C_LIME, (70.0 + level * 140.0) as u8)
+            } else {
+                rgba(C_NEON_HOT, (60.0 + level * 130.0) as u8)
+            }
+        } else {
+            rgba(C_BUBBLE_HI, 50)
+        };
         painter.rect_filled(
             Rect::from_min_max(Pos2::new(x, y), Pos2::new(x + bar_w, rect.bottom())),
             Rounding::same(2.0),
-            if hashing {
-                rgba(C_LIME, (70.0 + level * 140.0) as u8)
-            } else {
-                rgba(C_BUBBLE_HI, 50)
-            },
+            color,
         );
+        if hashing && level > 0.55 {
+            painter.rect_filled(
+                Rect::from_min_max(
+                    Pos2::new(x, y),
+                    Pos2::new(x + bar_w, (y + 3.0).min(rect.bottom())),
+                ),
+                Rounding::same(1.0),
+                rgba(C_NEON_HOT, 180),
+            );
+        }
     }
 }
 

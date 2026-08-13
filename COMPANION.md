@@ -59,6 +59,7 @@ In **Settings**:
 - **0.8.22** — fix Windows self-update bat (retry while `.new` remains; do not relaunch a locked old exe)
 - **0.8.23** — fetch updates via GitHub API / commit-pinned raw (branch raw CDN can serve stale VERSION/bins)
 - **0.8.24** — fix Update board: espflash reject `ESPFLASH_SKIP_UPDATE_CHECK=1` (needs true/false); skip Windows Store python stubs
+- **0.8.52** — Neon-blue lightning splashes (Companion storm, logo halo, phone monitor + web UI)
 - **0.8.51** — Personal phone QR per Companion install (token-gated :19285); optional remote host for travel; Expo Scan QR
 - **0.8.50** — Phone monitor: Companion LAN HTTP API on :19285 (`/api/status` + mobile web UI); Expo iOS/Android app in `mobile/`
 - **0.8.49** — CYD LCD: full-screen logo; status strip shows link + hashrate + Wi‑Fi IP only
