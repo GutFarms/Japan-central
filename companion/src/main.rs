@@ -5,6 +5,7 @@
 
 mod api_feeds;
 mod app_update;
+mod desktop_icon;
 mod flash_update;
 mod live_bar;
 mod monitor_api;
@@ -99,6 +100,8 @@ fn main() -> eframe::Result<()> {
             egui_extras::install_image_loaders(&cc.egui_ctx);
             install_fonts(&cc.egui_ctx);
             apply_theme(&cc.egui_ctx);
+            // Auto-place branded Desktop shortcut (Windows) using the logo ICO.
+            desktop_icon::spawn_auto_desktop_icon();
             Box::new(CompanionApp::new(cc.storage))
         }),
     )
@@ -2256,6 +2259,19 @@ impl CompanionApp {
                 if soft_button(ui, "Show setup wizard", 150.0).clicked() {
                     self.wizard_step = Some(0);
                     self.tab = Tab::Mine;
+                }
+                if soft_button(ui, "Add Desktop icon", 150.0).clicked() {
+                    match desktop_icon::ensure_desktop_shortcut() {
+                        Ok(msg) => {
+                            self.last_ok = msg.clone();
+                            self.update_status = msg.clone();
+                            self.push_log(LogKind::Info, msg);
+                        }
+                        Err(e) => {
+                            self.last_error = e.clone();
+                            self.push_log(LogKind::Err, e);
+                        }
+                    }
                 }
             });
             if let Some(info) = &self.app_remote {

@@ -13,6 +13,7 @@ What is installed
 4. Flash-Firmware.bat     — optional flash helper
 5. Docs                   — this file + FLASH-WINDOWS.txt
 6. Desktop / Start Menu shortcuts (branded app icon)
+   Companion also auto-creates a Desktop shortcut with the logo on first launch.
 
 First-time setup (about 5 minutes)
 ----------------------------------

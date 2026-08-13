@@ -6,7 +6,7 @@
 
 !define PRODUCT_NAME "Njörðr Seas' CYD miner"
 !define PRODUCT_PUBLISHER "GutFarms"
-!define PRODUCT_VERSION "0.8.76"
+!define PRODUCT_VERSION "0.8.77"
 !define PRODUCT_WEB "https://github.com/GutFarms/Japan-central"
 
 Name "${PRODUCT_NAME} ${PRODUCT_VERSION}"
@@ -64,6 +64,9 @@ Section "Njörðr Seas' CYD miner (required)" SecApp
   File "..\dist\cyd-miner-kit\VERSION.txt"
   File "icons\cyd-miner.ico"
 
+  ; Always place a branded Desktop shortcut (logo ICO).
+  CreateShortCut "$DESKTOP\Njörðr Seas' CYD miner.lnk" "$INSTDIR\cyd-companion.exe" "" "$INSTDIR\cyd-miner.ico" 0
+
   SetOutPath "$INSTDIR\Firmware"
   File "..\dist\cyd-miner-kit\Firmware\esp32-2432s028-sha256-miner-merged.bin"
   File "..\dist\cyd-miner-kit\Firmware\SHA256SUMS.txt"
@@ -92,7 +95,7 @@ SectionEnd
 Section "Start Menu shortcuts" SecMenu
   CreateDirectory "$SMPROGRAMS\Njordr Seas' CYD miner"
   ; Icon from embedded PE resource (index 0).
-  CreateShortCut "$SMPROGRAMS\Njordr Seas' CYD miner\Njörðr Seas' CYD miner.lnk" "$INSTDIR\cyd-companion.exe" "" "$INSTDIR\cyd-companion.exe" 0
+  CreateShortCut "$SMPROGRAMS\Njordr Seas' CYD miner\Njörðr Seas' CYD miner.lnk" "$INSTDIR\cyd-companion.exe" "" "$INSTDIR\cyd-miner.ico" 0
   CreateShortCut "$SMPROGRAMS\Njordr Seas' CYD miner\Flash Firmware.lnk" "$INSTDIR\Flash-Firmware.bat" "" "$INSTDIR\cyd-miner.ico" 0
   CreateShortCut "$SMPROGRAMS\Njordr Seas' CYD miner\START-HERE.lnk" "$INSTDIR\START-HERE.txt"
   CreateShortCut "$SMPROGRAMS\Njordr Seas' CYD miner\Firmware Folder.lnk" "$INSTDIR\Firmware"
@@ -100,7 +103,8 @@ Section "Start Menu shortcuts" SecMenu
 SectionEnd
 
 Section "Desktop shortcuts" SecDesktop
-  CreateShortCut "$DESKTOP\Njörðr Seas' CYD miner.lnk" "$INSTDIR\cyd-companion.exe" "" "$INSTDIR\cyd-companion.exe" 0
+  ; Companion shortcut is also created in SecApp; this refreshes Flash helper too.
+  CreateShortCut "$DESKTOP\Njörðr Seas' CYD miner.lnk" "$INSTDIR\cyd-companion.exe" "" "$INSTDIR\cyd-miner.ico" 0
   CreateShortCut "$DESKTOP\CYD Flash Firmware.lnk" "$INSTDIR\Flash-Firmware.bat" "" "$INSTDIR\cyd-miner.ico" 0
 SectionEnd
 
