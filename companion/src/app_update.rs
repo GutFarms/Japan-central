@@ -5,6 +5,8 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
+use sha2::{Digest, Sha256};
+
 use crate::flash_update::{normalize_fw_version, repo_version_urls, COMPANION_UA};
 
 #[derive(Clone, Debug)]
@@ -68,6 +70,98 @@ fn app_zip_urls() -> Vec<String> {
 
 fn app_exe_urls() -> Vec<String> {
     crate::flash_update::repo_file_urls("flash/downloads/cyd-companion.exe")
+}
+
+fn sha256sums_urls() -> Vec<String> {
+    let mut out = crate::flash_update::repo_file_urls("flash/downloads/SHA256SUMS.txt");
+    out.extend(crate::flash_update::repo_version_urls(
+        "flash/downloads/SHA256SUMS.txt",
+    ));
+    out
+}
+
+fn parse_sha256sums(txt: &str) -> std::collections::HashMap<String, String> {
+    let mut map = std::collections::HashMap::new();
+    for line in txt.lines() {
+        let t = line.trim();
+        if t.is_empty() || t.starts_with('#') {
+            continue;
+        }
+        // "hex  filename" or "hex *filename"
+        let mut parts = t.split_whitespace();
+        let Some(hex) = parts.next() else { continue };
+        let Some(name) = parts.next() else { continue };
+        if hex.len() != 64 || !hex.chars().all(|c| c.is_ascii_hexdigit()) {
+            continue;
+        }
+        let name = name.trim_start_matches('*');
+        let base = name.rsplit('/').next().unwrap_or(name);
+        map.insert(base.to_ascii_lowercase(), hex.to_ascii_lowercase());
+    }
+    map
+}
+
+fn file_sha256_hex(path: &Path) -> Result<String, String> {
+    let mut file = std::fs::File::open(path).map_err(|e| format!("open {}: {e}", path.display()))?;
+    let mut hasher = Sha256::new();
+    let mut buf = [0u8; 64 * 1024];
+    loop {
+        let n = std::io::Read::read(&mut file, &mut buf).map_err(|e| format!("read: {e}"))?;
+        if n == 0 {
+            break;
+        }
+        hasher.update(&buf[..n]);
+    }
+    Ok(hex::encode(hasher.finalize()))
+}
+
+fn fetch_download_checksums(progress: &dyn Fn(String)) -> Result<std::collections::HashMap<String, String>, String> {
+    let mut last = String::new();
+    for url in sha256sums_urls() {
+        progress(format!("GET checksums {url}"));
+        match http_get_text(&url) {
+            Ok(txt) => {
+                let map = parse_sha256sums(&txt);
+                if !map.is_empty() {
+                    progress(format!("Loaded {} checksum(s) for verify", map.len()));
+                    return Ok(map);
+                }
+                last = "SHA256SUMS.txt had no usable entries".into();
+            }
+            Err(e) => last = e,
+        }
+    }
+    Err(format!("Could not fetch download SHA256SUMS ({last})"))
+}
+
+fn verify_named_file(
+    path: &Path,
+    logical_name: &str,
+    sums: &std::collections::HashMap<String, String>,
+    progress: &dyn Fn(String),
+    required: bool,
+) -> Result<(), String> {
+    let key = logical_name.to_ascii_lowercase();
+    let Some(expected) = sums.get(&key) else {
+        if required {
+            return Err(format!(
+                "SHA256SUMS.txt missing required entry for {logical_name}"
+            ));
+        }
+        progress(format!(
+            "No SHA-256 entry for {logical_name} in SUMS — skipping hash check for this file"
+        ));
+        return Ok(());
+    };
+    progress(format!("Verifying SHA-256 of {logical_name}…"));
+    let actual = file_sha256_hex(path)?;
+    if actual != *expected {
+        return Err(format!(
+            "SHA-256 mismatch for {logical_name}: expected {expected}, got {actual}"
+        ));
+    }
+    progress(format!("Verified {logical_name} SHA-256"));
+    Ok(())
 }
 
 fn http_get_text(url: &str) -> Result<String, String> {
@@ -396,25 +490,50 @@ pub fn update_companion_app(progress: &dyn Fn(String)) -> Result<AppRemoteInfo, 
 
     let staging = prepare_staging(&install, progress)?;
 
+    let sums = fetch_download_checksums(progress)?;
+    let has_companion_sum = ["cyd-companion.exe", "cyd-companion-app-only.zip", "cyd-miner-portable.zip"]
+        .iter()
+        .any(|n| sums.contains_key(*n));
+    if !has_companion_sum {
+        let _ = std::fs::remove_dir_all(&staging);
+        return Err(
+            "SHA256SUMS.txt has no Companion package hashes — refusing unverified update".into(),
+        );
+    }
+
     // Prefer full App-Only zip (exe + Firmware + Tools).
     let zip_path = install.join("companion-update.zip");
     let mut zip_ok = false;
     let mut last = String::new();
+    let mut used_zip_name = String::new();
     for url in app_zip_urls() {
         progress(format!("GET {url}"));
+        let zip_name = if url.to_ascii_lowercase().contains("portable") {
+            "CYD-Miner-Portable.zip"
+        } else {
+            "CYD-Companion-App-Only.zip"
+        };
         match http_download(&url, &zip_path, progress) {
-            Ok(()) => match extract_app_kit(&zip_path, &staging, progress) {
-                Ok(()) => {
-                    zip_ok = true;
-                    let _ = std::fs::remove_file(&zip_path);
-                    break;
-                }
-                Err(e) => {
+            Ok(()) => {
+                if let Err(e) = verify_named_file(&zip_path, zip_name, &sums, progress, true) {
                     last = e;
                     let _ = std::fs::remove_file(&zip_path);
-                    let _ = clean_dir_contents(&staging, &[]);
+                    continue;
                 }
-            },
+                match extract_app_kit(&zip_path, &staging, progress) {
+                    Ok(()) => {
+                        zip_ok = true;
+                        used_zip_name = zip_name.into();
+                        let _ = std::fs::remove_file(&zip_path);
+                        break;
+                    }
+                    Err(e) => {
+                        last = e;
+                        let _ = std::fs::remove_file(&zip_path);
+                        let _ = clean_dir_contents(&staging, &[]);
+                    }
+                }
+            }
             Err(e) => last = e,
         }
     }
@@ -429,12 +548,20 @@ pub fn update_companion_app(progress: &dyn Fn(String)) -> Result<AppRemoteInfo, 
             match http_download(&url, &new_exe, progress) {
                 Ok(()) => {
                     let bytes = std::fs::metadata(&new_exe).map(|m| m.len()).unwrap_or(0);
-                    if bytes > 1_000_000 {
-                        exe_ok = true;
-                        break;
+                    if bytes <= 1_000_000 {
+                        last = format!("exe too small ({bytes} bytes)");
+                        let _ = std::fs::remove_file(&new_exe);
+                        continue;
                     }
-                    last = format!("exe too small ({bytes} bytes)");
-                    let _ = std::fs::remove_file(&new_exe);
+                    if let Err(e) =
+                        verify_named_file(&new_exe, "cyd-companion.exe", &sums, progress, true)
+                    {
+                        last = e;
+                        let _ = std::fs::remove_file(&new_exe);
+                        continue;
+                    }
+                    exe_ok = true;
+                    break;
                 }
                 Err(e) => last = e,
             }
@@ -442,6 +569,14 @@ pub fn update_companion_app(progress: &dyn Fn(String)) -> Result<AppRemoteInfo, 
         if !exe_ok {
             let _ = std::fs::remove_dir_all(&staging);
             return Err(format!("Could not download Companion update ({last})"));
+        }
+    } else {
+        let staged_exe = staging.join("cyd-companion.exe");
+        if let Err(e) = verify_named_file(&staged_exe, "cyd-companion.exe", &sums, progress, true) {
+            let _ = std::fs::remove_dir_all(&staging);
+            return Err(format!(
+                "Update zip ({used_zip_name}) failed exe verify: {e}"
+            ));
         }
     }
 
@@ -536,6 +671,26 @@ mod tests {
             parse_version_text("# comment\nfw: 0.8.23-sha256\n").as_deref(),
             Some("0.8.23")
         );
+    }
+
+    #[test]
+    fn parse_sha256sums_lines() {
+        let txt = "\
+# comment
+aabbccddeeff00112233445566778899aabbccddeeff00112233445566778899  cyd-companion.exe
+11223344556677889900aabbccddeeff11223344556677889900aabbccddeeff *CYD-Companion-App-Only.zip
+not-a-hash  junk.bin
+";
+        let map = parse_sha256sums(txt);
+        assert_eq!(
+            map.get("cyd-companion.exe").map(String::as_str),
+            Some("aabbccddeeff00112233445566778899aabbccddeeff00112233445566778899")
+        );
+        assert_eq!(
+            map.get("cyd-companion-app-only.zip").map(String::as_str),
+            Some("11223344556677889900aabbccddeeff11223344556677889900aabbccddeeff")
+        );
+        assert!(!map.contains_key("junk.bin"));
     }
 
     #[test]

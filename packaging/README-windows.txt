@@ -15,3 +15,9 @@ Quick use
 7. Start mining
 
 Board has no Wi-Fi. Expect tens–hundreds of kH/s. Solo BTC is a lottery.
+
+SmartScreen / unverified file
+-----------------------------
+If Windows warns about an unknown publisher: Properties → Unblock, then
+verify SHA-256 against flash/downloads/SHA256SUMS.txt (or Firmware\SHA256SUMS.txt).
+True "Verified publisher" needs an Authenticode certificate on the release build.

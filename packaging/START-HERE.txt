@@ -40,3 +40,15 @@ Notes
 - Expect tens–hundreds of kH/s. Solo BTC is a lottery.
 - Always match Companion + firmware versions (see VERSION.txt).
 - Keep the Firmware folder; you only need to reflash after updates.
+
+Windows SmartScreen / "unknown publisher"
+-----------------------------------------
+Unsigned builds may show a SmartScreen prompt until Microsoft reputation
+builds (or until the publisher Authenticode-signs the release).
+
+If Windows blocks the download or marks it as unsafe:
+1. Right-click cyd-companion.exe (or the Setup) → Properties
+2. Check Unblock (if shown) → Apply → OK
+3. Confirm integrity: compare SHA-256 against Firmware\SHA256SUMS.txt
+   or the repo file flash/downloads/SHA256SUMS.txt
+   (PowerShell: Get-FileHash .\cyd-companion.exe -Algorithm SHA256)

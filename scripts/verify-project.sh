@@ -82,6 +82,47 @@ cargo = next(
 )
 if not ver.startswith(cargo):
     print(f"ERROR: downloads VERSION {ver!r} != Cargo {cargo!r}", file=sys.stderr); ok = False
+sums = Path("flash/downloads/SHA256SUMS.txt")
+if not sums.is_file():
+    print("ERROR: missing flash/downloads/SHA256SUMS.txt", file=sys.stderr); ok = False
+else:
+    import hashlib, re
+    text = sums.read_text()
+    entries = {}
+    for line in text.splitlines():
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        parts = line.split()
+        if len(parts) < 2 or len(parts[0]) != 64:
+            continue
+        name = parts[1].lstrip("*").split("/")[-1]
+        entries[name] = parts[0].lower()
+    required = [
+        "cyd-companion.exe",
+        "CYD-Companion-App-Only.zip",
+        "CYD-Miner-Portable.zip",
+        "esp32-2432s028-sha256-miner-merged.bin",
+    ]
+    for name in required:
+        path = Path("flash/downloads") / name
+        if not path.is_file():
+            print(f"ERROR: missing download {name}", file=sys.stderr); ok = False
+            continue
+        if name not in entries:
+            print(f"ERROR: SHA256SUMS missing {name}", file=sys.stderr); ok = False
+            continue
+        digest = hashlib.sha256(path.read_bytes()).hexdigest()
+        if digest != entries[name]:
+            print(f"ERROR: hash mismatch {name}", file=sys.stderr); ok = False
+    # PE VERSIONINFO / publisher string should be present on the Windows exe.
+    exe = Path("flash/downloads/cyd-companion.exe")
+    if exe.is_file():
+        blob = exe.read_bytes()
+        gut_utf16 = "GutFarms".encode("utf-16le")
+        if b"GutFarms" not in blob and gut_utf16 not in blob:
+            print("ERROR: cyd-companion.exe missing GutFarms VERSIONINFO", file=sys.stderr)
+            ok = False
 sys.exit(0 if ok else 1)
 PY
 
@@ -94,11 +135,16 @@ cp -f "$KIT_ZIP" /opt/cursor/artifacts/
 [[ -f "$SETUP" ]] && cp -f "$SETUP" /opt/cursor/artifacts/
 [[ -f "$SETUP_ALIAS" ]] && cp -f "$SETUP_ALIAS" /opt/cursor/artifacts/
 cp -f flash/SHA256SUMS.txt /opt/cursor/artifacts/esp32-2432s028-SHA256SUMS.txt
+cp -f flash/downloads/SHA256SUMS.txt /opt/cursor/artifacts/DOWNLOAD_SHA256SUMS.txt
+cp -f flash/downloads/cyd-companion.exe /opt/cursor/artifacts/ 2>/dev/null || true
 
 echo
-echo "OK — SHA-256 firmware + companion verified"
+echo "OK — SHA-256 firmware + companion verified (incl. download SHA256SUMS + PE metadata)"
 ls -la "$MERGED_BIN" "$EXE" "$PORTABLE_ZIP" "$APP_ONLY_ZIP" "$KIT_ZIP"
 [[ -f "$SETUP" ]] && ls -la "$SETUP" "$SETUP_ALIAS"
 sha256sum "$MERGED_BIN" "$PORTABLE_ZIP" "$APP_ONLY_ZIP" "$KIT_ZIP"
 [[ -f "$SETUP" ]] && sha256sum "$SETUP"
+echo "--- flash/downloads/SHA256SUMS.txt ---"
+cat flash/downloads/SHA256SUMS.txt
+echo "--- flash/SHA256SUMS.txt (firmware) ---"
 cat flash/SHA256SUMS.txt
