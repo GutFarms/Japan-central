@@ -20,7 +20,8 @@ constexpr esp_sha_type kSha = SHA2_256;
 
 // SHA-256 block is typically done well under this many CPU cycles @ 240 MHz.
 // Pace with ccount so we don't hammer DPORT busy reads.
-constexpr uint32_t kShaPaceCycles = 96;
+// 64 recovers a bit of H/s vs 96 while still avoiding busy-spin storms.
+constexpr uint32_t kShaPaceCycles = 64;
 
 IRAM_ATTR inline uint32_t ccount() { return esp_cpu_get_ccount(); }
 

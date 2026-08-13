@@ -1,4 +1,4 @@
-# CYD Companion downloads (`0.8.18`)
+# CYD Companion downloads (`0.8.19`)
 
 | File | What it is |
 |------|------------|

@@ -349,7 +349,7 @@ fn extract_merged_from_zip(
     })
 }
 
-const COMPANION_UA: &str = "CYD-Companion/0.8.18";
+const COMPANION_UA: &str = "CYD-Companion/0.8.19";
 const ESPFLASH_VERSION: &str = "4.5.0";
 const ESPFLASH_WIN_ZIP: &str = "https://github.com/esp-rs/espflash/releases/download/v4.5.0/espflash-x86_64-pc-windows-msvc.zip";
 

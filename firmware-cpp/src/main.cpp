@@ -187,9 +187,9 @@ static void noteShare(uint32_t nonce) {
 }
 
 static void serviceCompanion() {
-  // Snapshot at most ~2.5 Hz — ArduinoJson-free status still costs String copies.
+  // Snapshot ~1.5 Hz — enough for Companion UI, less core-0 churn while hashing.
   uint32_t now = millis();
-  if (now - g_lastSnapMs >= 400) {
+  if (now - g_lastSnapMs >= 650) {
     fillSnap();
     g_lastSnapMs = now;
   }
@@ -227,40 +227,46 @@ static void mineTaskA(void*) {
       continue;
     }
     if (g_hwSha) {
-      // Big IRAM batches; must *delay* (not just YIELD) so core-1 idle feeds TWDT.
+      // Big IRAM batches. Delay rarely — TWDT only needs idle every ~few seconds.
+      // (0.8.17 delayed every 4 batches and cut peak H/s.)
       mineLane(g_minerA, 1, 32768);
-      if ((++loops & 3u) == 0u) {
+      if ((++loops & 15u) == 0u) {
         vTaskDelay(1);
         esp_task_wdt_reset();
       }
     } else {
-      mineLane(g_minerA, 2, 4096);
+      mineLane(g_minerA, 2, 8192);
+      if ((++loops & 7u) == 0u) {
+        vTaskDelay(1);
+        esp_task_wdt_reset();
+      }
+    }
+  }
+}
+
+// Core-0 SW assist — dedicated task so LCD/Arduino loop cannot starve hashing.
+// vTaskDelay is required (taskYIELD never runs idle / TWDT), but only every
+// ~32 batches so assist H/s stays close to early peak speeds.
+static void mineTaskB(void*) {
+  uint32_t loops = 0;
+  for (;;) {
+    if (!g_mining || !g_jobLoaded) {
+      vTaskDelay(pdMS_TO_TICKS(2));
+      continue;
+    }
+    mineLane(g_minerB, 1, g_hwSha ? 4096 : 2048);
+    if ((++loops & 31u) == 0u) {
       vTaskDelay(1);
       esp_task_wdt_reset();
     }
   }
 }
 
-// Core-0 SW assist — dedicated task so LCD/Arduino loop cannot starve hashing.
-// IMPORTANT: vTaskDelay is required. taskYIELD() never runs idle (prio 0), so a
-// busy mineB starves the task WDT and the board reboots → start/stop loop.
-static void mineTaskB(void*) {
-  for (;;) {
-    if (!g_mining || !g_jobLoaded) {
-      vTaskDelay(pdMS_TO_TICKS(2));
-      continue;
-    }
-    mineLane(g_minerB, 1, g_hwSha ? 1024 : 512);
-    vTaskDelay(1);
-    esp_task_wdt_reset();
-  }
-}
-
-// USB — snappy for jobs/shares; delay so mineB + idle can run.
+// USB — snappy when RX has data; longer quiet delay frees core-0 for mineB.
 static void usbTask(void*) {
   for (;;) {
     serviceCompanion();
-    vTaskDelay(pdMS_TO_TICKS(Serial.available() > 0 ? 2 : 5));
+    vTaskDelay(pdMS_TO_TICKS(Serial.available() > 0 ? 2 : 8));
     esp_task_wdt_reset();
   }
 }
