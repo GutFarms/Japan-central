@@ -29,10 +29,10 @@ use stratum::{
     WorkJob,
 };
 use workers::{
-    list_serial_ports, mac_is_stable, mac_worker_id, normalize_mac, open_usb_serial,
-    open_usb_serial_timed, open_wifi_tcp, port_names_match, probe_wifi_endpoint,
-    scan_usb_workers_with_progress, BoardWifiDiscovery, DiscoveredWorker, LanDiscovery, PortChoice,
-    WorkerKind, WorkerLive, BOARD_WIFI_PORT, LAN_DISCOVERY_PORT,
+    list_serial_ports, mac_is_stable, mac_worker_id, normalize_mac, open_usb_serial_timed,
+    open_wifi_tcp, port_names_match, probe_wifi_endpoint, scan_usb_workers_with_progress,
+    BoardWifiDiscovery, DiscoveredWorker, LanDiscovery, PortChoice, WorkerKind, WorkerLive,
+    BOARD_WIFI_PORT, LAN_DISCOVERY_PORT,
 };
 
 use eframe::egui::{
