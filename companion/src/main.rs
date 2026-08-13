@@ -2389,7 +2389,7 @@ impl CompanionApp {
         );
         ui.label(
                 RichText::new(format!(
-                    "Scan USB serial (skip motherboard PCI), listen for Wi‑Fi CYD beacons (UDP {BOARD_WIFI_PORT}), and auto-link. SoftAP SSID Njordr-XXXX / pass njordrseas. LAN peers use UDP {LAN_DISCOVERY_PORT}."
+                    "Scan USB serial (skip motherboard PCI), listen for Wi‑Fi CYD beacons (UDP {BOARD_WIFI_PORT}), and auto-link. Each new board auto-benches (HW/HW+/HW/SW) on connect. SoftAP SSID Njordr-XXXX / pass njordrseas. LAN peers use UDP {LAN_DISCOVERY_PORT}."
                 ))
                 .color(C_MUTED)
                 .size(12.0),
@@ -4807,6 +4807,72 @@ fn mine_worker(cmd_rx: Receiver<NetCmd>, msg_tx: Sender<NetMsg>) {
         }
     }
 
+    /// Run D0 path auto-tune on a freshly linked board, then optionally arm a warmup job.
+    fn auto_bench_on_connect(
+        board: &mut UsbBoard,
+        msg_tx: &Sender<NetMsg>,
+        resume_mining: bool,
+    ) -> String {
+        let _ = usb_cmd(&mut board.port, &mut board.rx, "cmp stop");
+        log_msg(
+            msg_tx,
+            LogKind::Usb,
+            format!(
+                "Auto-bench {} on connect (HW / HW+ / HW/SW → lock best)…",
+                board.name
+            ),
+        );
+        let summary = match usb_cmd(&mut board.port, &mut board.rx, "cmp bench tune=1&n=120000") {
+            Ok(line) => {
+                // Pull status so SHA path / bench_hs show in the UI immediately.
+                if let Ok(st_line) = usb_cmd(&mut board.port, &mut board.rx, "cmp status") {
+                    if let Ok(st) = parse_cmp_status(&st_line) {
+                        board.hashrate_hs = st.hashrate_hs;
+                        board.hashes = st.hashes;
+                        board.mining = st.mining;
+                        if !st.sha_mode.is_empty() {
+                            let _ = msg_tx.send(NetMsg::Status(Ok(st)));
+                        } else {
+                            let _ = msg_tx.send(NetMsg::Status(Ok(st)));
+                        }
+                    }
+                }
+                log_msg(
+                    msg_tx,
+                    LogKind::Usb,
+                    format!("{} auto-bench OK: {line}", board.name),
+                );
+                line
+            }
+            Err(e) => {
+                log_msg(
+                    msg_tx,
+                    LogKind::Warn,
+                    format!("{} auto-bench failed: {e}", board.name),
+                );
+                format!("ERR {e}")
+            }
+        };
+        if resume_mining {
+            let mut legacy = board.legacy_job;
+            let _ = usb_cmd(
+                &mut board.port,
+                &mut board.rx,
+                "cmp stats accepted=0&rejected=0",
+            );
+            let _ = usb_push_job(
+                &mut board.port,
+                &mut board.rx,
+                &warmup_job(),
+                &mut legacy,
+                msg_tx,
+            );
+            board.legacy_job = legacy;
+            board.mining = true;
+        }
+        summary
+    }
+
     let mut boards: Vec<UsbBoard> = Vec::new();
     let mut stratum: Option<StratumClient> = None;
     let mut mining = false;
@@ -4929,32 +4995,14 @@ fn mine_worker(cmd_rx: Receiver<NetCmd>, msg_tx: Sender<NetMsg>) {
                     match open_board(&name) {
                         Ok((mut board, saw)) => {
                             configure_board(&mut board, &msg_tx);
-                            if mining {
-                                let mut legacy = board.legacy_job;
-                                let _ = usb_cmd(
-                                    &mut board.port,
-                                    &mut board.rx,
-                                    "cmp stats accepted=0&rejected=0",
-                                );
-                                let _ = usb_push_job(
-                                    &mut board.port,
-                                    &mut board.rx,
-                                    &warmup_job(),
-                                    &mut legacy,
-                                    &msg_tx,
-                                );
-                                board.legacy_job = legacy;
-                            }
+                            let bench = auto_bench_on_connect(&mut board, &msg_tx, mining);
                             boards.push(board);
                             publish_live(&msg_tx, &boards);
-                            let _ = msg_tx.send(NetMsg::Action(Ok(if saw {
-                                format!("USB open {name} (pong) · {} board(s)", boards.len())
-                            } else {
-                                format!(
-                                    "USB open {name} (no pong yet) · {} board(s)",
-                                    boards.len()
-                                )
-                            })));
+                            let _ = msg_tx.send(NetMsg::Action(Ok(format!(
+                                "USB open {name}{} · auto-bench · {} board(s) · {bench}",
+                                if saw { " (pong)" } else { "" },
+                                boards.len()
+                            ))));
                         }
                         Err(e) => {
                             publish_live(&msg_tx, &boards);
@@ -4991,32 +5039,14 @@ fn mine_worker(cmd_rx: Receiver<NetCmd>, msg_tx: Sender<NetMsg>) {
                                     );
                                 }
                             }
-                            if mining {
-                                let mut legacy = board.legacy_job;
-                                let _ = usb_cmd(
-                                    &mut board.port,
-                                    &mut board.rx,
-                                    "cmp stats accepted=0&rejected=0",
-                                );
-                                let _ = usb_push_job(
-                                    &mut board.port,
-                                    &mut board.rx,
-                                    &warmup_job(),
-                                    &mut legacy,
-                                    &msg_tx,
-                                );
-                                board.legacy_job = legacy;
-                            }
+                            let bench = auto_bench_on_connect(&mut board, &msg_tx, mining);
                             boards.push(board);
                             publish_live(&msg_tx, &boards);
-                            let _ = msg_tx.send(NetMsg::Action(Ok(if saw {
-                                format!("Worker linked {name} (pong) · {} total", boards.len())
-                            } else {
-                                format!(
-                                    "Worker linked {name} (no pong yet) · {} total",
-                                    boards.len()
-                                )
-                            })));
+                            let _ = msg_tx.send(NetMsg::Action(Ok(format!(
+                                "Worker linked {name}{} · auto-bench · {} total · {bench}",
+                                if saw { " (pong)" } else { "" },
+                                boards.len()
+                            ))));
                         }
                         Err(e) => {
                             let _ = msg_tx.send(NetMsg::Action(Err(format!(
@@ -5057,35 +5087,14 @@ fn mine_worker(cmd_rx: Receiver<NetCmd>, msg_tx: Sender<NetMsg>) {
                                     );
                                 }
                             }
-                            if mining {
-                                let mut legacy = board.legacy_job;
-                                let _ = usb_cmd(
-                                    &mut board.port,
-                                    &mut board.rx,
-                                    "cmp stats accepted=0&rejected=0",
-                                );
-                                let _ = usb_push_job(
-                                    &mut board.port,
-                                    &mut board.rx,
-                                    &warmup_job(),
-                                    &mut legacy,
-                                    &msg_tx,
-                                );
-                                board.legacy_job = legacy;
-                            }
+                            let bench = auto_bench_on_connect(&mut board, &msg_tx, mining);
                             boards.push(board);
                             publish_live(&msg_tx, &boards);
-                            let _ = msg_tx.send(NetMsg::Action(Ok(if saw {
-                                format!(
-                                    "Wi‑Fi worker linked {endpoint} (pong) · {} total",
-                                    boards.len()
-                                )
-                            } else {
-                                format!(
-                                    "Wi‑Fi worker linked {endpoint} · {} total",
-                                    boards.len()
-                                )
-                            })));
+                            let _ = msg_tx.send(NetMsg::Action(Ok(format!(
+                                "Wi‑Fi worker linked {endpoint}{} · auto-bench · {} total · {bench}",
+                                if saw { " (pong)" } else { "" },
+                                boards.len()
+                            ))));
                         }
                         Err(e) => {
                             let _ = msg_tx.send(NetMsg::Action(Err(format!(
