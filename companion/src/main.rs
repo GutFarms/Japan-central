@@ -515,11 +515,6 @@ enum NetCmd {
         text: String,
     },
     RebootBoard,
-    FetchFirmware,
-    /// Compare running Companion vs remote VERSION.txt.
-    CheckAppUpdate,
-    /// Download latest Companion build and restart (Windows).
-    UpdateApp,
     /// Pull one user-configured API feed in the worker thread.
     PullApiFeed(ApiFeed),
     /// Probe USB / Bluetooth / Wi‑Fi for CYD companion firmwares.
@@ -5695,15 +5690,6 @@ fn mine_worker(cmd_rx: Receiver<NetCmd>, msg_tx: Sender<NetMsg>) {
                     } else {
                         let _ = msg_tx.send(NetMsg::Action(Err("USB not open".into())));
                     }
-                }
-                // FetchFirmware / CheckAppUpdate / UpdateApp spawn from the UI
-                // thread (msg_tx) so they never sit behind USB auto-bench.
-                NetCmd::FetchFirmware | NetCmd::CheckAppUpdate | NetCmd::UpdateApp => {
-                    log_msg(
-                        &msg_tx,
-                        LogKind::Warn,
-                        "Ignoring stale update cmd on mine-worker (use UI spawn path)",
-                    );
                 }
                 NetCmd::PullApiFeed(feed) => {
                     let outcome = pull_feed(&feed);
