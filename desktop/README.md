@@ -7,10 +7,10 @@ Windows / desktop **point of sale** for Native Pure. Staff ring in-store sales, 
 See [`../DOWNLOAD.md`](../DOWNLOAD.md).
 
 **Windows Setup (GitHub Releases):**  
-https://github.com/GutFarms/native/releases/latest/download/NativePure-POS-Setup.exe  
+https://github.com/GutFarms/Native/releases/latest/download/NativePure-POS-Setup.exe  
 
 **SHA-256:**  
-https://github.com/GutFarms/native/releases/latest/download/SHA256SUMS  
+https://github.com/GutFarms/Native/releases/latest/download/SHA256SUMS  
 
 GitHub Actions workflow **Build Native Pure Windows companion** uploads:
 

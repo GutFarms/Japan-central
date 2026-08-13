@@ -175,7 +175,7 @@ class AppUpdateChecker(
 
     companion object {
         const val MANIFEST_URL =
-            "https://github.com/GutFarms/native/releases/latest/download/update-manifest.json"
+            "https://github.com/GutFarms/Native/releases/latest/download/update-manifest.json"
         private const val KEY_DISMISSED_VERSION = "update_dismissed_version_code"
         private const val KEY_PENDING_VERSION = "update_pending_version_code"
         private const val KEY_PENDING_NAME = "update_pending_version_name"

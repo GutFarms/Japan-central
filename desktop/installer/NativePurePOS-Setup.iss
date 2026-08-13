@@ -6,7 +6,7 @@
 #define MyAppVersion "1.14.0"
 #define MyAppPublisher "Native Pure"
 #define MyAppExeName "NativePureCompanion.exe"
-#define MyAppURL "https://github.com/GutFarms/native"
+#define MyAppURL "https://github.com/GutFarms/Native"
 
 [Setup]
 AppId={{A7C3E91F-4B2D-4E8A-9F1C-6D5B8A0E2C44}

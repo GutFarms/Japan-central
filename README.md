@@ -1,21 +1,33 @@
-# native
+# Native
 
 **Native Pure** — dispensary phone app and desktop Point of Sale.
 
-> This repository was split from `Japan-central`. Rename it to **`native`** in GitHub  
-> (**Settings → General → Repository name**) if the URL is still `GutFarms/Japan-central`.
+Home: **https://github.com/GutFarms/Native**
 
 | Path | What |
 |------|------|
-| [`android/`](./android/) | Android app |
+| [`android/`](./android/) | Android app (`com.solstice.dispensary`) |
 | [`desktop/`](./desktop/) | Windows / desktop POS |
 | [`mail-server/`](./mail-server/) | Verification mail server |
 | [`DOWNLOADS.md`](./DOWNLOADS.md) | QR codes + download links |
+| [`DOWNLOAD.md`](./DOWNLOAD.md) | Install instructions |
 
 ## Downloads
 
-- APK: https://github.com/GutFarms/native/releases/latest/download/NativePure-Dispensary.apk
-- Windows Setup: https://github.com/GutFarms/native/releases/latest/download/NativePure-POS-Setup.exe
-- SHA-256: https://github.com/GutFarms/native/releases/latest/download/SHA256SUMS
+- **Android APK:** https://github.com/GutFarms/Native/releases/latest/download/NativePure-Dispensary.apk
+- **Windows POS Setup:** https://github.com/GutFarms/Native/releases/latest/download/NativePure-POS-Setup.exe
+- **SHA-256:** https://github.com/GutFarms/Native/releases/latest/download/SHA256SUMS
 
-Until the GitHub rename is done, the same assets may still appear under `GutFarms/Japan-central` releases.
+## Build
+
+```bash
+cd android && ./gradlew assembleRelease
+cd desktop && ./gradlew run
+cd mail-server && ./gradlew run
+```
+
+## Verified (clean)
+
+- Desktop: `./gradlew clean test` (data package) — passed
+- Android: `./gradlew clean assembleRelease` — **1.21.0** / versionCode **26**
+- Mail server: `./gradlew clean compileKotlin` — passed

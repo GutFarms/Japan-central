@@ -2,7 +2,7 @@ name: Build Native Pure Android APK
 
 on:
   push:
-    branches: [master, "cursor/**"]
+    branches: [main, master, "cursor/**"]
     tags: ["dispensary-v*", "nativepure-v*"]
   pull_request:
     paths:
@@ -67,7 +67,7 @@ jobs:
           {
             "versionCode": ${VERSION_CODE},
             "versionName": "${VERSION_NAME}",
-            "apkUrl": "https://github.com/GutFarms/native/releases/latest/download/NativePure-Dispensary.apk",
+            "apkUrl": "https://github.com/GutFarms/Native/releases/latest/download/NativePure-Dispensary.apk",
             "releaseNotes": "Native Pure ${VERSION_NAME} — tap Download in the app to install."
           }
           EOF
@@ -108,7 +108,7 @@ jobs:
 
             Windows POS (`NativePure-POS-Setup.exe` + `SHA256SUMS`) is published by the companion workflow on the same `nativepure-v*` tag when present.
 
-            QR codes & companion links: [DOWNLOADS.md](https://github.com/GutFarms/native/blob/master/DOWNLOADS.md)
+            QR codes & companion links: [DOWNLOADS.md](https://github.com/GutFarms/Native/blob/main/DOWNLOADS.md)
 
             In-app updates read `update-manifest.json` from this release.
 

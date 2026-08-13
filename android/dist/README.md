@@ -4,7 +4,7 @@
 
 Download: **[NativePure-Dispensary.apk](./NativePure-Dispensary.apk)**
 
-Latest release: https://github.com/GutFarms/native/releases/latest/download/NativePure-Dispensary.apk
+Latest release: https://github.com/GutFarms/Native/releases/latest/download/NativePure-Dispensary.apk
 
 Scan to download the latest release:
 

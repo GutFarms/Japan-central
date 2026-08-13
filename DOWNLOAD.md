@@ -16,13 +16,13 @@ Local HTML poster: [`downloads/index.html`](./downloads/index.html)
 ## Android APK (download)
 
 **Scan or open the latest release APK:**  
-https://github.com/GutFarms/native/releases/latest/download/NativePure-Dispensary.apk
+https://github.com/GutFarms/Native/releases/latest/download/NativePure-Dispensary.apk
 
 **Direct file (this branch):**  
 [`android/dist/NativePure-Dispensary.apk`](./android/dist/NativePure-Dispensary.apk)
 
 **GitHub Releases:**  
-https://github.com/GutFarms/native/releases  
+https://github.com/GutFarms/Native/releases  
 → download **`NativePure-Dispensary.apk`**
 
 ### Install on phone
@@ -55,10 +55,10 @@ Point-of-sale register for in-store sales, loyalty lookup, cash/card tender, and
 ### Windows — install wizard (recommended)
 
 **Stable download (from the latest GitHub Release):**  
-https://github.com/GutFarms/native/releases/latest/download/NativePure-POS-Setup.exe
+https://github.com/GutFarms/Native/releases/latest/download/NativePure-POS-Setup.exe
 
 **Checksums:**  
-https://github.com/GutFarms/native/releases/latest/download/SHA256SUMS
+https://github.com/GutFarms/Native/releases/latest/download/SHA256SUMS
 
 Verify in PowerShell:
 

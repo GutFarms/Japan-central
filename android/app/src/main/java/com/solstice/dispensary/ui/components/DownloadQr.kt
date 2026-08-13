@@ -31,11 +31,11 @@ import com.google.zxing.qrcode.decoder.ErrorCorrectionLevel
 
 object AppDownloadLinks {
     const val ANDROID_APK =
-        "https://github.com/GutFarms/native/releases/latest/download/NativePure-Dispensary.apk"
+        "https://github.com/GutFarms/Native/releases/latest/download/NativePure-Dispensary.apk"
     const val DOWNLOADS_PAGE =
-        "https://github.com/GutFarms/native/blob/master/DOWNLOADS.md"
+        "https://github.com/GutFarms/Native/blob/main/DOWNLOADS.md"
     const val COMPANION_DOCS =
-        "https://github.com/GutFarms/native/blob/master/DOWNLOADS.md#desktop-companion"
+        "https://github.com/GutFarms/Native/blob/main/DOWNLOADS.md#desktop-companion"
 }
 
 fun qrBitmap(

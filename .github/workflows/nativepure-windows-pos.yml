@@ -2,7 +2,7 @@ name: Build Native Pure Windows POS
 
 on:
   push:
-    branches: [master, "cursor/**"]
+    branches: [main, master, "cursor/**"]
     paths:
       - "desktop/**"
       - ".github/workflows/nativepure-windows-pos.yml"

@@ -8,7 +8,7 @@ Scan these codes to install the apps. Print this page for the counter or lobby.
 
 <img src="./downloads/qr/nativepure-android.png" alt="QR code — download Native Pure Android APK" width="240" />
 
-**Link:** https://github.com/GutFarms/native/releases/latest/download/NativePure-Dispensary.apk
+**Link:** https://github.com/GutFarms/Native/releases/latest/download/NativePure-Dispensary.apk
 
 ### Install steps
 1. Scan the QR with your phone camera  
@@ -33,9 +33,9 @@ Requires Android 8.0+.
 
 ### Windows (easiest)
 
-**Download:** https://github.com/GutFarms/native/releases/latest/download/NativePure-POS-Setup.exe  
+**Download:** https://github.com/GutFarms/Native/releases/latest/download/NativePure-POS-Setup.exe  
 
-**Checksums:** https://github.com/GutFarms/native/releases/latest/download/SHA256SUMS  
+**Checksums:** https://github.com/GutFarms/Native/releases/latest/download/SHA256SUMS  
 
 ```powershell
 Get-FileHash .\NativePure-POS-Setup.exe -Algorithm SHA256
@@ -57,7 +57,7 @@ Artifact **`NativePure-Companion-linux-jar`** — runnable JAR (JDK 17+)
 
 <img src="./downloads/qr/downloads-page.png" alt="QR code — Native Pure downloads page" width="200" />
 
-Open: https://github.com/GutFarms/native/blob/master/DOWNLOADS.md
+Open: https://github.com/GutFarms/Native/blob/main/DOWNLOADS.md
 
 ---
 
