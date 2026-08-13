@@ -30,8 +30,9 @@ use flash_update::{
 };
 use live_bar::{format_change, format_usd, LiveFeed};
 use monitor_api::{
-    new_shared as new_monitor_shared, publish as publish_monitor, start as start_monitor_api,
-    MonitorBoard, MonitorShared, MonitorSnapshot, MONITOR_PORT,
+    generate_install_id, generate_token, pair_url, primary_lan_ipv4, qr_modules,
+    start as start_monitor_api, web_pair_url, MonitorBoard, MonitorCreds, MonitorHub,
+    MonitorSnapshot, MONITOR_PORT,
 };
 use stratum::{
     encode_job_cmd, encode_job_parts, expected_shares_per_hour, urlenc, ShareOutcome, StratumClient,
@@ -413,6 +414,15 @@ struct PersistedMine {
     auto_connect: bool,
     #[serde(default)]
     wizard_done: bool,
+    /// Public install id shown in QR / phone UI (not secret).
+    #[serde(default)]
+    monitor_install_id: String,
+    /// Secret pairing token — only phones that scanned this Companion’s QR may poll.
+    #[serde(default)]
+    monitor_token: String,
+    /// Optional public host / DDNS / Tailscale IP for remote phone access; empty = LAN IP.
+    #[serde(default)]
+    monitor_public_host: String,
 }
 
 fn default_mhz() -> u8 {
@@ -591,9 +601,13 @@ struct CompanionApp {
     worker_scan_busy: bool,
     lan: LanDiscovery,
     board_wifi: BoardWifiDiscovery,
-    /// Shared snapshot for the phone monitor HTTP API (:19285).
-    monitor: MonitorShared,
+    /// Shared snapshot + personal pairing creds for the phone monitor HTTP API (:19285).
+    monitor: MonitorHub,
     monitor_addr: String,
+    monitor_install_id: String,
+    monitor_token: String,
+    /// Optional public host / DDNS for QR (empty → auto LAN IPv4).
+    monitor_public_host: String,
 }
 
 impl CompanionApp {
@@ -610,6 +624,9 @@ impl CompanionApp {
         let mut com_port = String::new();
         let mut auto_connect = false;
         let mut wizard_done = false;
+        let mut monitor_install_id = String::new();
+        let mut monitor_token = String::new();
+        let mut monitor_public_host = String::new();
         let mut api_feeds: Vec<ApiFeed> = Vec::new();
         if let Some(storage) = storage {
             if let Some(raw) = storage.get_string("mine_prefs") {
@@ -628,12 +645,26 @@ impl CompanionApp {
                     com_port = p.com_port;
                     auto_connect = p.auto_connect;
                     wizard_done = p.wizard_done;
+                    monitor_install_id = p.monitor_install_id;
+                    monitor_token = p.monitor_token;
+                    monitor_public_host = p.monitor_public_host;
                 }
             }
             if let Some(raw) = storage.get_string("api_feeds") {
                 api_feeds = load_feeds(&raw);
             }
         }
+        if monitor_install_id.trim().is_empty() {
+            monitor_install_id = generate_install_id();
+        }
+        if monitor_token.trim().is_empty() {
+            monitor_token = generate_token();
+        }
+
+        let monitor = MonitorHub::new(MonitorCreds {
+            install_id: monitor_install_id.clone(),
+            token: monitor_token.clone(),
+        });
 
         let mut app = Self {
             tab: Tab::Mine,
@@ -708,16 +739,20 @@ impl CompanionApp {
             worker_scan_busy: false,
             lan: LanDiscovery::start(),
             board_wifi: BoardWifiDiscovery::start(),
-            monitor: new_monitor_shared(),
+            monitor,
             monitor_addr: format!("0.0.0.0:{MONITOR_PORT}"),
+            monitor_install_id,
+            monitor_token,
+            monitor_public_host,
         };
-        match start_monitor_api(Arc::clone(&app.monitor)) {
+        match start_monitor_api(app.monitor.clone()) {
             Ok(addr) => {
                 app.monitor_addr = addr.to_string();
                 app.push_log(
                     LogKind::Info,
                     format!(
-                        "Phone monitor API on http://<pc-lan-ip>:{MONITOR_PORT} (JSON /api/status)"
+                        "Personal phone monitor on :{MONITOR_PORT} · pair id {} · scan QR in Settings",
+                        app.monitor_install_id
                     ),
                 );
             }
@@ -775,6 +810,7 @@ impl CompanionApp {
         let snap = MonitorSnapshot {
             version: running_version().into(),
             product: "Njörðr Seas' CYD miner".into(),
+            pair_id: self.monitor_install_id.clone(),
             mining: self.mining,
             usb_open: self.usb_open,
             pool_phase: if self.stratum_live.phase.is_empty() {
@@ -792,13 +828,64 @@ impl CompanionApp {
             accepted: acc,
             rejected: rej,
             boards,
-            host: local_host_hint(),
+            host: self.monitor_connect_host(),
             updated_ms: SystemTime::now()
                 .duration_since(UNIX_EPOCH)
                 .map(|d| d.as_millis() as u64)
                 .unwrap_or(0),
         };
-        publish_monitor(&self.monitor, snap);
+        self.monitor.publish(snap);
+    }
+
+    fn monitor_connect_host(&self) -> String {
+        let override_host = self.monitor_public_host.trim();
+        if !override_host.is_empty() {
+            return override_host
+                .trim_start_matches("http://")
+                .trim_start_matches("https://")
+                .split('/')
+                .next()
+                .unwrap_or(override_host)
+                .split(':')
+                .next()
+                .unwrap_or(override_host)
+                .to_string();
+        }
+        primary_lan_ipv4().unwrap_or_else(local_host_hint)
+    }
+
+    fn monitor_pair_url(&self) -> String {
+        pair_url(
+            &self.monitor_connect_host(),
+            MONITOR_PORT,
+            &self.monitor_install_id,
+            &self.monitor_token,
+        )
+    }
+
+    fn monitor_web_url(&self) -> String {
+        web_pair_url(
+            &self.monitor_connect_host(),
+            MONITOR_PORT,
+            &self.monitor_install_id,
+            &self.monitor_token,
+        )
+    }
+
+    fn regenerate_monitor_pairing(&mut self) {
+        self.monitor_install_id = generate_install_id();
+        self.monitor_token = generate_token();
+        self.monitor.set_creds(MonitorCreds {
+            install_id: self.monitor_install_id.clone(),
+            token: self.monitor_token.clone(),
+        });
+        self.push_log(
+            LogKind::Warn,
+            format!(
+                "Phone pairing reset · new pair id {} — old QR codes no longer work",
+                self.monitor_install_id
+            ),
+        );
     }
 
     fn board_khs(&self) -> f32 {
@@ -974,6 +1061,9 @@ impl CompanionApp {
             com_port: self.com_port.clone(),
             auto_connect: self.auto_connect,
             wizard_done: self.wizard_step.is_none(),
+            monitor_install_id: self.monitor_install_id.clone(),
+            monitor_token: self.monitor_token.clone(),
+            monitor_public_host: self.monitor_public_host.clone(),
         };
         if let Ok(raw) = serde_json::to_string(&p) {
             storage.set_string("mine_prefs", raw);
@@ -1672,26 +1762,121 @@ impl CompanionApp {
         ui.add_space(14.0);
         soft_panel(ui, "Phone monitor", |ui| {
             ui.label(
-                RichText::new(format!(
-                    "iPhone / Android: open http://<this-pc-lan-ip>:{MONITOR_PORT} on the same Wi‑Fi, or use the Expo app in mobile/. Live JSON: /api/status"
-                ))
+                RichText::new(
+                    "Each Companion install has a personal QR. Phones that scan it connect only to this PC — other users’ miners stay private.",
+                )
                 .color(C_MUTED)
                 .size(13.0),
             );
-            ui.add_space(8.0);
+            ui.add_space(10.0);
+
+            let pair = self.monitor_pair_url();
+            let web = self.monitor_web_url();
+            let host = self.monitor_connect_host();
+
+            ui.horizontal(|ui| {
+                // Personal QR
+                let qr_size = 168.0;
+                if let Some((w, cells)) = qr_modules(&pair) {
+                    let (resp, painter) =
+                        ui.allocate_painter(Vec2::splat(qr_size), egui::Sense::hover());
+                    let rect = resp.rect;
+                    painter.rect_filled(rect, Rounding::same(8.0), Color32::WHITE);
+                    let cell = (qr_size - 12.0) / w as f32;
+                    let origin = rect.min + Vec2::splat(6.0);
+                    for y in 0..w {
+                        for x in 0..w {
+                            if cells[y * w + x] {
+                                let r = Rect::from_min_size(
+                                    origin + Vec2::new(x as f32 * cell, y as f32 * cell),
+                                    Vec2::splat(cell + 0.2),
+                                );
+                                painter.rect_filled(r, Rounding::ZERO, Color32::BLACK);
+                            }
+                        }
+                    }
+                } else {
+                    ui.label(RichText::new("QR unavailable").color(C_WARN));
+                }
+
+                ui.add_space(14.0);
+                ui.vertical(|ui| {
+                    ui.label(
+                        RichText::new(format!("Pair id · {}", self.monitor_install_id))
+                            .color(C_LIME)
+                            .font(mono_ui_font(12.0)),
+                    );
+                    ui.add_space(6.0);
+                    ui.label(
+                        RichText::new(format!("Connect host · {host}:{MONITOR_PORT}"))
+                            .color(C_TEXT)
+                            .font(mono_ui_font(11.0)),
+                    );
+                    ui.add_space(4.0);
+                    ui.label(
+                        RichText::new(format!("API · {}", self.monitor_addr))
+                            .color(C_DIM)
+                            .font(mono_ui_font(10.0)),
+                    );
+                    ui.add_space(10.0);
+                    ui.label(
+                        RichText::new("Scan with the Njörðr Seas' Monitor phone app (iPhone / Android).")
+                            .color(C_MUTED)
+                            .size(12.0),
+                    );
+                    ui.add_space(8.0);
+                    if ui
+                        .add(egui::Button::new(
+                            RichText::new("Copy pair link").color(C_BG).size(13.0),
+                        ))
+                        .clicked()
+                    {
+                        ui.output_mut(|o| o.copied_text = pair.clone());
+                        self.push_log(LogKind::Info, "Copied personal phone pair link".into());
+                    }
+                    if ui
+                        .add(egui::Button::new(
+                            RichText::new("Copy web link").color(C_BG).size(13.0),
+                        ))
+                        .clicked()
+                    {
+                        ui.output_mut(|o| o.copied_text = web.clone());
+                        self.push_log(LogKind::Info, "Copied personal web monitor link".into());
+                    }
+                    ui.add_space(6.0);
+                    if ui
+                        .add(
+                            egui::Button::new(
+                                RichText::new("Regenerate QR (revoke phones)")
+                                    .color(C_WARN)
+                                    .size(12.0),
+                            )
+                            .fill(Color32::from_rgb(40, 28, 12)),
+                        )
+                        .on_hover_text("Creates a new personal token. Old QR codes stop working.")
+                        .clicked()
+                    {
+                        self.regenerate_monitor_pairing();
+                    }
+                });
+            });
+
+            ui.add_space(12.0);
             ui.label(
-                RichText::new(format!(
-                    "API listening · {} · host {}",
-                    self.monitor_addr,
-                    local_host_hint()
-                ))
-                .color(C_LIME)
-                .font(mono_ui_font(11.0)),
+                RichText::new("Remote host (optional — DDNS / Tailscale / public IP for travel)")
+                    .color(C_DIM)
+                    .size(11.0),
+            );
+            ui.add(
+                TextEdit::singleline(&mut self.monitor_public_host)
+                    .desired_width(f32::INFINITY)
+                    .hint_text("leave empty to use this PC’s LAN IP in the QR")
+                    .font(mono_ui_font(12.0)),
             );
             ui.add_space(6.0);
             ui.label(
                 RichText::new(
-                    "Tip: on the phone, enter this PC’s LAN IP (ipconfig / ifconfig). Port is always 19285.",
+                    "Same Wi‑Fi works with LAN IP. Around the globe: set your reachable host above and forward TCP 19285 (or use Tailscale/VPN). Token still binds the phone to only this Companion.",
                 )
                 .color(C_DIM)
                 .font(mono_ui_font(10.0)),

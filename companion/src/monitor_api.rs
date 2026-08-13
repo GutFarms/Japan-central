@@ -1,8 +1,10 @@
-//! LAN phone-monitor HTTP API — JSON + mobile web UI on port 19285.
+//! Personal phone-monitor HTTP API — token-gated JSON + mobile web UI on port 19285.
 
+use qrcode::{Color as QrColor, QrCode};
+use rand::RngCore;
 use serde::Serialize;
 use std::io::{Read, Write};
-use std::net::{SocketAddr, TcpListener, TcpStream};
+use std::net::{IpAddr, SocketAddr, TcpListener, TcpStream, UdpSocket};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
@@ -23,6 +25,8 @@ pub struct MonitorBoard {
 pub struct MonitorSnapshot {
     pub version: String,
     pub product: String,
+    /// Public install id (safe to show); not the secret token.
+    pub pair_id: String,
     pub mining: bool,
     pub usb_open: bool,
     pub pool_phase: String,
@@ -41,6 +45,7 @@ impl Default for MonitorSnapshot {
         Self {
             version: env!("CARGO_PKG_VERSION").into(),
             product: "Njörðr Seas' CYD miner".into(),
+            pair_id: String::new(),
             mining: false,
             usb_open: false,
             pool_phase: "off".into(),
@@ -56,20 +61,140 @@ impl Default for MonitorSnapshot {
     }
 }
 
-pub type MonitorShared = Arc<Mutex<MonitorSnapshot>>;
-
-pub fn new_shared() -> MonitorShared {
-    Arc::new(Mutex::new(MonitorSnapshot::default()))
+#[derive(Debug, Clone)]
+pub struct MonitorCreds {
+    pub install_id: String,
+    pub token: String,
 }
 
-pub fn publish(shared: &MonitorShared, snap: MonitorSnapshot) {
-    if let Ok(mut g) = shared.lock() {
-        *g = snap;
+struct MonitorInner {
+    snap: Mutex<MonitorSnapshot>,
+    creds: Mutex<MonitorCreds>,
+}
+
+#[derive(Clone)]
+pub struct MonitorHub {
+    inner: Arc<MonitorInner>,
+}
+
+impl MonitorHub {
+    pub fn new(creds: MonitorCreds) -> Self {
+        Self {
+            inner: Arc::new(MonitorInner {
+                snap: Mutex::new(MonitorSnapshot::default()),
+                creds: Mutex::new(creds),
+            }),
+        }
+    }
+
+    pub fn publish(&self, snap: MonitorSnapshot) {
+        if let Ok(mut g) = self.inner.snap.lock() {
+            *g = snap;
+        }
+    }
+
+    pub fn creds(&self) -> MonitorCreds {
+        self.inner
+            .creds
+            .lock()
+            .map(|g| g.clone())
+            .unwrap_or_else(|_| MonitorCreds {
+                install_id: String::new(),
+                token: String::new(),
+            })
+    }
+
+    pub fn set_creds(&self, creds: MonitorCreds) {
+        if let Ok(mut g) = self.inner.creds.lock() {
+            *g = creds;
+        }
     }
 }
 
-/// Bind `0.0.0.0:19285` and serve `/api/status` + a phone web UI on a background thread.
-pub fn start(shared: MonitorShared) -> Result<SocketAddr, String> {
+/// Short public install id (8 hex chars).
+pub fn generate_install_id() -> String {
+    let mut b = [0u8; 4];
+    rand::thread_rng().fill_bytes(&mut b);
+    hex_lower(&b)
+}
+
+/// Secret pairing token (32 hex chars / 128-bit).
+pub fn generate_token() -> String {
+    let mut b = [0u8; 16];
+    rand::thread_rng().fill_bytes(&mut b);
+    hex_lower(&b)
+}
+
+fn hex_lower(bytes: &[u8]) -> String {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    let mut out = String::with_capacity(bytes.len() * 2);
+    for &b in bytes {
+        out.push(HEX[(b >> 4) as usize] as char);
+        out.push(HEX[(b & 0xf) as usize] as char);
+    }
+    out
+}
+
+/// Best-effort primary LAN IPv4 (UDP connect trick).
+pub fn primary_lan_ipv4() -> Option<String> {
+    let sock = UdpSocket::bind("0.0.0.0:0").ok()?;
+    sock.connect("8.8.8.8:80").ok()?;
+    match sock.local_addr().ok()?.ip() {
+        IpAddr::V4(v) if !v.is_loopback() && !v.is_unspecified() => Some(v.to_string()),
+        _ => None,
+    }
+}
+
+/// Deep-link payload encoded in the personal QR (unique per Companion install).
+pub fn pair_url(host: &str, port: u16, install_id: &str, token: &str) -> String {
+    format!(
+        "njordrseas://cyd-monitor/v1?host={}&port={}&id={}&token={}",
+        url_encode(host.trim()),
+        port,
+        url_encode(install_id.trim()),
+        url_encode(token.trim())
+    )
+}
+
+/// Browser fallback URL that carries the personal token.
+pub fn web_pair_url(host: &str, port: u16, install_id: &str, token: &str) -> String {
+    format!(
+        "http://{}:{}/?id={}&token={}",
+        host.trim(),
+        port,
+        url_encode(install_id.trim()),
+        url_encode(token.trim())
+    )
+}
+
+fn url_encode(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for b in s.bytes() {
+        match b {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                out.push(b as char);
+            }
+            _ => out.push_str(&format!("%{b:02X}")),
+        }
+    }
+    out
+}
+
+/// QR module matrix (true = dark). Empty on encode failure.
+pub fn qr_modules(data: &str) -> Option<(usize, Vec<bool>)> {
+    let code = QrCode::new(data.as_bytes()).ok()?;
+    let w = code.width();
+    let mut cells = Vec::with_capacity(w * w);
+    for y in 0..w {
+        for x in 0..w {
+            cells.push(code[(x, y)] == QrColor::Dark);
+        }
+    }
+    Some((w, cells))
+}
+
+/// Bind `0.0.0.0:19285` and serve token-gated `/api/status` + phone web UI.
+pub fn start(hub: MonitorHub) -> Result<SocketAddr, String> {
     let listener = TcpListener::bind(("0.0.0.0", MONITOR_PORT))
         .map_err(|e| format!("monitor bind :{MONITOR_PORT}: {e}"))?;
     listener
@@ -84,8 +209,8 @@ pub fn start(shared: MonitorShared) -> Result<SocketAddr, String> {
             for stream in listener.incoming() {
                 match stream {
                     Ok(s) => {
-                        let shared = Arc::clone(&shared);
-                        thread::spawn(move || handle_client(s, shared));
+                        let hub = hub.clone();
+                        thread::spawn(move || handle_client(s, hub));
                     }
                     Err(_) => thread::sleep(Duration::from_millis(20)),
                 }
@@ -95,20 +220,35 @@ pub fn start(shared: MonitorShared) -> Result<SocketAddr, String> {
     Ok(addr)
 }
 
-fn handle_client(mut stream: TcpStream, shared: MonitorShared) {
+fn handle_client(mut stream: TcpStream, hub: MonitorHub) {
     let _ = stream.set_read_timeout(Some(Duration::from_secs(5)));
     let _ = stream.set_write_timeout(Some(Duration::from_secs(5)));
-    let mut buf = [0u8; 2048];
+    let mut buf = [0u8; 8192];
     let n = match stream.read(&mut buf) {
         Ok(n) if n > 0 => n,
         _ => return,
     };
     let req = String::from_utf8_lossy(&buf[..n]);
     let line = req.lines().next().unwrap_or("");
-    let path = line.split_whitespace().nth(1).unwrap_or("/");
+    let path_q = line.split_whitespace().nth(1).unwrap_or("/");
+    let (path, query) = split_path_query(path_q);
+
+    let creds = hub.creds();
+    let auth_ok = token_authorized(&req, query, &creds.token);
 
     if path.starts_with("/api/status") {
-        let body = shared
+        if !auth_ok {
+            reply(
+                &mut stream,
+                401,
+                "application/json; charset=utf-8",
+                br#"{"error":"unauthorized","hint":"Scan your personal Companion QR, or pass ?token= / Authorization: Bearer"}"#,
+            );
+            return;
+        }
+        let body = hub
+            .inner
+            .snap
             .lock()
             .ok()
             .and_then(|g| serde_json::to_string_pretty(&*g).ok())
@@ -123,6 +263,7 @@ fn handle_client(mut stream: TcpStream, shared: MonitorShared) {
     }
 
     if path == "/" || path.starts_with("/index") || path.starts_with("/monitor") {
+        // Web UI is public shell; live data fetch requires the personal token.
         reply(
             &mut stream,
             200,
@@ -140,9 +281,107 @@ fn handle_client(mut stream: TcpStream, shared: MonitorShared) {
     );
 }
 
+fn split_path_query(path_q: &str) -> (&str, &str) {
+    match path_q.split_once('?') {
+        Some((p, q)) => (p, q),
+        None => (path_q, ""),
+    }
+}
+
+fn token_authorized(req: &str, query: &str, expected: &str) -> bool {
+    if expected.is_empty() {
+        return false;
+    }
+    if query_param(query, "token").as_deref() == Some(expected) {
+        return true;
+    }
+    if query_param(query, "t").as_deref() == Some(expected) {
+        return true;
+    }
+    for line in req.lines().skip(1) {
+        let line = line.trim_end();
+        if line.is_empty() {
+            break;
+        }
+        let Some((name, value)) = line.split_once(':') else {
+            continue;
+        };
+        let value = value.trim();
+        if name.eq_ignore_ascii_case("authorization") {
+            let tok = value
+                .strip_prefix("Bearer ")
+                .or_else(|| value.strip_prefix("bearer "))
+                .unwrap_or("")
+                .trim();
+            if tok == expected {
+                return true;
+            }
+        }
+        if name.eq_ignore_ascii_case("x-cyd-token") && value == expected {
+            return true;
+        }
+    }
+    false
+}
+
+fn query_param(query: &str, key: &str) -> Option<String> {
+    for part in query.split('&') {
+        let mut it = part.splitn(2, '=');
+        let k = it.next().unwrap_or("");
+        let v = it.next().unwrap_or("");
+        if k == key {
+            return Some(url_decode(v));
+        }
+    }
+    None
+}
+
+fn url_decode(s: &str) -> String {
+    let bytes = s.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        match bytes[i] {
+            b'+' => {
+                out.push(b' ');
+                i += 1;
+            }
+            b'%' if i + 2 < bytes.len() => {
+                let h = || -> Option<u8> {
+                    let a = hex_nibble(bytes[i + 1])?;
+                    let b = hex_nibble(bytes[i + 2])?;
+                    Some((a << 4) | b)
+                };
+                if let Some(b) = h() {
+                    out.push(b);
+                    i += 3;
+                } else {
+                    out.push(bytes[i]);
+                    i += 1;
+                }
+            }
+            b => {
+                out.push(b);
+                i += 1;
+            }
+        }
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
+
+fn hex_nibble(b: u8) -> Option<u8> {
+    match b {
+        b'0'..=b'9' => Some(b - b'0'),
+        b'a'..=b'f' => Some(b - b'a' + 10),
+        b'A'..=b'F' => Some(b - b'A' + 10),
+        _ => None,
+    }
+}
+
 fn reply(stream: &mut TcpStream, code: u16, ctype: &str, body: &[u8]) {
     let reason = match code {
         200 => "OK",
+        401 => "Unauthorized",
         404 => "Not Found",
         _ => "Error",
     };
@@ -151,6 +390,7 @@ fn reply(stream: &mut TcpStream, code: u16, ctype: &str, body: &[u8]) {
          Content-Type: {ctype}\r\n\
          Content-Length: {}\r\n\
          Access-Control-Allow-Origin: *\r\n\
+         Access-Control-Allow-Headers: Authorization, X-Cyd-Token, Content-Type\r\n\
          Cache-Control: no-store\r\n\
          Connection: close\r\n\
          \r\n",
@@ -222,7 +462,7 @@ const MONITOR_HTML: &str = r##"<!DOCTYPE html>
 <body>
   <div class="wrap">
     <p class="brand">Njörðr Seas'</p>
-    <p class="tag">CYD miner · phone monitor</p>
+    <p class="tag">CYD miner · personal phone monitor</p>
     <div class="hero">
       <div class="rate" id="rate">—</div>
       <div class="unit" id="unit">board measured</div>
@@ -233,10 +473,12 @@ const MONITOR_HTML: &str = r##"<!DOCTYPE html>
       </div>
       <div class="boards" id="boards"></div>
     </div>
-    <label class="foot" for="host">Companion host (LAN IP)</label>
+    <label class="foot" for="host">Companion host (LAN IP / DDNS)</label>
     <input id="host" placeholder="192.168.x.x" autocomplete="off" autocapitalize="off"/>
+    <label class="foot" for="token">Personal token (from your QR)</label>
+    <input id="token" placeholder="scan Companion QR or paste token" autocomplete="off" autocapitalize="off"/>
     <button id="save">Save &amp; refresh</button>
-    <p class="foot" id="meta">Polling /api/status on this host when opened from Companion. For a remote PC, enter its LAN IP.</p>
+    <p class="foot" id="meta">Each Companion install has a unique QR. Only phones that scanned yours can read this miner.</p>
   </div>
 <script>
 const $ = (id) => document.getElementById(id);
@@ -246,17 +488,48 @@ function fmtRate(hs){
   if (hs < 1e6) return [(hs/1000).toFixed(hs>=100000?0:hs>=10000?1:2), 'kH/s'];
   return [(hs/1e6).toFixed(2), 'MH/s'];
 }
-function baseUrl(){
-  const saved = localStorage.getItem('cyd_monitor_host') || '';
-  if (saved) return 'http://' + saved.replace(/^https?:\/\//,'').replace(/\/$/,'') + ':19285';
-  return '';
+function qp(){
+  const u = new URL(location.href);
+  return { id: u.searchParams.get('id')||'', token: u.searchParams.get('token')||u.searchParams.get('t')||'' };
+}
+function loadCreds(){
+  const q = qp();
+  let host = localStorage.getItem('cyd_monitor_host') || '';
+  let token = localStorage.getItem('cyd_monitor_token') || '';
+  let id = localStorage.getItem('cyd_monitor_id') || '';
+  if (q.token) { token = q.token; localStorage.setItem('cyd_monitor_token', token); }
+  if (q.id) { id = q.id; localStorage.setItem('cyd_monitor_id', id); }
+  if (!host && location.hostname && location.hostname !== 'localhost') host = location.hostname;
+  return { host, token, id };
+}
+function baseUrl(host){
+  if (!host) return '';
+  return 'http://' + host.replace(/^https?:\/\//,'').replace(/\/$/,'').replace(/:\d+$/,'') + ':19285';
 }
 async function tick(){
-  const base = baseUrl();
-  const url = (base || '') + '/api/status';
+  const { host, token, id } = loadCreds();
+  $('host').value = host || '';
+  $('token').value = token || '';
+  if (!token){
+    $('meta').textContent = 'Scan your personal QR in Companion Settings → Phone monitor (or paste the token).';
+    return;
+  }
+  const base = baseUrl(host) || '';
+  const url = (base || '') + '/api/status?token=' + encodeURIComponent(token);
   try{
-    const r = await fetch(url, {cache:'no-store'});
+    const r = await fetch(url, {
+      cache:'no-store',
+      headers: { 'Authorization': 'Bearer ' + token, 'X-Cyd-Token': token }
+    });
+    if (r.status === 401){
+      $('meta').textContent = 'Unauthorized — this token is not for this Companion. Scan the QR from your PC app.';
+      return;
+    }
     const j = await r.json();
+    if (id && j.pair_id && j.pair_id !== id){
+      $('meta').textContent = 'Pair id mismatch — QR is for a different Companion install.';
+      return;
+    }
     const [n,u] = fmtRate(j.hashrate_hs);
     $('rate').textContent = n;
     $('unit').textContent = u + ' · ' + (j.mining ? 'mining' : (j.usb_open?'linked':'idle'));
@@ -270,14 +543,14 @@ async function tick(){
       const [rn,ru]=fmtRate(b.hashrate_hs);
       return `<div class="board"><strong>${b.mac||b.endpoint}</strong><br/>${b.endpoint} · ${rn} ${ru}${b.mining?' · hashing':''}</div>`;
     }).join('') : '<div class="board">No boards linked</div>';
-    $('meta').textContent = (j.product||'Companion') + ' ' + (j.version||'') + ' · updated ' + new Date(j.updated_ms||Date.now()).toLocaleTimeString();
+    $('meta').textContent = (j.product||'Companion') + ' ' + (j.version||'') + ' · pair ' + (j.pair_id||'?') + ' · ' + new Date(j.updated_ms||Date.now()).toLocaleTimeString();
   }catch(e){
-    $('meta').textContent = 'Cannot reach Companion monitor API. Enter the PC LAN IP below (port 19285).';
+    $('meta').textContent = 'Cannot reach Companion. Same Wi‑Fi / VPN / port-forward to :19285, and use your personal token.';
   }
 }
-$('host').value = localStorage.getItem('cyd_monitor_host') || '';
 $('save').onclick = () => {
   localStorage.setItem('cyd_monitor_host', $('host').value.trim());
+  localStorage.setItem('cyd_monitor_token', $('token').value.trim());
   tick();
 };
 tick();
@@ -286,3 +559,38 @@ setInterval(tick, 2000);
 </body>
 </html>
 "##;
+
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn pair_url_roundtrip_fields() {
+        let u = pair_url("10.0.0.5", MONITOR_PORT, "aabbccdd", "0123456789abcdef0123456789abcdef");
+        assert!(u.starts_with("njordrseas://cyd-monitor/v1?"));
+        assert!(u.contains("host=10.0.0.5"));
+        assert!(u.contains("id=aabbccdd"));
+        assert!(u.contains("token=0123456789abcdef0123456789abcdef"));
+    }
+
+    #[test]
+    fn qr_encodes() {
+        let u = pair_url("192.168.0.2", MONITOR_PORT, "11223344", "ffffffffffffffffffffffffffffffff");
+        let (w, cells) = qr_modules(&u).expect("qr");
+        assert!(w >= 21);
+        assert_eq!(cells.len(), w * w);
+        assert!(cells.iter().any(|&c| c));
+    }
+
+    #[test]
+    fn token_gate_headers() {
+        let tok = "abc123";
+        let req = format!(
+            "GET /api/status HTTP/1.1\r\nAuthorization: Bearer {tok}\r\n\r\n"
+        );
+        assert!(token_authorized(&req, "", tok));
+        assert!(!token_authorized(&req, "", "other"));
+        assert!(token_authorized("GET /x HTTP/1.1\r\n\r\n", "token=abc123", tok));
+    }
+}

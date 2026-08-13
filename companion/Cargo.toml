@@ -1,6 +1,6 @@
 [package]
 name = "cyd-companion"
-version = "0.8.50"
+version = "0.8.51"
 edition = "2021"
 description = "Njörðr Seas' CYD miner — USB SHA-256 Bitcoin mining control (PC stratum, board hashes)"
 license = "MIT OR Apache-2.0"
@@ -21,6 +21,8 @@ hex = "0.4"
 ureq = { version = "2.12", default-features = false, features = ["json", "tls"] }
 chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
 zip = { version = "0.6", default-features = false, features = ["deflate"] }
+qrcode = { version = "0.14", default-features = false }
+rand = "0.8"
 
 [profile.release]
 lto = true
