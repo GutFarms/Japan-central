@@ -30,12 +30,8 @@ if "%COMPORT%"=="" (
   goto MANUAL
 )
 
-REM espflash exact-matches names from the OS port list (COM6, not \\.\COM6).
-if %COMPORT% GEQ 10 (
-  set "PORT=\\.\COM%COMPORT%"
-) else (
-  set "PORT=COM%COMPORT%"
-)
+REM espflash exact-matches OS port list names (COM6 / COM10 — never \\.\COMx).
+set "PORT=COM%COMPORT%"
 echo Using port %PORT%
 
 if exist "%ESPFLASH%" (

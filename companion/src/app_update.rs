@@ -3,6 +3,7 @@
 
 use std::io::Write;
 use std::path::{Path, PathBuf};
+#[cfg(windows)]
 use std::process::{Command, Stdio};
 
 use sha2::{Digest, Sha256};
@@ -193,7 +194,7 @@ fn fetch_download_checksums(progress: &dyn Fn(String)) -> Result<std::collection
                 ));
                 best = match best.take() {
                     None => Some((ver, map)),
-                    Some((prev_ver, prev_map)) if is_newer(&ver, &prev_ver) => Some((ver, map)),
+                    Some((prev_ver, _prev_map)) if is_newer(&ver, &prev_ver) => Some((ver, map)),
                     Some(prev) => Some(prev),
                 };
                 // API is first and tip — stop once we have a usable tip set.

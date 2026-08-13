@@ -26,6 +26,7 @@ pub fn default_header_coins() -> Vec<String> {
     vec!["BTC".into(), "LTC".into(), "ETH".into()]
 }
 
+#[allow(dead_code)]
 pub fn coin_symbol_valid(sym: &str) -> bool {
     let u = sym.trim().to_ascii_uppercase();
     COIN_CATALOG.iter().any(|(_, s)| *s == u)
@@ -117,7 +118,8 @@ impl LiveFeed {
     }
 
     /// Short ticker for the ESP LCD (`cmp netdata text=…`).
-    pub fn board_ticker(&self) -> String {
+    #[allow(dead_code)]
+pub fn board_ticker(&self) -> String {
         self.board_ticker_for(&default_header_coins())
     }
 
@@ -324,7 +326,7 @@ fn http_get_json<T: for<'de> Deserialize<'de>>(url: &str) -> Result<T, String> {
     let agent = ureq::AgentBuilder::new()
         .timeout_connect(Duration::from_secs(8))
         .timeout_read(Duration::from_secs(12))
-        .user_agent("Njordr-seas-CYD-miner/0.8.77")
+        .user_agent(concat!("Njordr-seas-CYD-miner/", env!("CARGO_PKG_VERSION")))
         .build();
     let resp = agent.get(url).call().map_err(|e| format!("http: {e}"))?;
     resp.into_json::<T>().map_err(|e| format!("json: {e}"))

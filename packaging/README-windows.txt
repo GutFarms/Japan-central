@@ -14,7 +14,7 @@ Quick use
 6. Worker = Bitcoin address, password = x
 7. Start mining
 
-Board has no Wi-Fi. Expect tens–hundreds of kH/s. Solo BTC is a lottery.
+USB preferred for mining; SoftAP/STA Wi-Fi is optional. Expect tens–hundreds of kH/s. Solo BTC is a lottery.
 
 SmartScreen / unverified file
 -----------------------------

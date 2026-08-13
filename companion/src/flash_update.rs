@@ -373,7 +373,7 @@ fn extract_merged_from_zip(
     })
 }
 
-pub const COMPANION_UA: &str = "Njordr-seas-CYD-miner/0.8.77";
+pub const COMPANION_UA: &str = concat!("Njordr-seas-CYD-miner/", env!("CARGO_PKG_VERSION"));
 const ESPFLASH_VERSION: &str = "4.5.0";
 pub const REPO_OWNER: &str = "GutFarms";
 pub const REPO_NAME: &str = "Japan-central";
@@ -468,6 +468,7 @@ pub fn repo_file_urls(path: &str) -> Vec<String> {
 }
 
 /// VERSION.txt only — skip branch-name raw CDN (can lag and falsely report "up to date").
+#[allow(dead_code)]
 pub fn repo_version_urls(path: &str) -> Vec<String> {
     let path = path.trim_start_matches('/');
     let mut out = Vec::new();

@@ -142,7 +142,7 @@ fn brand_logo(ui: &mut egui::Ui, height: f32) {
     painter.circle_stroke(
         rect.center(),
         height * 0.52,
-        Stroke::new(1.4, rgba(C_NEON, 55)),
+        Stroke::new(1.4_f32, rgba(C_NEON, 55)),
     );
     egui::Image::new(LOGO_PNG)
         .fit_to_exact_size(size)
@@ -5061,7 +5061,7 @@ fn paint_data_flow(ui: &mut egui::Ui, v: DataFlowView) {
         Rounding::same(16.0),
         Color32::from_rgba_unmultiplied(3, 14, 28, 200),
     );
-    painter.rect_stroke(rect, Rounding::same(16.0), Stroke::new(1.0, rgba(C_STROKE, 160)));
+    painter.rect_stroke(rect, Rounding::same(16.0), Stroke::new(1.0_f32, rgba(C_STROKE, 160)));
 
     let pad = 18.0;
     let node_w = 118.0;
@@ -5076,7 +5076,7 @@ fn paint_data_flow(ui: &mut egui::Ui, v: DataFlowView) {
 
     let link = |a: Pos2, b: Pos2, active: bool, reverse: bool, color: Color32| {
         let stroke = Stroke::new(
-            if active { 2.4 } else { 1.2 },
+            if active { 2.4_f32 } else { 1.2_f32 },
             rgba(color, if active { 160 } else { 55 }),
         );
         painter.line_segment([a, b], stroke);
@@ -5142,7 +5142,7 @@ fn paint_data_flow(ui: &mut egui::Ui, v: DataFlowView) {
             r,
             Rounding::same(14.0),
             Stroke::new(
-                if live { 1.8 } else { 1.0 },
+                if live { 1.8_f32 } else { 1.0_f32 },
                 rgba(accent, if live { (90.0 + glow * 120.0) as u8 } else { 70 }),
             ),
         );

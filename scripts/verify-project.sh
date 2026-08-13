@@ -82,6 +82,28 @@ cargo = next(
 )
 if not ver.startswith(cargo):
     print(f"ERROR: downloads VERSION {ver!r} != Cargo {cargo!r}", file=sys.stderr); ok = False
+# Embedded firmware tags must match the kit release line (strip -d0 flavor).
+fw_needle = f"{cargo}-sha256".encode()
+for bin_path in [
+    "flash/esp32-2432s028-sha256-miner-merged.bin",
+    "flash/esp32-2432s028-sha256-miner-d0-merged.bin",
+]:
+    blob = Path(bin_path).read_bytes()
+    if fw_needle not in blob and f"{cargo}-sha256-d0".encode() not in blob:
+        print(
+            f"ERROR: {bin_path} missing embedded fw tag {cargo}-sha256 (firmware tag drift)",
+            file=sys.stderr,
+        )
+        ok = False
+# Source tags must also match (catch rebuild skips).
+for src in [
+    "firmware-cpp/src/companion.cpp",
+    "firmware-cpp/src/wifi_link.cpp",
+]:
+    text = Path(src).read_text(errors="ignore")
+    if f"{cargo}-sha256" not in text:
+        print(f"ERROR: {src} kFwTag does not include {cargo}-sha256", file=sys.stderr)
+        ok = False
 sums = Path("flash/downloads/SHA256SUMS.txt")
 if not sums.is_file():
     print("ERROR: missing flash/downloads/SHA256SUMS.txt", file=sys.stderr); ok = False

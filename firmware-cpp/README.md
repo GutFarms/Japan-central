@@ -1,6 +1,6 @@
 # CYD SHA-256 miner (C++ / USB hash)
 
-ESP32-2432S028 firmware: **Bitcoin double-SHA256** with a custom midstate compressor (IRAM hot path). No Wi‑Fi. Pool traffic stays on the PC companion; work and shares move over USB-C (`cmp`).
+ESP32-2432S028 firmware: **Bitcoin double-SHA256** with a custom midstate compressor (IRAM hot path). Optional SoftAP/STA Wi‑Fi (USB preferred for mining). Pool traffic stays on the PC companion; work and shares move over USB-C (`cmp`).
 
 ## Build
 

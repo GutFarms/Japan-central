@@ -52,7 +52,7 @@ D) Best path on this board (not a different algorithm)
 
 Notes
 -----
-- The board has no Wi-Fi. Pool traffic stays on this PC.
+- Pool traffic stays on this PC (USB preferred). Board SoftAP/STA Wi-Fi is optional for Companion TCP / phone monitor.
 - Expect tens–hundreds of kH/s. Solo BTC is a lottery.
 - Always match Companion + firmware versions (see VERSION.txt).
 - Keep the Firmware folder; you only need to reflash after updates.

@@ -264,11 +264,13 @@ fn wait_for_pong(port: &mut dyn SerialPort, buf: &mut String, wait_ms: u64) -> O
 }
 
 /// Probe a serial port for CYD companion firmware (`cmp ping` → `CMP ok`).
+#[allow(dead_code)]
 pub fn probe_usb_port(name: &str) -> Option<DiscoveredWorker> {
     probe_usb_port_detailed(name).ok()
 }
 
 /// Like [`probe_usb_port`], but returns why a port was skipped (for Event log).
+#[allow(dead_code)]
 pub fn probe_usb_port_detailed(name: &str) -> Result<DiscoveredWorker, String> {
     let mut last = String::new();
     for baud in [460_800u32, 115_200] {
@@ -410,6 +412,7 @@ fn scan_candidate_ports(include_bluetooth: bool) -> Vec<(String, WorkerKind)> {
 }
 
 /// Scan serial ports for CYD boards. Skips ports listed in `skip`.
+#[allow(dead_code)]
 pub fn scan_usb_workers(skip: &[String]) -> Vec<DiscoveredWorker> {
     scan_usb_workers_with_progress(skip, |_, _| {})
 }
@@ -417,6 +420,7 @@ pub fn scan_usb_workers(skip: &[String]) -> Vec<DiscoveredWorker> {
 /// Serial USB probe (one port at a time) with per-port progress + result callback.
 ///
 /// `on_port(port, detail)` — detail is `"probing"`, `"ok · …"`, or `"miss · …"`.
+#[allow(dead_code)]
 pub fn scan_usb_workers_with_progress(
     skip: &[String],
     on_port: impl Fn(&str, &str),
