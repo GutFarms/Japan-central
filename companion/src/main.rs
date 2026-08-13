@@ -512,6 +512,8 @@ struct CompanionApp {
     live: LiveFeed,
     firmware: Option<FirmwareImage>,
     update_confirm: bool,
+    /// After a successful board flash: wait until Instant, then CloseUsb + OpenUsb.
+    pending_post_flash_reconnect: Option<(Instant, String)>,
     update_busy: bool,
     update_status: String,
     auto_connect: bool,
@@ -621,6 +623,7 @@ impl CompanionApp {
             live: LiveFeed::start(),
             firmware: find_firmware_image().ok(),
             update_confirm: false,
+            pending_post_flash_reconnect: None,
             update_busy: false,
             update_status: String::new(),
             auto_connect,
@@ -1101,7 +1104,6 @@ impl CompanionApp {
             self.last_error = "Select a COM / serial port before updating.".into();
             return;
         }
-        let reopen = self.usb_open;
         if self.mining {
             self.stop_mine();
         }
@@ -1111,6 +1113,7 @@ impl CompanionApp {
             .map(|fw| fw.path.to_string_lossy().into_owned())
             .unwrap_or_default();
         self.update_busy = true;
+        self.pending_post_flash_reconnect = None;
         self.update_status = format!("Erase + flash board via {}…", self.com_port);
         self.last_ok = self.update_status.clone();
         self.last_error.clear();
@@ -1131,7 +1134,8 @@ impl CompanionApp {
         let _ = self.cmd_tx.send(NetCmd::UpdateFirmware {
             port: self.com_port.clone(),
             image,
-            reopen,
+            // Always reconnect after a successful flash.
+            reopen: true,
         });
     }
 
@@ -2321,23 +2325,28 @@ impl App for CompanionApp {
                     self.update_status = trunc(&line, 140);
                 }
                 NetMsg::FlashDone { result, reopen } => {
-                    self.update_busy = false;
                     match result {
                         Ok(s) => {
-                            self.update_status = s.clone();
                             self.last_ok = s.clone();
                             self.last_error.clear();
-                            self.push_log(LogKind::Usb, s);
-                            if let Some(port) = reopen {
-                                self.com_port = port.clone();
-                                self.push_log(
-                                    LogKind::Usb,
-                                    format!("Reconnecting USB on {port}…"),
-                                );
-                                let _ = self.cmd_tx.send(NetCmd::OpenUsb(port));
+                            self.push_log(LogKind::Usb, s.clone());
+                            let port = reopen
+                                .filter(|p| !p.trim().is_empty())
+                                .unwrap_or_else(|| self.com_port.clone());
+                            if port.trim().is_empty() {
+                                self.update_busy = false;
+                                self.update_status = s;
+                            } else {
+                                // Keep spinner up: wait 1s, then disconnect + reconnect.
+                                self.update_status =
+                                    format!("Flash OK — waiting 1s, then reconnect {port}…");
+                                self.pending_post_flash_reconnect =
+                                    Some((Instant::now() + Duration::from_secs(1), port));
                             }
                         }
                         Err(e) => {
+                            self.update_busy = false;
+                            self.pending_post_flash_reconnect = None;
                             self.update_status = e.clone();
                             self.last_error = e.clone();
                             self.push_log(LogKind::Err, e);
@@ -2520,6 +2529,24 @@ impl App for CompanionApp {
         self.lan.maybe_beacon(&board_ads, &host);
         if self.update_busy || self.fetch_busy || self.app_update_busy {
             ctx.request_repaint();
+        }
+        if let Some((when, port)) = self.pending_post_flash_reconnect.clone() {
+            if Instant::now() >= when {
+                self.pending_post_flash_reconnect = None;
+                self.update_busy = false;
+                self.com_port = port.clone();
+                self.update_status = format!("Disconnect + reconnect {port}…");
+                self.push_log(
+                    LogKind::Usb,
+                    format!("Post-flash: disconnect, then reconnect {port}"),
+                );
+                // Ensure a clean disconnect, then open again on the same COM.
+                let _ = self.cmd_tx.send(NetCmd::CloseUsb);
+                self.usb_open = false;
+                let _ = self.cmd_tx.send(NetCmd::OpenUsb(port));
+            } else {
+                ctx.request_repaint_after(Duration::from_millis(50));
+            }
         }
 
         if let Some(step) = self.wizard_step {
@@ -2748,9 +2775,13 @@ impl App for CompanionApp {
                         ui.add(egui::Spinner::new().size(52.0).color(C_LIME));
                         ui.add_space(16.0);
                         ui.label(
-                            RichText::new("Erase + flash in progress")
-                                .color(C_LIME)
-                                .font(display_font(22.0)),
+                            RichText::new(if self.pending_post_flash_reconnect.is_some() {
+                                "Flash complete — reconnecting"
+                            } else {
+                                "Erase + flash in progress"
+                            })
+                            .color(C_LIME)
+                            .font(display_font(22.0)),
                         );
                         ui.add_space(8.0);
                         ui.label(
