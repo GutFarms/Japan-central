@@ -38,6 +38,11 @@ See [`flash/downloads/README.md`](flash/downloads/README.md) for checksums.
 
 `Update board` stops mining, frees the COM port, flashes `Firmware\esp32-2432s028-sha256-miner-merged.bin` with bundled `Tools\espflash.exe`, then reconnects. If flash fails: hold **BOOT**, tap **RESET**, release **BOOT**, then retry.
 
+In **Settings**:
+- **Update app** — download the latest Companion Windows build and restart
+- **Fetch latest FW** — pull the newest board `merged.bin` into `Firmware\`
+- **Update board** — flash that image to the CYD over USB
+
 ## Companion extras (0.8.5+)
 - First-run setup wizard
 - Version-aware **Update board** + **Fetch latest FW**

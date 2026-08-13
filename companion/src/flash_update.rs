@@ -347,7 +347,7 @@ fn extract_merged_from_zip(
     })
 }
 
-const COMPANION_UA: &str = "CYD-Companion/0.8.20";
+const COMPANION_UA: &str = "CYD-Companion/0.8.21";
 const ESPFLASH_VERSION: &str = "4.5.0";
 
 fn firmware_writable_dir() -> Result<PathBuf, String> {

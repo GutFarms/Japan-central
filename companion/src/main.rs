@@ -4,6 +4,7 @@
 #![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
 
 mod api_feeds;
+mod app_update;
 mod flash_update;
 mod live_bar;
 mod stratum;
@@ -16,6 +17,7 @@ use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use api_feeds::{load_feeds, next_feed_id, pull_feed, save_feeds, ApiFeed, ApiPullOutcome};
+use app_update::{check_app_update, running_version, update_companion_app, AppRemoteInfo};
 use flash_update::{
     ensure_firmware_image, fetch_latest_firmware, find_firmware_image, flash_merged_bin,
     update_needed, FirmwareImage,
@@ -42,7 +44,10 @@ fn main() -> eframe::Result<()> {
         viewport: egui::ViewportBuilder::default()
             .with_inner_size([1200.0, 820.0])
             .with_min_inner_size([1020.0, 700.0])
-            .with_title("CYD Companion · USB SHA-256 Miner"),
+            .with_title(format!(
+                "CYD Companion {} · USB SHA-256 Miner",
+                env!("CARGO_PKG_VERSION")
+            )),
         multisampling: 8,
         depth_buffer: 0,
         persist_window: true,
@@ -421,6 +426,8 @@ enum NetMsg {
     },
     Share(ShareOutcome),
     FirmwareFetched(Result<FirmwareImage, String>),
+    /// Result of Check / Update Companion app.
+    AppUpdate(Result<AppRemoteInfo, String>),
     ApiFeedResult(ApiPullOutcome),
     WorkersFound(Vec<DiscoveredWorker>),
     WorkersLive(Vec<WorkerLive>),
@@ -452,6 +459,10 @@ enum NetCmd {
     },
     RebootBoard,
     FetchFirmware,
+    /// Compare running Companion vs remote VERSION.txt.
+    CheckAppUpdate,
+    /// Download latest Companion build and restart (Windows).
+    UpdateApp,
     /// Pull one user-configured API feed in the worker thread.
     PullApiFeed(ApiFeed),
     /// Probe USB (+ report) for CYD companion firmwares.
@@ -514,6 +525,10 @@ struct CompanionApp {
     /// None = wizard dismissed; Some(0..3) = step.
     wizard_step: Option<u8>,
     fetch_busy: bool,
+    /// Companion self-update in progress.
+    app_update_busy: bool,
+    /// Last check/update result for the Companion app itself.
+    app_remote: Option<AppRemoteInfo>,
     /// User-configured HTTP APIs that pull external info into the app.
     api_feeds: Vec<ApiFeed>,
     api_draft_name: String,
@@ -618,6 +633,8 @@ impl CompanionApp {
             last_share_latency_ms: None,
             wizard_step: if wizard_done { None } else { Some(0) },
             fetch_busy: false,
+            app_update_busy: false,
+            app_remote: None,
             api_feeds,
             api_draft_name: String::new(),
             api_draft_url: String::new(),
@@ -630,7 +647,12 @@ impl CompanionApp {
             worker_scan_busy: false,
             lan: LanDiscovery::start(),
         };
-        app.push_log(LogKind::Info, "CYD Companion ready".into());
+        app.push_log(
+            LogKind::Info,
+            format!("CYD Companion {} ready", running_version()),
+        );
+        // Soft check for a newer Companion build (non-blocking).
+        let _ = app.cmd_tx.send(NetCmd::CheckAppUpdate);
         if let Some(fw) = &app.firmware {
             app.push_log(
                 LogKind::Info,
@@ -1038,9 +1060,33 @@ impl CompanionApp {
             return;
         }
         self.fetch_busy = true;
-        self.update_status = "Fetching latest firmware…".into();
-        self.push_log(LogKind::Info, "Fetching latest firmware…".into());
+        self.update_status = "Fetching latest board firmware…".into();
+        self.push_log(LogKind::Info, "Fetching latest board firmware…".into());
         let _ = self.cmd_tx.send(NetCmd::FetchFirmware);
+    }
+
+    fn start_app_update_check(&mut self) {
+        if self.app_update_busy {
+            return;
+        }
+        self.app_update_busy = true;
+        self.update_status = "Checking for Companion updates…".into();
+        self.push_log(LogKind::Info, "Checking for Companion updates…".into());
+        let _ = self.cmd_tx.send(NetCmd::CheckAppUpdate);
+    }
+
+    fn start_app_update(&mut self) {
+        if self.app_update_busy || self.update_busy {
+            return;
+        }
+        if self.mining {
+            self.stop_mine();
+        }
+        self.app_update_busy = true;
+        self.update_status = format!("Updating Companion {}…", running_version());
+        self.last_ok = self.update_status.clone();
+        self.push_log(LogKind::Info, self.update_status.clone());
+        let _ = self.cmd_tx.send(NetCmd::UpdateApp);
     }
 
     fn begin_board_update(&mut self) {
@@ -1258,33 +1304,74 @@ impl CompanionApp {
     }
 
     fn ui_settings(&mut self, ui: &mut egui::Ui) {
-        soft_panel(ui, "Board tools", |ui| {
+        soft_panel(ui, "Companion app", |ui| {
             ui.label(
-                RichText::new("Bench, flash, and firmware fetch — kept off the Mine screen.")
-                    .color(C_MUTED)
-                    .size(13.0),
+                RichText::new(format!(
+                    "Running Companion {} — check/download the latest Windows build.",
+                    running_version()
+                ))
+                .color(C_MUTED)
+                .size(13.0),
             );
             ui.add_space(12.0);
             ui.horizontal_wrapped(|ui| {
-                if soft_button(ui, "Bench board", 160.0).clicked() {
+                let check_label = if self.app_update_busy {
+                    "Working…"
+                } else {
+                    "Check for app update"
+                };
+                if soft_button(ui, check_label, 180.0).clicked() && !self.app_update_busy {
+                    self.start_app_update_check();
+                }
+                let update_app_label = if self.app_update_busy {
+                    "Updating app…"
+                } else {
+                    "Update app"
+                };
+                if soft_button(ui, update_app_label, 140.0).clicked() && !self.app_update_busy {
+                    self.start_app_update();
+                }
+            });
+            if let Some(info) = &self.app_remote {
+                ui.add_space(8.0);
+                ui.label(
+                    RichText::new(&info.detail)
+                        .color(if info.newer { C_LIME } else { C_MUTED })
+                        .font(mono_ui_font(11.0)),
+                );
+            }
+        });
+
+        ui.add_space(14.0);
+        soft_panel(ui, "Board firmware", |ui| {
+            ui.label(
+                RichText::new(
+                    "Fetch the latest board image, then push it over USB with Update board.",
+                )
+                .color(C_MUTED)
+                .size(13.0),
+            );
+            ui.add_space(12.0);
+            ui.horizontal_wrapped(|ui| {
+                if soft_button(ui, "Bench board", 140.0).clicked() {
                     let _ = self.cmd_tx.send(NetCmd::Bench);
                     self.push_log(LogKind::Usb, "Bench requested".into());
                 }
-                let update_label = if self.update_busy {
-                    "Updating…"
-                } else {
-                    "Update board"
-                };
-                if soft_button(ui, update_label, 160.0).clicked() && !self.update_busy {
-                    self.request_board_update();
-                }
                 let fetch_label = if self.fetch_busy {
-                    "Fetching…"
+                    "Fetching FW…"
                 } else {
                     "Fetch latest FW"
                 };
-                if soft_button(ui, fetch_label, 160.0).clicked() && !self.fetch_busy {
+                if soft_button(ui, fetch_label, 150.0).clicked() && !self.fetch_busy {
                     self.start_firmware_fetch();
+                }
+                let update_label = if self.update_busy {
+                    "Flashing…"
+                } else {
+                    "Update board"
+                };
+                if soft_button(ui, update_label, 140.0).clicked() && !self.update_busy {
+                    self.request_board_update();
                 }
             });
             ui.add_space(10.0);
@@ -1298,7 +1385,7 @@ impl CompanionApp {
                 ui.add_space(6.0);
                 ui.label(
                     RichText::new(&self.update_status)
-                        .color(if self.update_busy || self.fetch_busy {
+                        .color(if self.update_busy || self.fetch_busy || self.app_update_busy {
                             C_WARN
                         } else {
                             C_MUTED
@@ -1310,7 +1397,7 @@ impl CompanionApp {
                 ui.add_space(8.0);
                 ui.label(
                     RichText::new(format!(
-                        "Bundled · {} · {} KB",
+                        "Board image · {} · {} KB",
                         if fw.version.is_empty() {
                             "unknown"
                         } else {
@@ -1345,17 +1432,17 @@ impl CompanionApp {
                 .color(C_MUTED)
                 .font(mono_ui_font(11.0)),
             );
-        });
-
-        ui.add_space(14.0);
-        soft_panel(ui, "Preferences", |ui| {
-            ui.checkbox(&mut self.auto_connect, "Auto-connect USB on launch");
             ui.add_space(8.0);
             ui.label(
                 RichText::new("Tip: hold BOOT, tap RESET, release BOOT if Update board fails.")
                     .color(C_DIM)
                     .size(12.0),
             );
+        });
+
+        ui.add_space(14.0);
+        soft_panel(ui, "Preferences", |ui| {
+            ui.checkbox(&mut self.auto_connect, "Auto-connect USB on launch");
         });
 
         ui.add_space(14.0);
@@ -2263,7 +2350,7 @@ impl App for CompanionApp {
                     match result {
                         Ok(fw) => {
                             self.update_status = format!(
-                                "Fetched {} ({} KB)",
+                                "Board FW fetched {} ({} KB)",
                                 fw.version,
                                 fw.bytes / 1024
                             );
@@ -2275,6 +2362,39 @@ impl App for CompanionApp {
                             self.update_status = e.clone();
                             self.last_error = e.clone();
                             self.push_log(LogKind::Err, e);
+                        }
+                    }
+                }
+                NetMsg::AppUpdate(result) => {
+                    let user_initiated = self.app_update_busy;
+                    self.app_update_busy = false;
+                    match result {
+                        Ok(info) => {
+                            self.update_status = info.detail.clone();
+                            if info.newer
+                                && info.detail.to_ascii_lowercase().contains("restarting")
+                            {
+                                self.last_ok = info.detail.clone();
+                                self.push_log(LogKind::Info, info.detail.clone());
+                                self.app_remote = Some(info);
+                                // Give the updater bat a moment, then release the .exe lock.
+                                thread::sleep(Duration::from_millis(400));
+                                std::process::exit(0);
+                            }
+                            if user_initiated || info.newer {
+                                self.last_ok = info.detail.clone();
+                                self.push_log(LogKind::Info, info.detail.clone());
+                            }
+                            self.app_remote = Some(info);
+                        }
+                        Err(e) => {
+                            if user_initiated {
+                                self.update_status = e.clone();
+                                self.last_error = e.clone();
+                                self.push_log(LogKind::Err, e);
+                            } else {
+                                self.push_log(LogKind::Warn, format!("App update check: {e}"));
+                            }
                         }
                     }
                 }
@@ -2355,7 +2475,7 @@ impl App for CompanionApp {
             .collect();
         let host = hostname_fallback();
         self.lan.maybe_beacon(&board_ads, &host);
-        if self.update_busy || self.fetch_busy {
+        if self.update_busy || self.fetch_busy || self.app_update_busy {
             ctx.request_repaint();
         }
 
@@ -2446,6 +2566,9 @@ impl App for CompanionApp {
                                 }
                                 if soft_button(ui, "Fetch latest FW", 140.0).clicked() {
                                     self.start_firmware_fetch();
+                                }
+                                if soft_button(ui, "Update app", 120.0).clicked() {
+                                    self.start_app_update();
                                 }
                             });
                         }
@@ -3653,6 +3776,22 @@ fn mine_worker(cmd_rx: Receiver<NetCmd>, msg_tx: Sender<NetMsg>) {
                     };
                     let result = fetch_latest_firmware(&progress);
                     let _ = msg_tx.send(NetMsg::FirmwareFetched(result));
+                }
+                NetCmd::CheckAppUpdate => {
+                    let tx = msg_tx.clone();
+                    let progress = move |line: String| {
+                        log_msg(&tx, LogKind::Info, line);
+                    };
+                    let result = check_app_update(&progress);
+                    let _ = msg_tx.send(NetMsg::AppUpdate(result));
+                }
+                NetCmd::UpdateApp => {
+                    let tx = msg_tx.clone();
+                    let progress = move |line: String| {
+                        log_msg(&tx, LogKind::Info, line);
+                    };
+                    let result = update_companion_app(&progress);
+                    let _ = msg_tx.send(NetMsg::AppUpdate(result));
                 }
                 NetCmd::PullApiFeed(feed) => {
                     let outcome = pull_feed(&feed);
