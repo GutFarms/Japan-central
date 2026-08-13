@@ -45,40 +45,78 @@ pub fn is_newer(remote: &str, local: &str) -> bool {
 }
 
 fn version_urls() -> Vec<String> {
-    // Keep this list short and free of GitHub API / resolve_ref_commit round-trips.
-    // (Building repo_version_urls used to block on commits API and made Check feel stuck.)
+    // Prefer GitHub tip (raw / Contents API). Branch-name jsDelivr often lags days
+    // behind and used to make Check stop on a stale "newer" version (e.g. 0.8.64
+    // while tip was 0.8.77) or pair fresh VERSION with stale SHA256SUMS.
     vec![
-        "https://cdn.jsdelivr.net/gh/GutFarms/Japan-central@cursor/esp32-cyd-cpp-firmware-e801/flash/downloads/VERSION.txt"
-            .into(),
         "https://raw.githubusercontent.com/GutFarms/Japan-central/cursor/esp32-cyd-cpp-firmware-e801/flash/downloads/VERSION.txt"
             .into(),
         "https://api.github.com/repos/GutFarms/Japan-central/contents/flash/downloads/VERSION.txt?ref=cursor%2Fesp32-cyd-cpp-firmware-e801"
             .into(),
-        "https://cdn.jsdelivr.net/gh/GutFarms/Japan-central@master/flash/downloads/VERSION.txt"
+        "https://cdn.jsdelivr.net/gh/GutFarms/Japan-central@cursor/esp32-cyd-cpp-firmware-e801/flash/downloads/VERSION.txt"
             .into(),
     ]
 }
 
 fn app_zip_urls() -> Vec<String> {
-    let mut out = crate::flash_update::repo_file_urls("flash/downloads/CYD-Companion-App-Only.zip");
-    out.extend(crate::flash_update::repo_file_urls(
+    // Large packages: commit-pinned / branch raw only (skip jsDelivr branch tip).
+    let mut out = crate::flash_update::repo_bin_urls("flash/downloads/CYD-Companion-App-Only.zip");
+    out.extend(crate::flash_update::repo_bin_urls(
         "flash/downloads/CYD-Miner-Portable.zip",
     ));
-    out
+    // Fall back to the broader list (API / pinned CDN) if raw mirrors fail.
+    out.extend(prefer_fresh_download_urls(crate::flash_update::repo_file_urls(
+        "flash/downloads/CYD-Companion-App-Only.zip",
+    )));
+    out.extend(prefer_fresh_download_urls(crate::flash_update::repo_file_urls(
+        "flash/downloads/CYD-Miner-Portable.zip",
+    )));
+    dedupe_urls(out)
 }
 
 fn app_exe_urls() -> Vec<String> {
-    crate::flash_update::repo_file_urls("flash/downloads/cyd-companion.exe")
+    let mut out = crate::flash_update::repo_bin_urls("flash/downloads/cyd-companion.exe");
+    out.extend(prefer_fresh_download_urls(crate::flash_update::repo_file_urls(
+        "flash/downloads/cyd-companion.exe",
+    )));
+    dedupe_urls(out)
+}
+
+/// Push unpinned branch-tip jsDelivr URLs last — that CDN often lags tip by several releases.
+fn prefer_fresh_download_urls(urls: Vec<String>) -> Vec<String> {
+    let mut fresh = Vec::with_capacity(urls.len());
+    let mut stale = Vec::new();
+    for u in urls {
+        let branch_jsdelivr = u.contains("cdn.jsdelivr.net/gh/") && u.contains("@cursor/");
+        if branch_jsdelivr {
+            stale.push(u);
+        } else {
+            fresh.push(u);
+        }
+    }
+    fresh.extend(stale);
+    fresh
+}
+
+fn dedupe_urls(urls: Vec<String>) -> Vec<String> {
+    let mut seen = std::collections::HashSet::new();
+    let mut out = Vec::with_capacity(urls.len());
+    for u in urls {
+        if seen.insert(u.clone()) {
+            out.push(u);
+        }
+    }
+    out
 }
 
 fn sha256sums_urls() -> Vec<String> {
-    // Fast mirrors first — avoid resolve_ref_commit HTTP while building the list.
+    // Raw/API first so verify hashes match the tip packages, not a stale CDN copy.
     vec![
-        "https://cdn.jsdelivr.net/gh/GutFarms/Japan-central@cursor/esp32-cyd-cpp-firmware-e801/flash/downloads/SHA256SUMS.txt"
-            .into(),
         "https://raw.githubusercontent.com/GutFarms/Japan-central/cursor/esp32-cyd-cpp-firmware-e801/flash/downloads/SHA256SUMS.txt"
             .into(),
         "https://api.github.com/repos/GutFarms/Japan-central/contents/flash/downloads/SHA256SUMS.txt?ref=cursor%2Fesp32-cyd-cpp-firmware-e801"
+            .into(),
+        "https://cdn.jsdelivr.net/gh/GutFarms/Japan-central@cursor/esp32-cyd-cpp-firmware-e801/flash/downloads/SHA256SUMS.txt"
             .into(),
     ]
 }
@@ -254,7 +292,8 @@ pub fn check_app_update(progress: &dyn Fn(String)) -> Result<AppRemoteInfo, Stri
     let mut best_remote: Option<String> = None;
     let mut sources_ok = 0u32;
     progress(format!("Checking for Companion updates (running {local})…"));
-    // Probe fast mirrors; stop early once we have a newer version, or after 2 agreeing hits.
+    // Probe every mirror and keep the *newest* VERSION. Do not stop on the first
+    // "newer than local" hit — a stale CDN can report 0.8.64 while tip is 0.8.78.
     for url in version_urls() {
         match http_get_text(&url) {
             Ok(txt) => {
@@ -266,14 +305,6 @@ pub fn check_app_update(progress: &dyn Fn(String)) -> Result<AppRemoteInfo, Stri
                         Some(prev) if is_newer(&remote, &prev) => Some(remote),
                         Some(prev) => Some(prev),
                     };
-                    if let Some(ref remote) = best_remote {
-                        if is_newer(remote, local) && sources_ok >= 1 {
-                            break;
-                        }
-                        if sources_ok >= 2 {
-                            break;
-                        }
-                    }
                 } else {
                     last = "VERSION.txt had no usable version".into();
                 }
@@ -673,6 +704,20 @@ mod tests {
         assert!(!is_newer("0.8.3", "0.8.21"));
         assert!(is_newer("v0.9.0", "0.8.21"));
         assert!(is_newer("0.8.61", "0.8.60"));
+        assert!(is_newer("0.8.78", "0.8.64"));
+        assert!(is_newer("0.8.78", "0.8.77"));
+    }
+
+    #[test]
+    fn prefer_fresh_puts_branch_jsdelivr_last() {
+        let urls = prefer_fresh_download_urls(vec![
+            "https://cdn.jsdelivr.net/gh/GutFarms/Japan-central@cursor/esp32-cyd-cpp-firmware-e801/flash/downloads/VERSION.txt".into(),
+            "https://raw.githubusercontent.com/GutFarms/Japan-central/cursor/esp32-cyd-cpp-firmware-e801/flash/downloads/VERSION.txt".into(),
+            "https://cdn.jsdelivr.net/gh/GutFarms/Japan-central@deadbeef/flash/downloads/VERSION.txt".into(),
+        ]);
+        assert!(urls[0].contains("raw.githubusercontent.com"));
+        assert!(urls[1].contains("@deadbeef"));
+        assert!(urls[2].contains("@cursor/"));
     }
 
     #[test]

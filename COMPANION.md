@@ -59,6 +59,7 @@ In **Settings**:
 - **0.8.22** — fix Windows self-update bat (retry while `.new` remains; do not relaunch a locked old exe)
 - **0.8.23** — fetch updates via GitHub API / commit-pinned raw (branch raw CDN can serve stale VERSION/bins)
 - **0.8.24** — fix Update board: espflash reject `ESPFLASH_SKIP_UPDATE_CHECK=1` (needs true/false); skip Windows Store python stubs
+- **0.8.78** — Fix Companion self-update: ignore stale jsDelivr VERSION/SUMS; take newest tip
 - **0.8.77** — Auto Desktop shortcut with brand logo (first launch + Setup always)
 - **0.8.76** — Taskbar / window icon from brand logo (runtime IconData + PE ICO)
 - **0.8.75** — Fresh D0 firmware + Companion rebuild (new merged.bin)
