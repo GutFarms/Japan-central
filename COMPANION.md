@@ -59,6 +59,7 @@ In **Settings**:
 - **0.8.22** — fix Windows self-update bat (retry while `.new` remains; do not relaunch a locked old exe)
 - **0.8.23** — fetch updates via GitHub API / commit-pinned raw (branch raw CDN can serve stale VERSION/bins)
 - **0.8.24** — fix Update board: espflash reject `ESPFLASH_SKIP_UPDATE_CHECK=1` (needs true/false); skip Windows Store python stubs
+- **0.8.37** — fix Find CYD workers: open probes without DTR reset, settle/retry after boot, longer timeouts, background scan + per-port Event log
 - **0.8.36** — push board H/s toward ~1020 kH/s (real hashes); rename product to **Njörðr seas CYD miner**; skip LCD SPI while mining
 - **0.8.35** — brand logo replaces large CYD title; workers identified by board MAC; COM list shows every OS serial port with USB chip details
 - **0.8.34** — fix phantom hashrate when USB disconnected; drop dead boards; report real mining flag; OpenUsb no longer wipes multi-board fleet (SHA256d verify scripts PASS)

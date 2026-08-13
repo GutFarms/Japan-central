@@ -116,6 +116,17 @@ pub fn normalize_mac(raw: &str) -> String {
     )
 }
 
+/// Normalize COM / serial path for comparisons (`\\.\COM10` ↔ `COM10`).
+pub fn normalize_port_name(name: &str) -> String {
+    let t = name.trim();
+    let stripped = t.strip_prefix(r"\\.\").unwrap_or(t);
+    stripped.to_ascii_uppercase()
+}
+
+pub fn port_names_match(a: &str, b: &str) -> bool {
+    normalize_port_name(a) == normalize_port_name(b)
+}
+
 pub fn mac_worker_id(mac: &str) -> String {
     let m = normalize_mac(mac);
     if m.is_empty() || m == "unknown" {
@@ -123,6 +134,42 @@ pub fn mac_worker_id(mac: &str) -> String {
     } else {
         format!("usb:mac:{m}")
     }
+}
+
+/// Open a USB-UART port without asserting DTR (ESP32 often resets on DTR/RTS).
+pub fn open_usb_serial(
+    name: &str,
+    baud: u32,
+    timeout: Duration,
+) -> Result<Box<dyn SerialPort>, String> {
+    let mut port = serialport::new(name, baud)
+        .timeout(timeout)
+        .dtr_on_open(false)
+        .open()
+        .map_err(|e| format!("USB open failed @ {baud}: {e}"))?;
+    let _ = port.write_data_terminal_ready(false);
+    let _ = port.write_request_to_send(false);
+    // Brief settle; CH340/CP210x still may glitch lines on some hosts.
+    std::thread::sleep(Duration::from_millis(120));
+    let _ = port.clear(serialport::ClearBuffer::All);
+    Ok(port)
+}
+
+fn wait_for_pong(port: &mut dyn SerialPort, buf: &mut String, wait_ms: u64) -> Option<String> {
+    let _ = port.write_all(b"\r\ncmp ping\r\n");
+    let _ = port.flush();
+    let deadline = Instant::now() + Duration::from_millis(wait_ms);
+    while Instant::now() < deadline {
+        drain(port, buf);
+        if let Some(line) = buf.lines().find(|l| {
+            let t = l.trim();
+            t.starts_with("CMP ok") || t.eq_ignore_ascii_case("CMPACK ping")
+        }) {
+            return Some(line.trim().to_string());
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    None
 }
 
 /// Probe a serial port for CYD companion firmware (`cmp ping` → `CMP ok`).
@@ -136,44 +183,35 @@ pub fn probe_usb_port(name: &str) -> Option<DiscoveredWorker> {
 }
 
 fn probe_usb_port_at(name: &str, baud: u32) -> Option<DiscoveredWorker> {
-    let mut port = serialport::new(name, baud)
-        .timeout(Duration::from_millis(40))
-        .open()
-        .ok()?;
-    let _ = port.clear(serialport::ClearBuffer::All);
-    let _ = port.write_all(b"\r\ncmp ping\r\n");
-    let _ = port.flush();
-
+    let mut port = open_usb_serial(name, baud, Duration::from_millis(80)).ok()?;
     let mut buf = String::new();
-    let deadline = Instant::now() + Duration::from_millis(if baud > 115_200 { 450 } else { 700 });
-    let mut saw_pong = false;
-    let mut mac = String::new();
-    while Instant::now() < deadline {
-        drain(&mut *port, &mut buf);
-        if let Some(line) = buf.lines().find(|l| {
-            let t = l.trim();
-            t.starts_with("CMP ok") || t.eq_ignore_ascii_case("CMPACK ping")
-        }) {
-            saw_pong = true;
-            if let Some(rest) = line.trim().split_once("mac=") {
-                mac = normalize_mac(rest.1.trim());
-            }
-            break;
-        }
-        std::thread::sleep(Duration::from_millis(15));
+    // First try after soft open; if the UART bridge still reset the MCU, wait for boot.
+    let ping_ms = if baud > 115_200 { 1_200 } else { 2_000 };
+    let mut pong = wait_for_pong(port.as_mut(), &mut buf, ping_ms);
+    if pong.is_none() {
+        std::thread::sleep(Duration::from_millis(1_600));
+        let _ = port.clear(serialport::ClearBuffer::All);
+        buf.clear();
+        pong = wait_for_pong(port.as_mut(), &mut buf, ping_ms + 800);
     }
-    if !saw_pong {
-        return None;
+    let pong_line = pong?;
+    let mut mac = String::new();
+    if let Some(rest) = pong_line.split_once("mac=") {
+        mac = normalize_mac(rest.1.trim());
     }
 
     let mut fw = String::new();
     let mut mode = String::new();
     let _ = port.write_all(b"cmp config\r\n");
     let _ = port.flush();
-    let cfg_deadline = Instant::now() + Duration::from_millis(700);
+    let cfg_deadline = Instant::now() + Duration::from_millis(1_500);
     while Instant::now() < cfg_deadline {
-        drain(&mut *port, &mut buf);
-        if let Some(line) = buf.lines().rev().find(|l| l.trim().starts_with('{') || l.trim().starts_with("CMPCONFIG ")) {
+        drain(port.as_mut(), &mut buf);
+        if let Some(line) = buf
+            .lines()
+            .rev()
+            .find(|l| l.trim().starts_with('{') || l.trim().starts_with("CMPCONFIG "))
+        {
             let json = line
                 .trim()
                 .strip_prefix("CMPCONFIG ")
@@ -197,7 +235,7 @@ fn probe_usb_port_at(name: &str, baud: u32) -> Option<DiscoveredWorker> {
                 break;
             }
         }
-        std::thread::sleep(Duration::from_millis(15));
+        std::thread::sleep(Duration::from_millis(20));
     }
 
     let id = {
@@ -228,15 +266,42 @@ fn probe_usb_port_at(name: &str, baud: u32) -> Option<DiscoveredWorker> {
     })
 }
 
-/// Scan all serial ports for CYD boards. Skips ports listed in `skip`.
+/// Ports worth probing for CYD boards (USB first; skip Bluetooth).
+fn scan_candidate_ports() -> Vec<String> {
+    let mut infos = serialport::available_ports().unwrap_or_default();
+    infos.sort_by(|a, b| {
+        let rank = |p: &serialport::SerialPortInfo| match p.port_type {
+            SerialPortType::UsbPort(_) => 0,
+            SerialPortType::Unknown => 1,
+            SerialPortType::PciPort => 2,
+            SerialPortType::BluetoothPort => 9,
+        };
+        rank(a).cmp(&rank(b)).then_with(|| a.port_name.cmp(&b.port_name))
+    });
+    infos
+        .into_iter()
+        .filter(|p| !matches!(p.port_type, SerialPortType::BluetoothPort))
+        .map(|p| p.port_name)
+        .collect()
+}
+
+/// Scan serial ports for CYD boards. Skips ports listed in `skip`.
 pub fn scan_usb_workers(skip: &[String]) -> Vec<DiscoveredWorker> {
-    let ports = list_serial_ports();
+    scan_usb_workers_with_progress(skip, |_| {})
+}
+
+/// Like [`scan_usb_workers`], with a per-port progress callback (Event log).
+pub fn scan_usb_workers_with_progress(
+    skip: &[String],
+    mut on_port: impl FnMut(&str),
+) -> Vec<DiscoveredWorker> {
     let mut out = Vec::new();
-    for p in ports {
-        if skip.iter().any(|s| s == &p.name) {
+    for name in scan_candidate_ports() {
+        if skip.iter().any(|s| port_names_match(s, &name)) {
             continue;
         }
-        if let Some(w) = probe_usb_port(&p.name) {
+        on_port(&name);
+        if let Some(w) = probe_usb_port(&name) {
             out.push(w);
         }
     }

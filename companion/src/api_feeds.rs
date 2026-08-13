@@ -58,7 +58,7 @@ pub struct ApiPullOutcome {
     pub pulled_ms: u64,
 }
 
-const UA: &str = "Njordr-seas-CYD-miner/0.8.36";
+const UA: &str = "Njordr-seas-CYD-miner/0.8.37";
 const MAX_PREVIEW: usize = 3500;
 
 /// GET `url` and return status + preview (+ optional JSON-path summary).

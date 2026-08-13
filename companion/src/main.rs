@@ -28,7 +28,8 @@ use stratum::{
     WorkJob,
 };
 use workers::{
-    list_serial_ports, mac_worker_id, normalize_mac, scan_usb_workers, DiscoveredWorker,
+    list_serial_ports, mac_worker_id, normalize_mac, open_usb_serial, port_names_match,
+    scan_usb_workers_with_progress, DiscoveredWorker,
     LanDiscovery, PortChoice, WorkerKind, WorkerLive, LAN_DISCOVERY_PORT,
 };
 
@@ -3619,23 +3620,34 @@ fn mine_worker(cmd_rx: Receiver<NetCmd>, msg_tx: Sender<NetMsg>) {
     }
 
     fn open_board_at(name: &str, baud: u32) -> Result<(UsbBoard, bool), String> {
-        let mut port = serialport::new(name, baud)
-            .timeout(Duration::from_millis(8))
-            .open()
-            .map_err(|e| format!("USB open failed @ {baud}: {e}"))?;
-        let _ = port.clear(serialport::ClearBuffer::All);
+        let mut port = open_usb_serial(name, baud, Duration::from_millis(8))?;
         let mut rx = String::new();
-        let _ = port.write_all(b"\r\ncmp ping\r\n");
-        let _ = port.flush();
-        let deadline = Instant::now() + Duration::from_millis(if baud > 115_200 { 900 } else { 2500 });
+        let wait_ms = if baud > 115_200 { 1_400 } else { 2_800 };
         let mut saw = false;
-        while Instant::now() < deadline {
-            drain_serial(port.as_mut(), &mut rx);
-            if rx.lines().any(|l| l.trim().starts_with("CMP ok")) {
-                saw = true;
+        for attempt in 0..2u32 {
+            if attempt > 0 {
+                // UART bridge may still have reset the MCU on open — wait for boot.
+                thread::sleep(Duration::from_millis(1_600));
+                let _ = port.clear(serialport::ClearBuffer::All);
+                rx.clear();
+            }
+            let _ = port.write_all(b"\r\ncmp ping\r\n");
+            let _ = port.flush();
+            let deadline = Instant::now() + Duration::from_millis(wait_ms);
+            while Instant::now() < deadline {
+                drain_serial(port.as_mut(), &mut rx);
+                if rx.lines().any(|l| {
+                    let t = l.trim();
+                    t.starts_with("CMP ok") || t.eq_ignore_ascii_case("CMPACK ping")
+                }) {
+                    saw = true;
+                    break;
+                }
+                thread::sleep(Duration::from_millis(15));
+            }
+            if saw {
                 break;
             }
-            thread::sleep(Duration::from_millis(15));
         }
         if !saw && baud > 115_200 {
             return Err(format!("no pong @ {baud}"));
@@ -3736,19 +3748,44 @@ fn mine_worker(cmd_rx: Receiver<NetCmd>, msg_tx: Sender<NetMsg>) {
                     let _ = msg_tx.send(NetMsg::Ports(ports));
                 }
                 NetCmd::ScanWorkers => {
+                    // Probe on a side thread so mining / UI stay responsive while
+                    // each COM settles (ESP32 boot after open can take >1s).
                     let skip: Vec<String> = boards.iter().map(|b| b.name.clone()).collect();
-                    log_msg(
-                        &msg_tx,
-                        LogKind::Usb,
-                        format!("USB CYD scan (skipping {} open)…", skip.len()),
-                    );
-                    let found = scan_usb_workers(&skip);
-                    let _ = msg_tx.send(NetMsg::WorkersFound(found));
+                    let msg_tx_scan = msg_tx.clone();
+                    thread::spawn(move || {
+                        log_msg(
+                            &msg_tx_scan,
+                            LogKind::Usb,
+                            format!(
+                                "USB CYD scan (skipping {} open port(s))…",
+                                skip.len()
+                            ),
+                        );
+                        let found = scan_usb_workers_with_progress(&skip, |port| {
+                            log_msg(
+                                &msg_tx_scan,
+                                LogKind::Usb,
+                                format!("Probing {port}…"),
+                            );
+                        });
+                        log_msg(
+                            &msg_tx_scan,
+                            LogKind::Usb,
+                            format!(
+                                "USB probe finished · {} CYD board(s) answering",
+                                found.len()
+                            ),
+                        );
+                        let _ = msg_tx_scan.send(NetMsg::WorkersFound(found));
+                    });
                 }
                 NetCmd::OpenUsb(name) => {
                     // Do not wipe the whole fleet — reconnect/replace this port only
                     // so multi-board setups survive a primary Connect click.
-                    if let Some(idx) = boards.iter().position(|b| b.name == name) {
+                    if let Some(idx) = boards
+                        .iter()
+                        .position(|b| port_names_match(&b.name, &name))
+                    {
                         let mut old = boards.remove(idx);
                         let _ = usb_cmd(old.port.as_mut(), &mut old.rx, "cmp stop");
                     }
@@ -3790,7 +3827,7 @@ fn mine_worker(cmd_rx: Receiver<NetCmd>, msg_tx: Sender<NetMsg>) {
                     }
                 }
                 NetCmd::ConnectWorker(name) => {
-                    if boards.iter().any(|b| b.name == name) {
+                    if boards.iter().any(|b| port_names_match(&b.name, &name)) {
                         let _ = msg_tx.send(NetMsg::Action(Ok(format!(
                             "Worker {name} already linked"
                         ))));
@@ -3834,7 +3871,10 @@ fn mine_worker(cmd_rx: Receiver<NetCmd>, msg_tx: Sender<NetMsg>) {
                     }
                 }
                 NetCmd::DisconnectWorker(name) => {
-                    if let Some(idx) = boards.iter().position(|b| b.name == name) {
+                    if let Some(idx) = boards
+                        .iter()
+                        .position(|b| port_names_match(&b.name, &name))
+                    {
                         let mut b = boards.remove(idx);
                         let _ = usb_cmd(b.port.as_mut(), &mut b.rx, "cmp stop");
                         publish_live(&msg_tx, &boards);
