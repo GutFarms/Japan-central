@@ -5,7 +5,7 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
-use crate::flash_update::{normalize_fw_version, repo_file_urls, COMPANION_UA};
+use crate::flash_update::{normalize_fw_version, repo_version_urls, COMPANION_UA};
 
 #[derive(Clone, Debug)]
 pub struct AppRemoteInfo {
@@ -43,19 +43,31 @@ pub fn is_newer(remote: &str, local: &str) -> bool {
 }
 
 fn version_urls() -> Vec<String> {
-    let mut out = repo_file_urls("flash/downloads/VERSION.txt");
-    out.extend(repo_file_urls("flash/VERSION.txt"));
+    let mut out = repo_version_urls("flash/downloads/VERSION.txt");
+    out.extend(repo_version_urls("flash/VERSION.txt"));
+    // Hard pin to the shipping PR branch so older installs still see updates even
+    // when master has no VERSION.txt yet.
+    out.push(
+        "https://cdn.jsdelivr.net/gh/GutFarms/Japan-central@cursor/esp32-cyd-cpp-firmware-e801/flash/downloads/VERSION.txt"
+            .into(),
+    );
+    out.push(
+        "https://raw.githubusercontent.com/GutFarms/Japan-central/cursor/esp32-cyd-cpp-firmware-e801/flash/downloads/VERSION.txt"
+            .into(),
+    );
     out
 }
 
 fn app_zip_urls() -> Vec<String> {
-    let mut out = repo_file_urls("flash/downloads/CYD-Companion-App-Only.zip");
-    out.extend(repo_file_urls("flash/downloads/CYD-Miner-Portable.zip"));
+    let mut out = crate::flash_update::repo_file_urls("flash/downloads/CYD-Companion-App-Only.zip");
+    out.extend(crate::flash_update::repo_file_urls(
+        "flash/downloads/CYD-Miner-Portable.zip",
+    ));
     out
 }
 
 fn app_exe_urls() -> Vec<String> {
-    repo_file_urls("flash/downloads/cyd-companion.exe")
+    crate::flash_update::repo_file_urls("flash/downloads/cyd-companion.exe")
 }
 
 fn http_get_text(url: &str) -> Result<String, String> {
@@ -68,6 +80,8 @@ fn http_get_text(url: &str) -> Result<String, String> {
     if url.contains("api.github.com/repos/") && url.contains("/contents/") {
         req = req.set("Accept", "application/vnd.github.raw");
     }
+    // Discourage intermediary caches from serving a days-old VERSION.txt.
+    req = req.set("Cache-Control", "no-cache");
     let resp = req.call().map_err(|e| format!("http: {e}"))?;
     if !(200..300).contains(&resp.status()) {
         return Err(format!("http {} for {url}", resp.status()));
@@ -136,28 +150,42 @@ fn parse_version_text(txt: &str) -> Option<String> {
 pub fn check_app_update(progress: &dyn Fn(String)) -> Result<AppRemoteInfo, String> {
     let local = running_version();
     let mut last = String::new();
+    let mut best_remote: Option<String> = None;
+    let mut sources_ok = 0u32;
     progress(format!("Checking for Companion updates (running {local})…"));
+    // Probe every candidate and keep the *newest* version. Returning on the first
+    // hit used to accept a stale CDN copy and hide a real update.
     for url in version_urls() {
         match http_get_text(&url) {
             Ok(txt) => {
                 if let Some(remote) = parse_version_text(&txt) {
-                    let newer = is_newer(&remote, local);
-                    return Ok(AppRemoteInfo {
-                        version: remote.clone(),
-                        newer,
-                        detail: if newer {
-                            format!("Update available · {local} → {remote}")
-                        } else {
-                            format!("App is up to date · {local}")
-                        },
-                    });
+                    sources_ok += 1;
+                    progress(format!("Remote VERSION {remote}"));
+                    best_remote = match best_remote.take() {
+                        None => Some(remote),
+                        Some(prev) if is_newer(&remote, &prev) => Some(remote),
+                        Some(prev) => Some(prev),
+                    };
+                } else {
+                    last = "VERSION.txt had no usable version".into();
                 }
-                last = "VERSION.txt had no usable version".into();
             }
             Err(e) => last = e,
         }
     }
-    Err(format!("Could not check for app updates ({last})"))
+    let Some(remote) = best_remote else {
+        return Err(format!("Could not check for app updates ({last})"));
+    };
+    let newer = is_newer(&remote, local);
+    Ok(AppRemoteInfo {
+        version: remote.clone(),
+        newer,
+        detail: if newer {
+            format!("Update available · {local} → {remote} ({sources_ok} source(s))")
+        } else {
+            format!("App is up to date · {local} (remote {remote})")
+        },
+    })
 }
 
 /// Staging folder under the install dir — updater bat promotes this after a clean sweep.
@@ -495,6 +523,7 @@ mod tests {
         assert!(!is_newer("0.8.21-sha256", "0.8.21"));
         assert!(!is_newer("0.8.3", "0.8.21"));
         assert!(is_newer("v0.9.0", "0.8.21"));
+        assert!(is_newer("0.8.61", "0.8.60"));
     }
 
     #[test]

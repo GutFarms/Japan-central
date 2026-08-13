@@ -371,7 +371,7 @@ fn extract_merged_from_zip(
     })
 }
 
-pub const COMPANION_UA: &str = "Njordr-seas-CYD-miner/0.8.60";
+pub const COMPANION_UA: &str = "Njordr-seas-CYD-miner/0.8.61";
 const ESPFLASH_VERSION: &str = "4.5.0";
 pub const REPO_OWNER: &str = "GutFarms";
 pub const REPO_NAME: &str = "Japan-central";
@@ -449,9 +449,42 @@ pub fn repo_file_urls(path: &str) -> Vec<String> {
             out.push(format!(
                 "https://raw.githubusercontent.com/{REPO_OWNER}/{REPO_NAME}/{sha}/{path}"
             ));
+            // jsDelivr is often fresher than raw branch CDN when the API is rate-limited.
+            out.push(format!(
+                "https://cdn.jsdelivr.net/gh/{REPO_OWNER}/{REPO_NAME}@{sha}/{path}"
+            ));
         }
         out.push(format!(
             "https://raw.githubusercontent.com/{REPO_OWNER}/{REPO_NAME}/{r}/{path}"
+        ));
+        // Branch refs may contain `/` — do not percent-encode for jsDelivr.
+        out.push(format!(
+            "https://cdn.jsdelivr.net/gh/{REPO_OWNER}/{REPO_NAME}@{r}/{path}"
+        ));
+    }
+    out
+}
+
+/// VERSION.txt only — skip branch-name raw CDN (can lag and falsely report "up to date").
+pub fn repo_version_urls(path: &str) -> Vec<String> {
+    let path = path.trim_start_matches('/');
+    let mut out = Vec::new();
+    for r in REPO_REFS {
+        let enc = urlencode_ref(r);
+        out.push(format!(
+            "https://api.github.com/repos/{REPO_OWNER}/{REPO_NAME}/contents/{path}?ref={enc}"
+        ));
+        if let Some(sha) = resolve_ref_commit(r) {
+            out.push(format!(
+                "https://raw.githubusercontent.com/{REPO_OWNER}/{REPO_NAME}/{sha}/{path}"
+            ));
+            out.push(format!(
+                "https://cdn.jsdelivr.net/gh/{REPO_OWNER}/{REPO_NAME}@{sha}/{path}"
+            ));
+        }
+        // Branch tip via jsDelivr (not GitHub branch raw CDN).
+        out.push(format!(
+            "https://cdn.jsdelivr.net/gh/{REPO_OWNER}/{REPO_NAME}@{r}/{path}"
         ));
     }
     out
@@ -1111,9 +1144,9 @@ mod tests {
             Some(false)
         );
         assert_eq!(
-            update_needed("0.8.56-sha256-d0", "0.8.60-sha256"),
+            update_needed("0.8.56-sha256-d0", "0.8.61-sha256"),
             Some(true)
         );
-        assert_eq!(update_needed("", "0.8.60-sha256"), None);
+        assert_eq!(update_needed("", "0.8.61-sha256"), None);
     }
 }
