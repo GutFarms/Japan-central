@@ -127,12 +127,20 @@ pub fn port_names_match(a: &str, b: &str) -> bool {
     normalize_port_name(a) == normalize_port_name(b)
 }
 
+/// True when `mac` is a real 6-byte identity (not empty / `unknown`).
+pub fn mac_is_stable(mac: &str) -> bool {
+    let hex: String = normalize_mac(mac)
+        .chars()
+        .filter(|c| c.is_ascii_hexdigit())
+        .collect();
+    hex.len() == 12
+}
+
 pub fn mac_worker_id(mac: &str) -> String {
-    let m = normalize_mac(mac);
-    if m.is_empty() || m == "unknown" {
+    if !mac_is_stable(mac) {
         String::new()
     } else {
-        format!("usb:mac:{m}")
+        format!("usb:mac:{}", normalize_mac(mac))
     }
 }
 
@@ -280,7 +288,13 @@ fn scan_candidate_ports() -> Vec<String> {
     });
     infos
         .into_iter()
-        .filter(|p| !matches!(p.port_type, SerialPortType::BluetoothPort))
+        .filter(|p| {
+            // Skip Bluetooth/PCI — motherboard COM1 often hangs and is never a CYD.
+            matches!(
+                p.port_type,
+                SerialPortType::UsbPort(_) | SerialPortType::Unknown
+            )
+        })
         .map(|p| p.port_name)
         .collect()
 }

@@ -28,7 +28,7 @@ use stratum::{
     WorkJob,
 };
 use workers::{
-    list_serial_ports, mac_worker_id, normalize_mac, open_usb_serial, port_names_match,
+    list_serial_ports, mac_is_stable, mac_worker_id, normalize_mac, open_usb_serial, port_names_match,
     scan_usb_workers_with_progress, DiscoveredWorker,
     LanDiscovery, PortChoice, WorkerKind, WorkerLive, LAN_DISCOVERY_PORT,
 };
@@ -888,14 +888,15 @@ impl CompanionApp {
 
     fn merge_discovered(&mut self, worker: DiscoveredWorker) {
         // Prefer stable MAC identity over COM path when matching USB boards.
+        // Never merge on mac=unknown — that collapsed distinct boards into one.
         if let Some(existing) = self.discovered_workers.iter_mut().find(|w| {
             w.id == worker.id
-                || (!worker.mac.is_empty()
-                    && !w.mac.is_empty()
+                || (mac_is_stable(&worker.mac)
+                    && mac_is_stable(&w.mac)
                     && normalize_mac(&w.mac) == normalize_mac(&worker.mac))
                 || (w.kind == WorkerKind::Usb
                     && worker.kind == WorkerKind::Usb
-                    && w.endpoint == worker.endpoint)
+                    && port_names_match(&w.endpoint, &worker.endpoint))
         }) {
             *existing = worker;
         } else {
@@ -905,15 +906,33 @@ impl CompanionApp {
             .sort_by(|a, b| a.mac.cmp(&b.mac).then(a.endpoint.cmp(&b.endpoint)));
     }
 
-    fn connect_usb(&mut self) {
+    fn worker_already_linked(&self, endpoint: &str) -> bool {
+        self.connected_workers
+            .iter()
+            .any(|c| port_names_match(&c.endpoint, endpoint))
+    }
+
+    fn connect_or_add_usb(&mut self) {
         self.last_error.clear();
         if self.com_port.is_empty() {
             self.last_error = "Select a COM / serial port.".into();
             return;
         }
-        let _ = self.cmd_tx.send(NetCmd::OpenUsb(self.com_port.clone()));
-        self.last_ok = format!("Opening {}…", self.com_port);
-        self.push_log(LogKind::Usb, format!("Opening {}", self.com_port));
+        if self.worker_already_linked(&self.com_port) {
+            self.last_ok = format!("{} already linked", self.com_port);
+            return;
+        }
+        if self.usb_open {
+            let _ = self
+                .cmd_tx
+                .send(NetCmd::ConnectWorker(self.com_port.clone()));
+            self.last_ok = format!("Adding board {}…", self.com_port);
+            self.push_log(LogKind::Usb, format!("Adding worker {}", self.com_port));
+        } else {
+            let _ = self.cmd_tx.send(NetCmd::OpenUsb(self.com_port.clone()));
+            self.last_ok = format!("Opening {}…", self.com_port);
+            self.push_log(LogKind::Usb, format!("Opening {}", self.com_port));
+        }
     }
 
     fn start_mine(&mut self) {
@@ -1356,7 +1375,7 @@ impl CompanionApp {
                                 self.clear_hash_display();
                                 self.push_log(LogKind::Usb, "Disconnect requested".into());
                             } else {
-                                self.connect_usb();
+                                self.connect_or_add_usb();
                             }
                         }
                         ui.add_space(8.0);
@@ -1715,24 +1734,24 @@ impl CompanionApp {
                 if soft_button(ui, "Refresh", 98.0).clicked() {
                     let _ = self.cmd_tx.send(NetCmd::ListPorts);
                 }
-                if soft_button(
-                    ui,
-                    if self.usb_open { "Disconnect" } else { "Connect" },
-                    112.0,
-                )
-                .clicked()
-                {
-                    if self.usb_open {
+                let selected_linked = self.worker_already_linked(&self.com_port);
+                if self.usb_open {
+                    if !selected_linked && !self.com_port.is_empty() {
+                        if soft_button(ui, "Add board", 112.0).clicked() {
+                            self.connect_or_add_usb();
+                        }
+                    }
+                    if soft_button(ui, "Disconnect", 112.0).clicked() {
                         let _ = self.cmd_tx.send(NetCmd::CloseUsb);
                         self.usb_open = false;
                         self.mining = false;
                         self.session_started = None;
                         self.connected_workers.clear();
                         self.clear_hash_display();
-                        self.push_log(LogKind::Usb, "Disconnect requested".into());
-                    } else {
-                        self.connect_usb();
+                        self.push_log(LogKind::Usb, "Disconnect all requested".into());
                     }
+                } else if soft_button(ui, "Connect", 112.0).clicked() {
+                    self.connect_or_add_usb();
                 }
             });
             ui.add_space(12.0);
@@ -1789,7 +1808,7 @@ impl CompanionApp {
         );
         ui.label(
                 RichText::new(format!(
-                    "Scan every COM/serial port for companion firmwares (boards identified by MAC). LAN peers use UDP {LAN_DISCOVERY_PORT}."
+                    "Find CYD boards on every COM port and auto-link them (MAC identity). Already-open ports stay linked. LAN peers use UDP {LAN_DISCOVERY_PORT}."
                 ))
                 .color(C_MUTED)
                 .size(12.0),
@@ -1866,10 +1885,7 @@ impl CompanionApp {
             ui.add_space(8.0);
             ui.label(RichText::new("USB CYD boards").color(C_MUTED).size(12.0));
             for w in usb_found {
-                let already = self
-                    .connected_workers
-                    .iter()
-                    .any(|c| c.endpoint == w.endpoint);
+                let already = self.worker_already_linked(&w.endpoint);
                 ui.horizontal(|ui| {
                     ui.label(
                         RichText::new({
@@ -2314,7 +2330,7 @@ impl App for CompanionApp {
                         && self.ports.iter().any(|x| x.name == self.com_port)
                     {
                         self.auto_connect_attempted = true;
-                        self.connect_usb();
+                        self.connect_or_add_usb();
                     }
                 }
                 NetMsg::Action(Ok(s)) => {
@@ -2559,14 +2575,46 @@ impl App for CompanionApp {
                 }
                 NetMsg::WorkersFound(found) => {
                     self.worker_scan_busy = false;
+                    let mut auto_link: Vec<String> = Vec::new();
                     for w in found {
+                        if w.kind == WorkerKind::Usb && !self.worker_already_linked(&w.endpoint) {
+                            auto_link.push(w.endpoint.clone());
+                        }
                         self.merge_discovered(w);
+                    }
+                    // Always surface already-linked boards in the found list too.
+                    for live in self.connected_workers.clone() {
+                        self.merge_discovered(DiscoveredWorker {
+                            id: {
+                                let mid = mac_worker_id(&live.mac);
+                                if mid.is_empty() {
+                                    format!("usb:{}", live.endpoint)
+                                } else {
+                                    mid
+                                }
+                            },
+                            kind: WorkerKind::Usb,
+                            endpoint: live.endpoint.clone(),
+                            mac: live.mac.clone(),
+                            fw: live.fw.clone(),
+                            detail: format!("linked · {}", format_hashrate(live.hashrate_hs)),
+                            host: "local".into(),
+                            last_seen_ms: 0,
+                        });
+                    }
+                    for endpoint in auto_link {
+                        self.push_log(
+                            LogKind::Usb,
+                            format!("Auto-linking CYD worker {endpoint}"),
+                        );
+                        let _ = self.cmd_tx.send(NetCmd::ConnectWorker(endpoint));
                     }
                     self.push_log(
                         LogKind::Usb,
                         format!(
-                            "Worker scan done · {} USB/LAN entries",
-                            self.discovered_workers.len()
+                            "Worker scan done · {} USB/LAN entries · {} linked",
+                            self.discovered_workers.len(),
+                            self.connected_workers.len()
                         ),
                     );
                 }
@@ -2727,7 +2775,7 @@ impl App for CompanionApp {
                                 .clicked()
                                     && !self.usb_open
                                 {
-                                    self.connect_usb();
+                                    self.connect_or_add_usb();
                                 }
                             });
                             ui.label(
@@ -3838,6 +3886,23 @@ fn mine_worker(cmd_rx: Receiver<NetCmd>, msg_tx: Sender<NetMsg>) {
                     match open_board(&name) {
                         Ok((mut board, saw)) => {
                             configure_board(&mut board, &msg_tx);
+                            // Same eFuse MAC already linked on another COM — replace that slot.
+                            if mac_is_stable(&board.mac) {
+                                if let Some(idx) = boards.iter().position(|b| {
+                                    mac_is_stable(&b.mac)
+                                        && normalize_mac(&b.mac) == normalize_mac(&board.mac)
+                                }) {
+                                    let old = boards.remove(idx);
+                                    log_msg(
+                                        &msg_tx,
+                                        LogKind::Usb,
+                                        format!(
+                                            "Replaced {} with {} (same MAC {})",
+                                            old.name, name, board.mac
+                                        ),
+                                    );
+                                }
+                            }
                             if mining {
                                 let mut legacy = board.legacy_job;
                                 let _ = usb_cmd(
@@ -3866,7 +3931,9 @@ fn mine_worker(cmd_rx: Receiver<NetCmd>, msg_tx: Sender<NetMsg>) {
                             })));
                         }
                         Err(e) => {
-                            let _ = msg_tx.send(NetMsg::Action(Err(e)));
+                            let _ = msg_tx.send(NetMsg::Action(Err(format!(
+                                "Link {name} failed: {e}"
+                            ))));
                         }
                     }
                 }
