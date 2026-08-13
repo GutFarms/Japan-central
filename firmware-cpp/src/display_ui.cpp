@@ -37,7 +37,7 @@ void DisplayUi::showSplash() {
   tft_.setTextColor(cLime_, cBg_);
   tft_.drawString("Njordr", 24, 48, 4);
   tft_.setTextColor(cMuted_, cBg_);
-  tft_.drawString("seas CYD miner", 24, 100, 2);
+  tft_.drawString("Seas' CYD miner", 24, 100, 2);
   tft_.setTextColor(cText_, cBg_);
   tft_.drawString("SHA-256", 24, 132, 4);
   tft_.setTextColor(cMuted_, cBg_);
@@ -62,7 +62,7 @@ void DisplayUi::showWaitingCompanion() {
   tft_.setTextColor(cLime_, cBg_);
   tft_.drawString("Njordr", 24, 20, 4);
   tft_.setTextColor(cMuted_, cBg_);
-  tft_.drawString("seas CYD miner", 24, 68, 2);
+  tft_.drawString("Seas' CYD miner", 24, 68, 2);
   tft_.setTextColor(cText_, cBg_);
   tft_.drawString("Waiting for USB", 24, 100, 2);
   tft_.setTextColor(cMuted_, cBg_);

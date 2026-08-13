@@ -427,7 +427,7 @@ impl StratumClient {
             return Ok(());
         }
 
-        let id = v.get("id").and_then(|i| i.as_u64()).unwrap_or(0);
+        let id = json_rpc_id(&v);
         let has_error = !v.get("error").map(|e| e.is_null()).unwrap_or(true);
         if id == self.subscribe_id && !self.subscribed {
             if has_error {
@@ -461,7 +461,7 @@ impl StratumClient {
             return Ok(());
         }
 
-        if let Some(ok) = v.get("result").and_then(|r| r.as_bool()) {
+        if let Some(ok) = result_as_bool(v.get("result")) {
             let ok = ok && !has_error;
             if id == self.authorize_id {
                 if ok {
@@ -490,6 +490,7 @@ impl StratumClient {
                     let why = v
                         .get("error")
                         .map(|e| e.to_string())
+                        .filter(|s| s != "null")
                         .unwrap_or_else(|| "false".into());
                     self.record_share_outcome(false, id, why, latency_ms, nonce, job_id);
                 }
@@ -528,10 +529,10 @@ impl StratumClient {
         self.pending_share_meta.clear();
         self.pending_job = None;
         self.post_auth_job = false;
-        // Swallow early pool rejects while the first clean job settles.
-        self.reject_grace_until = Some(Instant::now() + Duration::from_secs(20));
+        // Swallow only the first few seconds of pool rejects while the first clean job settles.
+        self.reject_grace_until = Some(Instant::now() + Duration::from_secs(5));
         self.phase = "idle".into();
-        self.push_recent("← authorized (share counters reset; reject grace 20s)".into());
+        self.push_recent("← authorized (share counters reset; reject grace 5s)".into());
         // If notify already arrived during subscribe, release work now.
         if !self.job_id.is_empty() {
             self.emit_job_from_fields();
@@ -593,11 +594,20 @@ impl StratumClient {
             return;
         }
 
-        // Drop connect-warmup rejects from counters / UI / board stats.
+        // During grace still surface rejects in the Event log / UI so Accept/Reject
+        // are never stuck silent — tag detail as warmup.
         if !self.post_auth_job || self.in_reject_grace() {
-            self.push_recent(format!(
-                "← share REJECTED (ignored warmup) id={id} {detail}"
-            ));
+            let detail = format!("warmup · {detail}");
+            self.push_recent(format!("← share REJECTED (warmup) id={id} {detail}"));
+            self.rejected += 1;
+            self.share_events.push(ShareOutcome {
+                accepted: false,
+                id,
+                detail,
+                latency_ms,
+                nonce,
+                job_id,
+            });
             return;
         }
 
@@ -672,6 +682,28 @@ impl StratumClient {
             extranonce2_hex: self.active_en2_hex.clone(),
             ntime_hex: self.active_ntime_hex.clone(),
         })
+    }
+}
+
+fn json_rpc_id(v: &Value) -> u64 {
+    match v.get("id") {
+        Some(Value::Number(n)) => n.as_u64().unwrap_or(0),
+        Some(Value::String(s)) => s.parse().unwrap_or(0),
+        _ => 0,
+    }
+}
+
+fn result_as_bool(result: Option<&Value>) -> Option<bool> {
+    match result {
+        Some(Value::Bool(b)) => Some(*b),
+        Some(Value::String(s)) => match s.to_ascii_lowercase().as_str() {
+            "true" | "1" | "ok" | "accepted" => Some(true),
+            "false" | "0" | "rejected" => Some(false),
+            _ => None,
+        },
+        Some(Value::Null) => Some(false),
+        Some(Value::Number(n)) => Some(n.as_u64().unwrap_or(0) != 0),
+        _ => None,
     }
 }
 

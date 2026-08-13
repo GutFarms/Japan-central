@@ -1,8 +1,9 @@
 #include "companion.hpp"
+#include "sha256_hw.hpp"
 #include <cstring>
 #include <esp_system.h>
 
-extern "C" float cyd_run_bench(uint32_t n);
+extern "C" float cyd_run_bench(uint32_t n, bool tune);
 
 void CompanionLink::begin(uint32_t baud) {
   Serial.setRxBufferSize(16384);
@@ -217,18 +218,41 @@ void CompanionLink::handleLine(const String& line, AppConfig& cfg, const MinerSn
     return;
   }
   if (verb == "bench") {
-    uint32_t n = 8;
+    uint32_t n = 100000;
+    bool tune = false;
     if (args.length()) {
-      int eq = args.indexOf('=');
-      String val = (eq < 0) ? args : args.substring(eq + 1);
-      int v = val.toInt();
-      if (v > 0) n = (uint32_t)v;
+      int start = 0;
+      while (start < (int)args.length()) {
+        int amp = args.indexOf('&', start);
+        String pair = (amp < 0) ? args.substring(start) : args.substring(start, amp);
+        int eq = pair.indexOf('=');
+        String key = (eq < 0) ? pair : pair.substring(0, eq);
+        String val = (eq < 0) ? "" : pair.substring(eq + 1);
+        key.toLowerCase();
+        if (key == "n" || key == "hashes") {
+          int v = val.toInt();
+          if (v > 0) n = (uint32_t)v;
+        } else if (key == "tune" || key == "opt" || key == "best") {
+          tune = (val.length() == 0 || val == "1" || val.equalsIgnoreCase("true"));
+        }
+        if (amp < 0) break;
+        start = amp + 1;
+      }
+      // Legacy: `cmp bench n=8` or bare number
+      if (args.indexOf('=') < 0) {
+        int v = args.toInt();
+        if (v > 0) n = (uint32_t)v;
+      }
     }
-    float hs = cyd_run_bench(n);
-    char line[96];
-    snprintf(line, sizeof(line), "CMPBENCH hashes=%u hs=%.4f khs=%.6f", (unsigned)n, hs,
-             hs / 1000.0f);
+    if (n < 1000) n = 1000;
+    if (n > 400000) n = 400000;
+    float hs = cyd_run_bench(n, tune);
+    char line[160];
+    snprintf(line, sizeof(line),
+             "CMPBENCH hashes=%u hs=%.0f khs=%.3f path=%s tune=%u", (unsigned)n, hs, hs / 1000.0f,
+             cyd_sha_hw::mode_label(), tune ? 1u : 0u);
     out_->println(line);
+    out_->flush();
     return;
   }
   if (verb == "stats") {
@@ -355,7 +379,7 @@ void CompanionLink::replyConfig(const AppConfig& cfg, const MinerSnapshot& snap)
   copyJsonSafe(wap, sizeof(wap), snap.wifiAp.c_str(), 32);
   char buf[320];
   snprintf(buf, sizeof(buf),
-           "{\"cpu_mhz\":%u,\"hash_focus\":true,\"fw\":\"0.8.42-sha256\",\"mode\":\"usb-wifi-sha256\","
+           "{\"cpu_mhz\":%u,\"hash_focus\":true,\"fw\":\"0.8.43-sha256\",\"mode\":\"usb-wifi-sha256\","
            "\"configured\":true,\"mac\":\"%s\",\"wifi_en\":%s,\"wifi_ssid\":\"%s\","
            "\"wifi_mode\":\"%s\",\"wifi_ip\":\"%s\",\"wifi_ap\":\"%s\",\"wifi_tcp\":%u}",
            (unsigned)cfg.cpuMhz, mac, cfg.wifiEnabled ? "true" : "false", ssid, wmode, wip, wap,

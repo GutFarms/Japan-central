@@ -32,6 +32,8 @@ void disable_midstate();
 
 // Tune path on-device (correctness + timed micro-bench). Call once after acquire.
 void calibrate(const uint32_t hdr_be[20], const uint32_t mid_be[8]);
+// Clear calibration so the next setJob/bench re-times HW/HW+/HW-SW paths.
+void force_recalibrate();
 
 bool hash_nonce(const uint32_t hdr_be[20], const uint32_t mid_be[8], uint32_t nonce_le,
                 uint32_t out_be[8], uint32_t msb_limit);

@@ -491,6 +491,12 @@ void calibrate(const uint32_t hdr_be[20], const uint32_t mid_be[8]) {
   g_calibrated = true;
 }
 
+void force_recalibrate() {
+  g_calibrated = false;
+  g_mid_ok = false;
+  g_mode = Mode::FullHw;
+}
+
 IRAM_ATTR bool hash_nonce(const uint32_t hdr_be[20], const uint32_t mid_be[8], uint32_t nonce_le,
                           uint32_t out_be[8], uint32_t msb_limit) {
   const uint32_t w16 = hdr_be[16];
@@ -586,6 +592,7 @@ const char* mode_label() { return "SW"; }
 bool midstate_ok() { return false; }
 void disable_midstate() {}
 void calibrate(const uint32_t*, const uint32_t*) {}
+void force_recalibrate() {}
 bool hash_nonce(const uint32_t*, const uint32_t*, uint32_t, uint32_t*, uint32_t) { return false; }
 size_t mine(const uint32_t*, const uint32_t*, uint32_t*, size_t, uint32_t, uint32_t, bool*,
             uint32_t*, uint32_t*) {

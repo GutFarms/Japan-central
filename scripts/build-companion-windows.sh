@@ -6,7 +6,7 @@ cd "$ROOT/companion"
 
 VER="$(grep -m1 '^version' Cargo.toml | sed -E 's/.*"([^"]+)".*/\1/')"
 
-echo "==> Building egui Njörðr seas CYD miner (MinGW) v${VER}..."
+echo "==> Building egui Njörðr Seas' CYD miner (MinGW) v${VER}..."
 rustup target add x86_64-pc-windows-gnu >/dev/null
 cargo build --release --target x86_64-pc-windows-gnu
 
@@ -131,7 +131,7 @@ fi
 
 # Keep a short download index next to the binaries.
 cat > flash/downloads/README.md <<EOF
-# Njörðr seas CYD miner downloads (\`${VER}\`)
+# Njörðr Seas' CYD miner downloads (\`${VER}\`)
 
 | File | What it is |
 |------|------------|

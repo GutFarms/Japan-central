@@ -1279,16 +1279,16 @@ impl CompanionApp {
                     ui.vertical(|ui| {
                         ui.set_min_width((ui.available_width() * 0.58).clamp(420.0, 720.0));
                         ui.horizontal(|ui| {
-                            brand_logo(ui, 56.0);
-                            ui.add_space(10.0);
+                            brand_logo(ui, 168.0);
+                            ui.add_space(14.0);
                             ui.vertical(|ui| {
                                 ui.label(
-                                    RichText::new("Njörðr seas")
+                                    RichText::new("Njörðr Seas'")
                                         .color(C_LIME)
-                                        .font(display_font(28.0)),
+                                        .font(display_font(32.0)),
                                 );
                                 ui.label(
-                                    RichText::new("CYD miner · USB SHA-256 · ~1020 kH/s target")
+                                    RichText::new("CYD miner · USB/Wi‑Fi SHA-256 · ~1020 kH/s target")
                                         .color(C_TEXT)
                                         .font(display_font(16.0)),
                                 );
@@ -1455,9 +1455,12 @@ impl CompanionApp {
             );
             ui.add_space(12.0);
             ui.horizontal_wrapped(|ui| {
-                if soft_button(ui, "Bench board", 140.0).clicked() {
+                if soft_button(ui, "Bench boards", 140.0).clicked() {
                     let _ = self.cmd_tx.send(NetCmd::Bench);
-                    self.push_log(LogKind::Usb, "Bench requested".into());
+                    self.push_log(
+                        LogKind::Usb,
+                        "Bench+tune all boards for max hashrate…".into(),
+                    );
                 }
                 let fetch_label = if self.fetch_busy {
                     "Fetching FW…"
@@ -1993,6 +1996,7 @@ impl CompanionApp {
             } else if self.session_started.is_some() {
                 (self.session_accepted, self.session_rejected)
             } else {
+                // Authorized but session not stamped — still show live pool counters.
                 (self.accepted, self.rejected)
             };
             // Compact chips — large metric tiles overflow short viewports.
@@ -2540,11 +2544,15 @@ impl App for CompanionApp {
                     }
                 }
                 NetMsg::Share(ev) => {
-                    // Stratum only emits post-authorize, post-warmup outcomes.
+                    if self.session_started.is_none() && self.mining {
+                        self.session_started = Some(Instant::now());
+                    }
                     if ev.accepted {
                         self.session_accepted = self.session_accepted.saturating_add(1);
+                        self.accepted = self.accepted.saturating_add(1);
                     } else {
                         self.session_rejected = self.session_rejected.saturating_add(1);
+                        self.rejected = self.rejected.saturating_add(1);
                     }
                     if let Some(ms) = ev.latency_ms {
                         self.last_share_latency_ms = Some(ms);
@@ -4496,18 +4504,64 @@ fn mine_worker(cmd_rx: Receiver<NetCmd>, msg_tx: Sender<NetMsg>) {
                     }
                 }
                 NetCmd::Bench => {
-                    if let Some(b) = boards.first_mut() {
-                        match usb_cmd(&mut b.port, &mut b.rx, "cmp bench n=8") {
+                    if boards.is_empty() {
+                        let _ = msg_tx.send(NetMsg::Action(Err("No boards linked".into())));
+                        continue;
+                    }
+                    let was_mining = mining;
+                    // Pause pool hashing so each board can retune HW paths cleanly.
+                    if was_mining {
+                        for b in boards.iter_mut() {
+                            let _ = usb_cmd(&mut b.port, &mut b.rx, "cmp stop");
+                        }
+                    }
+                    let mut lines = Vec::new();
+                    for b in boards.iter_mut() {
+                        log_msg(
+                            &msg_tx,
+                            LogKind::Usb,
+                            format!("Tuning {} for max hashrate…", b.name),
+                        );
+                        match usb_cmd(&mut b.port, &mut b.rx, "cmp bench tune=1&n=120000") {
                             Ok(line) => {
-                                let _ = msg_tx.send(NetMsg::Action(Ok(line)));
+                                lines.push(format!("{} → {line}", b.name));
+                                log_msg(&msg_tx, LogKind::Usb, format!("{} bench OK: {line}", b.name));
                             }
                             Err(e) => {
-                                let _ = msg_tx.send(NetMsg::Action(Err(e)));
+                                lines.push(format!("{} → ERR {e}", b.name));
+                                log_msg(
+                                    &msg_tx,
+                                    LogKind::Warn,
+                                    format!("{} bench failed: {e}", b.name),
+                                );
                             }
                         }
-                    } else {
-                        let _ = msg_tx.send(NetMsg::Action(Err("USB not open".into())));
                     }
+                    if was_mining {
+                        // Resume with a warmup job so calibrated path stays hot.
+                        for b in boards.iter_mut() {
+                            let mut legacy = b.legacy_job;
+                            let _ = usb_cmd(
+                                &mut b.port,
+                                &mut b.rx,
+                                "cmp stats accepted=0&rejected=0",
+                            );
+                            let _ = usb_push_job(
+                                &mut b.port,
+                                &mut b.rx,
+                                &warmup_job(),
+                                &mut legacy,
+                                &msg_tx,
+                            );
+                            b.legacy_job = legacy;
+                        }
+                    }
+                    let summary = if lines.is_empty() {
+                        "Bench done".into()
+                    } else {
+                        lines.join(" · ")
+                    };
+                    let _ = msg_tx.send(NetMsg::Action(Ok(summary)));
                 }
                 NetCmd::UsbRaw(cmd) => {
                     if let Some(b) = boards.first_mut() {
@@ -4950,10 +5004,14 @@ fn usb_cmd(port: &mut BoardIo, buf: &mut String, cmd: &str) -> Result<String, St
     let mut last_err = String::new();
     // Bigger writes + single flush cut job-push latency a lot vs per-chunk sleeps.
     let (wait_ms, retries, chunk, gap_ms) = if cmd.contains("bench") {
-        (60_000u64, 2usize, 128usize, 1u64)
+        // Full HW retune + 120k hashes can take >30s on classic ESP32.
+        (120_000u64, 2usize, 128usize, 1u64)
     } else if cmd.contains("status") {
         // Board may be mid mineB batch; firmware yields on RX, but allow headroom.
         (2_800u64, 3usize, 256usize, 0u64)
+    } else if cmd.contains("stats") {
+        // Never stall the mine loop waiting on LCD stats ACKs.
+        (450u64, 1usize, 256usize, 0u64)
     } else if cmd.contains(" jh") || cmd.contains(" jt") || cmd.contains(" ja") {
         (3_000u64, 3usize, 256usize, 0u64)
     } else if cmd.contains(" job ") {

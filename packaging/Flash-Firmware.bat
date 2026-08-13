@@ -61,6 +61,6 @@ exit /b 1
 
 :DONE
 echo.
-echo Flash OK. Unplug/replug without holding BOOT, then open Njörðr seas CYD miner.
+echo Flash OK. Unplug/replug without holding BOOT, then open Njörðr Seas' CYD miner.
 pause
 exit /b 0

@@ -471,12 +471,29 @@ void loop() {
   delay(50);
 }
 
-extern "C" float cyd_run_bench(uint32_t n) {
+extern "C" float cyd_run_bench(uint32_t n, bool tune) {
   bool was = g_mining;
   g_mining = false;
-  delay(8);
-  (void)n;
-  g_lastBenchHs = runBench(100000);
+  delay(12);
+  if (tune) {
+    cyd_sha_hw::force_recalibrate();
+  }
+  // Warm job so calibrate() can pick the fastest correct HW path.
+  uint8_t hdr[80];
+  memset(hdr, 0xA5, 80);
+  uint8_t tgt[32];
+  memset(tgt, 0xFF, 32);
+  g_minerA.setJob(hdr, tgt, 1);
+  if (tune) {
+    // Second setJob after force_recalibrate still skips if calibrated mid-setJob —
+    // calibrate runs inside setJob; force again then setJob once more for a clean timing.
+    cyd_sha_hw::force_recalibrate();
+    g_minerA.setJob(hdr, tgt, 2);
+  }
+  uint32_t hashes = n;
+  if (hashes < 20000) hashes = 20000;
+  if (hashes > 400000) hashes = 400000;
+  g_lastBenchHs = runBench(hashes);
   g_mining = was;
   if (g_jobLoaded) {
     g_minerA.setJob(g_job.header, g_job.target, g_minerA.nonce());

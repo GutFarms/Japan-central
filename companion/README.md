@@ -1,4 +1,4 @@
-# Njörðr seas CYD miner
+# Njörðr Seas' CYD miner
 
 USB SHA-256 Bitcoin mining control for the ESP32-2432S028.
 

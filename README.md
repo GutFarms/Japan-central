@@ -1,6 +1,6 @@
 # Japan-central — CYD USB SHA-256 miner
 
-ESP32-2432S028 board **hashes Bitcoin SHA-256 only**. **Njörðr seas CYD miner** on Windows owns the pool connection; work and shares move over **USB-C**. No board Wi‑Fi.
+ESP32-2432S028 board **hashes Bitcoin SHA-256 only**. **Njörðr Seas' CYD miner** on Windows owns the pool connection; work and shares move over **USB-C**. No board Wi‑Fi.
 
 ## Pieces
 
