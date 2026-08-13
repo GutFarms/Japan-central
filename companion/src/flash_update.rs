@@ -74,6 +74,19 @@ pub fn normalize_fw_version(raw: &str) -> String {
         .to_ascii_lowercase()
 }
 
+/// Compare key for board vs kit: strip flavor suffixes so D0 boards match kit VERSION.txt.
+/// `0.8.56-sha256-d0` and `0.8.56-sha256` are the same release line.
+pub fn fw_version_key(raw: &str) -> String {
+    let mut v = normalize_fw_version(raw);
+    for suffix in ["-d0", "_d0"] {
+        if let Some(stripped) = v.strip_suffix(suffix) {
+            v = stripped.to_string();
+            break;
+        }
+    }
+    v
+}
+
 pub fn read_nearby_fw_version(bin_path: &Path) -> String {
     if let Some(dir) = bin_path.parent() {
         for name in ["VERSION.txt", "version.txt", "FW_VERSION.txt"] {
@@ -99,8 +112,8 @@ pub fn read_nearby_fw_version(bin_path: &Path) -> String {
 
 /// Compare board `cmp config` fw string vs bundled image version.
 pub fn update_needed(board_fw: &str, bundled: &str) -> Option<bool> {
-    let a = normalize_fw_version(board_fw);
-    let b = normalize_fw_version(bundled);
+    let a = fw_version_key(board_fw);
+    let b = fw_version_key(bundled);
     if a.is_empty() || b.is_empty() {
         return None;
     }
@@ -358,7 +371,7 @@ fn extract_merged_from_zip(
     })
 }
 
-pub const COMPANION_UA: &str = "Njordr-seas-CYD-miner/0.8.57";
+pub const COMPANION_UA: &str = "Njordr-seas-CYD-miner/0.8.58";
 const ESPFLASH_VERSION: &str = "4.5.0";
 pub const REPO_OWNER: &str = "GutFarms";
 pub const REPO_NAME: &str = "Japan-central";
@@ -1080,5 +1093,27 @@ fn run_streaming(
                 tail
             }
         ))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{fw_version_key, update_needed};
+
+    #[test]
+    fn d0_board_matches_kit_without_d0_suffix() {
+        assert_eq!(
+            fw_version_key("0.8.56-sha256-d0"),
+            fw_version_key("0.8.56-sha256")
+        );
+        assert_eq!(
+            update_needed("0.8.56-sha256-d0", "0.8.56-sha256"),
+            Some(false)
+        );
+        assert_eq!(
+            update_needed("0.8.56-sha256-d0", "0.8.58-sha256"),
+            Some(true)
+        );
+        assert_eq!(update_needed("", "0.8.58-sha256"), None);
     }
 }

@@ -3151,6 +3151,13 @@ impl App for CompanionApp {
                             self.last_ok = s.clone();
                             self.last_error.clear();
                             self.push_log(LogKind::Usb, s.clone());
+                            // Clear "Update available" immediately — board may still
+                            // report `-d0` after reconnect; version keys match kit.
+                            if let Some(fw) = &self.firmware {
+                                if !fw.version.is_empty() {
+                                    self.fw_label = fw.version.clone();
+                                }
+                            }
                             let port = reopen
                                 .filter(|p| !p.trim().is_empty())
                                 .unwrap_or_else(|| self.com_port.clone());
