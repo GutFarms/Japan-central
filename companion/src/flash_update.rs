@@ -371,7 +371,7 @@ fn extract_merged_from_zip(
     })
 }
 
-pub const COMPANION_UA: &str = "Njordr-seas-CYD-miner/0.8.64";
+pub const COMPANION_UA: &str = "Njordr-seas-CYD-miner/0.8.65";
 const ESPFLASH_VERSION: &str = "4.5.0";
 pub const REPO_OWNER: &str = "GutFarms";
 pub const REPO_NAME: &str = "Japan-central";
@@ -829,7 +829,9 @@ fn run_espflash_erase(
         "espflash erase-flash → {port} @ {baud} ({})",
         espflash.display()
     ));
-    // Stay in the bootloader so write-bin can follow without another reset dance.
+    // Use hard-reset after erase. `--after no-reset` makes espflash soft_reset, which often
+    // fails on a wiped chip — and write-bin is a *new* process anyway, so staying in the
+    // bootloader cannot carry across the process boundary (closing the COM port drops it).
     run_espflash_argv(
         espflash,
         &[
@@ -842,7 +844,7 @@ fn run_espflash_erase(
             "esp32",
             "--non-interactive",
             "--after",
-            "no-reset",
+            "hard-reset",
         ],
         progress,
         "espflash-erase",
@@ -873,15 +875,22 @@ fn run_espflash_write(
             "-c",
             "esp32",
             "--non-interactive",
+            "--before",
+            "default-reset",
+            "--after",
+            "hard-reset",
             addr,
             img.as_ref(),
         ],
         progress,
-        "espflash",
+        "espflash-write",
     )
 }
 
-/// Full erase, then flash merged image @ 0x0 (DIO / 4MB / 40MHz layout inside the merge).
+/// Flash merged image @ 0x0 (DIO / 4MB / 40MHz layout inside the merge).
+///
+/// Tries a direct write first (merged.bin already contains bootloader + partitions + app).
+/// Falls back to full erase + write when the board needs a clean slate.
 pub fn flash_merged_bin(port: &str, image: &Path, progress: &dyn Fn(String)) -> Result<(), String> {
     if port.trim().is_empty() {
         return Err("Select a COM / serial port before updating.".into());
@@ -891,7 +900,7 @@ pub fn flash_merged_bin(port: &str, image: &Path, progress: &dyn Fn(String)) -> 
     }
 
     progress(format!(
-        "Erase + flash {} ({} bytes) → {} @ 0x0",
+        "Flash {} ({} bytes) → {} @ 0x0",
         image
             .file_name()
             .and_then(|s| s.to_str())
@@ -904,11 +913,31 @@ pub fn flash_merged_bin(port: &str, image: &Path, progress: &dyn Fn(String)) -> 
     // espflash is required — do not fall through to a misleading "esptool.py not found".
     let espflash = ensure_espflash(progress)?;
     let mut esp_err = String::new();
+
+    // 1) Direct write — reliable path for normal updates (no soft_reset-after-wipe).
+    for baud in ["460800", "115200"] {
+        progress(format!("Writing firmware @ {baud}…"));
+        match run_espflash_write(&espflash, port, baud, image, progress) {
+            Ok(()) => return Ok(()),
+            Err(e) => {
+                esp_err = format!("write: {e}");
+                progress(format!("espflash write @ {baud} failed: {esp_err}"));
+            }
+        }
+        if baud == "460800" {
+            progress("Retrying write at 115200…".into());
+        }
+    }
+
+    // 2) Full erase then write — recovery when flash is corrupted / write alone fails.
+    progress("Direct write failed — trying full erase, then write…".into());
     for baud in ["460800", "115200"] {
         progress(format!("Erasing entire flash @ {baud}…"));
         match run_espflash_erase(&espflash, port, baud, progress) {
             Ok(()) => {
-                progress("Erase done — writing firmware…".into());
+                progress("Erase done — waiting for COM port to settle…".into());
+                std::thread::sleep(std::time::Duration::from_millis(900));
+                progress("Writing firmware after erase…".into());
                 match run_espflash_write(&espflash, port, baud, image, progress) {
                     Ok(()) => return Ok(()),
                     Err(e) => {
@@ -923,7 +952,7 @@ pub fn flash_merged_bin(port: &str, image: &Path, progress: &dyn Fn(String)) -> 
             }
         }
         if baud == "460800" {
-            progress("Retrying erase+flash at 115200…".into());
+            progress("Retrying erase+write at 115200…".into());
         }
     }
 
@@ -935,7 +964,7 @@ pub fn flash_merged_bin(port: &str, image: &Path, progress: &dyn Fn(String)) -> 
         .filter(|p| !is_windows_store_python_stub(p))
         .collect();
     if !py_bins.is_empty() {
-        progress("espflash failed — trying Python esptool (erase_flash + write_flash)…".into());
+        progress("espflash failed — trying Python esptool…".into());
         for baud in ["460800", "115200"] {
             for py in &py_bins {
                 let py_launcher = py
@@ -944,7 +973,52 @@ pub fn flash_merged_bin(port: &str, image: &Path, progress: &dyn Fn(String)) -> 
                     .map(|s| s.eq_ignore_ascii_case("py") || s.eq_ignore_ascii_case("py.exe"))
                     .unwrap_or(false);
 
-                // 1) erase_flash
+                // Prefer single-shot erase-all + write (one serial session).
+                let mut args: Vec<String> = Vec::new();
+                if py_launcher {
+                    args.extend(["-3".into(), "-m".into(), "esptool".into()]);
+                } else {
+                    args.extend(["-m".into(), "esptool".into()]);
+                }
+                args.extend([
+                    "--chip".into(),
+                    "esp32".into(),
+                    "--port".into(),
+                    port.into(),
+                    "--baud".into(),
+                    baud.into(),
+                    "write_flash".into(),
+                    "--erase-all".into(),
+                    "-z".into(),
+                    "--flash_mode".into(),
+                    "dio".into(),
+                    "--flash_freq".into(),
+                    "40m".into(),
+                    "--flash_size".into(),
+                    "4MB".into(),
+                    "0x0".into(),
+                    image.display().to_string(),
+                ]);
+                progress(format!(
+                    "esptool write_flash --erase-all via {} @ {baud}…",
+                    py.display()
+                ));
+                let mut cmd = Command::new(py);
+                cmd.args(&args);
+                match run_streaming(&mut cmd, progress, "esptool") {
+                    Ok(()) => return Ok(()),
+                    Err(e) => {
+                        if e.contains("9009") || e.to_ascii_lowercase().contains("microsoft store")
+                        {
+                            progress("Skipping Windows Store Python stub…".into());
+                            continue;
+                        }
+                        py_err = e.clone();
+                        progress(format!("esptool erase-all write failed: {e}"));
+                    }
+                }
+
+                // Legacy two-step if --erase-all unsupported.
                 let mut erase_args: Vec<String> = Vec::new();
                 if py_launcher {
                     erase_args.extend(["-3".into(), "-m".into(), "esptool".into()]);
@@ -972,15 +1046,15 @@ pub fn flash_merged_bin(port: &str, image: &Path, progress: &dyn Fn(String)) -> 
                     progress("esptool erase failed — trying next…".into());
                     continue;
                 }
+                std::thread::sleep(std::time::Duration::from_millis(900));
 
-                // 2) write_flash
-                let mut args: Vec<String> = Vec::new();
+                let mut wargs: Vec<String> = Vec::new();
                 if py_launcher {
-                    args.extend(["-3".into(), "-m".into(), "esptool".into()]);
+                    wargs.extend(["-3".into(), "-m".into(), "esptool".into()]);
                 } else {
-                    args.extend(["-m".into(), "esptool".into()]);
+                    wargs.extend(["-m".into(), "esptool".into()]);
                 }
-                args.extend([
+                wargs.extend([
                     "--chip".into(),
                     "esp32".into(),
                     "--port".into(),
@@ -999,9 +1073,9 @@ pub fn flash_merged_bin(port: &str, image: &Path, progress: &dyn Fn(String)) -> 
                     image.display().to_string(),
                 ]);
                 progress(format!("esptool write_flash via {} @ {baud}…", py.display()));
-                let mut cmd = Command::new(py);
-                cmd.args(&args);
-                match run_streaming(&mut cmd, progress, "esptool") {
+                let mut wcmd = Command::new(py);
+                wcmd.args(&wargs);
+                match run_streaming(&mut wcmd, progress, "esptool") {
                     Ok(()) => return Ok(()),
                     Err(e) => {
                         if e.contains("9009") || e.to_ascii_lowercase().contains("microsoft store")
@@ -1111,7 +1185,7 @@ fn run_streaming(
         .wait()
         .map_err(|e| format!("{label} wait: {e}"))?;
     if status.success() {
-        progress("Flash write complete.".into());
+        progress(format!("{label} complete."));
         Ok(())
     } else {
         Err(format!(
@@ -1144,9 +1218,9 @@ mod tests {
             Some(false)
         );
         assert_eq!(
-            update_needed("0.8.56-sha256-d0", "0.8.64-sha256"),
+            update_needed("0.8.56-sha256-d0", "0.8.65-sha256"),
             Some(true)
         );
-        assert_eq!(update_needed("", "0.8.64-sha256"), None);
+        assert_eq!(update_needed("", "0.8.65-sha256"), None);
     }
 }

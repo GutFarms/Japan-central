@@ -1551,7 +1551,7 @@ impl CompanionApp {
             .unwrap_or_default();
         self.update_busy = true;
         self.pending_post_flash_reconnect = None;
-        self.update_status = format!("Erase + flash board via {}…", self.com_port);
+        self.update_status = format!("Flashing board via {}…", self.com_port);
         self.last_ok = self.update_status.clone();
         self.last_error.clear();
         self.push_log(
@@ -1998,7 +1998,7 @@ impl CompanionApp {
                     self.start_firmware_fetch();
                 }
                 let update_label = if self.update_busy {
-                    "Erase+flash…"
+                    "Flashing…"
                 } else {
                     "Update board"
                 };
@@ -3729,7 +3729,7 @@ impl App for CompanionApp {
                             RichText::new(if self.pending_post_flash_reconnect.is_some() {
                                 "Flash complete — reconnecting"
                             } else {
-                                "Erase + flash in progress"
+                                "Flashing board firmware"
                             })
                             .color(C_LIME)
                             .font(display_font(22.0)),
@@ -5665,7 +5665,7 @@ fn mine_worker(cmd_rx: Receiver<NetCmd>, msg_tx: Sender<NetMsg>) {
                         LogKind::Usb,
                         "USB released — waiting for COM port…",
                     );
-                    thread::sleep(Duration::from_millis(1200));
+                    thread::sleep(Duration::from_millis(1600));
 
                     let progress_tx = msg_tx.clone();
                     let progress = move |line: String| {
