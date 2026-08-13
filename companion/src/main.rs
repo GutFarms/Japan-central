@@ -696,11 +696,22 @@ impl CompanionApp {
     }
 
     fn board_hashing(&self) -> bool {
-        self.status.mining
-            || self.status.connected
-            || self.status.hashrate_hs > 0.0
-            || self.status.hashes > 0
-            || (!self.status.nonce.is_empty() && self.status.nonce != "00000000")
+        // Live hashing only — never use lifetime hashes/nonce (those stuck true forever).
+        self.usb_open
+            && self.mining
+            && (self.status.mining || self.status.hashrate_hs > 0.0)
+    }
+
+    fn clear_hash_display(&mut self) {
+        self.status.hashrate_hs = 0.0;
+        self.status.hashrate_khs = 0.0;
+        self.status.mining = false;
+        self.status.connected = false;
+        self.status.nonce.clear();
+        self.status.job.clear();
+        self.displayed_khs = 0.0;
+        self.hashrate_history = VecDeque::from(vec![0.0; HASH_HISTORY_SAMPLES]);
+        self.history_phase = 0.0;
     }
 
     fn pool_state(&self) -> (&'static str, Color32) {
@@ -738,11 +749,15 @@ impl CompanionApp {
         let target = self.board_khs();
         // Hold last rate briefly when a single poll returns 0 while still mining —
         // avoids the UI slamming to zero between status samples.
+        // Must require usb_open + mining — never hold after disconnect/stop.
         let target = if target <= 0.0
-            && (self.mining || self.board_hashing())
+            && self.usb_open
+            && self.mining
             && self.displayed_khs > 1.0
         {
             self.displayed_khs * 0.97
+        } else if !self.usb_open || !self.mining {
+            0.0
         } else {
             target
         };
@@ -911,6 +926,7 @@ impl CompanionApp {
         let _ = self.cmd_tx.send(NetCmd::StopMine);
         self.mining = false;
         self.session_started = None;
+        self.clear_hash_display();
         self.last_ok = "Mining stopped.".into();
         self.push_log(LogKind::Info, "Mining stopped".into());
     }
@@ -1305,6 +1321,9 @@ impl CompanionApp {
                                 let _ = self.cmd_tx.send(NetCmd::CloseUsb);
                                 self.usb_open = false;
                                 self.mining = false;
+                                self.session_started = None;
+                                self.connected_workers.clear();
+                                self.clear_hash_display();
                                 self.push_log(LogKind::Usb, "Disconnect requested".into());
                             } else {
                                 self.connect_usb();
@@ -1668,6 +1687,7 @@ impl CompanionApp {
                         self.mining = false;
                         self.session_started = None;
                         self.connected_workers.clear();
+                        self.clear_hash_display();
                         self.push_log(LogKind::Usb, "Disconnect requested".into());
                     } else {
                         self.connect_usb();
@@ -2484,8 +2504,15 @@ impl App for CompanionApp {
                 }
                 NetMsg::WorkersLive(live) => {
                     self.connected_workers = live;
+                    let was_open = self.usb_open;
                     self.usb_open = !self.connected_workers.is_empty();
-                    if let Some(first) = self.connected_workers.first() {
+                    if !self.usb_open {
+                        if was_open {
+                            self.mining = false;
+                            self.session_started = None;
+                        }
+                        self.clear_hash_display();
+                    } else if let Some(first) = self.connected_workers.first() {
                         self.com_port = first.endpoint.clone();
                         if !first.fw.is_empty() {
                             self.fw_label = first.fw.clone();
@@ -3467,6 +3494,8 @@ fn mine_worker(cmd_rx: Receiver<NetCmd>, msg_tx: Sender<NetMsg>) {
         hashrate_hs: f64,
         hashes: u64,
         mining: bool,
+        /// Consecutive cmp status soft-fails — used to drop dead USB boards.
+        status_fails: u8,
     }
 
     fn live_from(boards: &[UsbBoard]) -> Vec<WorkerLive> {
@@ -3531,6 +3560,7 @@ fn mine_worker(cmd_rx: Receiver<NetCmd>, msg_tx: Sender<NetMsg>) {
                 hashrate_hs: 0.0,
                 hashes: 0,
                 mining: false,
+                status_fails: 0,
             },
             saw,
         ))
@@ -3610,21 +3640,41 @@ fn mine_worker(cmd_rx: Receiver<NetCmd>, msg_tx: Sender<NetMsg>) {
                     let _ = msg_tx.send(NetMsg::WorkersFound(found));
                 }
                 NetCmd::OpenUsb(name) => {
-                    mining = false;
-                    if let Some(mut s) = stratum.take() {
-                        s.disconnect();
+                    // Do not wipe the whole fleet — reconnect/replace this port only
+                    // so multi-board setups survive a primary Connect click.
+                    if let Some(idx) = boards.iter().position(|b| b.name == name) {
+                        let mut old = boards.remove(idx);
+                        let _ = usb_cmd(old.port.as_mut(), &mut old.rx, "cmp stop");
                     }
-                    boards.clear();
                     log_msg(&msg_tx, LogKind::Usb, format!("Opening {name} (460800→115200)"));
                     match open_board(&name) {
                         Ok((mut board, saw)) => {
                             configure_board(&mut board, &msg_tx);
+                            if mining {
+                                let mut legacy = board.legacy_job;
+                                let _ = usb_cmd(
+                                    board.port.as_mut(),
+                                    &mut board.rx,
+                                    "cmp stats accepted=0&rejected=0",
+                                );
+                                let _ = usb_push_job(
+                                    board.port.as_mut(),
+                                    &mut board.rx,
+                                    &warmup_job(),
+                                    &mut legacy,
+                                    &msg_tx,
+                                );
+                                board.legacy_job = legacy;
+                            }
                             boards.push(board);
                             publish_live(&msg_tx, &boards);
                             let _ = msg_tx.send(NetMsg::Action(Ok(if saw {
-                                format!("USB open {name} (pong)")
+                                format!("USB open {name} (pong) · {} board(s)", boards.len())
                             } else {
-                                format!("USB open {name} (no pong yet)")
+                                format!(
+                                    "USB open {name} (no pong yet) · {} board(s)",
+                                    boards.len()
+                                )
                             })));
                         }
                         Err(e) => {
@@ -3706,9 +3756,12 @@ fn mine_worker(cmd_rx: Receiver<NetCmd>, msg_tx: Sender<NetMsg>) {
                     }
                     for b in boards.iter_mut() {
                         let _ = usb_cmd(b.port.as_mut(), &mut b.rx, "cmp stop");
+                        b.mining = false;
+                        b.hashrate_hs = 0.0;
                     }
                     boards.clear();
                     publish_live(&msg_tx, &boards);
+                    let _ = msg_tx.send(NetMsg::Status(Ok(StatusJson::default())));
                     let _ = msg_tx.send(NetMsg::Action(Ok("USB closed".into())));
                 }
                 NetCmd::StartMine {
@@ -3801,8 +3854,16 @@ fn mine_worker(cmd_rx: Receiver<NetCmd>, msg_tx: Sender<NetMsg>) {
                     for b in boards.iter_mut() {
                         let _ = usb_cmd(b.port.as_mut(), &mut b.rx, "cmp stop");
                         b.mining = false;
+                        b.hashrate_hs = 0.0;
                     }
                     publish_live(&msg_tx, &boards);
+                    let _ = msg_tx.send(NetMsg::Status(Ok(StatusJson {
+                        mining: false,
+                        connected: false,
+                        hashrate_hs: 0.0,
+                        hashrate_khs: 0.0,
+                        ..Default::default()
+                    })));
                     let _ = msg_tx.send(NetMsg::Action(Ok("Mining stopped".into())));
                     let _ = msg_tx.send(NetMsg::MineStats {
                         accepted: 0,
@@ -3830,12 +3891,14 @@ fn mine_worker(cmd_rx: Receiver<NetCmd>, msg_tx: Sender<NetMsg>) {
                 }
                 NetCmd::PollStatus => {
                     if boards.is_empty() {
+                        let _ = msg_tx.send(NetMsg::Status(Ok(StatusJson::default())));
                         continue;
                     }
                     let mut total_hs = 0.0;
                     let mut total_hashes = 0u64;
                     let mut any_mining = false;
                     let mut last_status: Option<StatusJson> = None;
+                    let mut drop_names: Vec<String> = Vec::new();
                     for b in boards.iter_mut() {
                         harvest_shares(
                             b.port.as_mut(),
@@ -3847,6 +3910,7 @@ fn mine_worker(cmd_rx: Receiver<NetCmd>, msg_tx: Sender<NetMsg>) {
                         match usb_cmd(b.port.as_mut(), &mut b.rx, "cmp status") {
                             Ok(line) => match parse_cmp_status(&line) {
                                 Ok(st) => {
+                                    b.status_fails = 0;
                                     b.hashrate_hs = st.hashrate_hs;
                                     b.hashes = st.hashes;
                                     b.mining = st.mining;
@@ -3856,21 +3920,50 @@ fn mine_worker(cmd_rx: Receiver<NetCmd>, msg_tx: Sender<NetMsg>) {
                                     last_status = Some(st);
                                 }
                                 Err(e) => {
+                                    b.status_fails = b.status_fails.saturating_add(1);
                                     log_msg(
                                         &msg_tx,
                                         LogKind::Warn,
                                         format!("status {}: {e}", b.name),
                                     );
+                                    if b.status_fails >= 5 {
+                                        drop_names.push(b.name.clone());
+                                    }
                                 }
                             },
                             Err(e) => {
+                                b.status_fails = b.status_fails.saturating_add(1);
                                 log_msg(
                                     &msg_tx,
                                     LogKind::Warn,
                                     format!("status soft-fail {}: {e}", b.name),
                                 );
+                                if b.status_fails >= 5 {
+                                    drop_names.push(b.name.clone());
+                                }
                             }
                         }
+                    }
+                    for name in drop_names {
+                        if let Some(idx) = boards.iter().position(|b| b.name == name) {
+                            let mut dead = boards.remove(idx);
+                            let _ = usb_cmd(dead.port.as_mut(), &mut dead.rx, "cmp stop");
+                            log_msg(
+                                &msg_tx,
+                                LogKind::Err,
+                                format!("Dropped dead board {name} after status failures"),
+                            );
+                        }
+                    }
+                    if boards.is_empty() {
+                        mining = false;
+                        reconnect_at = None;
+                        if let Some(mut s) = stratum.take() {
+                            s.disconnect();
+                        }
+                        publish_live(&msg_tx, &boards);
+                        let _ = msg_tx.send(NetMsg::Status(Ok(StatusJson::default())));
+                        continue;
                     }
                     publish_live(&msg_tx, &boards);
                     if let Some(mut st) = last_status {
@@ -3879,6 +3972,12 @@ fn mine_worker(cmd_rx: Receiver<NetCmd>, msg_tx: Sender<NetMsg>) {
                         st.hashes = total_hashes;
                         st.mining = any_mining;
                         let _ = msg_tx.send(NetMsg::Status(Ok(st)));
+                    } else {
+                        // All boards soft-failed this round — don't freeze the last rate.
+                        let _ = msg_tx.send(NetMsg::Status(Ok(StatusJson {
+                            hashes: total_hashes,
+                            ..Default::default()
+                        })));
                     }
                 }
                 NetCmd::Bench => {

@@ -132,6 +132,7 @@ static void fillSnap() {
   g_snap.rejected = g_rejected;
   g_snap.pool = g_poolLabel;
   g_snap.connected = g_jobLoaded;
+  g_snap.mining = g_mining && g_jobLoaded;
   g_snap.difficulty = 0;
   g_snap.nonce = g_minerA.nonce();
   g_snap.cpuMhz = (uint8_t)getCpuFrequencyMhz();

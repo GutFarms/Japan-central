@@ -59,6 +59,7 @@ In **Settings**:
 - **0.8.22** — fix Windows self-update bat (retry while `.new` remains; do not relaunch a locked old exe)
 - **0.8.23** — fetch updates via GitHub API / commit-pinned raw (branch raw CDN can serve stale VERSION/bins)
 - **0.8.24** — fix Update board: espflash reject `ESPFLASH_SKIP_UPDATE_CHECK=1` (needs true/false); skip Windows Store python stubs
+- **0.8.34** — fix phantom hashrate when USB disconnected; drop dead boards; report real mining flag; OpenUsb no longer wipes multi-board fleet (SHA256d verify scripts PASS)
 - **0.8.33** — Njörðr theme (deep blues + lightning); hide Windows console windows for flash/update exes
 - **0.8.32** — restore Event log on Mine; Debug/Terminal tab stays hidden
 - **0.8.31** — hide Debug/Terminal tab from the Companion UI

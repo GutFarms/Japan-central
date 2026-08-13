@@ -278,7 +278,7 @@ void CompanionLink::replyStatus(const AppConfig& cfg, const MinerSnapshot& snap)
       "\"full_v\":true,\"bench_hs\":%.0f,\"nonce\":\"%s\"}",
       (double)snap.hashrateHs, (double)(snap.hashrateHs / 1000.0f),
       (unsigned long long)snap.shares, (unsigned long long)snap.totalHashes,
-      snap.connected ? "true" : "false", (unsigned)snap.accepted, (unsigned)snap.rejected, pool,
+      snap.mining ? "true" : "false", (unsigned)snap.accepted, (unsigned)snap.rejected, pool,
       snap.connected ? "true" : "false", (unsigned)(millis() / 1000),
       (unsigned)(snap.cpuMhz ? snap.cpuMhz : cfg.cpuMhz), job, sha, (double)snap.benchHs, nonceHex);
   Serial.print("CMPSTATUS ");
@@ -288,7 +288,7 @@ void CompanionLink::replyStatus(const AppConfig& cfg, const MinerSnapshot& snap)
 void CompanionLink::replyConfig(const AppConfig& cfg) {
   char buf[128];
   snprintf(buf, sizeof(buf),
-           "{\"cpu_mhz\":%u,\"hash_focus\":true,\"fw\":\"0.8.33-sha256\",\"mode\":\"usb-sha256\","
+           "{\"cpu_mhz\":%u,\"hash_focus\":true,\"fw\":\"0.8.34-sha256\",\"mode\":\"usb-sha256\","
            "\"configured\":true}",
            (unsigned)cfg.cpuMhz);
   Serial.print("CMPCONFIG ");

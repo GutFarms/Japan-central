@@ -11,6 +11,7 @@ struct MinerSnapshot {
   uint32_t rejected = 0;
   String pool = "usb";
   bool connected = false;
+  bool mining = false;
   uint32_t difficulty = 0;
   uint32_t nonce = 0;
   uint8_t cpuMhz = 240;
