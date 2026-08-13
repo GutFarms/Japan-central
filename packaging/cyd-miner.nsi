@@ -6,7 +6,7 @@
 
 !define PRODUCT_NAME "Njörðr Seas' CYD miner"
 !define PRODUCT_PUBLISHER "GutFarms"
-!define PRODUCT_VERSION "0.8.46"
+!define PRODUCT_VERSION "0.8.47"
 !define PRODUCT_WEB "https://github.com/GutFarms/Japan-central"
 
 Name "${PRODUCT_NAME} ${PRODUCT_VERSION}"

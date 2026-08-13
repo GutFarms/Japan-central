@@ -551,6 +551,10 @@ struct CompanionApp {
     session_accepted: u32,
     session_rejected: u32,
     last_share_latency_ms: Option<u64>,
+    /// Last time a pool job was pushed to boards (drives data-flow packets).
+    last_job_flow_at: Instant,
+    /// Last time a share was accepted/rejected (drives return-path packets).
+    last_share_flow_at: Instant,
     /// None = wizard dismissed; Some(0..3) = step.
     wizard_step: Option<u8>,
     fetch_busy: bool,
@@ -663,6 +667,8 @@ impl CompanionApp {
             session_accepted: 0,
             session_rejected: 0,
             last_share_latency_ms: None,
+            last_job_flow_at: Instant::now() - Duration::from_secs(30),
+            last_share_flow_at: Instant::now() - Duration::from_secs(30),
             wizard_step: if wizard_done { None } else { Some(0) },
             fetch_busy: false,
             app_update_busy: false,
@@ -1299,11 +1305,51 @@ impl CompanionApp {
             self.ui_telemetry_rail(&mut right[0]);
         });
 
+        ui.add_space(14.0);
+        self.ui_data_flow(ui);
+
         ui.add_space(16.0);
         self.ui_api_feeds_mine(ui);
         self.ui_stratum_panel(ui);
         ui.add_space(12.0);
         self.ui_logs_panel(ui);
+    }
+
+    fn ui_data_flow(&self, ui: &mut egui::Ui) {
+        let (pool_label, pool_color) = self.pool_state();
+        let boards = self.connected_workers.len().max(if self.usb_open { 1 } else { 0 });
+        let jobs_live = self.mining && self.stratum_live.authorized;
+        let hash_live = self.board_hashing();
+        let job_burst = self.last_job_flow_at.elapsed() < Duration::from_millis(2_400);
+        let share_burst = self.last_share_flow_at.elapsed() < Duration::from_millis(2_800);
+        soft_panel(ui, "Data flow", |ui| {
+            ui.label(
+                RichText::new("Pool jobs down · board hashes · shares back up")
+                    .color(C_DIM)
+                    .font(mono_ui_font(11.0)),
+            );
+            ui.add_space(8.0);
+            paint_data_flow(
+                ui,
+                DataFlowView {
+                    pulse: self.pulse,
+                    pool_label,
+                    pool_color,
+                    usb_open: self.usb_open,
+                    mining: self.mining,
+                    jobs_live: jobs_live || job_burst,
+                    hash_live,
+                    share_burst: share_burst || (hash_live && jobs_live),
+                    board_count: boards,
+                    rate_label: format_hashrate(self.displayed_khs as f64 * 1000.0),
+                    accepted: if self.stratum_live.authorized {
+                        self.session_accepted
+                    } else {
+                        0
+                    },
+                },
+            );
+        });
     }
 
     fn ui_mining_hero(&mut self, ui: &mut egui::Ui) {
@@ -2462,6 +2508,9 @@ impl App for CompanionApp {
                         self.usb_open = false;
                         self.mining = false;
                     }
+                    if low.contains("usb ← job") || low.contains("usb <- job") {
+                        self.last_job_flow_at = Instant::now();
+                    }
                     let kind = if low.contains("job") || low.contains("share") || low.contains("pool")
                     {
                         LogKind::Stratum
@@ -2589,6 +2638,7 @@ impl App for CompanionApp {
                     }
                 }
                 NetMsg::Share(ev) => {
+                    self.last_share_flow_at = Instant::now();
                     if self.session_started.is_none() && self.mining {
                         self.session_started = Some(Instant::now());
                     }
@@ -3507,6 +3557,189 @@ fn hash_activity_bars(ui: &mut egui::Ui, khs: f32, pulse: f32, hashing: bool) {
             },
         );
     }
+}
+
+struct DataFlowView {
+    pulse: f32,
+    pool_label: &'static str,
+    pool_color: Color32,
+    usb_open: bool,
+    mining: bool,
+    jobs_live: bool,
+    hash_live: bool,
+    share_burst: bool,
+    board_count: usize,
+    rate_label: String,
+    accepted: u32,
+}
+
+fn paint_data_flow(ui: &mut egui::Ui, v: DataFlowView) {
+    let desired = Vec2::new(ui.available_width().clamp(280.0, 920.0), 118.0);
+    let (rect, _) = ui.allocate_exact_size(desired, Sense::hover());
+    let painter = ui.painter_at(rect);
+    painter.rect_filled(
+        rect,
+        Rounding::same(16.0),
+        Color32::from_rgba_unmultiplied(3, 14, 28, 200),
+    );
+    painter.rect_stroke(rect, Rounding::same(16.0), Stroke::new(1.0, rgba(C_STROKE, 160)));
+
+    let pad = 18.0;
+    let node_w = 118.0;
+    let node_h = 64.0;
+    let y = rect.center().y;
+    let left = rect.left() + pad + node_w * 0.5;
+    let right = rect.right() - pad - node_w * 0.5;
+    let mid = rect.center().x;
+    let pool_c = Pos2::new(left, y);
+    let app_c = Pos2::new(mid, y);
+    let board_c = Pos2::new(right, y);
+
+    let link = |a: Pos2, b: Pos2, active: bool, reverse: bool, color: Color32| {
+        let stroke = Stroke::new(
+            if active { 2.4 } else { 1.2 },
+            rgba(color, if active { 160 } else { 55 }),
+        );
+        painter.line_segment([a, b], stroke);
+        // Traveling packets along the link.
+        let n = if active { 3 } else { 1 };
+        for i in 0..n {
+            let base = (v.pulse * (if reverse { -0.55 } else { 0.55 })
+                + i as f32 * (1.0 / n as f32))
+                .rem_euclid(1.0);
+            let t = if active {
+                base
+            } else {
+                0.15 + 0.1 * (v.pulse + i as f32).sin()
+            };
+            let p = Pos2::new(a.x + (b.x - a.x) * t, a.y + (b.y - a.y) * t);
+            let r = if active { 4.2 } else { 2.4 };
+            painter.circle_filled(p, r + 2.0, rgba(color, if active { 40 } else { 18 }));
+            painter.circle_filled(p, r, if active { color } else { rgba(color, 90) });
+        }
+    };
+
+    // Upper path: jobs pool → app → board. Lower path offset for shares back.
+    let job_y = y - 10.0;
+    let share_y = y + 10.0;
+    link(
+        Pos2::new(pool_c.x + node_w * 0.42, job_y),
+        Pos2::new(app_c.x - node_w * 0.42, job_y),
+        v.jobs_live,
+        false,
+        C_LIME,
+    );
+    link(
+        Pos2::new(app_c.x + node_w * 0.42, job_y),
+        Pos2::new(board_c.x - node_w * 0.42, job_y),
+        v.jobs_live && v.usb_open,
+        false,
+        C_LIME,
+    );
+    link(
+        Pos2::new(board_c.x - node_w * 0.42, share_y),
+        Pos2::new(app_c.x + node_w * 0.42, share_y),
+        v.share_burst || v.hash_live,
+        true,
+        C_WARN,
+    );
+    link(
+        Pos2::new(app_c.x - node_w * 0.42, share_y),
+        Pos2::new(pool_c.x + node_w * 0.42, share_y),
+        v.share_burst && v.jobs_live,
+        true,
+        C_WARN,
+    );
+
+    let glow = 0.55 + 0.45 * (0.5 + 0.5 * v.pulse.sin());
+    let draw_node = |center: Pos2, title: &str, detail: &str, live: bool, accent: Color32| {
+        let r = Rect::from_center_size(center, Vec2::new(node_w, node_h));
+        painter.rect_filled(
+            r,
+            Rounding::same(14.0),
+            Color32::from_rgba_unmultiplied(8, 26, 46, 235),
+        );
+        painter.rect_stroke(
+            r,
+            Rounding::same(14.0),
+            Stroke::new(
+                if live { 1.8 } else { 1.0 },
+                rgba(accent, if live { (90.0 + glow * 120.0) as u8 } else { 70 }),
+            ),
+        );
+        if live {
+            painter.circle_filled(
+                Pos2::new(r.right() - 12.0, r.top() + 12.0),
+                3.6,
+                accent,
+            );
+        }
+        painter.text(
+            Pos2::new(center.x, center.y - 12.0),
+            egui::Align2::CENTER_CENTER,
+            title,
+            mono_ui_font(12.0),
+            C_TEXT,
+        );
+        painter.text(
+            Pos2::new(center.x, center.y + 12.0),
+            egui::Align2::CENTER_CENTER,
+            detail,
+            mono_ui_font(10.0),
+            if live { accent } else { C_MUTED },
+        );
+    };
+
+    let board_detail = if v.usb_open {
+        if v.board_count > 1 {
+            format!("{} boards · {}", v.board_count, v.rate_label)
+        } else {
+            format!("USB · {}", v.rate_label)
+        }
+    } else {
+        "idle".into()
+    };
+    let app_detail = if v.mining {
+        format!("mine · {} ok", v.accepted)
+    } else if v.usb_open {
+        "linked".into()
+    } else {
+        "standby".into()
+    };
+
+    draw_node(pool_c, "POOL", v.pool_label, v.jobs_live, v.pool_color);
+    draw_node(app_c, "COMPANION", &app_detail, v.mining || v.usb_open, C_LIME);
+    draw_node(
+        board_c,
+        "BOARD",
+        &board_detail,
+        v.hash_live || v.usb_open,
+        if v.hash_live { C_LIME } else { C_BUBBLE_HI },
+    );
+
+    // Direction captions
+    painter.text(
+        Pos2::new(mid, rect.top() + 14.0),
+        egui::Align2::CENTER_CENTER,
+        if v.jobs_live { "jobs →" } else { "jobs idle" },
+        mono_ui_font(10.0),
+        if v.jobs_live { rgba(C_LIME, 200) } else { C_DIM },
+    );
+    painter.text(
+        Pos2::new(mid, rect.bottom() - 14.0),
+        egui::Align2::CENTER_CENTER,
+        if v.share_burst || v.hash_live {
+            "← shares / hash"
+        } else {
+            "← shares idle"
+        },
+        mono_ui_font(10.0),
+        if v.share_burst || v.hash_live {
+            rgba(C_WARN, 200)
+        } else {
+            C_DIM
+        },
+    );
 }
 
 fn sparkline(ui: &mut egui::Ui, values: &VecDeque<f32>, pulse: f32, history_phase: f32) {
