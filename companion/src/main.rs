@@ -4506,6 +4506,8 @@ impl App for CompanionApp {
                     });
             });
 
+        paint_under_development_watermarks(ctx);
+
         // Keep animation continuous (~60 fps). 40 ms made looping motion feel stepped.
         ctx.request_repaint_after(Duration::from_millis(16));
         self.refresh_monitor_lan_ip();
@@ -4690,6 +4692,56 @@ fn ui_live_bar(ui: &mut egui::Ui, live: &LiveFeed, header_coins: &mut Vec<String
                 }
             }
     });
+}
+
+fn paint_under_development_watermarks(ctx: &egui::Context) {
+    // Diagonal TL→BR watermark bands (ESP / companion still under development).
+    let painter = ctx.layer_painter(egui::LayerId::new(
+        egui::Order::Foreground,
+        egui::Id::new("under_development_watermarks"),
+    ));
+    let rect = ctx.screen_rect();
+    if rect.width() < 8.0 || rect.height() < 8.0 {
+        return;
+    }
+
+    let phrase = "UNDER DEVELOPMENT";
+    let chars: Vec<char> = phrase.chars().collect();
+    let angle = rect.height().atan2(rect.width());
+    let dir = Vec2::angled(angle);
+    let perp = Vec2::new(-dir.y, dir.x);
+    let color = Color32::from_rgba_unmultiplied(186, 214, 232, 34);
+    let font = FontId::monospace(15.0);
+    let char_step = 13.5;
+    let phrase_span = chars.len() as f32 * char_step;
+    let phrase_gap = 72.0;
+    let lane_spacing = 96.0;
+    let diag = (rect.width() * rect.width() + rect.height() * rect.height()).sqrt();
+    let origin = rect.left_top() - dir * 40.0 - perp * 60.0;
+    let lanes = ((diag / lane_spacing) as i32) + 6;
+
+    for lane in -3..lanes {
+        let lane_origin = origin + perp * (lane as f32 * lane_spacing);
+        let mut along = -phrase_span;
+        while along < diag + phrase_span {
+            for (i, ch) in chars.iter().enumerate() {
+                if *ch == ' ' {
+                    continue;
+                }
+                let p = lane_origin + dir * (along + i as f32 * char_step);
+                if rect.expand(48.0).contains(p) {
+                    painter.text(
+                        p,
+                        egui::Align2::CENTER_CENTER,
+                        ch.to_string(),
+                        font.clone(),
+                        color,
+                    );
+                }
+            }
+            along += phrase_span + phrase_gap;
+        }
+    }
 }
 
 fn paint_background(ui: &mut egui::Ui, rect: Rect, pulse: f32, grid_phase: f32, mining: bool) {
