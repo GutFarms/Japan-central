@@ -2,7 +2,7 @@ mod corpus;
 mod scene;
 mod symbols;
 
-use corpus::{load_lexicon, Lexeme};
+use corpus::{load_history, load_lexicon, HistoryEra, Lexeme};
 use eframe::egui::{self, Color32, FontData, FontDefinitions, FontFamily, Key, RichText, Sense};
 use rand::seq::SliceRandom;
 use rand::Rng;
@@ -18,6 +18,7 @@ enum Mode {
     Fill,
     Define,
     Story,
+    History,
     Structure,
 }
 
@@ -56,6 +57,12 @@ struct StoryState {
     feedback: Option<(bool, String)>,
 }
 
+struct HistoryState {
+    idx: usize,
+    choices: Vec<String>,
+    feedback: Option<(bool, String)>,
+}
+
 struct Confetti {
     x: f32,
     y: f32,
@@ -67,6 +74,7 @@ struct Confetti {
 
 pub struct BorikenApp {
     lexicon: Vec<Lexeme>,
+    history_eras: Vec<HistoryEra>,
     scene: Scene,
     mode: Mode,
     xp: i32,
@@ -78,6 +86,7 @@ pub struct BorikenApp {
     flash: Option<FlashState>,
     fill: Option<FillState>,
     story: StoryState,
+    history: HistoryState,
     confetti: Vec<Confetti>,
     last: Instant,
     status: String,
@@ -87,8 +96,10 @@ pub struct BorikenApp {
 impl Default for BorikenApp {
     fn default() -> Self {
         let lexicon = load_lexicon();
+        let history_eras = load_history();
         Self {
             lexicon,
+            history_eras,
             scene: Scene::new(1280.0, 800.0),
             mode: Mode::Home,
             xp: 0,
@@ -101,6 +112,11 @@ impl Default for BorikenApp {
             fill: None,
             story: StoryState {
                 idx: 0,
+                feedback: None,
+            },
+            history: HistoryState {
+                idx: 0,
+                choices: Vec::new(),
                 feedback: None,
             },
             confetti: Vec::new(),
@@ -282,6 +298,22 @@ impl BorikenApp {
         }
     }
 
+    fn start_history(&mut self) {
+        self.history.idx = 0;
+        self.history.feedback = None;
+        self.refresh_history_choices();
+        self.mode = Mode::History;
+        self.status = "Island Time Machine — history you can play.".into();
+    }
+
+    fn refresh_history_choices(&mut self) {
+        self.history.choices.clear();
+        if let Some(era) = self.history_eras.get(self.history.idx) {
+            self.history.choices = era.quiz.choices.clone();
+            self.history.choices.shuffle(&mut rand::thread_rng());
+        }
+    }
+
     fn story_beats() -> &'static [StoryBeat] {
         &[
             StoryBeat {
@@ -388,6 +420,7 @@ impl eframe::App for BorikenApp {
                             ("Memory Flip", Mode::Flash),
                             ("Konuko Fill", Mode::Fill),
                             ("Areyto Quest", Mode::Story),
+                            ("Time Machine", Mode::History),
                             ("Sentences", Mode::Structure),
                             ("Define", Mode::Define),
                         ];
@@ -421,6 +454,7 @@ impl eframe::App for BorikenApp {
                                         self.mode = Mode::Story;
                                         self.status = "Areyto Quest begins at dawn.".into();
                                     }
+                                    Mode::History => self.start_history(),
                                     Mode::Structure => {
                                         self.mode = Mode::Structure;
                                         self.status =
@@ -463,7 +497,7 @@ impl eframe::App for BorikenApp {
                                 ui.add_space(8.0);
                                 ui.label(
                                     RichText::new(
-                                        "Sol Taíno · cemí · coquí · carey · petroglyph friezes · sentence structure",
+                                        "Sol Taíno · cemí · coquí · carey · Island Time Machine · sentence structure",
                                     )
                                     .size(14.0)
                                     .color(Color32::from_rgb(180, 210, 195)),
@@ -892,6 +926,144 @@ impl eframe::App for BorikenApp {
                                                         "Kasike energy unlocked.".into()
                                                     } else {
                                                         format!("Remember: {}", beat.answer)
+                                                    },
+                                                ));
+                                            }
+                                        }
+                                    }
+                                }
+                            });
+                        }
+                        Mode::History => {
+                            glass_panel(ui, 900.0, |ui| {
+                                if self.history.idx >= self.history_eras.len() {
+                                    ui.label(
+                                        RichText::new("Island Time Machine · Complete")
+                                            .size(28.0)
+                                            .color(Color32::from_rgb(242, 199, 90))
+                                            .strong(),
+                                    );
+                                    ui.label(
+                                        RichText::new(
+                                            "Island Chronist unlocked. You walked Borikén's areyto of ages. +20 XP.",
+                                        )
+                                        .size(18.0)
+                                        .color(Color32::WHITE),
+                                    );
+                                    if ui.button("Replay timeline").clicked() {
+                                        self.start_history();
+                                    }
+                                    if ui.button("Sail home").clicked() {
+                                        self.mode = Mode::Home;
+                                    }
+                                } else {
+                                    let era = self.history_eras[self.history.idx].clone();
+                                    ui.label(
+                                        RichText::new(format!(
+                                            "Time Machine · Ch. {} · {}",
+                                            era.chapter, era.era_label
+                                        ))
+                                        .size(18.0)
+                                        .color(Color32::from_rgb(242, 199, 90)),
+                                    );
+                                    ui.label(
+                                        RichText::new(&era.when)
+                                            .size(14.0)
+                                            .color(Color32::from_rgb(180, 210, 195)),
+                                    );
+                                    ui.label(
+                                        RichText::new(&era.title_en)
+                                            .size(26.0)
+                                            .color(Color32::WHITE)
+                                            .strong(),
+                                    );
+                                    ui.label(
+                                        RichText::new(&era.story_en)
+                                            .size(17.0)
+                                            .color(Color32::from_rgb(235, 245, 240)),
+                                    );
+                                    ui.add_space(4.0);
+                                    ui.label(
+                                        RichText::new(format!("✦ {}", era.fun_hook))
+                                            .size(15.0)
+                                            .color(Color32::from_rgb(242, 199, 90)),
+                                    );
+                                    if !era.honesty.is_empty() {
+                                        ui.label(
+                                            RichText::new(format!("Accuracy: {}", era.honesty))
+                                                .size(13.0)
+                                                .color(Color32::from_rgb(170, 200, 190)),
+                                        );
+                                    }
+                                    ui.add_space(8.0);
+                                    ui.label(
+                                        RichText::new(&era.quiz.question)
+                                            .size(16.0)
+                                            .color(Color32::from_rgb(210, 235, 220))
+                                            .strong(),
+                                    );
+                                    if let Some((ok, msg)) = &self.history.feedback {
+                                        ui.label(
+                                            RichText::new(msg).size(18.0).color(if *ok {
+                                                Color32::from_rgb(160, 240, 180)
+                                            } else {
+                                                Color32::from_rgb(255, 190, 170)
+                                            }),
+                                        );
+                                        if ui
+                                            .add(
+                                                egui::Button::new("Next chapter")
+                                                    .fill(Color32::from_rgb(242, 199, 90)),
+                                            )
+                                            .clicked()
+                                        {
+                                            self.history.feedback = None;
+                                            self.history.idx += 1;
+                                            if self.history.idx >= self.history_eras.len() {
+                                                self.add_xp(20);
+                                                self.burst(640.0, 320.0);
+                                                self.status =
+                                                    "Timeline complete — Island Chronist!".into();
+                                            } else {
+                                                self.refresh_history_choices();
+                                            }
+                                        }
+                                    } else {
+                                        let choices = self.history.choices.clone();
+                                        let answer = era.quiz.answer.clone();
+                                        let xp = if era.quiz.xp > 0 { era.quiz.xp } else { 10 };
+                                        for choice in choices {
+                                            if ui
+                                                .add(
+                                                    egui::Button::new(
+                                                        RichText::new(&choice).size(17.0),
+                                                    )
+                                                    .min_size(egui::vec2(
+                                                        ui.available_width(),
+                                                        40.0,
+                                                    ))
+                                                    .fill(Color32::from_rgba_unmultiplied(
+                                                        255, 255, 255, 24,
+                                                    )),
+                                                )
+                                                .clicked()
+                                            {
+                                                let ok = choice == answer;
+                                                if ok {
+                                                    self.add_xp(xp);
+                                                    self.burst(
+                                                        ui.max_rect().center().x,
+                                                        ui.max_rect().center().y,
+                                                    );
+                                                } else {
+                                                    self.add_xp(1);
+                                                }
+                                                self.history.feedback = Some((
+                                                    ok,
+                                                    if ok {
+                                                        "Timeline unlocked.".into()
+                                                    } else {
+                                                        format!("True beat: {}", answer)
                                                     },
                                                 ));
                                             }

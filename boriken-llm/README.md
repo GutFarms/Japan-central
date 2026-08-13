@@ -71,11 +71,14 @@ Modes under `/v1/fun/*`:
 | Batey Match | `GET /v1/fun/match` | Match Boriken ↔ meaning |
 | Konuko Fill-In | `GET /v1/fun/fill-blank` | Plant the missing word |
 | Areyto Quest | `GET /v1/fun/story` | Tiny choose-your-path adventure |
-| Daily Island Run | `GET /v1/fun/daily` | Three-step streak combo |
+| **Island Time Machine** | `GET /v1/fun/history` | Fun history of Borikén (8 chapters + quizzes) |
+| Daily Island Run | `GET /v1/fun/daily` | Streak combo (now includes a history quiz) |
+
+History deep-links: `/v1/fun/history/quest`, `/v1/fun/history/walk?index=0`, `/v1/fun/history/quiz`, `/v1/fun/history/era/{id}`
 
 Definitions: every lexicon entry now has `definition_en`, `definition_es`, `fun_fact`, and `example`. Use `GET /v1/define/{term}`.
 
-The sample SwiftUI home (`ios/SampleApp/BorikenHomeView.swift`) plays Word of the Day, Batey Match, lessons, XP, and streaks.
+The sample SwiftUI home (`ios/SampleApp/BorikenHomeView.swift`) plays Word of the Day, Batey Match, lessons, **Island Time Machine**, XP, and streaks.
 
 ## How the “LLM” works
 

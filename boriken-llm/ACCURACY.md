@@ -63,6 +63,9 @@ Always show the label in UI. Fun games must not hide attestation.
 
 `GET /v1/accuracy` returns live counts, disclaimer text, and flagged entry ids for clients.
 
+Fun history (`GET /v1/fun/history`) teaches ethnohistory in playful chapters but keeps honesty notes—do not treat story beats as primary linguistic attestation.
+
+
 ## Honest product rule
 
 **Prefer a smaller high-confidence core over a fluent fake language.** Reconstruct in the open; never upgrade a revival form to “attested” without a colonial citation.

@@ -96,6 +96,57 @@ public struct MatchItem: Codable, Sendable, Identifiable {
     public let text: String
 }
 
+public struct HistoryTimelineResponse: Codable, Sendable {
+    public let mode: String
+    public let title: String
+    public let subtitle: String
+    public let disclaimer_en: String
+    public let cheer: String?
+    public let chapters: [HistoryChapter]
+    public let total_chapters: Int
+    public let total_xp_possible: Int
+}
+
+public struct HistoryChapter: Codable, Sendable, Identifiable {
+    public let id: String
+    public let chapter: Int?
+    public let era_label: String
+    public let when: String?
+    public let title_en: String
+    public let fun_hook: String?
+    public let xp: Int?
+}
+
+public struct HistoryWalkResponse: Codable, Sendable {
+    public let mode: String
+    public let done: Bool?
+    public let title: String?
+    public let message: String?
+    public let cheer: String?
+    public let xp_bonus: Int?
+    public let era: HistoryEraDetail?
+}
+
+public struct HistoryEraDetail: Codable, Sendable {
+    public let id: String?
+    public let chapter: Int?
+    public let era_label: String?
+    public let when: String?
+    public let title_en: String?
+    public let story_en: String?
+    public let fun_hook: String?
+    public let honesty: String?
+    public let quiz: HistoryQuizPayload?
+    public let lexicon: [BorikenLexeme]?
+}
+
+public struct HistoryQuizPayload: Codable, Sendable {
+    public let question: String?
+    public let choices: [String]?
+    public let answer: String?
+    public let xp: Int?
+}
+
 public struct GradeResponse: Codable, Sendable {
     public let correct: Bool
     public let expected: String
@@ -171,6 +222,14 @@ public actor BorikenClient {
 
     public func matchGame() async throws -> MatchGameResponse {
         try await get("/v1/fun/match")
+    }
+
+    public func historyTimeline() async throws -> HistoryTimelineResponse {
+        try await get("/v1/fun/history")
+    }
+
+    public func historyWalk(index: Int = 0) async throws -> HistoryWalkResponse {
+        try await get("/v1/fun/history/walk?index=\(index)")
     }
 
     public func grade(answer: String, expected: String, mode: String = "match") async throws -> GradeResponse {

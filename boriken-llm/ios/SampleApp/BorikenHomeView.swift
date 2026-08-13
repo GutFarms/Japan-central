@@ -14,6 +14,10 @@ public struct BorikenHomeView: View {
     @State private var matchPrompt: String?
     @State private var matchChoices: [String] = []
     @State private var matchAnswer = ""
+    @State private var historyIndex = 0
+    @State private var historyChoices: [String] = []
+    @State private var historyAnswer = ""
+    @State private var historyXP = 10
     @State private var isLoading = false
     @State private var pulse = false
 
@@ -91,6 +95,7 @@ public struct BorikenHomeView: View {
                         LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 10) {
                             playButton("Word of Day", system: "sun.max.fill") { await loadWordOfDay() }
                             playButton("Batey Match", system: "square.grid.2x2.fill") { await startMatch() }
+                            playButton("Time Machine", system: "clock.arrow.circlepath") { await startHistory() }
                             playButton("Mini Lesson", system: "book.fill") { await loadLesson() }
                             playButton("Daily Run", system: "flag.fill") { await loadDaily() }
                         }
@@ -105,6 +110,20 @@ public struct BorikenHomeView: View {
                                     .foregroundStyle(.white)
                                 ForEach(matchChoices, id: \.self) { choice in
                                     Button(choice) { Task { await submitMatch(choice) } }
+                                        .buttonStyle(.bordered)
+                                        .tint(.white)
+                                        .frame(maxWidth: .infinity)
+                                }
+                            }
+                        }
+
+                        if !historyChoices.isEmpty {
+                            panel {
+                                Text("Island Time Machine")
+                                    .font(.headline)
+                                    .foregroundStyle(gold)
+                                ForEach(historyChoices, id: \.self) { choice in
+                                    Button(choice) { Task { await submitHistory(choice) } }
                                         .buttonStyle(.bordered)
                                         .tint(.white)
                                         .frame(maxWidth: .infinity)
@@ -239,8 +258,53 @@ public struct BorikenHomeView: View {
     @MainActor
     private func loadDaily() async {
         await loadWordOfDay()
-        funFact = "Daily Island Run step 1 complete — next: Batey Match."
+        funFact = "Daily Island Run step 1 complete — next: Batey Match or Time Machine."
         streak = max(streak, 1)
+    }
+
+    @MainActor
+    private func startHistory() async {
+        isLoading = true
+        defer { isLoading = false }
+        do {
+            let walk = try await client.historyWalk(index: historyIndex)
+            if walk.done == true {
+                resultText = walk.message ?? "Timeline complete — Island Chronist!"
+                funFact = walk.cheer ?? ""
+                xp += walk.xp_bonus ?? 20
+                historyChoices = []
+                historyIndex = 0
+                await refreshProgress()
+                return
+            }
+            guard let era = walk.era else {
+                resultText = "History chapter unavailable."
+                return
+            }
+            let title = era.title_en ?? "Chapter"
+            let story = era.story_en ?? ""
+            resultText = "\(era.era_label ?? "Time Machine")\n\(title)\n\(story)"
+            funFact = era.fun_hook ?? era.honesty ?? ""
+            historyAnswer = era.quiz?.answer ?? ""
+            historyXP = era.quiz?.xp ?? 10
+            historyChoices = (era.quiz?.choices ?? []).shuffled()
+            matchPrompt = nil
+            matchChoices = []
+        } catch {
+            resultText = "Time Machine unavailable — start API on :8080."
+        }
+    }
+
+    @MainActor
+    private func submitHistory(_ choice: String) async {
+        let ok = choice == historyAnswer
+        resultText = ok ? "Timeline unlocked. ✓" : "True beat: \(historyAnswer)"
+        xp += ok ? historyXP : 1
+        historyChoices = []
+        historyIndex += 1
+        await refreshProgress()
+        // Auto-advance to next chapter
+        await startHistory()
     }
 
     @MainActor

@@ -23,7 +23,7 @@ from engine.tutor import TutorEngine  # noqa: E402
 app = FastAPI(
     title="BorikenLLM API",
     description="Fun Boriken language reconstruction & learning API for iOS",
-    version="0.3.1",
+    version="0.3.2",
 )
 app.add_middleware(
     CORSMiddleware,
@@ -97,10 +97,11 @@ def health() -> dict[str, Any]:
         "has_definitions": bool(getattr(corpus.entries[0], "definition_en", "")),
         "sentence_patterns": len(corpus.grammar.get("sentence_patterns", [])),
         "llm": llm.info(),
-        "version": "0.3.1",
+        "version": "0.3.2",
         "play": "/v1/fun/menu",
         "sentence_structure": "/v1/sentences/structure",
         "accuracy": "/v1/accuracy",
+        "history": "/v1/fun/history",
     }
 
 
@@ -279,6 +280,31 @@ def fill_blank(n: int = 5) -> dict[str, Any]:
 @app.get("/v1/fun/story")
 def story_quest() -> dict[str, Any]:
     return fun.story_quest()
+
+
+@app.get("/v1/fun/history")
+def history_timeline() -> dict[str, Any]:
+    return fun.history_timeline()
+
+
+@app.get("/v1/fun/history/quest")
+def history_quest() -> dict[str, Any]:
+    return fun.history_quest()
+
+
+@app.get("/v1/fun/history/era/{era_id}")
+def history_era(era_id: str) -> dict[str, Any]:
+    return fun.history_era(era_id=era_id)
+
+
+@app.get("/v1/fun/history/walk")
+def history_walk(index: int = 0) -> dict[str, Any]:
+    return fun.history_walk(index=index)
+
+
+@app.get("/v1/fun/history/quiz")
+def history_quiz(era_id: str | None = None) -> dict[str, Any]:
+    return fun.history_quiz(era_id=era_id)
 
 
 @app.get("/v1/fun/daily")

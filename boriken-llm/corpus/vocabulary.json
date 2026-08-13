@@ -5,8 +5,9 @@
     "dialect": "Classic Taíno / Borikén reconstruction",
     "orthography": "modern regularized Latin (Granberry-style)",
     "notes": "attested=true means documented in colonial Spanish records as Taíno/Antillean, or a widely accepted Taíno→Spanish loan (hamaca, canoa, huracán, etc.). attested=false covers Neo-Taíno/community revival forms, comparative reconstructions, disputed Caribbean Spanish etymologies, and ethnohistoric names that are not Taíno lexemes. Classic Taíno is extinct (ISO tnq); revival mixes ages and invents forms—see ACCURACY.md. Learner SVO is pedagogical Neo-Taíno, not proven classical word order.",
-    "version": "0.3.1",
+    "version": "0.3.2",
     "has_definitions": true,
+    "has_history": true,
     "accuracy_audit": "2026-08",
     "disclaimer": "This toolkit prefers colonial anchors and labels uncertainty. It is not a claim that reconstructed forms are Classical Taíno."
   },

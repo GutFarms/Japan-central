@@ -39,7 +39,7 @@ IOS_NAME="Boriken-iOS-ContentBundle-${VERSION}"
 IOS_DIR="$DIST/$IOS_NAME"
 rm -rf "$IOS_DIR"
 mkdir -p "$IOS_DIR/Corpus" "$IOS_DIR/Model" "$IOS_DIR/BorikenKit"
-cp corpus/vocabulary.json corpus/grammar.json corpus/sentences.json "$IOS_DIR/Corpus/"
+cp corpus/vocabulary.json corpus/grammar.json corpus/sentences.json corpus/history.json "$IOS_DIR/Corpus/"
 cp -R corpus/training "$IOS_DIR/Corpus/" 2>/dev/null || true
 cp models/boriken-gpt.pt models/boriken-gpt.json "$IOS_DIR/Model/" 2>/dev/null || true
 cp -R ios/BorikenKit "$IOS_DIR/"
@@ -73,7 +73,10 @@ echo "==> Building high-graphics desktop release"
   cargo build --release
 )
 cp desktop/target/release/boriken-desktop "$DESK_DIR/"
-cp corpus/vocabulary.json corpus/grammar.json corpus/sentences.json "$DESK_DIR/corpus/"
+cp corpus/vocabulary.json corpus/grammar.json corpus/sentences.json corpus/history.json "$DESK_DIR/corpus/"
+cp prompts/system.md "$DESK_DIR/" 2>/dev/null || true
+# keep ACCURACY.md with desktop when present
+cp ACCURACY.md "$DESK_DIR/" 2>/dev/null || true
 cat > "$DESK_DIR/RUN.txt" <<EOF
 BORIKÉN Desktop Learner ${VERSION}
 =================================

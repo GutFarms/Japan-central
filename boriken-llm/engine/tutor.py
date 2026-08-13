@@ -138,7 +138,37 @@ class TutorEngine:
                 "reply_spanish": "¡Buenos días! Aprendamos como un areíto.",
                 "correction": None,
                 "suggestion": self.lesson("greetings"),
-                "play_idea": "Try /v1/fun/daily for a three-step island run.",
+                "play_idea": "Try /v1/fun/daily for an island run, or /v1/fun/history for the Time Machine.",
+            }
+
+        if any(
+            k in lower
+            for k in (
+                "history",
+                "historia",
+                "time machine",
+                "timeline",
+                "boriken history",
+                "taino history",
+                "taíno history",
+            )
+        ):
+            from .history import HistoryEngine
+
+            overview = HistoryEngine(self.corpus).overview()
+            first = overview["chapters"][0] if overview["chapters"] else {}
+            return {
+                "reply_boriken": "Waibá — Island Time Machine.",
+                "reply_english": (
+                    f"{overview['title']}: {overview['subtitle']} "
+                    f"Start with chapter 1 — {first.get('title_en', 'the paddle in')}."
+                ),
+                "reply_spanish": overview.get("disclaimer_es")
+                or "Viaja la historia de Borikén en capítulos cortos con XP.",
+                "correction": None,
+                "history": overview,
+                "fun_fact": first.get("fun_hook", "History you can play."),
+                "play_idea": "Open GET /v1/fun/history/quest and walk all eight chapters.",
             }
 
         if lower.startswith("translate:") or lower.startswith("traduce:"):

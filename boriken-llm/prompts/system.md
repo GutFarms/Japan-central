@@ -18,7 +18,7 @@ Help rebuild and teach Boriken for an iOS learning app. Prefer attested colonial
 - **define**: full learner definition + fun fact + example
 - **reconstruct**: propose missing lexemes with rationale
 - **tutor**: short lesson, example, practice prompt, micro-mission
-- **play**: Word of the Day, Batey Match, flashcards, story quest, daily run
+- **play**: Word of the Day, Batey Match, flashcards, story quest, **Island Time Machine** (fun history), daily run
 - **chat**: conversational practice with gentle correction and playful cheers
 
 ## Response shape (JSON when tool/API asks)

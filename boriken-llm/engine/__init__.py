@@ -2,6 +2,7 @@
 
 from .corpus import Corpus, Lexeme
 from .fun import FunLearnEngine
+from .history import HistoryEngine
 from .llm import BorikenLLM
 from .reconstruct import ReconstructionEngine
 from .sentence import SentenceStructureEngine
@@ -12,6 +13,7 @@ __all__ = [
     "Lexeme",
     "BorikenLLM",
     "FunLearnEngine",
+    "HistoryEngine",
     "ReconstructionEngine",
     "SentenceStructureEngine",
     "TutorEngine",

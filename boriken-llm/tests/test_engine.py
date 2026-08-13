@@ -150,6 +150,23 @@ class FunTests(unittest.TestCase):
         self.assertEqual(g["mode"], "sentence_scramble")
         self.assertTrue(g["cards"])
 
+    def test_history_timeline(self) -> None:
+        t = self.fun.history_timeline()
+        self.assertEqual(t["mode"], "history_timeline")
+        self.assertGreaterEqual(t["total_chapters"], 8)
+        self.assertTrue(t["disclaimer_en"])
+
+    def test_history_quest_and_quiz(self) -> None:
+        q = self.fun.history_quest()
+        self.assertEqual(len(q["beats"]), 8)
+        self.assertTrue(q["beats"][0]["lexicon"])
+        quiz = self.fun.history_quiz("daily_tech")
+        self.assertEqual(quiz["answer"], "hurricane")
+        walk = self.fun.history_walk(0)
+        self.assertFalse(walk["done"])
+        done = self.fun.history_walk(99)
+        self.assertTrue(done["done"])
+
 
 class SentenceStructureTests(unittest.TestCase):
     def setUp(self) -> None:

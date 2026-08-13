@@ -8,6 +8,7 @@ from datetime import date
 from typing import Any
 
 from .corpus import Corpus, Lexeme, load_corpus, normalize
+from .history import HistoryEngine
 from .tutor import TutorEngine
 from .sentence import SentenceStructureEngine
 
@@ -16,6 +17,7 @@ BADGES = [
     {"id": "batey_rookie", "title": "Batey Rookie", "rule": "Win 1 match game", "xp": 25},
     {"id": "kasabi_cook", "title": "Kasabi Cook", "rule": "Learn 5 food words", "xp": 40},
     {"id": "areyto_singer", "title": "Areyto Singer", "rule": "Complete a story quest", "xp": 50},
+    {"id": "island_chronist", "title": "Island Chronist", "rule": "Finish Island Time Machine", "xp": 80},
     {"id": "hurakan_chaser", "title": "Hurakán Chaser", "rule": "3-day streak", "xp": 60},
     {"id": "cacique_mind", "title": "Kasike Mind", "rule": "Reach 200 XP", "xp": 200},
 ]
@@ -44,6 +46,7 @@ class FunLearnEngine:
         self.corpus = corpus or load_corpus()
         self.tutor = TutorEngine(self.corpus)
         self.sentences = SentenceStructureEngine(self.corpus)
+        self.history = HistoryEngine(self.corpus)
 
     def word_of_the_day(self, day: str | None = None) -> dict[str, Any]:
         day = day or date.today().isoformat()
@@ -218,9 +221,15 @@ class FunLearnEngine:
                 {"step": 1, "task": "Learn Word of the Day", "payload": wotd, "xp": 15},
                 {"step": 2, "task": "Win Batey Match", "payload": match, "xp": match["xp_reward"]},
                 {"step": 3, "task": "Finish mini-lesson", "payload": lesson, "xp": 12},
+                {
+                    "step": 4,
+                    "task": "One Island Time Machine quiz",
+                    "payload": self.history.quiz(),
+                    "xp": 10,
+                },
             ],
             "bonus_badge": "hurakan_chaser",
-            "cheer": "Three tiny quests. One louder Borikén.",
+            "cheer": "Four tiny quests. One louder Borikén.",
         }
 
     def grade(self, mode: str, answer: str, expected: str) -> dict[str, Any]:
@@ -270,6 +279,7 @@ class FunLearnEngine:
                 {"id": "match", "name": "Batey Match", "blurb": "Pair Boriken ↔ meaning against the clock.", "route": "/v1/fun/match"},
                 {"id": "fill_blank", "name": "Konuko Fill-In", "blurb": "Plant the missing word in a sentence.", "route": "/v1/fun/fill-blank"},
                 {"id": "story_quest", "name": "Areyto Quest", "blurb": "A tiny adventure that teaches as you choose.", "route": "/v1/fun/story"},
+                {"id": "history", "name": "Island Time Machine", "blurb": "Fun history of Borikén in eight playable chapters.", "route": "/v1/fun/history"},
                 {"id": "sentence_builder", "name": "Sentence Builder", "blurb": "Assemble SVO / identity / possession patterns.", "route": "/v1/sentences/lesson"},
                 {"id": "sentence_scramble", "name": "Sentence Scramble", "blurb": "Restore Boriken word order for XP.", "route": "/v1/fun/sentence-scramble"},
                 {"id": "daily_challenge", "name": "Daily Island Run", "blurb": "Three quests. One streak-friendly combo.", "route": "/v1/fun/daily"},
@@ -279,3 +289,18 @@ class FunLearnEngine:
 
     def sentence_scramble(self, n: int = 3) -> dict[str, Any]:
         return self.sentences.scramble_game(n=n)
+
+    def history_timeline(self) -> dict[str, Any]:
+        return self.history.overview()
+
+    def history_quest(self) -> dict[str, Any]:
+        return self.history.quest()
+
+    def history_era(self, era_id: str | None = None, chapter: int | None = None) -> dict[str, Any]:
+        return self.history.era(era_id=era_id, chapter=chapter)
+
+    def history_quiz(self, era_id: str | None = None) -> dict[str, Any]:
+        return self.history.quiz(era_id=era_id)
+
+    def history_walk(self, index: int = 0) -> dict[str, Any]:
+        return self.history.walk(index=index)

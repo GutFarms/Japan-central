@@ -42,10 +42,12 @@ def main() -> None:
 
     patterns = grammar.get("sentence_patterns", [])
     learner = sentences.get("learner_sentences", [])
+    history = json.loads((ROOT / "corpus" / "history.json").read_text(encoding="utf-8"))
     payload = json.dumps(entries, ensure_ascii=False)
     patterns_json = json.dumps(patterns, ensure_ascii=False)
     learner_json = json.dumps(learner, ensure_ascii=False)
     overview = json.dumps(grammar.get("sentence_structure", {}).get("overview", {}), ensure_ascii=False)
+    history_json = json.dumps(history, ensure_ascii=False)
     accuracy_banner = json.dumps(
         {
             "version": data.get("meta", {}).get("version"),
@@ -60,6 +62,7 @@ def main() -> None:
         .replace("__LEARNER_JSON__", learner_json)
         .replace("__OVERVIEW_JSON__", overview)
         .replace("__ACCURACY_JSON__", accuracy_banner)
+        .replace("__HISTORY_JSON__", history_json)
     )
     OUT_DIR.mkdir(parents=True, exist_ok=True)
     OUT_HTML.write_text(html, encoding="utf-8")
@@ -68,7 +71,7 @@ def main() -> None:
         "======================\n\n"
         "Open index.html in any browser (iPhone Safari works).\n"
         "On iOS: Share → Add to Home Screen for an app-like icon.\n"
-        "Includes sentence structure (SVO), definitions, and games.\n"
+        "Includes Island Time Machine (fun history), sentence structure, definitions, and games.\n"
         "No server required — lexicon and games are embedded.\n",
         encoding="utf-8",
     )
@@ -163,6 +166,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
       <button onclick="fillBlank()">Konuko Fill</button>
       <button onclick="showSearch()">Define</button>
       <button onclick="story()">Areyto Quest</button>
+      <button onclick="historyStart()">Time Machine</button>
       <button onclick="showStructure()">Sentences</button>
       <button onclick="scramble()">Scramble</button>
     </div>
@@ -187,6 +191,7 @@ const PATTERNS = __PATTERNS_JSON__;
 const LEARNER = __LEARNER_JSON__;
 const OVERVIEW = __OVERVIEW_JSON__;
 const ACCURACY = __ACCURACY_JSON__;
+const HISTORY = __HISTORY_JSON__;
 const state = {
   xp: Number(localStorage.getItem("boriken_xp") || 0),
   streak: Number(localStorage.getItem("boriken_streak") || 1),
@@ -195,6 +200,7 @@ const state = {
   flashCards: [],
   storyIdx: 0,
   scramble: null,
+  historyIdx: 0,
 };
 
 function save() {
@@ -410,6 +416,47 @@ function checkScramble() {
   stage(`<p class="${ok ? "ok" : "bad"}">${ok ? "Word order restored." : "Answer: " + state.scramble.answer}</p>
     <button class="primary" onclick="scramble()">Another</button>
     <button onclick="showStructure()">See structures</button>`);
+}
+
+function historyStart() {
+  state.historyIdx = 0;
+  renderHistory();
+}
+
+function renderHistory() {
+  const eras = HISTORY.eras || [];
+  if (state.historyIdx >= eras.length) {
+    addXp(20);
+    stage(`<h3>Island Time Machine · Complete</h3>
+      <p class="ok">+20 XP — Island Chronist energy. You walked Borikén's areyto of ages.</p>
+      <p class="muted">${(HISTORY.meta && HISTORY.meta.disclaimer_en) || ""}</p>
+      <button class="primary" onclick="historyStart()">Replay</button>`);
+    return;
+  }
+  const e = eras[state.historyIdx];
+  const words = (e.words || []).map(id => {
+    const w = LEXICON.find(x => x.id === id);
+    return w ? `<span class="chip">${w.boriken}</span>` : "";
+  }).join(" ");
+  const q = e.quiz || {};
+  const choices = (q.choices || []).slice().sort(() => Math.random() - 0.5);
+  stage(`<h3>Time Machine · Ch. ${e.chapter}</h3>
+    <p class="gold">${e.era_label} · ${e.when}</p>
+    <div class="boriken">${e.title_en}</div>
+    <p>${e.story_en}</p>
+    <p class="gold">✦ ${e.fun_hook || ""}</p>
+    <p>${words}</p>
+    <p class="muted">${e.honesty || ""}</p>
+    <p><strong>${q.question || ""}</strong></p>
+    ${choices.map(c => `<button class="choice" onclick="historyPick(${JSON.stringify(c)}, ${JSON.stringify(q.answer)}, ${q.xp || 10})">${c}</button>`).join("")}`);
+}
+
+function historyPick(choice, answer, xp) {
+  const ok = choice === answer;
+  addXp(ok ? xp : 1);
+  state.historyIdx += 1;
+  stage(`<p class="${ok ? "ok" : "bad"}">${ok ? "Timeline unlocked." : "True beat: " + answer}</p>
+    <button class="primary" onclick="renderHistory()">Next chapter</button>`);
 }
 </script>
 </body>
