@@ -329,8 +329,12 @@ IRAM_ATTR uint32_t sha256d_hw_sw(const uint32_t block1[16], const uint32_t mid_b
 
 bool g_locked = false;
 bool g_mid_ok = false;
+bool g_hybrid_ok = false;
 bool g_calibrated = false;
 Mode g_mode = Mode::FullHw;
+int8_t g_preferred = -1;  // -1 auto, else Mode ordinal
+TuneReport g_last_tune{};
+bool g_tune_active = false;
 
 }  // namespace
 
@@ -338,13 +342,24 @@ bool available() { return true; }
 bool locked() { return g_locked; }
 Mode mode() { return g_mode; }
 bool midstate_ok() { return g_mid_ok; }
+bool hybrid_ok() { return g_hybrid_ok; }
 void disable_midstate() {
   g_mid_ok = false;
   if (g_mode == Mode::MidHw) g_mode = Mode::HwSwSecond;
 }
 
-const char* mode_label() {
-  switch (g_mode) {
+void set_preferred_mode(int8_t mode_or_neg1) { g_preferred = mode_or_neg1; }
+int8_t preferred_mode() { return g_preferred; }
+
+void force_mode(Mode m) {
+  if (m == Mode::MidHw && !g_mid_ok) m = Mode::FullHw;
+  if (m == Mode::HwSwSecond && !g_hybrid_ok) m = Mode::FullHw;
+  g_mode = m;
+  g_calibrated = true;
+}
+
+const char* mode_label_of(Mode m) {
+  switch (m) {
     case Mode::MidHw:
       return "HW+";
     case Mode::HwSwSecond:
@@ -354,6 +369,8 @@ const char* mode_label() {
   }
 }
 
+const char* mode_label() { return mode_label_of(g_mode); }
+
 bool acquire() {
   if (g_locked) return true;
   DPORT_SET_PERI_REG_MASK(DPORT_PERI_CLK_EN_REG, DPORT_PERI_EN_SHA);
@@ -361,6 +378,7 @@ bool acquire() {
   esp_sha_lock_engine(kSha);
   g_locked = true;
   g_mid_ok = false;
+  g_hybrid_ok = false;
   g_calibrated = false;
   g_mode = Mode::FullHw;
   return true;
@@ -371,6 +389,7 @@ void release() {
   esp_sha_unlock_engine(kSha);
   g_locked = false;
   g_mid_ok = false;
+  g_hybrid_ok = false;
   g_calibrated = false;
   g_mode = Mode::FullHw;
 }
@@ -426,6 +445,7 @@ void calibrate(const uint32_t hdr_be[20], const uint32_t mid_be[8]) {
 
   // Correctness gate for mid + hybrid.
   g_mid_ok = false;
+  g_hybrid_ok = false;
   bool mid_ok = false;
   bool hybrid_ok = false;
   {
@@ -447,9 +467,28 @@ void calibrate(const uint32_t hdr_be[20], const uint32_t mid_be[8]) {
     }
   }
   g_mid_ok = mid_ok;
+  g_hybrid_ok = hybrid_ok;
+
+  // Honoured preferred path from a prior Bench (NVS), if still valid.
+  if (g_preferred == (int8_t)Mode::FullHw) {
+    g_mode = Mode::FullHw;
+    g_calibrated = true;
+    return;
+  }
+  if (g_preferred == (int8_t)Mode::MidHw && mid_ok) {
+    g_mode = Mode::MidHw;
+    g_calibrated = true;
+    return;
+  }
+  if (g_preferred == (int8_t)Mode::HwSwSecond && hybrid_ok) {
+    g_mode = Mode::HwSwSecond;
+    g_calibrated = true;
+    return;
+  }
 
   auto time_path = [&](Mode m) -> uint32_t {
-    const uint32_t N = 2048;
+    // D0 builds use a longer micro-window for a stabler pick.
+    const uint32_t N = CYD_D0_BUILD ? 6144u : 2048u;
     uint32_t t0 = micros();
     for (uint32_t i = 0; i < N; i++) {
       const uint32_t nonce_be = bswap32(i);
@@ -494,8 +533,66 @@ void calibrate(const uint32_t hdr_be[20], const uint32_t mid_be[8]) {
 void force_recalibrate() {
   g_calibrated = false;
   g_mid_ok = false;
+  g_hybrid_ok = false;
   g_mode = Mode::FullHw;
 }
+
+void begin_tune_session() {
+  g_tune_active = true;
+  g_last_tune = TuneReport{};
+  g_last_tune.mid_ok = g_mid_ok;
+  g_last_tune.hybrid_ok = g_hybrid_ok;
+  g_last_tune.hw.ok = true;
+}
+
+void record_path_hs(Mode m, float hs) {
+  if (!g_tune_active) return;
+  PathScore* slot = nullptr;
+  switch (m) {
+    case Mode::MidHw:
+      slot = &g_last_tune.hw_plus;
+      break;
+    case Mode::HwSwSecond:
+      slot = &g_last_tune.hw_sw;
+      break;
+    default:
+      slot = &g_last_tune.hw;
+      break;
+  }
+  slot->ok = true;
+  slot->hs = hs;
+}
+
+TuneReport finish_tune_session() {
+  g_tune_active = false;
+  g_last_tune.mid_ok = g_mid_ok;
+  g_last_tune.hybrid_ok = g_hybrid_ok;
+
+  Mode best = Mode::FullHw;
+  float best_hs = g_last_tune.hw.ok ? g_last_tune.hw.hs : 0;
+  if (g_last_tune.hw_sw.ok && g_last_tune.hw_sw.hs > best_hs) {
+    best = Mode::HwSwSecond;
+    best_hs = g_last_tune.hw_sw.hs;
+  }
+  if (g_last_tune.hw_plus.ok && g_last_tune.hw_plus.hs > best_hs) {
+    best = Mode::MidHw;
+    best_hs = g_last_tune.hw_plus.hs;
+  }
+  // Within ~1.5% noise, prefer HW/SW (usually strongest on ESP32-D0).
+  if (g_last_tune.hw_sw.ok && best != Mode::HwSwSecond && best_hs > 0 &&
+      g_last_tune.hw_sw.hs >= best_hs * 0.985f) {
+    best = Mode::HwSwSecond;
+    best_hs = g_last_tune.hw_sw.hs;
+  }
+
+  force_mode(best);
+  g_preferred = (int8_t)best;
+  g_last_tune.best = best;
+  g_last_tune.best_hs = best_hs;
+  return g_last_tune;
+}
+
+const TuneReport& last_tune_report() { return g_last_tune; }
 
 IRAM_ATTR bool hash_nonce(const uint32_t hdr_be[20], const uint32_t mid_be[8], uint32_t nonce_le,
                           uint32_t out_be[8], uint32_t msb_limit) {
@@ -583,16 +680,27 @@ IRAM_ATTR size_t mine(const uint32_t hdr_be[20], const uint32_t mid_be[8], uint3
 #else  // !CYD_SHA_HW
 
 namespace cyd_sha_hw {
+static TuneReport g_last_tune{};
+
 bool available() { return false; }
 bool acquire() { return false; }
 void release() {}
 bool locked() { return false; }
 Mode mode() { return Mode::FullHw; }
+const char* mode_label_of(Mode) { return "SW"; }
 const char* mode_label() { return "SW"; }
 bool midstate_ok() { return false; }
+bool hybrid_ok() { return false; }
 void disable_midstate() {}
+void set_preferred_mode(int8_t) {}
+int8_t preferred_mode() { return -1; }
+void force_mode(Mode) {}
 void calibrate(const uint32_t*, const uint32_t*) {}
 void force_recalibrate() {}
+void begin_tune_session() { g_last_tune = TuneReport{}; }
+void record_path_hs(Mode, float) {}
+TuneReport finish_tune_session() { return g_last_tune; }
+const TuneReport& last_tune_report() { return g_last_tune; }
 bool hash_nonce(const uint32_t*, const uint32_t*, uint32_t, uint32_t*, uint32_t) { return false; }
 size_t mine(const uint32_t*, const uint32_t*, uint32_t*, size_t, uint32_t, uint32_t, bool*,
             uint32_t*, uint32_t*) {

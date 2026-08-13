@@ -1609,7 +1609,7 @@ impl CompanionApp {
                                         .font(display_font(32.0)),
                                 );
                                 ui.label(
-                                    RichText::new("CYD miner · USB/Wi‑Fi SHA-256 · ~1020 kH/s target")
+                                    RichText::new("CYD D0 miner · USB/Wi‑Fi SHA-256 · Bench auto-picks best path · ~1020 kH/s")
                                         .color(C_TEXT)
                                         .font(display_font(16.0)),
                                 );
@@ -1673,7 +1673,7 @@ impl CompanionApp {
                         });
                         ui.label(
                             RichText::new(format!(
-                                "SHA path {} · target ~1020 kH/s (real board measure; ESP32 cannot do tens of MH/s)",
+                                "SHA path {} · D0 Bench times HW/HW+/HW/SW and locks the winner · ~1020 kH/s target",
                                 self.sha_mode_label()
                             ))
                             .color(C_DIM)
@@ -1908,11 +1908,12 @@ impl CompanionApp {
             );
             ui.add_space(12.0);
             ui.horizontal_wrapped(|ui| {
-                if soft_button(ui, "Bench boards", 140.0).clicked() {
+                if soft_button(ui, "Bench boards (D0)", 168.0).clicked() {
                     let _ = self.cmd_tx.send(NetCmd::Bench);
                     self.push_log(
                         LogKind::Usb,
-                        "Bench+tune all boards for max hashrate…".into(),
+                        "D0 auto-tune: each board times HW / HW+ / HW/SW and locks the best path…"
+                            .into(),
                     );
                 }
                 let fetch_label = if self.fetch_busy {
@@ -2874,7 +2875,7 @@ impl CompanionApp {
                     self.term_input = "cmp stop".into();
                     self.send_term();
                 }
-                if soft_button(ui, "Bench", 82.0).clicked() {
+                if soft_button(ui, "Bench D0", 96.0).clicked() {
                     let _ = self.cmd_tx.send(NetCmd::Bench);
                 }
                 if soft_button(ui, "Reboot", 92.0).clicked() {
@@ -5416,7 +5417,7 @@ fn mine_worker(cmd_rx: Receiver<NetCmd>, msg_tx: Sender<NetMsg>) {
                             LogKind::Usb,
                             format!("Tuning {} for max hashrate…", b.name),
                         );
-                        match usb_cmd(&mut b.port, &mut b.rx, "cmp bench tune=1&n=120000") {
+                        match usb_cmd(&mut b.port, &mut b.rx, "cmp bench tune=1&n=180000") {
                             Ok(line) => {
                                 lines.push(format!("{} → {line}", b.name));
                                 log_msg(&msg_tx, LogKind::Usb, format!("{} bench OK: {line}", b.name));
@@ -5902,8 +5903,8 @@ fn usb_cmd(port: &mut BoardIo, buf: &mut String, cmd: &str) -> Result<String, St
     let mut last_err = String::new();
     // Bigger writes + single flush cut job-push latency a lot vs per-chunk sleeps.
     let (wait_ms, retries, chunk, gap_ms) = if cmd.contains("bench") {
-        // Full HW retune + 120k hashes can take >30s on classic ESP32.
-        (120_000u64, 2usize, 128usize, 1u64)
+        // D0 auto-tune times HW / HW+ / HW/SW (~3× samples) — allow up to 3 minutes.
+        (180_000u64, 2usize, 128usize, 1u64)
     } else if cmd.contains("status") {
         // Board may be mid mineB batch; firmware yields on RX, but allow headroom.
         (2_800u64, 3usize, 256usize, 0u64)

@@ -7,6 +7,7 @@ bool ConfigStore::load(AppConfig& cfg) {
   cfg.wifiEnabled = prefs_.getBool("wifi_en", true);
   cfg.wifiSsid = prefs_.getString("wifi_ssid", "");
   cfg.wifiPass = prefs_.getString("wifi_pass", "");
+  cfg.shaPath = (int8_t)prefs_.getInt("sha_path", -1);
   prefs_.end();
   return true;
 }
@@ -18,6 +19,7 @@ bool ConfigStore::save(const AppConfig& cfg) {
   prefs_.putBool("wifi_en", cfg.wifiEnabled);
   prefs_.putString("wifi_ssid", cfg.wifiSsid);
   prefs_.putString("wifi_pass", cfg.wifiPass);
+  prefs_.putInt("sha_path", (int)cfg.shaPath);
   prefs_.end();
   return true;
 }

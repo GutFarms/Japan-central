@@ -66,10 +66,17 @@ void WifiLink::beacon() {
   IPAddress sta = WiFi.localIP();
   IPAddress advertise = (WiFi.status() == WL_CONNECTED) ? sta : ap;
   char msg[220];
+#if CYD_D0_BUILD
+  static constexpr const char* kFwTag = "0.8.53-sha256-d0";
+  static constexpr const char* kFwShort = "0.8.53-d0";
+#else
+  static constexpr const char* kFwTag = "0.8.53-sha256";
+  static constexpr const char* kFwShort = "0.8.53";
+#endif
   snprintf(msg, sizeof(msg),
-           "%s|v=0.8.52|mac=%s|fw=0.8.52-sha256|tcp=%u|ip=%u.%u.%u.%u|ap=%s|mode=%s",
-           CYD_WIFI_MAGIC, mac_.c_str(), (unsigned)CYD_WIFI_TCP_PORT, advertise[0], advertise[1],
-           advertise[2], advertise[3], apSsid_.c_str(), modeLabel());
+           "%s|v=%s|mac=%s|fw=%s|tcp=%u|ip=%u.%u.%u.%u|ap=%s|mode=%s",
+           CYD_WIFI_MAGIC, kFwShort, mac_.c_str(), kFwTag, (unsigned)CYD_WIFI_TCP_PORT,
+           advertise[0], advertise[1], advertise[2], advertise[3], apSsid_.c_str(), modeLabel());
 
   // Broadcast on SoftAP subnet and STA subnet when available.
   IPAddress bcast(255, 255, 255, 255);

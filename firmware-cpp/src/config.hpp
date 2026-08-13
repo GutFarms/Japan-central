@@ -9,6 +9,8 @@ struct AppConfig {
   bool wifiEnabled = true;
   String wifiSsid;
   String wifiPass;
+  /// Preferred SHA path after Bench auto-tune: -1=auto, 0=HW, 1=HW+, 2=HW/SW.
+  int8_t shaPath = -1;
 
   uint8_t normalizeCpu(uint8_t mhz) const {
     if (mhz == 0 || mhz >= 200) return 240;

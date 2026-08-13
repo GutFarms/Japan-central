@@ -5,6 +5,12 @@
 
 extern "C" float cyd_run_bench(uint32_t n, bool tune);
 
+#if CYD_D0_BUILD
+static constexpr const char* kFwTag = "0.8.53-sha256-d0";
+#else
+static constexpr const char* kFwTag = "0.8.53-sha256";
+#endif
+
 void CompanionLink::begin(uint32_t baud) {
   Serial.setRxBufferSize(16384);
   Serial.setTxBufferSize(4096);
@@ -247,10 +253,20 @@ void CompanionLink::handleLine(const String& line, AppConfig& cfg, const MinerSn
     if (n < 1000) n = 1000;
     if (n > 400000) n = 400000;
     float hs = cyd_run_bench(n, tune);
-    char line[160];
-    snprintf(line, sizeof(line),
-             "CMPBENCH hashes=%u hs=%.0f khs=%.3f path=%s tune=%u", (unsigned)n, hs, hs / 1000.0f,
-             cyd_sha_hw::mode_label(), tune ? 1u : 0u);
+    char line[280];
+    if (tune) {
+      const auto& tr = cyd_sha_hw::last_tune_report();
+      snprintf(line, sizeof(line),
+               "CMPBENCH hashes=%u hs=%.0f khs=%.3f path=%s tune=1 d0=%u "
+               "HW=%.0f HW+=%.0f HW/SW=%.0f best=%s",
+               (unsigned)n, hs, hs / 1000.0f, cyd_sha_hw::mode_label(),
+               (unsigned)CYD_D0_BUILD, tr.hw.hs, tr.hw_plus.hs, tr.hw_sw.hs,
+               cyd_sha_hw::mode_label_of(tr.best));
+    } else {
+      snprintf(line, sizeof(line),
+               "CMPBENCH hashes=%u hs=%.0f khs=%.3f path=%s tune=0 d0=%u", (unsigned)n, hs,
+               hs / 1000.0f, cyd_sha_hw::mode_label(), (unsigned)CYD_D0_BUILD);
+    }
     out_->println(line);
     out_->flush();
     return;
@@ -379,11 +395,11 @@ void CompanionLink::replyConfig(const AppConfig& cfg, const MinerSnapshot& snap)
   copyJsonSafe(wap, sizeof(wap), snap.wifiAp.c_str(), 32);
   char buf[320];
   snprintf(buf, sizeof(buf),
-           "{\"cpu_mhz\":%u,\"hash_focus\":true,\"fw\":\"0.8.52-sha256\",\"mode\":\"usb-wifi-sha256\","
+           "{\"cpu_mhz\":%u,\"hash_focus\":true,\"fw\":\"%s\",\"mode\":\"usb-wifi-sha256\","
            "\"configured\":true,\"mac\":\"%s\",\"wifi_en\":%s,\"wifi_ssid\":\"%s\","
            "\"wifi_mode\":\"%s\",\"wifi_ip\":\"%s\",\"wifi_ap\":\"%s\",\"wifi_tcp\":%u}",
-           (unsigned)cfg.cpuMhz, mac, cfg.wifiEnabled ? "true" : "false", ssid, wmode, wip, wap,
-           19284u);
+           (unsigned)cfg.cpuMhz, kFwTag, mac, cfg.wifiEnabled ? "true" : "false", ssid, wmode, wip,
+           wap, 19284u);
   out_->print("CMPCONFIG ");
   out_->println(buf);
 }

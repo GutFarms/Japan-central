@@ -21,6 +21,8 @@ echo "==> Windows companion"
 
 APP_BIN="flash/esp32-2432s028-sha256-miner.bin"
 MERGED_BIN="flash/esp32-2432s028-sha256-miner-merged.bin"
+APP_D0="flash/esp32-2432s028-sha256-miner-d0.bin"
+MERGED_D0="flash/esp32-2432s028-sha256-miner-d0-merged.bin"
 ZIP="dist/cyd-companion-windows.zip"
 PORTABLE_ZIP="dist/CYD-Companion-Portable.zip"
 APP_ONLY_ZIP="dist/CYD-Companion-App-Only.zip"
@@ -32,6 +34,8 @@ SETUP_ALIAS="dist/CYD-Companion-Setup.exe"
 echo "==> verifying artifacts"
 test -f "$APP_BIN"
 test -f "$MERGED_BIN"
+test -f "$APP_D0"
+test -f "$MERGED_D0"
 test -f "$ZIP"
 test -f "$PORTABLE_ZIP"
 test -f "$APP_ONLY_ZIP"
@@ -45,20 +49,32 @@ fi
 python3 - <<'PY'
 from pathlib import Path
 import sys
-app = Path("flash/esp32-2432s028-sha256-miner.bin").read_bytes()
-merged = Path("flash/esp32-2432s028-sha256-miner-merged.bin").read_bytes()
-dl = Path("flash/downloads/esp32-2432s028-sha256-miner-merged.bin")
 ok = True
-if app[0] != 0xE9:
-    print("ERROR: app.bin missing ESP magic 0xE9", file=sys.stderr); ok = False
-if len(merged) < 0x10000 + 256:
-    print("ERROR: merged.bin too small", file=sys.stderr); ok = False
-elif merged[0x10000] != 0xE9 or merged[0x1000] != 0xE9:
-    print("ERROR: merged.bin layout bad", file=sys.stderr); ok = False
-elif app[:16] != merged[0x10000:0x10010]:
-    print("ERROR: merged app segment != app.bin", file=sys.stderr); ok = False
-if not dl.is_file() or dl.read_bytes() != merged:
-    print("ERROR: flash/downloads merged.bin != flash/merged.bin", file=sys.stderr); ok = False
+for app_path, merged_path, dl_path in [
+    (
+        "flash/esp32-2432s028-sha256-miner.bin",
+        "flash/esp32-2432s028-sha256-miner-merged.bin",
+        "flash/downloads/esp32-2432s028-sha256-miner-merged.bin",
+    ),
+    (
+        "flash/esp32-2432s028-sha256-miner-d0.bin",
+        "flash/esp32-2432s028-sha256-miner-d0-merged.bin",
+        "flash/downloads/esp32-2432s028-sha256-miner-d0-merged.bin",
+    ),
+]:
+    app = Path(app_path).read_bytes()
+    merged = Path(merged_path).read_bytes()
+    dl = Path(dl_path)
+    if app[0] != 0xE9:
+        print(f"ERROR: {app_path} missing ESP magic 0xE9", file=sys.stderr); ok = False
+    if len(merged) < 0x10000 + 256:
+        print(f"ERROR: {merged_path} too small", file=sys.stderr); ok = False
+    elif merged[0x10000] != 0xE9 or merged[0x1000] != 0xE9:
+        print(f"ERROR: {merged_path} layout bad", file=sys.stderr); ok = False
+    elif app[:16] != merged[0x10000:0x10010]:
+        print(f"ERROR: {merged_path} app segment != app.bin", file=sys.stderr); ok = False
+    if not dl.is_file() or dl.read_bytes() != merged:
+        print(f"ERROR: downloads {dl.name} != flash/{Path(merged_path).name}", file=sys.stderr); ok = False
 ver = Path("flash/downloads/VERSION.txt").read_text().strip()
 cargo = next(
     (ln.split('"')[1] for ln in Path("companion/Cargo.toml").read_text().splitlines() if ln.startswith("version")),

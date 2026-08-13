@@ -6,6 +6,8 @@
 # Fetch-latest / web install need these on GitHub (raw.githubusercontent.com).
 !flash/downloads/esp32-2432s028-sha256-miner.bin
 !flash/downloads/esp32-2432s028-sha256-miner-merged.bin
+!flash/downloads/esp32-2432s028-sha256-miner-d0.bin
+!flash/downloads/esp32-2432s028-sha256-miner-d0-merged.bin
 # Windows Companion downloads (installer + standalone app + flasher).
 !flash/downloads/CYD-Miner-Setup.exe
 !flash/downloads/CYD-Companion-Setup.exe

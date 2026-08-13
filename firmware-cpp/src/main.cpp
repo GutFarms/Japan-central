@@ -395,6 +395,7 @@ void setup() {
   g_cfg.hashFocus = true;
   g_cfg.wifiEnabled = true;
   applyCpu(240);
+  cyd_sha_hw::set_preferred_mode(g_cfg.shaPath);
   g_wifi.begin(g_macStr, g_cfg);
   g_cmp.setWifiApply([]() {
     g_store.save(g_cfg);
@@ -421,12 +422,17 @@ void setup() {
     memset(hdr, 0xA5, 80);
     uint8_t tgt[32];
     memset(tgt, 0xFF, 32);
-    // First setJob runs the one-time HW path calibrate.
+    // First setJob runs the one-time HW path calibrate (honours NVS preferred path).
     g_minerA.setJob(hdr, tgt, 1);
     refreshLabels();
-    char line[28];
+    char line[36];
+#if CYD_D0_BUILD
+    snprintf(line, sizeof(line), "D0 %s · USB/WiFi", cyd_sha_hw::mode_label());
+    g_ui.showMessage("SHA-256 D0", line);
+#else
     snprintf(line, sizeof(line), "%s · USB/WiFi", cyd_sha_hw::mode_label());
     g_ui.showMessage("SHA-256 MAX", line);
+#endif
   } else {
     g_ui.showMessage("SHA-256", "USB + WiFi link");
   }
@@ -484,25 +490,69 @@ extern "C" float cyd_run_bench(uint32_t n, bool tune) {
   bool was = g_mining;
   g_mining = false;
   delay(12);
-  if (tune) {
-    cyd_sha_hw::force_recalibrate();
-  }
-  // Warm job so calibrate() can pick the fastest correct HW path.
+
   uint8_t hdr[80];
   memset(hdr, 0xA5, 80);
   uint8_t tgt[32];
   memset(tgt, 0xFF, 32);
-  g_minerA.setJob(hdr, tgt, 1);
-  if (tune) {
-    // Second setJob after force_recalibrate still skips if calibrated mid-setJob —
-    // calibrate runs inside setJob; force again then setJob once more for a clean timing.
-    cyd_sha_hw::force_recalibrate();
-    g_minerA.setJob(hdr, tgt, 2);
-  }
+
   uint32_t hashes = n;
   if (hashes < 20000) hashes = 20000;
   if (hashes > 400000) hashes = 400000;
-  g_lastBenchHs = runBench(hashes);
+
+  if (tune && g_hwSha) {
+    // Full D0 auto-tune: time each correct SHA path with a real hash window,
+    // then lock the winner into NVS so boot keeps the best option.
+    cyd_sha_hw::set_preferred_mode(-1);
+    cyd_sha_hw::force_recalibrate();
+    g_minerA.setJob(hdr, tgt, 1);  // correctness gate + micro calibrate
+    cyd_sha_hw::begin_tune_session();
+
+    const cyd_sha_hw::Mode candidates[] = {
+        cyd_sha_hw::Mode::FullHw,
+        cyd_sha_hw::Mode::HwSwSecond,
+        cyd_sha_hw::Mode::MidHw,
+    };
+    // Per-path sample — enough to rank stably without a long stall.
+    uint32_t per = hashes / 3;
+    if (per < 40000) per = 40000;
+    if (per > 160000) per = 160000;
+
+    for (cyd_sha_hw::Mode m : candidates) {
+      if (m == cyd_sha_hw::Mode::MidHw && !cyd_sha_hw::midstate_ok()) continue;
+      if (m == cyd_sha_hw::Mode::HwSwSecond && !cyd_sha_hw::hybrid_ok()) continue;
+      cyd_sha_hw::force_mode(m);
+      g_minerA.setJob(hdr, tgt, (uint32_t)m + 10);
+      char msg[40];
+      snprintf(msg, sizeof(msg), "bench %s…", cyd_sha_hw::mode_label_of(m));
+      g_ui.showMessage("D0 AUTO-TUNE", msg);
+      float hs = runBench(per);
+      cyd_sha_hw::record_path_hs(m, hs);
+      esp_task_wdt_reset();
+    }
+
+    auto report = cyd_sha_hw::finish_tune_session();
+    g_cfg.shaPath = (int8_t)report.best;
+    cyd_sha_hw::set_preferred_mode(g_cfg.shaPath);
+    g_store.save(g_cfg);
+    g_lastBenchHs = report.best_hs > 0 ? report.best_hs : runBench(hashes);
+    refreshLabels();
+    char done[40];
+    snprintf(done, sizeof(done), "best %s · %.0f kH/s", cyd_sha_hw::mode_label(),
+             g_lastBenchHs / 1000.0f);
+    g_ui.showMessage("D0 AUTO-TUNE", done);
+  } else {
+    if (tune) {
+      cyd_sha_hw::force_recalibrate();
+    }
+    g_minerA.setJob(hdr, tgt, 1);
+    if (tune) {
+      cyd_sha_hw::force_recalibrate();
+      g_minerA.setJob(hdr, tgt, 2);
+    }
+    g_lastBenchHs = runBench(hashes);
+  }
+
   g_mining = was;
   if (g_jobLoaded) {
     g_minerA.setJob(g_job.header, g_job.target, g_minerA.nonce());
