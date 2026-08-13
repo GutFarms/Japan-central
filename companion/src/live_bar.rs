@@ -1,4 +1,4 @@
-//! Live ticker bar: IP geolocation → local weather/time + top crypto prices.
+//! Live ticker bar: IP geolocation → local weather/time + selectable crypto prices.
 
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::thread;
@@ -6,6 +6,30 @@ use std::time::{Duration, Instant};
 
 use chrono::{FixedOffset, Utc};
 use serde::Deserialize;
+
+/// Catalog of coins available for the header ticker (CoinGecko id → symbol).
+pub const COIN_CATALOG: &[(&str, &str)] = &[
+    ("bitcoin", "BTC"),
+    ("litecoin", "LTC"),
+    ("ethereum", "ETH"),
+    ("solana", "SOL"),
+    ("binancecoin", "BNB"),
+    ("ripple", "XRP"),
+    ("dogecoin", "DOGE"),
+    ("cardano", "ADA"),
+    ("monero", "XMR"),
+    ("bitcoin-cash", "BCH"),
+];
+
+/// Default coins shown in the header strip.
+pub fn default_header_coins() -> Vec<String> {
+    vec!["BTC".into(), "LTC".into(), "ETH".into()]
+}
+
+pub fn coin_symbol_valid(sym: &str) -> bool {
+    let u = sym.trim().to_ascii_uppercase();
+    COIN_CATALOG.iter().any(|(_, s)| *s == u)
+}
 
 #[derive(Debug, Clone, Default)]
 pub struct CryptoQuote {
@@ -58,8 +82,26 @@ impl LiveFeed {
         &self.snap
     }
 
+    /// Quotes filtered + ordered by the user's header coin selection.
+    pub fn quotes_for(&self, selected: &[String]) -> Vec<&CryptoQuote> {
+        let mut out = Vec::new();
+        for sel in selected {
+            let want = sel.trim().to_ascii_uppercase();
+            if let Some(q) = self
+                .snap
+                .quotes
+                .iter()
+                .find(|q| q.symbol.eq_ignore_ascii_case(&want))
+            {
+                out.push(q);
+            }
+        }
+        out
+    }
+
     pub fn local_now_label(&self) -> String {
-        let offset = FixedOffset::east_opt(self.snap.utc_offset_secs).unwrap_or(FixedOffset::east_opt(0).unwrap());
+        let offset = FixedOffset::east_opt(self.snap.utc_offset_secs)
+            .unwrap_or(FixedOffset::east_opt(0).unwrap());
         let now = Utc::now().with_timezone(&offset);
         now.format("%a %d %b  ·  %H:%M:%S").to_string()
     }
@@ -76,9 +118,19 @@ impl LiveFeed {
 
     /// Short ticker for the ESP LCD (`cmp netdata text=…`).
     pub fn board_ticker(&self) -> String {
+        self.board_ticker_for(&default_header_coins())
+    }
+
+    pub fn board_ticker_for(&self, selected: &[String]) -> String {
         let mut parts: Vec<String> = Vec::new();
-        for q in self.snap.quotes.iter().take(3) {
+        let quotes = self.quotes_for(selected);
+        for q in quotes.iter().take(3) {
             parts.push(format!("{} {}", q.symbol, format_usd(q.usd)));
+        }
+        if parts.is_empty() {
+            for q in self.snap.quotes.iter().take(3) {
+                parts.push(format!("{} {}", q.symbol, format_usd(q.usd)));
+            }
         }
         if self.snap.ready && !self.snap.city.is_empty() {
             parts.push(format!(
@@ -240,21 +292,21 @@ struct PriceRow {
 
 fn fetch_prices() -> Result<Vec<CryptoQuote>, String> {
     // CoinGecko free simple price — no API key.
-    let url = "https://api.coingecko.com/api/v3/simple/price?ids=bitcoin,ethereum,solana,binancecoin,ripple&vs_currencies=usd&include_24hr_change=true";
-    let map: serde_json::Map<String, serde_json::Value> = http_get_json(url)?;
-    let order = [
-        ("bitcoin", "BTC"),
-        ("ethereum", "ETH"),
-        ("solana", "SOL"),
-        ("binancecoin", "BNB"),
-        ("ripple", "XRP"),
-    ];
+    let ids: String = COIN_CATALOG
+        .iter()
+        .map(|(id, _)| *id)
+        .collect::<Vec<_>>()
+        .join(",");
+    let url = format!(
+        "https://api.coingecko.com/api/v3/simple/price?ids={ids}&vs_currencies=usd&include_24hr_change=true"
+    );
+    let map: serde_json::Map<String, serde_json::Value> = http_get_json(&url)?;
     let mut out = Vec::new();
-    for (id, sym) in order {
-        if let Some(v) = map.get(id) {
+    for (id, sym) in COIN_CATALOG {
+        if let Some(v) = map.get(*id) {
             if let Ok(row) = serde_json::from_value::<PriceRow>(v.clone()) {
                 out.push(CryptoQuote {
-                    symbol: sym.into(),
+                    symbol: (*sym).into(),
                     usd: row.usd.unwrap_or(0.0),
                     change_24h: row.usd_24h_change.unwrap_or(0.0),
                 });
@@ -272,12 +324,9 @@ fn http_get_json<T: for<'de> Deserialize<'de>>(url: &str) -> Result<T, String> {
     let agent = ureq::AgentBuilder::new()
         .timeout_connect(Duration::from_secs(8))
         .timeout_read(Duration::from_secs(12))
-        .user_agent("CYD-Companion/0.8.4")
+        .user_agent("Njordr-seas-CYD-miner/0.8.68")
         .build();
-    let resp = agent
-        .get(url)
-        .call()
-        .map_err(|e| format!("http: {e}"))?;
+    let resp = agent.get(url).call().map_err(|e| format!("http: {e}"))?;
     resp.into_json::<T>().map_err(|e| format!("json: {e}"))
 }
 

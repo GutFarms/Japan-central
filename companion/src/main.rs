@@ -28,7 +28,9 @@ use flash_update::{
     ensure_firmware_image, fetch_latest_firmware, find_firmware_image, flash_merged_bin,
     update_needed, FirmwareImage,
 };
-use live_bar::{format_change, format_usd, LiveFeed};
+use live_bar::{
+    default_header_coins, format_change, format_usd, COIN_CATALOG, LiveFeed,
+};
 use monitor_api::{
     generate_install_id, generate_token, pair_url, primary_lan_ipv4, qr_modules,
     start as start_monitor_api, web_pair_url, MonitorBoard, MonitorCreds, MonitorHub,
@@ -437,6 +439,9 @@ struct PersistedMine {
     /// Optional public host / DDNS / Tailscale IP for remote phone access; empty = LAN IP.
     #[serde(default)]
     monitor_public_host: String,
+    /// Symbols shown in the top price header (e.g. BTC, LTC, ETH).
+    #[serde(default = "default_header_coins")]
+    header_coins: Vec<String>,
 }
 
 fn default_mhz() -> u8 {
@@ -624,6 +629,8 @@ struct CompanionApp {
     /// Cached LAN IPv4 for QR / phone API (refreshed every few seconds — not every frame).
     monitor_lan_ip: String,
     monitor_lan_ip_at: Instant,
+    /// Coins visible in the top live-price header (order matters).
+    header_coins: Vec<String>,
 }
 
 impl CompanionApp {
@@ -646,6 +653,7 @@ impl CompanionApp {
         let mut monitor_install_id = String::new();
         let mut monitor_token = String::new();
         let mut monitor_public_host = String::new();
+        let mut header_coins = default_header_coins();
         let mut api_feeds: Vec<ApiFeed> = Vec::new();
         if let Some(storage) = storage {
             if let Some(raw) = storage.get_string("mine_prefs") {
@@ -673,6 +681,29 @@ impl CompanionApp {
                     monitor_install_id = p.monitor_install_id;
                     monitor_token = p.monitor_token;
                     monitor_public_host = p.monitor_public_host;
+                    if !p.header_coins.is_empty() {
+                        header_coins = p
+                            .header_coins
+                            .into_iter()
+                            .map(|s| s.trim().to_ascii_uppercase())
+                            .filter(|s| COIN_CATALOG.iter().any(|(_, sym)| *sym == s.as_str()))
+                            .collect();
+                        if header_coins.is_empty() {
+                            header_coins = default_header_coins();
+                        }
+                        // Ensure LTC is present for upgrades that only had BTC/ETH/…
+                        if !header_coins.iter().any(|s| s == "LTC")
+                            && header_coins.len() < 5
+                            && COIN_CATALOG.iter().any(|(_, s)| *s == "LTC")
+                        {
+                            // Insert LTC after BTC when upgrading older prefs.
+                            if let Some(i) = header_coins.iter().position(|s| s == "BTC") {
+                                header_coins.insert(i + 1, "LTC".into());
+                            } else {
+                                header_coins.insert(0, "LTC".into());
+                            }
+                        }
+                    }
                 }
             }
             if let Some(raw) = storage.get_string("api_feeds") {
@@ -773,6 +804,7 @@ impl CompanionApp {
             monitor_public_host,
             monitor_lan_ip: primary_lan_ipv4().unwrap_or_default(),
             monitor_lan_ip_at: Instant::now(),
+            header_coins,
         };
         match start_monitor_api(app.monitor.clone()) {
             Ok(addr) => {
@@ -1124,6 +1156,7 @@ impl CompanionApp {
             monitor_install_id: self.monitor_install_id.clone(),
             monitor_token: self.monitor_token.clone(),
             monitor_public_host: self.monitor_public_host.clone(),
+            header_coins: self.header_coins.clone(),
         };
         if let Ok(raw) = serde_json::to_string(&p) {
             storage.set_string("mine_prefs", raw);
@@ -3850,7 +3883,7 @@ impl App for CompanionApp {
                     .inner_margin(Margin::symmetric(16.0, 0.0)),
             )
             .show(ctx, |ui| {
-                ui_live_bar(ui, &self.live);
+                ui_live_bar(ui, &self.live, &mut self.header_coins);
             });
 
         egui::CentralPanel::default()
@@ -3943,7 +3976,7 @@ fn trunc(s: &str, n: usize) -> String {
     }
 }
 
-fn ui_live_bar(ui: &mut egui::Ui, live: &LiveFeed) {
+fn ui_live_bar(ui: &mut egui::Ui, live: &LiveFeed, header_coins: &mut Vec<String>) {
     let snap = live.snap();
     ui.allocate_ui_with_layout(
         Vec2::new(ui.available_width(), ui.available_height()),
@@ -3958,9 +3991,13 @@ fn ui_live_bar(ui: &mut egui::Ui, live: &LiveFeed) {
             ui.add_space(10.0);
             if snap.ready && !snap.weather.is_empty() {
                 ui.label(
-                    RichText::new(format!("{:.0}°F {}", snap.temp_c * 9.0 / 5.0 + 32.0, snap.weather))
-                        .color(C_LIME_SOFT)
-                        .font(mono_ui_font(12.0)),
+                    RichText::new(format!(
+                        "{:.0}°F {}",
+                        snap.temp_c * 9.0 / 5.0 + 32.0,
+                        snap.weather
+                    ))
+                    .color(C_LIME_SOFT)
+                    .font(mono_ui_font(12.0)),
                 );
                 ui.add_space(10.0);
             }
@@ -3972,10 +4009,71 @@ fn ui_live_bar(ui: &mut egui::Ui, live: &LiveFeed) {
 
             ui.add_space(16.0);
             ui.label(RichText::new("│").color(C_DIM).size(14.0));
-            ui.add_space(16.0);
+            ui.add_space(12.0);
 
-            // Crypto strip
-            if snap.quotes.is_empty() {
+            // Coin picker — choose which symbols appear in the strip.
+            let summary = if header_coins.is_empty() {
+                "Coins".into()
+            } else {
+                header_coins
+                    .iter()
+                    .take(4)
+                    .cloned()
+                    .collect::<Vec<_>>()
+                    .join(" · ")
+            };
+            egui::ComboBox::from_id_source("header_coin_picker")
+                .selected_text(RichText::new(summary).color(C_LIME).font(mono_ui_font(11.0)))
+                .width(118.0)
+                .show_ui(ui, |ui| {
+                    ui.set_min_width(160.0);
+                    ui.label(
+                        RichText::new("Header coins")
+                            .color(C_MUTED)
+                            .font(mono_ui_font(11.0)),
+                    );
+                    ui.add_space(4.0);
+                    for (_, sym) in COIN_CATALOG {
+                        let mut on = header_coins.iter().any(|s| s.eq_ignore_ascii_case(sym));
+                        if ui
+                            .checkbox(
+                                &mut on,
+                                RichText::new(*sym)
+                                    .color(C_TEXT)
+                                    .font(mono_ui_font(12.0)),
+                            )
+                            .changed()
+                        {
+                            if on {
+                                if !header_coins.iter().any(|s| s.eq_ignore_ascii_case(sym)) {
+                                    header_coins.push((*sym).into());
+                                }
+                            } else if header_coins.len() > 1 {
+                                header_coins.retain(|s| !s.eq_ignore_ascii_case(sym));
+                            }
+                        }
+                    }
+                    ui.add_space(6.0);
+                    if ui
+                        .add(
+                            egui::Button::new(
+                                RichText::new("Reset BTC · LTC · ETH")
+                                    .color(C_MUTED)
+                                    .font(mono_ui_font(11.0)),
+                            )
+                            .fill(Color32::TRANSPARENT),
+                        )
+                        .clicked()
+                    {
+                        *header_coins = default_header_coins();
+                    }
+                });
+
+            ui.add_space(12.0);
+
+            // Crypto strip (selected coins only)
+            let quotes = live.quotes_for(header_coins);
+            if quotes.is_empty() {
                 ui.label(
                     RichText::new(if snap.error.is_empty() {
                         "prices…"
@@ -3986,7 +4084,7 @@ fn ui_live_bar(ui: &mut egui::Ui, live: &LiveFeed) {
                     .font(mono_ui_font(11.0)),
                 );
             } else {
-                for (i, q) in snap.quotes.iter().enumerate() {
+                for (i, q) in quotes.iter().enumerate() {
                     if i > 0 {
                         ui.add_space(12.0);
                     }
