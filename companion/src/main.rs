@@ -4326,10 +4326,10 @@ phone opens Board Setup automatically (captive Sign-in), or use Setup / USB here
             let softap = self.fresh_softap_board();
             let step1 = if softap.is_some() {
                 "1. SoftAP is up — phone should auto-open Board Setup (Sign-in). \
-Or open http://10.x.x.1 (IP on screen). PC: use the form below."
+Or open http://192.168.1.88/. PC: use the form below."
             } else {
                 "1. Join open SoftAP Njordr-XXXX (no password). Phone auto-opens Board Setup \
-(captive Sign-in). PC: form below or USB Link."
+(captive Sign-in → http://192.168.1.88/). PC: form below or USB Link."
             };
             ui.label(
                 RichText::new(step1)

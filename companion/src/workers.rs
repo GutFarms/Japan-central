@@ -931,15 +931,16 @@ pub fn open_wifi_tcp(endpoint: &str) -> Result<TcpStream, String> {
         .next()
         .ok_or_else(|| format!("no address for {endpoint}"))?;
     let host = endpoint.split(':').next().unwrap_or(endpoint);
-    // SoftAP 10.x and busy LAN boards may need a bit longer than 3s.
-    let timeout = if host.starts_with("10.") {
+    // SoftAP 192.168.1.88 / legacy 10.x and busy LAN boards may need a bit longer than 3s.
+    let softap = host == "192.168.1.88" || host.starts_with("10.");
+    let timeout = if softap {
         Duration::from_secs(5)
     } else {
         Duration::from_secs(4)
     };
     let stream = TcpStream::connect_timeout(&addr, timeout).map_err(|e| {
-        let softap_hint = if host.starts_with("10.") {
-            " — SoftAP IP: join open Njordr-XXXX in Windows Wi‑Fi (no password), or Link over USB instead"
+        let softap_hint = if softap {
+            " — SoftAP: join open Njordr-XXXX, then open http://192.168.1.88/ (or Link over USB)"
         } else {
             " — board offline / wrong network / firewall"
         };
