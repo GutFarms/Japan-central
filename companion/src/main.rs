@@ -3752,6 +3752,20 @@ impl CompanionApp {
             ui.horizontal_wrapped(|ui| {
                 mini_stat(ui, "Accept", &acc.to_string());
                 mini_stat(ui, "Reject", &rej.to_string());
+                // Connection-local pool counters (reset on re-authorize) — often match
+                // the pool website window better than session chips after reconnects.
+                if self.stratum_live.authorized {
+                    mini_stat(
+                        ui,
+                        "Pool ok",
+                        &self.stratum_live.accepted.to_string(),
+                    );
+                    mini_stat(
+                        ui,
+                        "Pool rj",
+                        &self.stratum_live.rejected.to_string(),
+                    );
+                }
                 mini_stat(ui, "Accept%", &self.accept_rate_label());
                 mini_stat(ui, "Session", &self.session_elapsed_label());
                 mini_stat(ui, "Luck", &self.luck_label());
@@ -3969,6 +3983,21 @@ impl CompanionApp {
                 .color(C_DIM)
                 .font(mono_ui_font(10.0)),
             );
+            let exp = expected_shares_per_hour(self.status.hashrate_hs, s.difficulty);
+            if s.authorized && s.difficulty >= 0.05 && self.status.hashrate_hs > 50_000.0 && exp < 5.0
+            {
+                ui.add_space(4.0);
+                ui.label(
+                    RichText::new(format!(
+                        "Share diff {:.3} is hard for ~{:.0} kH/s (≈{:.1} accepts/h). Use an ESP pool port or wait for vardiff after suggest 0.001.",
+                        s.difficulty,
+                        self.status.hashrate_hs / 1000.0,
+                        exp
+                    ))
+                    .color(C_ERR)
+                    .size(12.0),
+                );
+            }
             ui.add_space(8.0);
             stratum_line(ui, "Last TX → pool", &trunc(&s.last_tx, 150));
             stratum_line(ui, "Last RX ← pool", &trunc(&s.last_rx, 150));
