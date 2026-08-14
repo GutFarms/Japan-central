@@ -235,6 +235,10 @@ impl StratumClient {
         self.authorized
     }
 
+    pub fn has_pending_job(&self) -> bool {
+        self.pending_job.is_some()
+    }
+
     pub fn difficulty(&self) -> f64 {
         self.difficulty
     }

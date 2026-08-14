@@ -6619,15 +6619,18 @@ fn mine_worker(cmd_rx: Receiver<NetCmd>, msg_tx: Sender<NetMsg>) {
         cmp_rest: &str,
     ) -> Result<String, String> {
         let mut noop = || {};
-        mesh_via_cmd_ex(boards, gateway, mac, cmp_rest, &mut noop)
+        mesh_via_cmd_ex(boards, gateway, mac, cmp_rest, &mut noop, 2)
     }
 
+    /// `soft_attempts`: ESP-NOW flake retries. Keep at 1 while mining so the pool
+    /// always keeps the CPU — never stack 3×8.5s via waits on a live stratum session.
     fn mesh_via_cmd_ex(
         boards: &mut [UsbBoard],
         gateway: &str,
         mac: &str,
         cmp_rest: &str,
         pump: &mut dyn FnMut(),
+        soft_attempts: u32,
     ) -> Result<String, String> {
         let gw = boards
             .iter_mut()
@@ -6638,10 +6641,9 @@ fn mine_worker(cmd_rx: Receiver<NetCmd>, msg_tx: Sender<NetMsg>) {
             .filter(|c| c.is_ascii_hexdigit())
             .collect();
         let cmd = format!("cmp via {hex} {cmp_rest}");
-        // Soft-retry ESP-NOW flake (root via timeout / send fail) without treating
-        // leaf CMPERR as retryable application errors.
+        let attempts = soft_attempts.max(1);
         let mut last = String::new();
-        for attempt in 0..3u32 {
+        for attempt in 0..attempts {
             match usb_cmd_ex(&mut gw.port, &mut gw.rx, &cmd, pump) {
                 Ok(line) => return Ok(line),
                 Err(e) => {
@@ -6649,11 +6651,11 @@ fn mine_worker(cmd_rx: Receiver<NetCmd>, msg_tx: Sender<NetMsg>) {
                     let soft = last.contains("via timeout")
                         || last.contains("via send failed")
                         || last.contains("USB timeout");
-                    if !soft || attempt == 2 {
+                    if !soft || attempt + 1 >= attempts {
                         return Err(last);
                     }
                     pump();
-                    thread::sleep(Duration::from_millis(40 + attempt as u64 * 60));
+                    thread::sleep(Duration::from_millis(25 + attempt as u64 * 40));
                 }
             }
         }
@@ -6665,6 +6667,9 @@ fn mine_worker(cmd_rx: Receiver<NetCmd>, msg_tx: Sender<NetMsg>) {
         mesh: &mut Vec<MeshBoard>,
         msg_tx: &Sender<NetMsg>,
         mining: bool,
+        pump: &mut dyn FnMut(),
+        // When true, only refresh the peer list — no via config/status/arm.
+        list_only: bool,
     ) {
         let gateways: Vec<(String, String)> = boards
             .iter()
@@ -6673,6 +6678,7 @@ fn mine_worker(cmd_rx: Receiver<NetCmd>, msg_tx: Sender<NetMsg>) {
             .collect();
         let mut seen: Vec<(String, String)> = Vec::new(); // (gateway, mac)
         for (gname, gmac) in &gateways {
+            pump();
             let reply = {
                 let Some(gw) = boards
                     .iter_mut()
@@ -6680,7 +6686,7 @@ fn mine_worker(cmd_rx: Receiver<NetCmd>, msg_tx: Sender<NetMsg>) {
                 else {
                     continue;
                 };
-                usb_cmd(&mut gw.port, &mut gw.rx, "cmp mesh").ok()
+                usb_cmd_ex(&mut gw.port, &mut gw.rx, "cmp mesh", pump).ok()
             };
             let Some(line) = reply else { continue };
             if !line.starts_with("CMPMESH ") {
@@ -6751,10 +6757,14 @@ Power a 2nd board nearby with wall/power-bank only (no PC cable)."
             }
             keep
         });
+        if list_only {
+            return;
+        }
         for (gname, mac) in seen {
             if mesh.iter().any(|m| m.mac == mac) {
                 continue;
             }
+            pump();
             let name = format!("mesh:{mac}");
             let mut mb = MeshBoard {
                 name: name.clone(),
@@ -6767,13 +6777,15 @@ Power a 2nd board nearby with wall/power-bank only (no PC cable)."
                 mining: false,
                 status_fails: 0,
             };
-            if let Ok(line) = mesh_via_cmd(boards, &gname, &mac, "config") {
+            // Discovery via — one attempt so stratum stays in charge.
+            if let Ok(line) = mesh_via_cmd_ex(boards, &gname, &mac, "config", pump, 1) {
                 if let Ok(cfg) = parse_cmp_config(&line) {
                     mb.legacy_job = !fw_supports_split_jobs(&cfg.fw);
                     mb.fw = cfg.fw;
                 }
             }
-            if let Ok(line) = mesh_via_cmd(boards, &gname, &mac, "status") {
+            pump();
+            if let Ok(line) = mesh_via_cmd_ex(boards, &gname, &mac, "status", pump, 1) {
                 if let Ok(st) = parse_cmp_status(&line) {
                     mb.hashrate_hs = st.hashrate_hs;
                     mb.hashes = st.hashes;
@@ -6786,8 +6798,7 @@ Power a 2nd board nearby with wall/power-bank only (no PC cable)."
                 format!("Mesh peer {mac} via {gname} (connectivity only)"),
             );
             if mining {
-                let mut noop = || {};
-                let _ = arm_mesh_job(boards, &mut mb, msg_tx, &mut noop);
+                let _ = arm_mesh_job(boards, &mut mb, msg_tx, pump);
             }
             mesh.push(mb);
         }
@@ -6805,6 +6816,7 @@ Power a 2nd board nearby with wall/power-bank only (no PC cable)."
             &mb.mac,
             "stats accepted=0&rejected=0",
             pump,
+            1,
         );
         if mb.legacy_job {
             return Err("mesh peer needs split-job firmware (0.6.2+)".into());
@@ -6812,7 +6824,7 @@ Power a 2nd board nearby with wall/power-bank only (no PC cable)."
         let job = warmup_job();
         for part in encode_job_parts(&job) {
             let rest = part.strip_prefix("cmp ").unwrap_or(part.as_str());
-            let reply = mesh_via_cmd_ex(boards, &mb.gateway, &mb.mac, rest, pump)?;
+            let reply = mesh_via_cmd_ex(boards, &mb.gateway, &mb.mac, rest, pump, 1)?;
             if !(reply.starts_with("CMPACK") || reply.starts_with("CMP ok")) {
                 return Err(format!("mesh job reply: {reply}"));
             }
@@ -6839,7 +6851,7 @@ Power a 2nd board nearby with wall/power-bank only (no PC cable)."
         }
         for part in encode_job_parts(job) {
             let rest = part.strip_prefix("cmp ").unwrap_or(part.as_str());
-            let reply = mesh_via_cmd_ex(boards, &mb.gateway, &mb.mac, rest, pump)?;
+            let reply = mesh_via_cmd_ex(boards, &mb.gateway, &mb.mac, rest, pump, 1)?;
             if !(reply.starts_with("CMPACK") || reply.starts_with("CMP ok")) {
                 log_msg(
                     msg_tx,
@@ -7116,6 +7128,22 @@ Power a 2nd board nearby with wall/power-bank only (no PC cable)."
         err
     }
 
+    /// Stratum always wins: handshake, pending jobs, and reconnect windows defer mesh/USB chrome.
+    fn pool_has_presidency(
+        stratum: &Option<StratumClient>,
+        reconnect_at: Option<Instant>,
+    ) -> bool {
+        if reconnect_at.is_some() {
+            return true;
+        }
+        match stratum {
+            Some(s) => {
+                (s.stream_connected() && !s.authorized() && !s.auth_give_up) || s.has_pending_job()
+            }
+            None => false,
+        }
+    }
+
     let mut boards: Vec<UsbBoard> = Vec::new();
     let mut mesh: Vec<MeshBoard> = Vec::new();
     let mut stratum: Option<StratumClient> = None;
@@ -7273,7 +7301,18 @@ Power a 2nd board nearby with wall/power-bank only (no PC cable)."
                                 recent_jobs.back(),
                             );
                             boards.push(board);
-                            sync_mesh_peers(&mut boards, &mut mesh, &msg_tx, mining);
+                            {
+                                let mut noop = || {};
+                                let list_only = pool_has_presidency(&stratum, reconnect_at);
+                                sync_mesh_peers(
+                                    &mut boards,
+                                    &mut mesh,
+                                    &msg_tx,
+                                    mining,
+                                    &mut noop,
+                                    list_only,
+                                );
+                            }
                             last_mesh_sync = Instant::now();
                             publish_live(&msg_tx, &boards, &mesh);
                             let _ = msg_tx.send(NetMsg::Action(Ok(if dl {
@@ -7362,7 +7401,18 @@ Power a 2nd board nearby with wall/power-bank only (no PC cable)."
                                 recent_jobs.back(),
                             );
                             boards.push(board);
-                            sync_mesh_peers(&mut boards, &mut mesh, &msg_tx, resume_mine || mining);
+                            {
+                                let mut noop = || {};
+                                let list_only = pool_has_presidency(&stratum, reconnect_at);
+                                sync_mesh_peers(
+                                    &mut boards,
+                                    &mut mesh,
+                                    &msg_tx,
+                                    resume_mine || mining,
+                                    &mut noop,
+                                    list_only,
+                                );
+                            }
                             last_mesh_sync = Instant::now();
                             publish_live(&msg_tx, &boards, &mesh);
                             let _ = msg_tx.send(NetMsg::Action(Ok(if dl {
@@ -7426,7 +7476,18 @@ Power a 2nd board nearby with wall/power-bank only (no PC cable)."
                                 recent_jobs.back(),
                             );
                             boards.push(board);
-                            sync_mesh_peers(&mut boards, &mut mesh, &msg_tx, mining);
+                            {
+                                let mut noop = || {};
+                                let list_only = pool_has_presidency(&stratum, reconnect_at);
+                                sync_mesh_peers(
+                                    &mut boards,
+                                    &mut mesh,
+                                    &msg_tx,
+                                    mining,
+                                    &mut noop,
+                                    list_only,
+                                );
+                            }
                             last_mesh_sync = Instant::now();
                             publish_live(&msg_tx, &boards, &mesh);
                             let _ = msg_tx.send(NetMsg::Action(Ok(format!(
@@ -7651,13 +7712,28 @@ Power a 2nd board nearby with wall/power-bank only (no PC cable)."
                             }
                         }
                     }
-                    // Mesh sync can block on via timeouts — only after pool is up.
+                    // Mesh is secondary — only after authorize, and never during handshake.
                     if stratum.as_ref().map(|s| s.authorized()).unwrap_or(false)
-                        || stratum.is_some()
+                        && !pool_has_presidency(&stratum, reconnect_at)
                     {
-                        sync_mesh_peers(&mut boards, &mut mesh, &msg_tx, true);
+                        {
+                            let mut pump = || {
+                                let _ = pump_stratum_keepalive(&mut stratum, &msg_tx);
+                            };
+                            sync_mesh_peers(
+                                &mut boards,
+                                &mut mesh,
+                                &msg_tx,
+                                true,
+                                &mut pump,
+                                false,
+                            );
+                        }
                         last_mesh_sync = Instant::now();
                         for m in mesh.iter_mut() {
+                            if pool_has_presidency(&stratum, reconnect_at) {
+                                break;
+                            }
                             let arm_res = {
                                 let mut pump = || {
                                     let _ = pump_stratum_keepalive(&mut stratum, &msg_tx);
@@ -7765,6 +7841,13 @@ Power a 2nd board nearby with wall/power-bank only (no PC cable)."
                                 (reconnect_backoff * 2).min(Duration::from_secs(60));
                         }
                     }
+                    // If the pool is linking / has a job / reconnecting, skip USB status
+                    // this tick so the hot loop can push work immediately.
+                    if pool_has_presidency(&stratum, reconnect_at) {
+                        publish_live(&msg_tx, &boards, &mesh);
+                        let _ = msg_tx.send(NetMsg::Status(Ok(last_fleet_status.clone())));
+                        continue;
+                    }
                     let mut total_hs = 0.0;
                     let mut total_hashes = 0u64;
                     let mut any_mining = false;
@@ -7864,37 +7947,48 @@ Power a 2nd board nearby with wall/power-bank only (no PC cable)."
                         let _ = pump_stratum_keepalive(&mut stratum, &msg_tx);
                     }
                     if last_mesh_sync.elapsed()
-                        >= if boards.len() <= 1 && mesh.is_empty() {
-                            // Single Type‑C root: poll mesh often so power-only peers appear quickly.
+                        >= if mining {
+                            // Mesh discovery is background while hashing — keep pool snappy.
+                            Duration::from_secs(10)
+                        } else if boards.len() <= 1 && mesh.is_empty() {
                             Duration::from_secs(2)
                         } else {
                             Duration::from_secs(4)
                         }
                     {
-                        // Don't block the pool handshake on ESP-NOW via timeouts.
-                        let pool_linking = stratum
-                            .as_ref()
-                            .map(|s| s.stream_connected() && !s.authorized())
-                            .unwrap_or(false);
-                        if !pool_linking {
-                            let _ = pump_stratum_keepalive(&mut stratum, &msg_tx);
-                            sync_mesh_peers(&mut boards, &mut mesh, &msg_tx, mining);
+                        // Stratum presidency: skip mesh entirely while linking / job pending / reconnect.
+                        if !pool_has_presidency(&stratum, reconnect_at) {
+                            let list_only = mining
+                                && stratum.as_ref().map(|s| s.authorized()).unwrap_or(false);
+                            let mut pump = || {
+                                let _ = pump_stratum_keepalive(&mut stratum, &msg_tx);
+                            };
+                            sync_mesh_peers(
+                                &mut boards,
+                                &mut mesh,
+                                &msg_tx,
+                                mining,
+                                &mut pump,
+                                list_only,
+                            );
                             last_mesh_sync = Instant::now();
                             let _ = pump_stratum_keepalive(&mut stratum, &msg_tx);
                         }
                     }
-                    // Via status can take ~3s per leaf — do it less often while mining
-                    // so the pool socket is not starved into reconnect loops.
+                    // Via status is chrome — defer whenever the pool needs the thread.
                     let via_due = last_mesh_via_status.elapsed()
                         >= if mining {
-                            Duration::from_secs(12)
+                            Duration::from_secs(20)
                         } else {
                             Duration::from_secs(4)
                         };
                     let mut drop_mesh: Vec<String> = Vec::new();
-                    if via_due {
+                    if via_due && !pool_has_presidency(&stratum, reconnect_at) {
                         last_mesh_via_status = Instant::now();
                         for m in mesh.iter_mut() {
+                            if pool_has_presidency(&stratum, reconnect_at) {
+                                break;
+                            }
                             let status_line = {
                                 let mut pump = || {
                                     let _ = pump_stratum_keepalive(&mut stratum, &msg_tx);
@@ -7905,6 +7999,7 @@ Power a 2nd board nearby with wall/power-bank only (no PC cable)."
                                     &m.mac,
                                     "status",
                                     &mut pump,
+                                    1,
                                 )
                             };
                             match status_line {
@@ -8313,21 +8408,7 @@ Power a 2nd board nearby with wall/power-bank only (no PC cable)."
             }
         }
 
-        // Pull board shares BEFORE polling the pool so submits leave ASAP
-        // (cuts measured share→accept latency).
-        if !boards.is_empty() {
-            for b in boards.iter_mut() {
-                harvest_shares(
-                    &mut b.port,
-                    &mut b.rx,
-                    stratum.as_mut(),
-                    &recent_jobs,
-                    &mut held_board_shares,
-                    &msg_tx,
-                );
-            }
-        }
-
+        // STRATUM PRESIDENCY: drain/push pool work before board share harvest or mesh chrome.
         if stratum.is_some() {
             let was_authorized = stratum.as_ref().map(|c| c.authorized()).unwrap_or(false);
             let mut poll_err: Option<String> = None;
@@ -8404,6 +8485,7 @@ Power a 2nd board nearby with wall/power-bank only (no PC cable)."
                 }
                 if let Some(job) = client.take_job() {
                     let mut pushed = 0usize;
+                    let mut stale_abort = false;
                     for b in boards.iter_mut() {
                         let mut legacy = b.legacy_job;
                         let push_res = {
@@ -8432,25 +8514,43 @@ Power a 2nd board nearby with wall/power-bank only (no PC cable)."
                                 ))));
                             }
                         }
+                        // Newer notify wins — finish USB boards then stop.
+                        if client.has_pending_job() {
+                            stale_abort = true;
+                            break;
+                        }
                     }
-                    for m in mesh.iter_mut() {
-                        let mesh_res = {
-                            let mut pump = || {
-                                let _ = client.poll();
+                    if !stale_abort {
+                        for m in mesh.iter_mut() {
+                            if client.has_pending_job() {
+                                stale_abort = true;
+                                break;
+                            }
+                            let mesh_res = {
+                                let mut pump = || {
+                                    let _ = client.poll();
+                                };
+                                push_mesh_job(&mut boards, m, &job, &msg_tx, &mut pump)
                             };
-                            push_mesh_job(&mut boards, m, &job, &msg_tx, &mut pump)
-                        };
-                        match mesh_res {
-                            Ok(()) => pushed += 1,
-                            Err(e) => {
-                                let _ = msg_tx.send(NetMsg::Action(Err(format!(
-                                    "mesh {} job push: {e}",
-                                    m.mac
-                                ))));
+                            match mesh_res {
+                                Ok(()) => pushed += 1,
+                                Err(e) => {
+                                    let _ = msg_tx.send(NetMsg::Action(Err(format!(
+                                        "mesh {} job push: {e}",
+                                        m.mac
+                                    ))));
+                                }
                             }
                         }
                     }
-                    if pushed > 0 {
+                    if stale_abort {
+                        // Drop this job; the newer pending job is handled next loop.
+                        log_msg(
+                            &msg_tx,
+                            LogKind::Stratum,
+                            format!("Job {} superseded mid-push — pool stays first", job.job_id),
+                        );
+                    } else if pushed > 0 {
                         recent_jobs.push_back(job.clone());
                         while recent_jobs.len() > 32 {
                             recent_jobs.pop_front();
@@ -8463,7 +8563,9 @@ Power a 2nd board nearby with wall/power-bank only (no PC cable)."
                         client.restore_job(job);
                     }
                 }
-                if last_stats_push.elapsed() > Duration::from_secs(2) {
+                if last_stats_push.elapsed() > Duration::from_secs(2)
+                    && !client.has_pending_job()
+                {
                     let (a, r) = if client.authorized() {
                         (client.accepted, client.rejected)
                     } else {
@@ -8574,6 +8676,20 @@ Power a 2nd board nearby with wall/power-bank only (no PC cable)."
                             (reconnect_backoff * 2).min(Duration::from_secs(60));
                     }
                 }
+            }
+        }
+
+        // Board shares after pool drain — submit ASAP without delaying stratum poll/jobs.
+        if !boards.is_empty() {
+            for b in boards.iter_mut() {
+                harvest_shares(
+                    &mut b.port,
+                    &mut b.rx,
+                    stratum.as_mut(),
+                    &recent_jobs,
+                    &mut held_board_shares,
+                    &msg_tx,
+                );
             }
         }
 
@@ -8817,7 +8933,8 @@ fn usb_cmd_ex(
         let deadline = Instant::now() + Duration::from_millis(wait_ms);
         let mut last_pump = Instant::now() - Duration::from_millis(200);
         while Instant::now() < deadline {
-            if last_pump.elapsed() >= Duration::from_millis(100) {
+            // Pump often — stratum presidency means the pool is polled during every USB wait.
+            if last_pump.elapsed() >= Duration::from_millis(40) {
                 pump();
                 last_pump = Instant::now();
             }
