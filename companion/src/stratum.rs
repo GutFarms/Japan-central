@@ -774,6 +774,26 @@ impl StratumClient {
             }
         } else if id == self.authorize_id && !self.authorized && !has_error {
             self.on_authorized();
+        } else if let Some(started) = self.pending_shares.remove(&id) {
+            // mining.submit reply with no boolean `result` (some solo stacks omit it).
+            // error==null ⇒ accept so Accept/Reject never stay silent after a real submit.
+            let latency_ms = Some(started.elapsed().as_millis() as u64);
+            let (job_id, nonce) = self
+                .pending_share_meta
+                .remove(&id)
+                .map(|(k, n)| {
+                    let job = k.split('|').next().unwrap_or("").to_string();
+                    (job, n)
+                })
+                .unwrap_or_default();
+            self.record_share_outcome(
+                true,
+                id,
+                "accepted (no result field)".into(),
+                latency_ms,
+                nonce,
+                job_id,
+            );
         }
         Ok(())
     }
@@ -1273,5 +1293,20 @@ mod tests {
         assert!(c.is_job_stale("old"));
         assert!(!c.is_job_stale("new"));
         assert!(c.take_job().is_some());
+    }
+
+    #[test]
+    fn submit_reply_without_result_counts_accept() {
+        let mut c = primed_client();
+        c.pending_shares.insert(42, Instant::now());
+        c.pending_share_meta
+            .insert(42, ("job|en2|deadbeef".into(), "deadbeef".into()));
+        c.handle_line(r#"{"id":42,"error":null}"#).unwrap();
+        assert_eq!(c.accepted, 1);
+        assert_eq!(c.rejected, 0);
+        assert!(c.pending_shares.is_empty());
+        let ev = c.take_share_events();
+        assert_eq!(ev.len(), 1);
+        assert!(ev[0].accepted);
     }
 }

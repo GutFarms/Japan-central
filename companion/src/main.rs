@@ -8628,34 +8628,28 @@ Power a 2nd board nearby with wall/power-bank only (no PC cable)."
                 for ev in client.take_share_events() {
                     let _ = msg_tx.send(NetMsg::Share(ev));
                 }
-                // NerdMiner-style clean_jobs: drop cached work so late board shares die.
+                // NerdMiner-style clean_jobs: only drop *superseded* job_ids (prev != new).
                 // Do NOT cmp-stop boards — that blanks LCD H/s and stalls hashing until the
                 // next job lands. Pushing the new header replaces work in-place (onJob).
                 //
-                // Unique-en2 matching is (job_id, en2). A blanket recent_jobs.clear() on
-                // every clean_jobs opened a window where *all* board CMPSHAREs were dropped
-                // as "not in recent job cache" until the new per-board en2 batch was pushed
-                // — and with same-id clean_jobs + stale marking, submits never recovered.
+                // Pools often reuse the same job_id with clean_jobs=true. Purging that id from
+                // recent_jobs (0.8.125) dropped every in-flight unique-en2 CMPSHARE as
+                // "not in recent job cache" until the next board hit — and with frequent
+                // same-id cleans, Accept/Reject stayed at 0/0 while boards kept hashing.
+                // Keep prior en2 headers for the active id; only strip is_job_stale ids.
                 let cleaned = client.take_clean_jobs();
-                if cleaned {
-                    held_board_shares.clear();
-                    log_msg(
-                        &msg_tx,
-                        LogKind::Stratum,
-                        "Pool clean_jobs — purged stale share cache (boards keep hashing)",
-                    );
-                }
-                // Drop superseded job_ids (prev != new on clean_jobs).
+                let before_jobs = recent_jobs.len();
                 recent_jobs.retain(|j| !client.is_job_stale(&j.job_id));
                 held_board_shares.retain(|(job, _, _, _)| !client.is_job_stale(job));
                 if cleaned {
-                    // Same job_id + clean_jobs: prior unique-en2 headers for this id are dead,
-                    // but the id itself must stay submittable for the new en2 batch.
-                    let cur = client.job_id().to_string();
-                    if !cur.is_empty() {
-                        recent_jobs.retain(|j| j.job_id != cur);
-                        held_board_shares.retain(|(job, _, _, _)| job != &cur);
-                    }
+                    let dropped = before_jobs.saturating_sub(recent_jobs.len());
+                    log_msg(
+                        &msg_tx,
+                        LogKind::Stratum,
+                        format!(
+                            "Pool clean_jobs — dropped {dropped} superseded job cache entr(y/ies); active en2 kept"
+                        ),
+                    );
                 }
                 // Fleet: one unique extranonce2 per USB/mesh worker (NerdMiner/multi-worker style).
                 let fleet_n = boards.len().saturating_add(mesh.len()).max(1);
@@ -9006,11 +9000,18 @@ fn try_submit_board_share(
         );
         return ShareSubmitResult::Dropped;
     }
-    if let Some(wj) = recent_jobs
-        .iter()
-        .rev()
-        .find(|j| j.job_id == job && j.extranonce2_hex == en2)
-    {
+    if s.is_job_stale(job) {
+        log_msg(
+            msg_tx,
+            LogKind::Warn,
+            format!("Dropping share for superseded job={job} en2={en2}"),
+        );
+        return ShareSubmitResult::Dropped;
+    }
+    let en2_l = en2.to_ascii_lowercase();
+    if let Some(wj) = recent_jobs.iter().rev().find(|j| {
+        j.job_id == job && j.extranonce2_hex.eq_ignore_ascii_case(en2)
+    }) {
         if let Err(e) = StratumClient::verify_share_against_job(wj, nonce) {
             log_msg(
                 msg_tx,
@@ -9020,14 +9021,15 @@ fn try_submit_board_share(
             return ShareSubmitResult::Dropped;
         }
     } else {
+        // Cache miss (evicted / mid clean_jobs push): still ask the pool so Accept/Reject
+        // cannot stay silent while boards are hashing valid work for a live job_id.
         log_msg(
             msg_tx,
             LogKind::Warn,
             format!(
-                "Dropping stale board share job={job} en2={en2} (not in recent job cache)"
+                "Share job={job} en2={en2_l} not in local cache — submitting for pool verdict"
             ),
         );
-        return ShareSubmitResult::Dropped;
     }
     match s.submit_share(job, en2, ntime, nonce) {
         Ok(()) => {
