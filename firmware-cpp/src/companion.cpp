@@ -7,9 +7,9 @@
 extern "C" float cyd_run_bench(uint32_t n, bool tune);
 
 #if CYD_D0_BUILD
-static constexpr const char* kFwTag = "0.8.104-sha256-d0";
+static constexpr const char* kFwTag = "0.8.105-sha256-d0";
 #else
-static constexpr const char* kFwTag = "0.8.104-sha256";
+static constexpr const char* kFwTag = "0.8.105-sha256";
 #endif
 
 void CompanionLink::begin(uint32_t baud) {
@@ -142,7 +142,7 @@ void CompanionLink::handleLine(const String& line, AppConfig& cfg, const MinerSn
     String rest = (sp2 < 0) ? "" : args.substring(sp2 + 1);
     mac.trim();
     rest.trim();
-    (void)g_mesh.handleVia(mac, rest, *this, cfg, snap, onApply, net, onJob, onStop, onStats);
+    (void)g_mesh.handleVia(mac, rest);
     return;
   }
 

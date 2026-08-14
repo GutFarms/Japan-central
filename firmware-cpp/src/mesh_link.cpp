@@ -76,14 +76,8 @@ void MeshPrint::flushLine() {
     return;
   }
   buf_[len_] = 0;
-  if (haveTarget_) {
-    mesh_->sendLineTo(target_, buf_);
-  } else {
-    uint8_t root[6];
-    // Leaf path: MeshLink::sendLineTo picks root when dst is broadcast sentinel.
-    // Use a dedicated API — send via pickRoot inside MeshLink.
-    mesh_->sendLineTo(kBcast, buf_);
-  }
+  // Untargeted = leaf → root (sendLineTo picks root when dst is broadcast).
+  mesh_->sendLineTo(haveTarget_ ? target_ : kBcast, buf_);
   len_ = 0;
 }
 
@@ -348,16 +342,10 @@ void MeshLink::handleIncomingLine(const uint8_t* from, const char* line, Compani
   if (!line || !line[0]) return;
 
   if (isRoot()) {
-    // Replies / shares from leaves → USB Companion.
-    if (viaPending_ && macEq(from, viaMac_)) {
-      viaReply_ = line;
-      // Fall through to also emit to Serial so usb_cmd can see it.
-    }
     // Shares and CMP* replies from leaves → USB Companion (pass-through).
     if (strncmp(line, "CMP", 3) == 0) {
       Serial.println(line);
       Serial.flush();
-      return;
     }
     return;
   }
@@ -389,21 +377,13 @@ void MeshLink::handleIncomingLine(const uint8_t* from, const char* line, Compani
   leafOut_.clearTarget();
 }
 
-bool MeshLink::handleVia(const String& macArg, const String& cmdRest, CompanionLink& /*cmp*/,
-                         AppConfig& /*cfg*/, const MinerSnapshot& /*snap*/,
-                         CompanionLink::ApplyFn /*onApply*/, NetFeed* /*net*/,
-                         CompanionLink::JobFn /*onJob*/, CompanionLink::StopFn /*onStop*/,
-                         CompanionLink::StatsFn /*onStats*/) {
+bool MeshLink::handleVia(const String& macArg, const String& cmdRest) {
   noteUsbActivity();
   uint8_t mac[6];
   if (!parseMac(macArg, mac)) {
     Serial.println("CMPERR via bad mac");
     Serial.flush();
     return true;
-  }
-  if (!isRoot()) {
-    // Becoming root because Companion is talking over USB.
-    noteUsbActivity();
   }
   String cmd = cmdRest;
   cmd.trim();
@@ -419,7 +399,6 @@ bool MeshLink::handleVia(const String& macArg, const String& cmdRest, CompanionL
   viaPending_ = true;
   memcpy(viaMac_, mac, 6);
   viaStartMs_ = millis();
-  viaReply_ = "";
 
   if (!sendLineTo(mac, wire.c_str())) {
     viaPending_ = false;
@@ -430,7 +409,6 @@ bool MeshLink::handleVia(const String& macArg, const String& cmdRest, CompanionL
 
   // Busy-wait briefly for ESP-NOW reply (Companion usb_cmd is blocked on us).
   while (millis() - viaStartMs_ < MESH_VIA_TIMEOUT_MS) {
-    // Drain RX queue inline.
     RxItem item{};
     bool got = false;
     portENTER_CRITICAL(&rxMux_);
@@ -449,9 +427,7 @@ bool MeshLink::handleVia(const String& macArg, const String& cmdRest, CompanionL
           Serial.println(item.line);
           Serial.flush();
           // Keep waiting if this was an unsolicited share during via.
-          if (strncmp(item.line, "CMPSHARE ", 9) == 0) {
-            // continue waiting for command reply
-          } else {
+          if (strncmp(item.line, "CMPSHARE ", 9) != 0) {
             viaPending_ = false;
             return true;
           }

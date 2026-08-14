@@ -1,7 +1,6 @@
 #pragma once
 #include "companion.hpp"
 #include <Arduino.h>
-#include <functional>
 
 // ESP-NOW connectivity mesh (not a hashrate multiplier).
 // USB-linked board = root bridge; other boards relay cmp lines through it.
@@ -42,8 +41,6 @@ class MeshPrint : public Print {
 
 class MeshLink {
  public:
-  using LineFn = std::function<void(const char* line)>;
-
   void begin(const uint8_t selfMac[6]);
   void noteUsbActivity();
   bool isRoot() const;
@@ -60,12 +57,8 @@ class MeshLink {
             CompanionLink::ApplyFn onApply, NetFeed* net, CompanionLink::JobFn onJob,
             CompanionLink::StopFn onStop, CompanionLink::StatsFn onStats);
 
-  // Root: forward a cmp command to a peer and wait for CMP* reply on Serial path.
-  // Returns true if a reply was printed to Serial (caller should not emit its own).
-  bool handleVia(const String& macArg, const String& cmdRest, CompanionLink& cmp, AppConfig& cfg,
-                 const MinerSnapshot& snap, CompanionLink::ApplyFn onApply, NetFeed* net,
-                 CompanionLink::JobFn onJob, CompanionLink::StopFn onStop,
-                 CompanionLink::StatsFn onStats);
+  // Root: forward a cmp command to a peer and wait for CMP* reply on Serial.
+  bool handleVia(const String& macArg, const String& cmdRest);
 
   // `cmp mesh` → peer list line printed to Serial/out.
   void replyMeshList(Print& out) const;
@@ -101,11 +94,6 @@ class MeshLink {
   bool viaPending_ = false;
   uint8_t viaMac_[6]{};
   uint32_t viaStartMs_ = 0;
-  String viaReply_;
-
-  // Leaf inbound line buffer for pollStream.
-  char leafInBuf_[MESH_LINE_CAP * 2]{};
-  size_t leafInLen_ = 0;
 
   void sendHello();
   void prunePeers();

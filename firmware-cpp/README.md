@@ -1,6 +1,6 @@
 # CYD SHA-256 miner (C++ / USB hash)
 
-ESP32-2432S028 firmware: **Bitcoin double-SHA256** with a custom midstate compressor (IRAM hot path). Optional SoftAP/STA Wi‑Fi (USB preferred for mining). Pool traffic stays on the PC companion; work and shares move over USB-C (`cmp`).
+ESP32-2432S028 firmware: **Bitcoin double-SHA256** with a custom midstate compressor (IRAM hot path). SoftAP/STA Wi‑Fi + ESP-NOW connectivity mesh (USB preferred for the Companion root). Pool traffic stays on the PC companion; work and shares move over USB `cmp` (mesh leaves relay through the root).
 
 ## Build
 
