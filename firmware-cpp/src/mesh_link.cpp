@@ -310,14 +310,18 @@ void MeshLink::onEspNowRecv(const uint8_t* mac, const uint8_t* data, int len, in
 
 void MeshLink::replyMeshList(Print& out) const {
   char buf[360];
+  char selfStr[18];
+  macToStr(selfMac_, selfStr);
   size_t o = 0;
-  o += snprintf(buf + o, sizeof(buf) - o, "CMPMESH root=%u bridging=%u peers=",
-                isRoot() ? 1u : 0u, isBridging() ? 1u : 0u);
+  // self= is this board — peers= lists OTHER boards only (never self).
+  o += snprintf(buf + o, sizeof(buf) - o,
+                "CMPMESH self=%s root=%u bridging=%u peers=", selfStr, isRoot() ? 1u : 0u,
+                isBridging() ? 1u : 0u);
   bool first = true;
   for (size_t i = 0; i < MESH_MAX_PEERS; i++) {
     if (!peers_[i].used) continue;
-    // List every peer the root can hear (including briefly dual-root boards).
-    // Companion skips the gateway's own MAC.
+    if (macEq(peers_[i].mac, selfMac_)) continue;
+    // List every other board the root can hear (including briefly dual-root boards).
     char m[18];
     macToStr(peers_[i].mac, m);
     if (!first) {
@@ -331,7 +335,7 @@ void MeshLink::replyMeshList(Print& out) const {
     buf[o++] = '-';
     buf[o] = 0;
   }
-  snprintf(buf + strlen(buf), sizeof(buf) - strlen(buf), " count=%u", (unsigned)peerCount());
+  snprintf(buf + strlen(buf), sizeof(buf) - strlen(buf), " count=%u", (unsigned)leafCount());
   out.println(buf);
   out.flush();
 }

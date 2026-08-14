@@ -3554,7 +3554,7 @@ impl CompanionApp {
                 .any(|w| w.endpoint.starts_with("mesh:"));
             ui.label(
                 RichText::new(if has_usb && !has_mesh {
-                    "Waiting for mesh peers… Power other CYDs near this USB root (wall / power bank — no PC cable). They appear as mesh:… SoftAP stays on. Boards with the same eFuse MAC cannot mesh — plug a 2nd data cable instead."
+                    "One USB root is enough. Mesh peers need a 2nd CYD on power only (no PC cable) within Wi‑Fi range — they show as mesh:…. SoftAP of this board is the same device, not a peer. Same eFuse MAC boards cannot mesh — use a 2nd data cable instead."
                 } else {
                     "USB root keeps hashing (throttled) while bridging mesh peers. Extra CYDs only need power nearby."
                 })
@@ -4712,8 +4712,17 @@ impl App for CompanionApp {
                             .find(|d| d.endpoint == endpoint)
                         {
                             if self.worker_mac_already_linked(&w.mac) {
+                                self.push_log(
+                                    LogKind::Usb,
+                                    format!(
+                                        "Skip Wi‑Fi {endpoint} — same board as USB root (SoftAP ≠ mesh peer)"
+                                    ),
+                                );
                                 continue;
                             }
+                        }
+                        if self.flash_busy() || self.flash_cooldown_active() {
+                            continue;
                         }
                         self.push_log(
                             LogKind::Usb,
@@ -6660,11 +6669,31 @@ fn mine_worker(cmd_rx: Receiver<NetCmd>, msg_tx: Sender<NetMsg>) {
             }
             let peers = parse_mesh_peers(&line);
             if peers.is_empty() {
-                log_msg(
-                    msg_tx,
-                    LogKind::Usb,
-                    format!("{gname}: mesh listen (no peers yet) · {line}"),
-                );
+                // Solo USB root with peers=- is normal — not a self-link. Don't spam.
+                static LAST_EMPTY: std::sync::Mutex<Option<Instant>> =
+                    std::sync::Mutex::new(None);
+                let mut due = true;
+                if let Ok(mut g) = LAST_EMPTY.lock() {
+                    if let Some(t) = *g {
+                        if t.elapsed() < Duration::from_secs(12) {
+                            due = false;
+                        }
+                    }
+                    if due {
+                        *g = Some(Instant::now());
+                    }
+                }
+                if due {
+                    log_msg(
+                        msg_tx,
+                        LogKind::Usb,
+                        format!(
+                            "{gname}: USB root listening — no other CYD in ESP-NOW range yet \
+(peers=- is normal; SoftAP of this board is not a mesh peer). \
+Power a 2nd board nearby with wall/power-bank only (no PC cable)."
+                        ),
+                    );
+                }
             } else {
                 log_msg(
                     msg_tx,
