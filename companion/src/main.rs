@@ -43,9 +43,9 @@ use stratum::{
     WorkJob,
 };
 use workers::{
-    cyd_port_score, is_usb_serial_port, list_serial_ports, mac_is_stable, mac_worker_id,
-    normalize_mac, open_usb_serial_timed, open_wifi_tcp, port_choice_is_pci, port_names_match,
-    prefer_cyd_port, prefer_cyd_port_excluding, probe_esp_download_mode,
+    count_usb_uart_ports, cyd_port_score, is_usb_serial_port, list_serial_ports, mac_is_stable,
+    mac_worker_id, normalize_mac, open_usb_serial_timed, open_wifi_tcp, port_choice_is_pci,
+    port_names_match, prefer_cyd_port, prefer_cyd_port_excluding, probe_esp_download_mode,
     scan_usb_workers_with_progress, transport_mac_id, BoardWifiDiscovery, DiscoveredWorker,
     LanDiscovery, PortChoice, WorkerKind, WorkerLive,
 };
@@ -1435,8 +1435,13 @@ impl CompanionApp {
             .map(|p| p.name.clone())
             .collect();
         if candidates.is_empty() {
-            self.last_ok = "No other USB COM to link — Refresh, or Find CYD workers.".into();
-            self.push_log(LogKind::Usb, self.last_ok.clone());
+            let usb_n = count_usb_uart_ports(&self.ports);
+            self.last_ok = if usb_n <= 1 {
+                "No 2nd USB COM yet — Windows only lists one USB-UART. Use a data cable on another PC USB port, check Device Manager → Ports, then Refresh.".into()
+            } else {
+                "No other USB COM to link — Refresh, or Find CYD workers.".into()
+            };
+            self.push_log(LogKind::Warn, self.last_ok.clone());
             // Still scan — probe may find a board the score skipped.
             self.worker_scan_busy = true;
             let _ = self.cmd_tx.send(NetCmd::ScanWorkers);
@@ -1525,6 +1530,8 @@ impl CompanionApp {
     fn refresh_com_ports(&mut self, force_best: bool, allow_auto_connect: bool) {
         let ports = list_serial_ports();
         let n = ports.len();
+        let usb_n = count_usb_uart_ports(&ports);
+        let pci_n = ports.iter().filter(|p| port_choice_is_pci(p)).count();
         self.ports = ports;
         self.apply_best_com_port(force_best);
         let selected = if self.com_port.is_empty() {
@@ -1532,11 +1539,22 @@ impl CompanionApp {
         } else {
             self.com_port.clone()
         };
-        self.last_ok = format!("COM list · {n} port(s) · selected {selected}");
-        self.push_log(
-            LogKind::Usb,
-            format!("COM list refreshed: {n} reported · selected {selected}"),
+        self.last_ok = format!(
+            "COM list · {n} port(s) · {usb_n} USB-UART · {pci_n} PCI · selected {selected}"
         );
+        self.push_log(LogKind::Usb, self.last_ok.clone());
+        let port_labels: Vec<String> = self.ports.iter().map(|p| p.label.clone()).collect();
+        for label in port_labels {
+            self.push_log(LogKind::Usb, format!("  · {label}"));
+        }
+        if self.usb_open && usb_n <= 1 {
+            self.push_log(
+                LogKind::Warn,
+                "Only one USB-UART COM is visible to Windows. A 2nd CYD needs its own data cable \
++ its own COM in Device Manager → Ports (COM & LPT). COM1 PCI is not a board."
+                    .into(),
+            );
+        }
         if allow_auto_connect {
             // Do not clear attempted while a connect is already in flight.
             if !self.usb_connect_pending {
@@ -3115,13 +3133,21 @@ impl CompanionApp {
             } else if self
                 .ports
                 .iter()
-                .find(|p| p.name == self.com_port)
+                .find(|p| port_names_match(&p.name, &self.com_port))
                 .map(port_choice_is_pci)
                 .unwrap_or(false)
             {
                 ui.label(
                     RichText::new(
                         "Selected port is motherboard PCI — pick the USB CH340/CP210x COM for the CYD.",
+                    )
+                    .color(C_WARN)
+                    .size(12.0),
+                );
+            } else if self.usb_open && count_usb_uart_ports(&self.ports) <= 1 {
+                ui.label(
+                    RichText::new(
+                        "Windows only sees 1 USB board COM (plus PCI junk like COM1). Plug the 2nd CYD with a data USB-C cable into another port, open Device Manager → Ports (COM & LPT), confirm a new COMx appears, then Refresh.",
                     )
                     .color(C_WARN)
                     .size(12.0),

@@ -78,6 +78,10 @@ pub fn cyd_port_score(p: &PortChoice) -> i32 {
     if l.contains("usb") {
         s += 20;
     }
+    // Registry / Unknown entries (common for CH340) — still prefer over PCI.
+    if l.contains("registry") || l.contains("— serial") || l.ends_with(" serial") {
+        s += 25;
+    }
     // Higher COM numbers are often the plugged-in dongle vs COM1/COM3 system ports.
     if let Some(n) = normalize_port_name(&p.name)
         .strip_prefix("COM")
@@ -110,50 +114,114 @@ pub fn prefer_cyd_port_excluding<'a>(
         .max_by_key(|p| cyd_port_score(p))
 }
 
-/// List every serial port the OS reports (no filtering) with USB details when available.
-pub fn list_serial_ports() -> Vec<PortChoice> {
-    let mut infos = serialport::available_ports().unwrap_or_default();
-    infos.sort_by(|a, b| a.port_name.cmp(&b.port_name));
-    infos
-        .into_iter()
-        .map(|p| {
-            let label = match &p.port_type {
-                SerialPortType::UsbPort(usb) => {
-                    let mut bits: Vec<String> = Vec::new();
-                    if let Some(m) = usb.manufacturer.as_ref() {
-                        let t = m.trim();
-                        if !t.is_empty() {
-                            bits.push(t.to_string());
-                        }
-                    }
-                    if let Some(prod) = usb.product.as_ref() {
-                        let t = prod.trim();
-                        if !t.is_empty() {
-                            bits.push(t.to_string());
-                        }
-                    }
-                    if let Some(sn) = usb.serial_number.as_ref() {
-                        let t = sn.trim();
-                        if !t.is_empty() {
-                            bits.push(format!("SN {t}"));
-                        }
-                    }
-                    if bits.is_empty() {
-                        format!("{} — USB {:04X}:{:04X}", p.port_name, usb.vid, usb.pid)
-                    } else {
-                        format!("{} — {}", p.port_name, bits.join(" · "))
-                    }
+/// Count USB-UART style COMs (excludes motherboard PCI).
+pub fn count_usb_uart_ports(ports: &[PortChoice]) -> usize {
+    ports
+        .iter()
+        .filter(|p| cyd_port_score(p) >= 0)
+        .count()
+}
+
+fn port_info_to_choice(p: serialport::SerialPortInfo) -> PortChoice {
+    let label = match &p.port_type {
+        SerialPortType::UsbPort(usb) => {
+            let mut bits: Vec<String> = Vec::new();
+            if let Some(m) = usb.manufacturer.as_ref() {
+                let t = m.trim();
+                if !t.is_empty() {
+                    bits.push(t.to_string());
                 }
-                SerialPortType::PciPort => format!("{} — PCI", p.port_name),
-                SerialPortType::BluetoothPort => format!("{} — Bluetooth", p.port_name),
-                SerialPortType::Unknown => p.port_name.clone(),
-            };
-            PortChoice {
-                name: p.port_name,
-                label,
             }
-        })
-        .collect()
+            if let Some(prod) = usb.product.as_ref() {
+                let t = prod.trim();
+                if !t.is_empty() {
+                    bits.push(t.to_string());
+                }
+            }
+            if let Some(sn) = usb.serial_number.as_ref() {
+                let t = sn.trim();
+                if !t.is_empty() {
+                    bits.push(format!("SN {t}"));
+                }
+            }
+            if bits.is_empty() {
+                format!("{} — USB {:04X}:{:04X}", p.port_name, usb.vid, usb.pid)
+            } else {
+                format!("{} — {}", p.port_name, bits.join(" · "))
+            }
+        }
+        SerialPortType::PciPort => format!("{} — PCI (not a CYD)", p.port_name),
+        SerialPortType::BluetoothPort => format!("{} — Bluetooth", p.port_name),
+        SerialPortType::Unknown => {
+            // Many CH340s show as Unknown — still usable.
+            format!("{} — serial", p.port_name)
+        }
+    };
+    PortChoice {
+        name: p.port_name,
+        label,
+    }
+}
+
+/// Windows: merge HARDWARE\DEVICEMAP\SERIALCOMM so COMs missed by SetupAPI still appear.
+#[cfg(windows)]
+fn windows_registry_com_ports() -> Vec<(String, String)> {
+    use winreg::enums::HKEY_LOCAL_MACHINE;
+    use winreg::types::FromRegValue;
+    use winreg::RegKey;
+
+    let hklm = RegKey::predef(HKEY_LOCAL_MACHINE);
+    let Ok(key) = hklm.open_subkey(r"HARDWARE\DEVICEMAP\SERIALCOMM") else {
+        return Vec::new();
+    };
+    let mut out = Vec::new();
+    for item in key.enum_values() {
+        let Ok((device, value)) = item else {
+            continue;
+        };
+        let Ok(com) = String::from_reg_value(&value) else {
+            continue;
+        };
+        let com = com.trim().to_string();
+        let upper = com.to_ascii_uppercase();
+        if upper.starts_with("COM")
+            && upper.len() > 3
+            && upper[3..].chars().all(|c| c.is_ascii_digit())
+        {
+            let hint = if device.contains('\\') {
+                format!("registry · {}", device.rsplit('\\').next().unwrap_or(&device))
+            } else {
+                format!("registry · {device}")
+            };
+            out.push((com, hint));
+        }
+    }
+    out
+}
+
+#[cfg(not(windows))]
+fn windows_registry_com_ports() -> Vec<(String, String)> {
+    Vec::new()
+}
+
+/// List every serial port the OS reports (no filtering) with USB details when available.
+/// On Windows, also merges registry SERIALCOMM so a 2nd CH340 is not dropped.
+pub fn list_serial_ports() -> Vec<PortChoice> {
+    use std::collections::BTreeMap;
+
+    let mut by_name: BTreeMap<String, PortChoice> = BTreeMap::new();
+    for info in serialport::available_ports().unwrap_or_default() {
+        let choice = port_info_to_choice(info);
+        by_name.insert(normalize_port_name(&choice.name), choice);
+    }
+    for (com, hint) in windows_registry_com_ports() {
+        let key = normalize_port_name(&com);
+        by_name.entry(key).or_insert_with(|| PortChoice {
+            name: com.clone(),
+            label: format!("{com} — {hint}"),
+        });
+    }
+    by_name.into_values().collect()
 }
 
 /// Normalize MAC for ids / display (`aabbccddeeff` → `aa:bb:cc:dd:ee:ff`).

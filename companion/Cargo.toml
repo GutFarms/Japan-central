@@ -1,6 +1,6 @@
 [package]
 name = "cyd-companion"
-version = "0.8.100"
+version = "0.8.101"
 edition = "2021"
 description = "Njörðr Seas' CYD miner — USB SHA-256 Bitcoin mining control (PC stratum, board hashes)"
 authors = ["GutFarms <https://github.com/GutFarms>"]
@@ -25,6 +25,9 @@ zip = { version = "0.6", default-features = false, features = ["deflate"] }
 qrcode = { version = "0.14", default-features = false }
 rand = "0.8"
 image = { version = "0.24", default-features = false, features = ["png"] }
+
+[target.'cfg(windows)'.dependencies]
+winreg = "0.52"
 
 [build-dependencies]
 winres = "0.1"
