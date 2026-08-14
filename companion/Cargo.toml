@@ -1,6 +1,6 @@
 [package]
 name = "cyd-companion"
-version = "0.8.131"
+version = "0.8.132"
 edition = "2021"
 description = "Njörðr Seas' CYD miner — USB SHA-256 Bitcoin mining control (PC stratum, board hashes)"
 authors = ["GutFarms <https://github.com/GutFarms>"]

@@ -732,6 +732,8 @@ struct CompanionApp {
     /// App start — delayed COM re-lists (USB enum often lags first paint).
     boot_at: Instant,
     port_rescans_done: u8,
+    /// Periodic COM re-enum so newly plugged USB adapters appear without Refresh.
+    last_port_refresh: Instant,
     session_started: Option<Instant>,
     session_hash_start: u64,
     share_history: VecDeque<ShareRow>,
@@ -941,6 +943,7 @@ impl CompanionApp {
             usb_connect_pending: false,
             boot_at: Instant::now(),
             port_rescans_done: 0,
+            last_port_refresh: Instant::now(),
             session_started: None,
             session_hash_start: 0,
             share_history: VecDeque::new(),
@@ -1668,6 +1671,10 @@ impl CompanionApp {
         let n = ports.len();
         let usb_n = count_usb_uart_ports(&ports);
         let pci_n = ports.iter().filter(|p| port_choice_is_pci(p)).count();
+        let changed = ports.len() != self.ports.len()
+            || ports.iter().zip(self.ports.iter()).any(|(a, b)| {
+                normalize_port_name(&a.name) != normalize_port_name(&b.name) || a.label != b.label
+            });
         self.ports = ports;
         self.apply_best_com_port(force_best);
         let selected = if self.com_port.is_empty() {
@@ -1678,18 +1685,21 @@ impl CompanionApp {
         self.last_ok = format!(
             "COM list · {n} port(s) · {usb_n} USB-UART · {pci_n} PCI · selected {selected}"
         );
-        self.push_log(LogKind::Usb, self.last_ok.clone());
-        let port_labels: Vec<String> = self.ports.iter().map(|p| p.label.clone()).collect();
-        for label in port_labels {
-            self.push_log(LogKind::Usb, format!("  · {label}"));
-        }
-        if self.usb_open && usb_n <= 1 {
-            self.push_log(
-                LogKind::Warn,
-                "Only one USB-UART COM is visible to Windows. A 2nd CYD needs its own data cable \
+        // Periodic polls stay quiet when nothing changed; boot / first paint / changes log fully.
+        if changed || allow_auto_connect || force_best {
+            self.push_log(LogKind::Usb, self.last_ok.clone());
+            let port_labels: Vec<String> = self.ports.iter().map(|p| p.label.clone()).collect();
+            for label in port_labels {
+                self.push_log(LogKind::Usb, format!("  · {label}"));
+            }
+            if self.usb_open && usb_n <= 1 {
+                self.push_log(
+                    LogKind::Warn,
+                    "Only one USB-UART COM is visible to Windows. A 2nd CYD needs its own data cable \
 + its own COM in Device Manager → Ports (COM & LPT). COM1 PCI is not a board."
-                    .into(),
-            );
+                        .into(),
+                );
+            }
         }
         if allow_auto_connect {
             // Do not clear attempted while a connect is already in flight.
@@ -3403,7 +3413,7 @@ impl CompanionApp {
             // Wrap so Refresh stays clickable in the half-width Mine column
             // (fixed 320px combo + buttons used to clip past the column edge).
             ui.horizontal_wrapped(|ui| {
-                let reserve = if self.usb_open { 340.0 } else { 110.0 };
+                let reserve = if self.usb_open { 340.0 } else { 220.0 };
                 let combo_w = (ui.available_width() - reserve).clamp(140.0, 320.0);
                 let com_label = if self.com_port.is_empty() {
                     "Select port".to_string()
@@ -3414,6 +3424,8 @@ impl CompanionApp {
                         .map(|p| {
                             if self.worker_already_linked(&p.name) {
                                 format!("{} · linked", p.label)
+                            } else if port_choice_is_system_junk(p) {
+                                format!("{} · skip", p.label)
                             } else {
                                 p.label.clone()
                             }
@@ -3424,29 +3436,50 @@ impl CompanionApp {
                     .width(combo_w)
                     .selected_text(RichText::new(com_label).color(C_TEXT).size(13.0))
                     .show_ui(ui, |ui| {
-                        let choices: Vec<PortChoice> =
-                            flashable_ports(&self.ports).into_iter().cloned().collect();
-                        if choices.is_empty() {
+                        // Show every COM Windows reported — junk rows visible but not selectable.
+                        let serial: Vec<PortChoice> = self
+                            .ports
+                            .iter()
+                            .filter(|p| is_usb_serial_port(&p.name))
+                            .cloned()
+                            .collect();
+                        if serial.is_empty() {
                             ui.label(
                                 RichText::new(
-                                    "No USB board COM (COM1 / PCI motherboard ports are hidden)",
+                                    "No COM ports from Windows — plug a data cable, then Refresh.",
                                 )
                                 .color(C_WARN)
                                 .size(12.0),
                             );
                         }
-                        for p in choices {
+                        for p in serial {
+                            let junk = port_choice_is_system_junk(&p);
                             let label = if self.worker_already_linked(&p.name) {
                                 format!("{} · linked", p.label)
+                            } else if junk {
+                                format!("{} · motherboard / skip", p.label)
                             } else {
                                 p.label.clone()
                             };
-                            ui.selectable_value(&mut self.com_port, p.name.clone(), label);
+                            if junk {
+                                ui.add_enabled(false, egui::Button::new(label));
+                            } else {
+                                ui.selectable_value(&mut self.com_port, p.name.clone(), label);
+                            }
                         }
                     });
                 if soft_button(ui, "Refresh", 98.0).clicked() {
                     // List only — never OpenUsb / auto-reconnect.
                     self.refresh_com_ports(false, false);
+                    self.push_log(LogKind::Usb, self.last_ok.clone());
+                    for p in self.ports.clone() {
+                        self.push_log(LogKind::Usb, format!("  · {}", p.label));
+                    }
+                }
+                // Offer multi-USB link whenever any board COM exists (not only after first link).
+                if soft_button(ui, "Link all USB", 110.0).clicked() {
+                    self.refresh_com_ports(false, false);
+                    self.link_all_unlinked_usb();
                 }
                 // Always offer Add board once at least one board is linked.
                 if self.usb_open {
@@ -3470,12 +3503,71 @@ impl CompanionApp {
                             self.link_all_unlinked_usb();
                         }
                     }
-                    if soft_button(ui, "Link all USB", 110.0).clicked() {
-                        self.refresh_com_ports(false, false);
-                        self.link_all_unlinked_usb();
-                    }
                 }
             });
+            // Always-visible COM inventory — dropdown alone hid secondary USB adapters.
+            {
+                let serial: Vec<PortChoice> = self
+                    .ports
+                    .iter()
+                    .filter(|p| is_usb_serial_port(&p.name))
+                    .cloned()
+                    .collect();
+                let usb_n = count_usb_uart_ports(&self.ports);
+                let junk_n = serial.len().saturating_sub(usb_n);
+                ui.label(
+                    RichText::new(format!(
+                        "PC COMs · {} total · {usb_n} USB-UART · {junk_n} motherboard/BT skipped",
+                        serial.len()
+                    ))
+                    .color(C_DIM)
+                    .size(11.0),
+                );
+                for p in serial.iter().take(12) {
+                    let linked = self.worker_already_linked(&p.name);
+                    let junk = port_choice_is_system_junk(p);
+                    let tag = if linked {
+                        "linked"
+                    } else if junk {
+                        "skip"
+                    } else {
+                        "ready"
+                    };
+                    let color = if linked {
+                        C_LIME
+                    } else if junk {
+                        C_DIM
+                    } else {
+                        C_TEXT
+                    };
+                    ui.horizontal(|ui| {
+                        ui.label(
+                            RichText::new(format!("  · {} · {tag}", p.label))
+                                .color(color)
+                                .font(mono_ui_font(11.0)),
+                        );
+                        if !junk && !linked {
+                            if soft_button(ui, "Use", 48.0).clicked() {
+                                self.com_port = p.name.clone();
+                            }
+                            if soft_button(ui, "Link", 48.0).clicked() {
+                                self.com_port = p.name.clone();
+                                self.connect_or_add_usb();
+                            }
+                        }
+                    });
+                }
+                if serial.len() > 12 {
+                    ui.label(
+                        RichText::new(format!(
+                            "  · …and {} more — open the COM menu",
+                            serial.len() - 12
+                        ))
+                        .color(C_DIM)
+                        .size(11.0),
+                    );
+                }
+            }
             if self.ports.is_empty() {
                 ui.label(
                     RichText::new(
@@ -3498,7 +3590,7 @@ impl CompanionApp {
                     .color(C_WARN)
                     .size(12.0),
                 );
-            } else if self.usb_open && count_usb_uart_ports(&self.ports) <= 1 {
+            } else if count_usb_uart_ports(&self.ports) <= 1 {
                 let mesh_n = self
                     .connected_workers
                     .iter()
@@ -3511,15 +3603,15 @@ impl CompanionApp {
                     .map(|w| w.mesh_peers as usize)
                     .max()
                     .unwrap_or(0);
-                if mesh_n == 0 {
+                if self.usb_open && mesh_n == 0 {
                     ui.label(
                         RichText::new(
-                            "Only one PC USB COM (normal). Keep this board as the root. Power a 2nd CYD nearby (wall USB / power bank — no PC cable). It should appear as mesh:… within a few seconds. Same eFuse MAC on both boards cannot mesh — then use a 2nd data cable.",
+                            "Only one PC USB COM so far. Plug a 2nd CYD data cable into another USB port — it should appear above within a few seconds (or click Refresh). Or power a 2nd CYD nearby for mesh:… (no PC cable).",
                         )
                         .color(C_WARN)
                         .size(12.0),
                     );
-                } else {
+                } else if self.usb_open {
                     ui.label(
                         RichText::new(format!(
                             "PC USB root + {mesh_n} mesh board(s) · root reports {root_peers} peer(s)."
@@ -5075,7 +5167,14 @@ impl App for CompanionApp {
                         if !skip {
                             match w.kind {
                                 WorkerKind::Usb => {
-                                    auto_usb.push(w.endpoint.clone());
+                                    // Probe misses are listed for visibility only — do not auto-link.
+                                    let present_only = w
+                                        .detail
+                                        .to_ascii_lowercase()
+                                        .contains("no cmp");
+                                    if !present_only {
+                                        auto_usb.push(w.endpoint.clone());
+                                    }
                                 }
                                 WorkerKind::Wifi => auto_wifi.push(w.endpoint.clone()),
                                 WorkerKind::Lan => {}
@@ -5303,7 +5402,15 @@ impl App for CompanionApp {
                 // UI-thread enum — same path as Refresh list scan; auto-connect only here.
                 let force = !self.usb_open && prefer_cyd_port(&self.ports).is_none();
                 self.refresh_com_ports(force, true);
+                self.last_port_refresh = Instant::now();
             }
+        } else if !self.update_busy
+            && !self.flash_busy()
+            && self.last_port_refresh.elapsed() > Duration::from_secs(3)
+        {
+            // Keep picking up boards plugged into other PC USB ports without Refresh.
+            self.refresh_com_ports(false, false);
+            self.last_port_refresh = Instant::now();
         }
         // LAN peer discovery / advertise local CYD USB fleet.
         for peer in self.lan.poll_peers() {
@@ -5481,25 +5588,38 @@ impl App for CompanionApp {
                                         RichText::new(wiz_com_label).color(C_TEXT).size(13.0),
                                     )
                                     .show_ui(ui, |ui| {
-                                        let choices: Vec<PortChoice> = flashable_ports(&self.ports)
-                                            .into_iter()
+                                        let serial: Vec<PortChoice> = self
+                                            .ports
+                                            .iter()
+                                            .filter(|p| is_usb_serial_port(&p.name))
                                             .cloned()
                                             .collect();
-                                        if choices.is_empty() {
+                                        if serial.is_empty() {
                                             ui.label(
                                                 RichText::new(
-                                                    "No USB board COM (COM1 / PCI hidden)",
+                                                    "No COM ports from Windows yet — Refresh.",
                                                 )
                                                 .color(C_WARN)
                                                 .size(12.0),
                                             );
                                         }
-                                        for p in choices {
-                                            ui.selectable_value(
-                                                &mut self.com_port,
-                                                p.name.clone(),
-                                                &p.label,
-                                            );
+                                        for p in serial {
+                                            let junk = port_choice_is_system_junk(&p);
+                                            if junk {
+                                                ui.add_enabled(
+                                                    false,
+                                                    egui::Button::new(format!(
+                                                        "{} · skip",
+                                                        p.label
+                                                    )),
+                                                );
+                                            } else {
+                                                ui.selectable_value(
+                                                    &mut self.com_port,
+                                                    p.name.clone(),
+                                                    &p.label,
+                                                );
+                                            }
                                         }
                                     });
                                 if soft_button(ui, "Refresh", 90.0).clicked() {
