@@ -8484,28 +8484,41 @@ Power a 2nd board nearby with wall/power-bank only (no PC cable)."
                     let _ = msg_tx.send(NetMsg::Share(ev));
                 }
                 // NerdMiner-style clean_jobs: drop cached work so late board shares die.
-                if client.take_clean_jobs() {
+                let cleaned = client.take_clean_jobs();
+                if cleaned {
                     recent_jobs.clear();
                     held_board_shares.clear();
+                    // Stop boards from grinding invalidated work until the new job lands.
+                    for b in boards.iter_mut() {
+                        let _ = usb_cmd(&mut b.port, &mut b.rx, "cmp stop");
+                    }
+                    let mesh_targets: Vec<(String, String)> = mesh
+                        .iter()
+                        .map(|m| (m.gateway.clone(), m.mac.clone()))
+                        .collect();
+                    for (gw, mac) in mesh_targets {
+                        let mut pump = || {
+                            let _ = client.poll();
+                        };
+                        let _ = mesh_via_cmd_ex(&mut boards, &gw, &mac, "stop", &mut pump, 1);
+                    }
                     log_msg(
                         &msg_tx,
                         LogKind::Stratum,
-                        "Pool clean_jobs — cleared job/share cache",
+                        "Pool clean_jobs — cleared cache, stopped boards",
                     );
                 }
-                for id in client.take_stale_job_ids() {
-                    recent_jobs.retain(|j| j.job_id != id);
-                    held_board_shares.retain(|(job, _, _, _)| job != &id);
-                }
+                recent_jobs.retain(|j| !client.is_job_stale(&j.job_id));
+                held_board_shares.retain(|(job, _, _, _)| !client.is_job_stale(job));
                 // Fleet: one unique extranonce2 per USB/mesh worker (NerdMiner/multi-worker style).
                 let fleet_n = boards.len().saturating_add(mesh.len()).max(1);
                 let jobs = client.take_job_batch(fleet_n);
                 if !jobs.is_empty() {
                     let mut pushed = 0usize;
                     let mut stale_abort = false;
-                    let mut job_iter = jobs.into_iter();
+                    let mut remaining: VecDeque<WorkJob> = jobs.into();
                     for b in boards.iter_mut() {
-                        let Some(job) = job_iter.next() else { break };
+                        let Some(job) = remaining.pop_front() else { break };
                         let mut legacy = b.legacy_job;
                         let push_res = {
                             let mut pump = || {
@@ -8528,15 +8541,18 @@ Power a 2nd board nearby with wall/power-bank only (no PC cable)."
                             }
                             Err(e) => {
                                 b.legacy_job = legacy;
+                                remaining.push_front(job);
                                 let _ = msg_tx.send(NetMsg::Action(Err(format!(
                                     "{} job push: {e}",
                                     b.name
                                 ))));
+                                break;
                             }
                         }
-                        // Newer notify wins — finish USB boards then stop.
+                        // Newer notify wins — abandon remaining of this batch.
                         if client.has_pending_job() {
                             stale_abort = true;
+                            remaining.clear();
                             break;
                         }
                     }
@@ -8544,9 +8560,10 @@ Power a 2nd board nearby with wall/power-bank only (no PC cable)."
                         for m in mesh.iter_mut() {
                             if client.has_pending_job() {
                                 stale_abort = true;
+                                remaining.clear();
                                 break;
                             }
-                            let Some(job) = job_iter.next() else { break };
+                            let Some(job) = remaining.pop_front() else { break };
                             let mesh_res = {
                                 let mut pump = || {
                                     let _ = client.poll();
@@ -8559,10 +8576,12 @@ Power a 2nd board nearby with wall/power-bank only (no PC cable)."
                                     recent_jobs.push_back(job);
                                 }
                                 Err(e) => {
+                                    remaining.push_front(job);
                                     let _ = msg_tx.send(NetMsg::Action(Err(format!(
                                         "mesh {} job push: {e}",
                                         m.mac
                                     ))));
+                                    break;
                                 }
                             }
                         }
@@ -8580,7 +8599,8 @@ Power a 2nd board nearby with wall/power-bank only (no PC cable)."
                         let _ = msg_tx.send(NetMsg::Action(Ok(format!(
                             "USB ← job → {pushed} board(s)/mesh (unique en2)"
                         ))));
-                    } else if let Some(job) = job_iter.next() {
+                    } else if let Some(job) = remaining.pop_front() {
+                        // Total failure — restore so the next loop retries (pre-0.8.121 behavior).
                         client.restore_job(job);
                     }
                 }
@@ -8643,43 +8663,59 @@ Power a 2nd board nearby with wall/power-bank only (no PC cable)."
                         let _ = msg_tx.send(NetMsg::Action(Ok(format!(
                             "Pool reconnected {mine_endpoint}"
                         ))));
-                        // Keep boards on last work — re-push if we have a recent job
-                        // so H/s doesn't sit on a stale/warmup header across the gap.
-                        if let Some(job) = recent_jobs.back().cloned() {
-                            for b in boards.iter_mut() {
-                                let mut legacy = b.legacy_job;
-                                let push_res = {
-                                    let mut pump = || {
-                                        if let Some(c) = stratum.as_mut() {
-                                            let _ = c.poll();
-                                        }
-                                    };
-                                    usb_push_job_ex(
-                                        &mut b.port,
-                                        &mut b.rx,
-                                        &job,
-                                        &mut legacy,
-                                        &msg_tx,
-                                        &mut pump,
-                                    )
-                                };
-                                if push_res.is_ok() {
-                                    b.legacy_job = legacy;
-                                    b.mining = true;
-                                }
+                        // Keep hashrate across the gap — re-push unique cached en2 jobs only
+                        // (never broadcast one en2 to the whole fleet).
+                        let fleet_n = boards.len().saturating_add(mesh.len());
+                        let mut chosen: Vec<WorkJob> = Vec::new();
+                        for j in recent_jobs.iter().rev() {
+                            if chosen
+                                .iter()
+                                .any(|c| c.extranonce2_hex == j.extranonce2_hex)
+                            {
+                                continue;
                             }
-                            for m in mesh.iter_mut() {
-                                let ok = {
-                                    let mut pump = || {
-                                        if let Some(c) = stratum.as_mut() {
-                                            let _ = c.poll();
-                                        }
-                                    };
-                                    push_mesh_job(&mut boards, m, &job, &msg_tx, &mut pump).is_ok()
+                            chosen.push(j.clone());
+                            if chosen.len() >= fleet_n {
+                                break;
+                            }
+                        }
+                        chosen.reverse();
+                        let mut it = chosen.into_iter();
+                        for b in boards.iter_mut() {
+                            let Some(job) = it.next() else { break };
+                            let mut legacy = b.legacy_job;
+                            let push_res = {
+                                let mut pump = || {
+                                    if let Some(c) = stratum.as_mut() {
+                                        let _ = c.poll();
+                                    }
                                 };
-                                if ok {
-                                    m.mining = true;
-                                }
+                                usb_push_job_ex(
+                                    &mut b.port,
+                                    &mut b.rx,
+                                    &job,
+                                    &mut legacy,
+                                    &msg_tx,
+                                    &mut pump,
+                                )
+                            };
+                            if push_res.is_ok() {
+                                b.legacy_job = legacy;
+                                b.mining = true;
+                            }
+                        }
+                        for m in mesh.iter_mut() {
+                            let Some(job) = it.next() else { break };
+                            let ok = {
+                                let mut pump = || {
+                                    if let Some(c) = stratum.as_mut() {
+                                        let _ = c.poll();
+                                    }
+                                };
+                                push_mesh_job(&mut boards, m, &job, &msg_tx, &mut pump).is_ok()
+                            };
+                            if ok {
+                                m.mining = true;
                             }
                         }
                     }

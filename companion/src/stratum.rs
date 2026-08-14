@@ -72,6 +72,8 @@ pub struct StratumClient {
     job_wait_since: Option<Instant>,
     /// Suggested share difficulty for ESP-class hashrate (NerdMiner-style).
     suggest_difficulty: f64,
+    /// Last outbound stratum write — used for idle suggest keepalive.
+    last_tx_at: Instant,
     pub accepted: u32,
     pub rejected: u32,
     pub phase: String,
@@ -132,6 +134,7 @@ impl StratumClient {
             job_wait_since: None,
             // Match NerdMiner / public-pool ESP defaults — pool may ignore or vardiff up.
             suggest_difficulty: 0.001,
+            last_tx_at: Instant::now(),
             accepted: 0,
             rejected: 0,
             phase: "off".into(),
@@ -251,11 +254,6 @@ impl StratumClient {
         self.pending_job.is_some()
     }
 
-    /// Job ids the pool invalidated via `clean_jobs=true` (drain each poll).
-    pub fn take_stale_job_ids(&mut self) -> Vec<String> {
-        self.stale_job_ids.drain(..).collect()
-    }
-
     /// True once after a notify with `clean_jobs=true` (clear recent job cache).
     pub fn take_clean_jobs(&mut self) -> bool {
         let v = self.clean_jobs_pending;
@@ -267,7 +265,7 @@ impl StratumClient {
         self.stale_job_ids.iter().any(|id| id == job_id)
     }
 
-    /// First pending job plus `extra` more unique-extranonce2 variants (fleet).
+    /// First pending job plus more unique-extranonce2 variants (fleet).
     /// NerdMiner / multi-worker fleets assign distinct en2 so boards do not collide.
     pub fn take_job_batch(&mut self, total: usize) -> Vec<WorkJob> {
         let Some(first) = self.pending_job.take() else {
@@ -387,6 +385,19 @@ impl StratumClient {
             return Err("pool requested reconnect".into());
         }
         self.release_held_job_if_ready();
+        // NerdMiner-style: re-suggest difficulty when the TX path has been idle so
+        // solo pools keep the connection / vardiff awake at ESP hashrates.
+        if self.authorized
+            && self.last_tx_at.elapsed() >= Duration::from_secs(50)
+            && self.pending_shares.is_empty()
+        {
+            let diff = if self.have_difficulty {
+                self.difficulty
+            } else {
+                self.suggest_difficulty
+            };
+            let _ = self.send_suggest_difficulty(diff);
+        }
         Ok(())
     }
 
@@ -527,6 +538,7 @@ impl StratumClient {
             trimmed
         };
         self.push_recent(format!("→ {preview}"));
+        self.last_tx_at = Instant::now();
         Ok(())
     }
 
@@ -579,7 +591,9 @@ impl StratumClient {
                         // NerdMiner/ESP-Miner: clean_jobs → drop prior work so stale shares die.
                         if clean_jobs {
                             self.clean_jobs_pending = true;
-                            if !prev_job.is_empty() && prev_job != self.job_id {
+                            // Always invalidate any held pending job — do not ship stale headers.
+                            self.pending_job = None;
+                            if !prev_job.is_empty() {
                                 self.mark_job_stale(&prev_job);
                             }
                             self.push_recent(format!(

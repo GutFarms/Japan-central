@@ -186,6 +186,10 @@ static bool applyConfig(AppConfig& updated, bool& reboot) {
 }
 
 static void onJob(const UsbJob& job) {
+  // Drop shares from the previous header — NerdMiner invalidates on new work.
+  portENTER_CRITICAL(&g_mux);
+  for (size_t i = 0; i < kShareQ; i++) g_shareQ[i].used = false;
+  portEXIT_CRITICAL(&g_mux);
   g_job = job;
   uint32_t start = job.startNonce ? job.startNonce : esp_random();
   // HW lane owns the SHA engine on the lower half of the nonce space.
@@ -206,6 +210,9 @@ static void onJob(const UsbJob& job) {
 }
 
 static void onStop() {
+  portENTER_CRITICAL(&g_mux);
+  for (size_t i = 0; i < kShareQ; i++) g_shareQ[i].used = false;
+  portEXIT_CRITICAL(&g_mux);
   g_jobLoaded = false;
   g_mining = false;
   g_hashrate = 0;
