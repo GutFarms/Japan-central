@@ -32,11 +32,11 @@ See [`flash/downloads/README.md`](flash/downloads/README.md) for checksums.
 ## Use
 
 1. Run **CYD-Miner-Setup.exe** (or unpack the portable kit)
-2. Open **Njörðr Seas' CYD miner** → select COM → **Update board** (pushes bundled firmware over USB @ **0x0**)  
-   — or run `Flash-Firmware.bat` once if you prefer
+2. Open **Njörðr Seas' CYD miner** → select COM → **Push update** on a linked board (auto-reset; no BOOT)  
+   — blank boards: **Update board** + BOOT Ready, or `Flash-Firmware.bat`
 3. **Connect** USB → enter stratum / **Bitcoin address** / password → **Start mining**
 
-`Update board` stops mining, frees the COM port, flashes `Firmware\esp32-2432s028-sha256-miner-merged.bin` with bundled `Tools\espflash.exe`, then reconnects. If flash fails: hold **BOOT**, tap **RESET**, release **BOOT**, then retry.
+**Push update** (linked companion firmware): stops mining briefly, auto-resets into download mode, writes `Firmware\esp32-2432s028-sha256-miner-merged.bin`, reconnects. **BOOT Ready** only if auto-reset fails. Blank boards still need hold **BOOT** → tap **RESET** → Ready.
 
 In **Settings**:
 - **Update app** — download the latest Companion Windows build and restart
@@ -59,6 +59,7 @@ In **Settings**:
 - **0.8.22** — fix Windows self-update bat (retry while `.new` remains; do not relaunch a locked old exe)
 - **0.8.23** — fetch updates via GitHub API / commit-pinned raw (branch raw CDN can serve stale VERSION/bins)
 - **0.8.24** — fix Update board: espflash reject `ESPFLASH_SKIP_UPDATE_CHECK=1` (needs true/false); skip Windows Store python stubs
+- **0.8.102** — Push update for linked boards (auto-reset, no BOOT Ready); blank boards still use Ready
 - **0.8.101** — Multi-USB: merge Windows registry COM list; warn when only 1 USB-UART (COM1 PCI is not a board)
 - **0.8.100** — Multi-USB: prefer unlinked COM after Refresh, Link all USB, don’t eject live board on same-MAC, pause mine while linking 2nd
 - **0.8.99** — Faster flash: esptool stub first (Terminator), fail MAC-stall in ~32s, no-stub uses --no-compress

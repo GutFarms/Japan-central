@@ -1195,17 +1195,19 @@ fn append_flash_log(line: &str) {
 
 /// Flash merged image @ 0x0 (DIO / 4MB / 40MHz layout inside the merge).
 ///
-/// Strategy (aligned with ESP Terminator / esptool-js):
-/// 1) User-gated Ready (hold BOOT → tap RESET → keep BOOT → Ready)
-/// 2) Do NOT open the COM for a pre-SYNC — closing CH340 often resets the chip
-/// 3) Prefer Python esptool stub+compress first (fast path); fail MAC-stall in ~32s
-/// 4) Then esptool --no-stub --no-compress; espflash last
-/// 5) Erase only when failures are not connect-stalls
+/// `live_push`: board was answering cmp — try auto-reset write first (no BOOT Ready).
+/// Blank / download-mode boards keep the Ready + BOOT path.
+///
+/// Strategy:
+/// 1) Live push: esptool/espflash with `default_reset` (silent) → fall back to Ready on stall
+/// 2) Blank: user-gated Ready, then write attempts
+/// 3) Prefer esptool stub+compress; fail MAC-stall in ~32s
 pub fn flash_merged_bin(
     port: &str,
     image: &Path,
     progress: &dyn Fn(String),
     ctrl: &FlashControl,
+    live_push: bool,
 ) -> Result<(), String> {
     use crate::workers::{flash_port_arg, is_usb_serial_port};
 
@@ -1249,19 +1251,27 @@ Available: {hint}. Unplug/replug the CYD, pick the COM again, then Update board.
         }
     }
     progress(format!(
-        "Flash {} ({} bytes) → {port} ({port_arg}) @ 0x0",
+        "{} {} ({} bytes) → {port} ({port_arg}) @ 0x0",
+        if live_push { "Push update" } else { "Flash" },
         image
             .file_name()
             .and_then(|s| s.to_str())
             .unwrap_or("firmware.bin"),
         std::fs::metadata(image).map(|m| m.len()).unwrap_or(0),
     ));
-    progress(
-        "Blank-board flash: Ready with BOOT held, then keep BOOT until Writing %."
-            .into(),
-    );
+    if live_push {
+        progress(
+            "Live board — trying silent auto-reset push (no BOOT). Ready only if that fails."
+                .into(),
+        );
+    } else {
+        progress(
+            "Blank-board flash: Ready with BOOT held, then keep BOOT until Writing %."
+                .into(),
+        );
+    }
     append_flash_log(&format!(
-        "begin port={port} arg={port_arg} image={}",
+        "begin port={port} arg={port_arg} live_push={live_push} image={}",
         image.display()
     ));
 
@@ -1334,29 +1344,49 @@ Available: {hint}. Unplug/replug the CYD, pick the COM again, then Update board.
     let mut connect_stall_only = true;
     let mut saw_chip_connect = false;
 
-    // ── Primary: Ready → esptool first (Terminator), fail-fast on MAC stall ─
-    // espflash --no-stub often sits at MAC (~14% UI) for minutes; esptool stub
-    // is what usually finishes. Post-MAC idle is ~32s so slow paths abort quickly.
-    for round in 1..=2 {
-        ensure_budget(progress)?;
-        wait_for_boot_ready(
-            ctrl,
-            progress,
-            &format!("write round {round}/2"),
-        )?;
-
-        // Attempts after one Ready: (label, before, no_stub, compress, use_esptool)
-        let attempts: &[(&str, &str, bool, bool, bool)] = &[
-            // Terminator default — stub + compress via esptool
-            ("esptool stub+compress no_reset", "no_reset", false, true, true),
-            ("esptool stub+compress default_reset", "default_reset", false, true, true),
-            // ROM path without deflate (deflate hangs after MAC on ~1MB images)
-            ("esptool no-stub no-compress no_reset", "no_reset", true, false, true),
-            ("esptool no-stub no-compress default_reset", "default_reset", true, false, true),
-            // espflash last — often the slow MAC-stall path
-            ("espflash no-stub no-reset", "no-reset", true, false, false),
-            ("espflash no-stub default-reset", "default-reset", true, false, false),
-        ];
+    // Helper: run one write attempt matrix. `need_ready` gates BOOT Ready once per round.
+    let run_attempt_matrix = |need_ready: bool,
+                              round_label: &str,
+                              prefer_default_reset: bool,
+                              esp_err: &mut String,
+                              py_err: &mut String,
+                              saw_chip_connect: &mut bool,
+                              connect_stall_only: &mut bool|
+     -> Result<bool, String> {
+        // Returns Ok(true) on success, Ok(false) if all attempts failed (continue), Err on cancel.
+        if need_ready {
+            wait_for_boot_ready(ctrl, progress, round_label)?;
+        }
+        let attempts: &[(&str, &str, bool, bool, bool)] = if prefer_default_reset {
+            &[
+                ("esptool stub+compress default_reset", "default_reset", false, true, true),
+                ("esptool stub+compress no_reset", "no_reset", false, true, true),
+                (
+                    "esptool no-stub no-compress default_reset",
+                    "default_reset",
+                    true,
+                    false,
+                    true,
+                ),
+                ("espflash stub default-reset", "default-reset", false, false, false),
+                ("espflash no-stub default-reset", "default-reset", true, false, false),
+            ]
+        } else {
+            &[
+                ("esptool stub+compress no_reset", "no_reset", false, true, true),
+                ("esptool stub+compress default_reset", "default_reset", false, true, true),
+                ("esptool no-stub no-compress no_reset", "no_reset", true, false, true),
+                (
+                    "esptool no-stub no-compress default_reset",
+                    "default_reset",
+                    true,
+                    false,
+                    true,
+                ),
+                ("espflash no-stub no-reset", "no-reset", true, false, false),
+                ("espflash no-stub default-reset", "default-reset", true, false, false),
+            ]
+        };
 
         let mut esptool_usable = true;
         for &(label, before, no_stub, compress, use_esptool) in attempts {
@@ -1370,7 +1400,7 @@ Available: {hint}. Unplug/replug the CYD, pick the COM again, then Update board.
             if use_esptool && !esptool_usable {
                 continue;
             }
-            progress(format!("Round {round}: {label} (keep BOOT held)…"));
+            progress(format!("{round_label}: {label}…"));
             let result = if use_esptool {
                 match run_esptool_write(
                     &port_arg,
@@ -1390,7 +1420,7 @@ Available: {hint}. Unplug/replug the CYD, pick the COM again, then Update board.
                             || low.contains("microsoft store")
                             || low.contains("no python")
                         {
-                            py_err = e.clone();
+                            *py_err = e.clone();
                             esptool_usable = false;
                             progress(format!("esptool unavailable: {e}"));
                             continue;
@@ -1418,7 +1448,7 @@ Available: {hint}. Unplug/replug the CYD, pick the COM again, then Update board.
                         run_espflash_reset(&espflash, &port_arg, progress, budget_left(), cancel);
                     append_flash_log(&format!("success {label}"));
                     ctrl.need_boot.store(false, Ordering::SeqCst);
-                    return Ok(());
+                    return Ok(true);
                 }
                 Err(e) => {
                     if e.to_ascii_lowercase().contains("cancelled") {
@@ -1426,18 +1456,56 @@ Available: {hint}. Unplug/replug the CYD, pick the COM again, then Update board.
                         return Err(e);
                     }
                     if use_esptool {
-                        py_err = e.clone();
+                        *py_err = e.clone();
                     }
                     note_fail(
                         &e,
-                        &mut esp_err,
-                        &mut saw_chip_connect,
-                        &mut connect_stall_only,
+                        esp_err,
+                        saw_chip_connect,
+                        connect_stall_only,
                         progress,
                         label,
                     );
                 }
             }
+        }
+        Ok(false)
+    };
+
+    // ── Live push: silent auto-reset first (no BOOT Ready) ─────────────────
+    if live_push {
+        ensure_budget(progress)?;
+        progress("Push update round — auto-reset (no BOOT)…".into());
+        if run_attempt_matrix(
+            false,
+            "push",
+            true,
+            &mut esp_err,
+            &mut py_err,
+            &mut saw_chip_connect,
+            &mut connect_stall_only,
+        )? {
+            return Ok(());
+        }
+        progress(
+            "Auto-reset push stalled — falling back to BOOT Ready…"
+                .into(),
+        );
+    }
+
+    // ── Ready → write (blank boards, or live push fallback) ────────────────
+    for round in 1..=2 {
+        ensure_budget(progress)?;
+        if run_attempt_matrix(
+            true,
+            &format!("ready {round}/2"),
+            live_push,
+            &mut esp_err,
+            &mut py_err,
+            &mut saw_chip_connect,
+            &mut connect_stall_only,
+        )? {
+            return Ok(());
         }
     }
 

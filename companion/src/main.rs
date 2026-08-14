@@ -575,6 +575,8 @@ enum NetCmd {
         need_boot: Arc<AtomicBool>,
         /// UI sets true when the user clicks Ready.
         boot_ready: Arc<AtomicBool>,
+        /// Board was answering cmp — try auto-reset push without BOOT Ready first.
+        live_push: bool,
     },
     /// Push live ticker text to the ESP LCD.
     PushNet {
@@ -1947,6 +1949,17 @@ impl CompanionApp {
         });
     }
 
+    /// True when the target COM is a live companion board (cmp answering) — can
+    /// push update via auto-reset without holding BOOT.
+    fn board_supports_live_push(&self, port: &str) -> bool {
+        self.connected_workers.iter().any(|c| {
+            port_names_match(&c.endpoint, port)
+                && !c.fw.is_empty()
+                && !c.fw.eq_ignore_ascii_case("download-mode")
+                && !c.fw.to_ascii_lowercase().contains("download")
+        })
+    }
+
     fn begin_board_update(&mut self) {
         self.update_confirm = false;
         let port = match self.resolve_flash_usb_port() {
@@ -1957,6 +1970,7 @@ impl CompanionApp {
             }
         };
         self.com_port = port.clone();
+        let live_push = self.board_supports_live_push(&port);
         if self.mining {
             self.stop_mine();
         }
@@ -1974,15 +1988,25 @@ impl CompanionApp {
         self.flash_need_boot = Some(need_boot.clone());
         self.flash_boot_ready = Some(boot_ready.clone());
         self.flash_progress = 0.02;
-        self.flash_phase = "Starting flash".into();
+        self.flash_phase = if live_push {
+            "Pushing update".into()
+        } else {
+            "Starting flash".into()
+        };
         self.pending_post_flash_reconnect = None;
         self.post_flash_verify = None;
-        self.update_status = format!("Flashing board via {port}…");
+        self.update_status = if live_push {
+            format!("Pushing firmware update to {port} (auto-reset)…")
+        } else {
+            format!("Flashing board via {port}…")
+        };
         self.last_ok = self.update_status.clone();
         self.last_error.clear();
         self.push_log(
             LogKind::Usb,
-            if image.is_empty() {
+            if live_push {
+                format!("Push update → {port} (no BOOT; auto-reset)")
+            } else if image.is_empty() {
                 format!("Update board → fetch firmware + flash on {port}")
             } else {
                 format!("Update board → {image} on {port}")
@@ -1999,6 +2023,7 @@ impl CompanionApp {
             cancel,
             need_boot,
             boot_ready,
+            live_push,
         });
     }
 
@@ -2646,7 +2671,7 @@ impl CompanionApp {
         soft_panel(ui, "Board firmware", |ui| {
             ui.label(
                 RichText::new(
-                    "Fetch the latest board image, then push it over USB with Update board.",
+                    "Fetch the latest board image, then Push update on a linked board (auto-reset). Blank boards still use Update board + BOOT Ready.",
                 )
                 .color(C_MUTED)
                 .size(13.0),
@@ -2686,7 +2711,9 @@ impl CompanionApp {
                     self.start_firmware_fetch();
                 }
                 let update_label = if self.update_busy {
-                    "Flashing…"
+                    "Updating…"
+                } else if self.board_supports_live_push(&self.com_port) {
+                    "Push update"
                 } else {
                     "Update board"
                 };
@@ -4666,7 +4693,12 @@ impl App for CompanionApp {
         }
 
         if self.update_confirm {
-            egui::Window::new("Update board firmware")
+            let live_push = self.board_supports_live_push(&self.com_port);
+            egui::Window::new(if live_push {
+                "Push firmware update"
+            } else {
+                "Update board firmware"
+            })
                 .collapsible(false)
                 .resizable(false)
                 .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
@@ -4711,9 +4743,11 @@ impl App for CompanionApp {
                     );
                     ui.add_space(8.0);
                     ui.label(
-                        RichText::new(
-                            "Mining stops and USB disconnects for the flash. When prompted: hold BOOT, tap RESET, keep BOOT held, then click Ready.",
-                        )
+                        RichText::new(if live_push {
+                            "Linked board will get a silent push update (auto-reset). No BOOT button unless auto-reset fails. Mining stops briefly."
+                        } else {
+                            "Blank / download-mode board: mining stops, then hold BOOT → tap RESET → keep BOOT → Ready when asked."
+                        })
                         .color(C_MUTED)
                         .size(13.0),
                     );
@@ -4727,7 +4761,13 @@ impl App for CompanionApp {
                                 .map(|f| f.version.clone())
                                 .unwrap_or_default(),
                         ) == Some(false);
-                        let flash_label = if up_to_date {
+                        let flash_label = if live_push {
+                            if up_to_date {
+                                "Push anyway"
+                            } else {
+                                "Push update"
+                            }
+                        } else if up_to_date {
                             "Flash anyway"
                         } else {
                             "Flash now"
@@ -6880,6 +6920,7 @@ fn mine_worker(cmd_rx: Receiver<NetCmd>, msg_tx: Sender<NetMsg>) {
                     cancel,
                     need_boot,
                     boot_ready,
+                    live_push,
                 } => {
                     // Only release the flash target COM — keep other linked boards.
                     if let Some(idx) = boards
@@ -6905,11 +6946,12 @@ fn mine_worker(cmd_rx: Receiver<NetCmd>, msg_tx: Sender<NetMsg>) {
                         &msg_tx,
                         LogKind::Usb,
                         format!(
-                            "Released {port} for flash · {} board(s) still linked",
+                            "Released {port} for {} · {} board(s) still linked",
+                            if live_push { "push update" } else { "flash" },
                             boards.len()
                         ),
                     );
-                    thread::sleep(Duration::from_millis(1800));
+                    thread::sleep(Duration::from_millis(if live_push { 900 } else { 1800 }));
 
                     // Run flash off the mine-worker so Cancel / port list keep working.
                     let progress_tx = msg_tx.clone();
@@ -6943,14 +6985,15 @@ fn mine_worker(cmd_rx: Receiver<NetCmd>, msg_tx: Sender<NetMsg>) {
                                 need_boot,
                                 boot_ready,
                             };
-                            flash_merged_bin(&port, &img.path, &progress, &ctrl)?;
+                            flash_merged_bin(&port, &img.path, &progress, &ctrl, live_push)?;
                             Ok(format!(
-                                "Firmware {} flashed on {port}",
+                                "Firmware {} {} on {port}",
                                 if img.version.is_empty() {
                                     "image".into()
                                 } else {
                                     img.version
-                                }
+                                },
+                                if live_push { "pushed" } else { "flashed" }
                             ))
                         })();
                         let reopen_port = if reopen { Some(port) } else { None };
