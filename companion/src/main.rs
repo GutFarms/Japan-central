@@ -1411,6 +1411,45 @@ impl CompanionApp {
         }
     }
 
+    /// Rescan OS serial ports on the UI thread (do not wait on the USB worker).
+    fn refresh_com_ports(&mut self, force_best: bool) {
+        let ports = list_serial_ports();
+        let n = ports.len();
+        self.ports = ports;
+        self.apply_best_com_port(force_best);
+        self.auto_connect_attempted = false;
+        let selected = if self.com_port.is_empty() {
+            "—".into()
+        } else {
+            self.com_port.clone()
+        };
+        self.last_ok = format!("COM refresh · {n} port(s) · selected {selected}");
+        self.push_log(
+            LogKind::Usb,
+            format!("Serial ports refreshed: {n} reported · selected {selected}"),
+        );
+        self.maybe_auto_connect_usb();
+    }
+
+    fn maybe_auto_connect_usb(&mut self) {
+        if self.auto_connect
+            && !self.auto_connect_attempted
+            && !self.usb_open
+            && !self.update_busy
+            && !self.com_port.is_empty()
+            && self.ports.iter().any(|x| x.name == self.com_port)
+            && self
+                .ports
+                .iter()
+                .find(|x| x.name == self.com_port)
+                .map(|p| !port_choice_is_pci(p))
+                .unwrap_or(false)
+        {
+            self.auto_connect_attempted = true;
+            self.connect_or_add_usb();
+        }
+    }
+
     fn connect_or_add_usb(&mut self) {
         self.last_error.clear();
         if self.com_port.is_empty() {
@@ -2843,7 +2882,11 @@ impl CompanionApp {
                     .color(C_LIME)
                     .font(mono_ui_font(12.0)),
             );
-            ui.horizontal(|ui| {
+            // Wrap so Refresh stays clickable in the half-width Mine column
+            // (fixed 320px combo + buttons used to clip past the column edge).
+            ui.horizontal_wrapped(|ui| {
+                let reserve = if self.usb_open { 230.0 } else { 110.0 };
+                let combo_w = (ui.available_width() - reserve).clamp(140.0, 320.0);
                 let com_label = if self.com_port.is_empty() {
                     "Select port".to_string()
                 } else {
@@ -2854,7 +2897,7 @@ impl CompanionApp {
                         .unwrap_or_else(|| self.com_port.clone())
                 };
                 egui::ComboBox::from_id_source("com")
-                    .width(320.0)
+                    .width(combo_w)
                     .selected_text(RichText::new(com_label).color(C_TEXT).size(13.0))
                     .show_ui(ui, |ui| {
                         if self.ports.is_empty() {
@@ -2869,8 +2912,7 @@ impl CompanionApp {
                         }
                     });
                 if soft_button(ui, "Refresh", 98.0).clicked() {
-                    let _ = self.cmd_tx.send(NetCmd::ListPorts);
-                    self.auto_connect_attempted = false;
+                    self.refresh_com_ports(true);
                 }
                 // Always offer Add board once at least one board is linked.
                 if self.usb_open {
@@ -3667,22 +3709,7 @@ impl App for CompanionApp {
                             }
                         ),
                     );
-                    if self.auto_connect
-                        && !self.auto_connect_attempted
-                        && !self.usb_open
-                        && !self.update_busy
-                        && !self.com_port.is_empty()
-                        && self.ports.iter().any(|x| x.name == self.com_port)
-                        && self
-                            .ports
-                            .iter()
-                            .find(|x| x.name == self.com_port)
-                            .map(|p| !port_choice_is_pci(p))
-                            .unwrap_or(false)
-                    {
-                        self.auto_connect_attempted = true;
-                        self.connect_or_add_usb();
-                    }
+                    self.maybe_auto_connect_usb();
                 }
                 NetMsg::Action(Ok(s)) => {
                     self.last_ok = s.clone();
@@ -4137,11 +4164,9 @@ impl App for CompanionApp {
             };
             if self.boot_at.elapsed() >= due {
                 self.port_rescans_done = self.port_rescans_done.saturating_add(1);
-                let _ = self.cmd_tx.send(NetCmd::ListPorts);
-                // Allow auto-connect again if first attempt had no usable USB yet.
-                if !self.usb_open && prefer_cyd_port(&self.ports).is_none() {
-                    self.auto_connect_attempted = false;
-                }
+                // UI-thread enum — same path as Refresh (worker may be busy opening USB).
+                let force = !self.usb_open && prefer_cyd_port(&self.ports).is_none();
+                self.refresh_com_ports(force);
             }
         }
         // LAN peer discovery / advertise local CYD USB fleet.
@@ -4284,7 +4309,8 @@ impl App for CompanionApp {
                                     .size(14.0),
                             );
                             ui.add_space(8.0);
-                            ui.horizontal(|ui| {
+                            ui.horizontal_wrapped(|ui| {
+                                let combo_w = (ui.available_width() - 220.0).clamp(140.0, 320.0);
                                 let wiz_com_label = if self.com_port.is_empty() {
                                     "Select port".to_string()
                                 } else {
@@ -4295,7 +4321,7 @@ impl App for CompanionApp {
                                         .unwrap_or_else(|| self.com_port.clone())
                                 };
                                 egui::ComboBox::from_id_source("wiz_com")
-                                    .width(320.0)
+                                    .width(combo_w)
                                     .selected_text(
                                         RichText::new(wiz_com_label).color(C_TEXT).size(13.0),
                                     )
@@ -4309,7 +4335,7 @@ impl App for CompanionApp {
                                         }
                                     });
                                 if soft_button(ui, "Refresh", 90.0).clicked() {
-                                    let _ = self.cmd_tx.send(NetCmd::ListPorts);
+                                    self.refresh_com_ports(true);
                                 }
                                 if soft_button(
                                     ui,
