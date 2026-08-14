@@ -461,13 +461,14 @@ pub fn update_needed(board_fw: &str, bundled: &str) -> Option<bool> {
     Some(a != b)
 }
 
-/// Download latest merged.bin (GitHub release asset, else raw repo flash/downloads/).
+/// Download latest merged.bin (and sibling app.bin for Wi‑Fi OTA).
 pub fn fetch_latest_firmware(
     progress: &dyn Fn(String),
 ) -> Result<FirmwareImage, String> {
     let dest_dir = firmware_writable_dir()?;
     std::fs::create_dir_all(&dest_dir).map_err(|e| format!("mkdir Firmware: {e}"))?;
     let dest = dest_dir.join(MERGED_BIN_NAME);
+    let app_dest = dest_dir.join(APP_BIN_NAME);
     let ver_path = dest_dir.join("VERSION.txt");
 
     progress("Checking GitHub releases for firmware…".into());
@@ -475,6 +476,7 @@ pub fn fetch_latest_firmware(
         progress(format!("Downloading release firmware {ver}…"));
         download_to(&url, &dest, progress)?;
         let _ = std::fs::write(&ver_path, format!("{ver}\n"));
+        let _ = fetch_sibling_app_bin(&dest_dir, &url, progress);
         let bytes = std::fs::metadata(&dest).map(|m| m.len()).unwrap_or(0);
         if bytes > 64_000 {
             return Ok(FirmwareImage {
@@ -490,11 +492,16 @@ pub fn fetch_latest_firmware(
 
     let mut last = String::new();
     for url in raw_firmware_candidate_urls() {
+        // Skip app-only URLs for the primary merged fetch.
+        if url.contains("miner.bin") && !url.contains("merged") {
+            continue;
+        }
         progress(format!("GET {url}"));
         match download_to(&url, &dest, progress) {
             Ok(()) => {
                 let ver = fetch_nearby_version_hint(&url).unwrap_or_else(|| "repo-flash".into());
                 let _ = std::fs::write(&ver_path, format!("{ver}\n"));
+                let _ = fetch_sibling_app_bin(&dest_dir, &url, progress);
                 let bytes = std::fs::metadata(&dest).map(|m| m.len()).unwrap_or(0);
                 if bytes > 64_000 {
                     return Ok(FirmwareImage {
@@ -511,7 +518,14 @@ pub fn fetch_latest_firmware(
 
     progress("Raw .bin missing — extracting from portable kit zip…".into());
     match fetch_firmware_from_portable_zip(&dest_dir, progress) {
-        Ok(img) => return Ok(img),
+        Ok(img) => {
+            if !app_dest.is_file() {
+                let _ = find_app_firmware_image().map(|a| {
+                    let _ = std::fs::copy(&a.path, &app_dest);
+                });
+            }
+            return Ok(img);
+        }
         Err(e) => {
             if last.is_empty() {
                 last = e;
@@ -526,6 +540,41 @@ pub fn fetch_latest_firmware(
     ))
 }
 
+/// Best-effort download of app-only bin beside merged (Wi‑Fi Push update).
+fn fetch_sibling_app_bin(
+    dest_dir: &Path,
+    merged_url_hint: &str,
+    progress: &dyn Fn(String),
+) -> Result<(), String> {
+    let dest = dest_dir.join(APP_BIN_NAME);
+    if dest.is_file() {
+        let bytes = std::fs::metadata(&dest).map(|m| m.len()).unwrap_or(0);
+        if bytes > 64_000 {
+            return Ok(());
+        }
+    }
+    let mut urls = Vec::new();
+    if merged_url_hint.contains("merged") {
+        urls.push(merged_url_hint.replace("-merged.bin", ".bin").replace("merged.bin", "miner.bin"));
+    }
+    for p in [
+        "flash/downloads/esp32-2432s028-sha256-miner.bin",
+        "flash/esp32-2432s028-sha256-miner.bin",
+    ] {
+        urls.extend(repo_bin_urls(p));
+    }
+    for url in urls {
+        progress(format!("GET app (Wi‑Fi OTA) {url}"));
+        if download_to(&url, &dest, progress).is_ok() {
+            let bytes = std::fs::metadata(&dest).map(|m| m.len()).unwrap_or(0);
+            if bytes > 64_000 {
+                return Ok(());
+            }
+        }
+    }
+    Err("app.bin not fetched".into())
+}
+
 fn raw_firmware_candidate_urls() -> Vec<String> {
     let mut out = Vec::new();
     // Prefer commit-pinned raw for ~1MB bins — Contents API is flaky at the 1MB cap
@@ -534,6 +583,10 @@ fn raw_firmware_candidate_urls() -> Vec<String> {
         "flash/downloads/esp32-2432s028-sha256-miner-merged.bin",
         "flash/downloads/esp32-2432s028-sha256-miner-d0-merged.bin",
         "flash/esp32-2432s028-sha256-miner-merged.bin",
+        // App-only for Wi‑Fi OTA (sibling of merged in Firmware/).
+        "flash/downloads/esp32-2432s028-sha256-miner.bin",
+        "flash/downloads/esp32-2432s028-sha256-miner-d0.bin",
+        "flash/esp32-2432s028-sha256-miner.bin",
     ] {
         out.extend(repo_bin_urls(p));
     }
@@ -719,6 +772,8 @@ pub const REPO_NAME: &str = "Japan-central";
 /// Branches probed for Companion/firmware updates (newest VERSION wins).
 /// Tip first — apps still on older builds may only hit the legacy CYD branch.
 pub const REPO_REFS: &[&str] = &[
+    "cursor/share-stratum-cohesion-e801",
+    "cursor/wifi-ota-push-e801",
     "cursor/esp32-mesh-connectivity-e801",
     "cursor/esp32-cyd-cpp-firmware-e801",
     "master",

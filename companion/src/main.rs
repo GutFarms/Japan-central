@@ -6540,16 +6540,33 @@ impl App for CompanionApp {
                         } else {
                             fw.version.clone()
                         };
+                        let (show_path, show_kb, label) = if wifi_target {
+                            match resolve_ota_app_image(Some(fw.path.as_path())) {
+                                Ok(app) => (
+                                    app.path.display().to_string(),
+                                    app.bytes / 1024,
+                                    "Wi‑Fi OTA app image",
+                                ),
+                                Err(_) => (
+                                    fw.path.display().to_string(),
+                                    fw.bytes / 1024,
+                                    "Image (need app.bin beside merged for Wi‑Fi)",
+                                ),
+                            }
+                        } else {
+                            (
+                                fw.path.display().to_string(),
+                                fw.bytes / 1024,
+                                "USB flash image",
+                            )
+                        };
                         ui.label(
-                            RichText::new(format!(
-                                "Image · {ver} · {} KB",
-                                fw.bytes / 1024
-                            ))
-                            .color(C_LIME)
-                            .font(mono_ui_font(12.0)),
+                            RichText::new(format!("{label} · {ver} · {show_kb} KB"))
+                                .color(C_LIME)
+                                .font(mono_ui_font(12.0)),
                         );
                         ui.label(
-                            RichText::new(fw.path.display().to_string())
+                            RichText::new(show_path)
                                 .color(C_DIM)
                                 .font(mono_ui_font(10.0)),
                         );
@@ -8319,9 +8336,8 @@ Power a 2nd board nearby with wall/power-bank only (no PC cable)."
             }
             keep
         });
-        if list_only {
-            return;
-        }
+        // Always register new peers so the mine loop can give unique-en2 jobs.
+        // list_only skips via config/status chrome (those starve stratum).
         for (gname, mac) in seen {
             if mesh.iter().any(|m| m.mac == mac) {
                 continue;
@@ -8342,27 +8358,37 @@ Power a 2nd board nearby with wall/power-bank only (no PC cable)."
                 mining: false,
                 status_fails: 0,
             };
-            // Discovery via — one attempt so stratum stays in charge.
-            if let Ok(line) = mesh_via_cmd_ex(boards, &gname, &mac, "config", pump, 1) {
-                if let Ok(cfg) = parse_cmp_config(&line) {
-                    mb.legacy_job = !fw_supports_split_jobs(&cfg.fw);
-                    mb.fw = cfg.fw;
+            if !list_only {
+                // Discovery via — one attempt so stratum stays in charge.
+                if let Ok(line) = mesh_via_cmd_ex(boards, &gname, &mac, "config", pump, 1) {
+                    if let Ok(cfg) = parse_cmp_config(&line) {
+                        mb.legacy_job = !fw_supports_split_jobs(&cfg.fw);
+                        mb.fw = cfg.fw;
+                    }
                 }
-            }
-            pump();
-            if let Ok(line) = mesh_via_cmd_ex(boards, &gname, &mac, "status", pump, 1) {
-                if let Ok(st) = parse_cmp_status(&line) {
-                    mb.hashrate_hs = st.hashrate_hs;
-                    mb.hashes = st.hashes;
-                    mb.mining = st.mining;
+                pump();
+                if let Ok(line) = mesh_via_cmd_ex(boards, &gname, &mac, "status", pump, 1) {
+                    if let Ok(st) = parse_cmp_status(&line) {
+                        mb.hashrate_hs = st.hashrate_hs;
+                        mb.hashes = st.hashes;
+                        mb.mining = st.mining;
+                    }
                 }
             }
             log_msg(
                 msg_tx,
                 LogKind::Usb,
-                format!("Mesh peer {mac} via {gname} (connectivity only)"),
+                format!(
+                    "Mesh peer {mac} via {gname} ({})",
+                    if list_only {
+                        "list — jobs next"
+                    } else {
+                        "connectivity"
+                    }
+                ),
             );
-            if mining {
+            // Warmup only when we have time for via; hot loop arms unique-en2 otherwise.
+            if mining && !list_only {
                 let _ = arm_mesh_job(boards, &mut mb, msg_tx, pump);
             }
             mesh.push(mb);
@@ -8683,13 +8709,25 @@ Power a 2nd board nearby with wall/power-bank only (no PC cable)."
     }
 
     /// Arm mining job on a newly linked board.
+    /// Always uses warmup — never reuse another board's recent_jobs en2 (duplicate submits).
     fn arm_mining_if_needed(
         board: &mut UsbBoard,
         msg_tx: &Sender<NetMsg>,
         resume_mining: bool,
-        resume_job: Option<&WorkJob>,
+        _resume_job: Option<&WorkJob>,
     ) {
         if board.download_mode || !resume_mining {
+            return;
+        }
+        if board_endpoint_is_softap_setup(&board.name) {
+            log_msg(
+                msg_tx,
+                LogKind::Warn,
+                format!(
+                    "Skip mine arm on SoftAP setup endpoint {} — rejoin home Wi‑Fi for pool uplink",
+                    board.name
+                ),
+            );
             return;
         }
         let mut legacy = board.legacy_job;
@@ -8698,23 +8736,31 @@ Power a 2nd board nearby with wall/power-bank only (no PC cable)."
             &mut board.rx,
             "cmp stats accepted=0&rejected=0",
         );
-        let warmup;
-        let job = match resume_job {
-            Some(j) => j,
-            None => {
-                warmup = warmup_job();
-                &warmup
-            }
-        };
+        // Unique-en2 pool jobs come from the next take_job_batch — never share en2.
+        let warmup = warmup_job();
         let _ = usb_push_job(
             &mut board.port,
             &mut board.rx,
-            job,
+            &warmup,
             &mut legacy,
             msg_tx,
         );
         board.legacy_job = legacy;
         board.mining = true;
+        log_msg(
+            msg_tx,
+            LogKind::Usb,
+            format!(
+                "Board {} hashing (warmup — waiting unique pool en2)…",
+                board.name
+            ),
+        );
+    }
+
+    /// SoftAP Board Setup portal endpoint (`10.88.88.x:19284`) — no pool uplink path.
+    fn board_endpoint_is_softap_setup(endpoint: &str) -> bool {
+        let ep = endpoint.trim();
+        ep.starts_with("10.88.88.") || ep.contains("@10.88.88.")
     }
 
     /// Keep the pool socket drained during long USB / mesh work so we do not
@@ -8914,7 +8960,7 @@ Power a 2nd board nearby with wall/power-bank only (no PC cable)."
                                 &mut board,
                                 &msg_tx,
                                 mining,
-                                recent_jobs.back(),
+                                None,
                             );
                             boards.push(board);
                             {
@@ -9017,7 +9063,7 @@ Power a 2nd board nearby with wall/power-bank only (no PC cable)."
                                 &mut board,
                                 &msg_tx,
                                 resume_mine,
-                                recent_jobs.back(),
+                                None,
                             );
                             boards.push(board);
                             {
@@ -9092,7 +9138,7 @@ Power a 2nd board nearby with wall/power-bank only (no PC cable)."
                                 &mut board,
                                 &msg_tx,
                                 mining,
-                                recent_jobs.back(),
+                                None,
                             );
                             boards.push(board);
                             {
@@ -9274,6 +9320,49 @@ Power a 2nd board nearby with wall/power-bank only (no PC cable)."
                         let _ = msg_tx.send(NetMsg::Action(Err("USB not open".into())));
                         continue;
                     }
+                    // SoftAP setup net has no internet — refuse Mine until PC rejoins home LAN.
+                    if softap_setup_client_ipv4()
+                        .map(|ip| ip.starts_with("10.88.88."))
+                        .unwrap_or(false)
+                    {
+                        let _ = msg_tx.send(NetMsg::Action(Err(
+                            "PC is on SoftAP (10.88.88.x) — rejoin home Wi‑Fi so the pool has uplink, then Mine"
+                                .into(),
+                        )));
+                        continue;
+                    }
+                    // Drop SoftAP-only TCP links from the mining fleet (setup portal, no pool path).
+                    let before = boards.len();
+                    boards.retain(|b| {
+                        if board_endpoint_is_softap_setup(&b.name) {
+                            log_msg(
+                                &msg_tx,
+                                LogKind::Warn,
+                                format!(
+                                    "Skip SoftAP setup board {} for Mine — use Setup tab / home Wi‑Fi",
+                                    b.name
+                                ),
+                            );
+                            false
+                        } else {
+                            true
+                        }
+                    });
+                    if boards.len() < before {
+                        mesh.retain(|m| {
+                            boards.iter().any(|b| {
+                                port_names_match(&b.name, &m.gateway) || b.name == m.gateway
+                            })
+                        });
+                        publish_live(&msg_tx, &boards, &mesh);
+                    }
+                    if boards.is_empty() {
+                        let _ = msg_tx.send(NetMsg::Action(Err(
+                            "No mineable boards (SoftAP setup links only) — Connect USB/STA Wi‑Fi first"
+                                .into(),
+                        )));
+                        continue;
+                    }
                     mine_endpoint = endpoint.clone();
                     mine_worker_name = worker.clone();
                     mine_password = password.clone();
@@ -9285,7 +9374,7 @@ Power a 2nd board nearby with wall/power-bank only (no PC cable)."
                         &msg_tx,
                         LogKind::Stratum,
                         format!(
-                            "Connecting pool {endpoint} as {worker} · {} USB + {} mesh",
+                            "Connecting pool {endpoint} as {worker} · {} USB/Wi‑Fi + {} mesh",
                             boards.len(),
                             mesh.len()
                         ),
@@ -9385,7 +9474,28 @@ Power a 2nd board nearby with wall/power-bank only (no PC cable)."
                             log_msg(&msg_tx, LogKind::Stratum, line);
                         }
                         push_stratum_live(&msg_tx, client);
-                        let fleet_n = boards.len().max(1);
+                        // Discover mesh peers before sizing the fleet so leaves get unique en2.
+                        let can_mesh = client.authorized()
+                            && reconnect_at.is_none()
+                            && !(client.stream_connected()
+                                && !client.authorized()
+                                && !client.auth_give_up)
+                            && !client.has_pending_job();
+                        if can_mesh {
+                            let mut pump = || {
+                                let _ = client.poll();
+                            };
+                            sync_mesh_peers(
+                                &mut boards,
+                                &mut mesh,
+                                &msg_tx,
+                                false,
+                                &mut pump,
+                                false,
+                            );
+                            last_mesh_sync = Instant::now();
+                        }
+                        let fleet_n = boards.len().saturating_add(mesh.len()).max(1);
                         let jobs = client.take_job_batch(fleet_n);
                         if !jobs.is_empty() {
                             let mut remaining: VecDeque<WorkJob> = jobs.into();
@@ -9437,6 +9547,37 @@ Power a 2nd board nearby with wall/power-bank only (no PC cable)."
                                 if client.has_pending_job() {
                                     remaining.clear();
                                     break;
+                                }
+                            }
+                            // Mesh leaves get the same unique-en2 treatment as USB/Wi‑Fi.
+                            for m in mesh.iter_mut() {
+                                if reconnect_at.is_some() || client.has_pending_job() {
+                                    break;
+                                }
+                                let Some(job) = remaining.pop_front() else { break };
+                                let push_res = {
+                                    let mut pump = || {
+                                        let _ = client.poll();
+                                    };
+                                    push_mesh_job(&mut boards, m, &job, &msg_tx, &mut pump)
+                                };
+                                match push_res {
+                                    Ok(()) => {
+                                        armed_pool += 1;
+                                        recent_jobs.push_back(job);
+                                        let _ = msg_tx.send(NetMsg::Action(Ok(format!(
+                                            "Mesh {} ← pool job (unique en2)",
+                                            m.mac
+                                        ))));
+                                    }
+                                    Err(e) => {
+                                        remaining.push_front(job);
+                                        log_msg(
+                                            &msg_tx,
+                                            LogKind::Warn,
+                                            format!("Mesh pool job {}: {e}", m.mac),
+                                        );
+                                    }
                                 }
                             }
                             while recent_jobs.len() > 64 {
@@ -9495,25 +9636,6 @@ Power a 2nd board nearby with wall/power-bank only (no PC cable)."
                                 }
                             }
                         }
-                    }
-                    // Mesh is secondary — only after authorize, and never during handshake.
-                    if stratum.as_ref().map(|s| s.authorized()).unwrap_or(false)
-                        && !pool_has_presidency(&stratum, reconnect_at)
-                    {
-                        {
-                            let mut pump = || {
-                                let _ = pump_stratum_keepalive(&mut stratum, &msg_tx);
-                            };
-                            sync_mesh_peers(
-                                &mut boards,
-                                &mut mesh,
-                                &msg_tx,
-                                true,
-                                &mut pump,
-                                false,
-                            );
-                        }
-                        last_mesh_sync = Instant::now();
                         for m in mesh.iter_mut() {
                             if pool_has_presidency(&stratum, reconnect_at) {
                                 break;
@@ -9985,9 +10107,18 @@ Power a 2nd board nearby with wall/power-bank only (no PC cable)."
                         }
                     }
                     if was_mining {
-                        // Resume the last real pool job — warmup shares are ignored by
-                        // harvest and starve accepts until the next mining.notify.
-                        let resume = recent_jobs.back().cloned();
+                        // Resume with distinct en2 per board — never share one job across the fleet.
+                        let mut seen_en2 = std::collections::HashSet::new();
+                        let mut unique: Vec<WorkJob> = Vec::new();
+                        for j in recent_jobs.iter().rev() {
+                            if seen_en2.insert(j.extranonce2_hex.clone()) {
+                                unique.push(j.clone());
+                                if unique.len() >= boards.len() {
+                                    break;
+                                }
+                            }
+                        }
+                        let mut remaining: VecDeque<WorkJob> = unique.into();
                         for b in boards.iter_mut() {
                             let mut legacy = b.legacy_job;
                             let _ = usb_cmd(
@@ -9995,7 +10126,10 @@ Power a 2nd board nearby with wall/power-bank only (no PC cable)."
                                 &mut b.rx,
                                 "cmp stats accepted=0&rejected=0",
                             );
-                            let job = resume.as_ref().cloned().unwrap_or_else(warmup_job);
+                            let job = remaining.pop_front().unwrap_or_else(warmup_job);
+                            let had_pool = !job.job_id.is_empty()
+                                && job.job_id != "warmup"
+                                && !job.extranonce2_hex.is_empty();
                             match usb_push_job(
                                 &mut b.port,
                                 &mut b.rx,
@@ -10005,13 +10139,22 @@ Power a 2nd board nearby with wall/power-bank only (no PC cable)."
                             ) {
                                 Ok(_) => {
                                     b.legacy_job = legacy;
-                                    if resume.is_some() {
+                                    if had_pool {
                                         log_msg(
                                             &msg_tx,
                                             LogKind::Usb,
                                             format!(
-                                                "{} resumed pool job {} after Bench",
-                                                b.name, job.job_id
+                                                "{} resumed pool job {} (en2 {}) after Bench",
+                                                b.name, job.job_id, job.extranonce2_hex
+                                            ),
+                                        );
+                                    } else {
+                                        log_msg(
+                                            &msg_tx,
+                                            LogKind::Usb,
+                                            format!(
+                                                "{} warmup after Bench — waiting unique pool en2",
+                                                b.name
                                             ),
                                         );
                                     }
@@ -10380,9 +10523,40 @@ Power a 2nd board nearby with wall/power-bank only (no PC cable)."
                 }
                 // Fleet: one unique extranonce2 per USB/mesh worker (NerdMiner/multi-worker style).
                 let fleet_n = boards.len().saturating_add(mesh.len()).max(1);
+                // SoftAP setup net has no pool uplink — don't keep pushing work that can't submit.
+                let softap_blocked = softap_setup_client_ipv4()
+                    .map(|ip| ip.starts_with("10.88.88."))
+                    .unwrap_or(false);
+                if softap_blocked {
+                    static LAST_SOFTAP_WARN: std::sync::Mutex<Option<Instant>> =
+                        std::sync::Mutex::new(None);
+                    let mut due = true;
+                    if let Ok(mut g) = LAST_SOFTAP_WARN.lock() {
+                        if let Some(t) = *g {
+                            if t.elapsed() < Duration::from_secs(20) {
+                                due = false;
+                            }
+                        }
+                        if due {
+                            *g = Some(Instant::now());
+                        }
+                    }
+                    if due {
+                        log_msg(
+                            &msg_tx,
+                            LogKind::Warn,
+                            "PC on SoftAP (10.88.88.x) — pool has no uplink. Rejoin home Wi‑Fi; shares held until then."
+                                .to_string(),
+                        );
+                        for b in boards.iter_mut() {
+                            let _ = usb_cmd(&mut b.port, &mut b.rx, "cmp stop");
+                            b.mining = false;
+                        }
+                    }
+                }
                 // Pull any CMPSHARE already sitting in USB RX before we push a new
                 // header (firmware also flushes its ring in onJob as of 0.8.127).
-                if client.has_pending_job() {
+                if !softap_blocked && client.has_pending_job() {
                     for b in boards.iter_mut() {
                         harvest_shares(
                             &mut b.port,
@@ -10394,7 +10568,11 @@ Power a 2nd board nearby with wall/power-bank only (no PC cable)."
                         );
                     }
                 }
-                let jobs = client.take_job_batch(fleet_n);
+                let jobs = if softap_blocked {
+                    Vec::new()
+                } else {
+                    client.take_job_batch(fleet_n)
+                };
                 if !jobs.is_empty() {
                     let mut pushed = 0usize;
                     let mut stale_abort = false;
