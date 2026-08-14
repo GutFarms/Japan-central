@@ -32,16 +32,16 @@ See [`flash/downloads/README.md`](flash/downloads/README.md) for checksums.
 ## Use
 
 1. Run **CYD-Miner-Setup.exe** (or unpack the portable kit)
-2. Open **Njörðr Seas' CYD miner** → select COM → **Push update** on a linked board (auto-reset; no BOOT)  
-   — blank boards: **Update board** + BOOT Ready, or `Flash-Firmware.bat`
+2. Open **Njörðr Seas' CYD miner** → select COM → **Update board** → choose **Push update** (linked, auto-reset) or **Flash (BOOT)** (blank / full rewrite)  
+   — or `Flash-Firmware.bat`
 3. **Connect** USB → enter stratum / **Bitcoin address** / password → **Start mining**
 
-**Push update** (linked companion firmware): stops mining briefly, auto-resets into download mode, writes `Firmware\esp32-2432s028-sha256-miner-merged.bin`, reconnects. **BOOT Ready** only if auto-reset fails. Blank boards still need hold **BOOT** → tap **RESET** → Ready.
+**Push update** (linked companion firmware): stops mining briefly, auto-resets into download mode, writes `Firmware\esp32-2432s028-sha256-miner-merged.bin`, reconnects. **BOOT Ready** only if auto-reset fails. **Flash (BOOT)** always uses hold **BOOT** → tap **RESET** → Ready.
 
 In **Settings**:
 - **Update app** — download the latest Companion Windows build and restart
 - **Fetch latest FW** — pull the newest board `merged.bin` into `Firmware\`
-- **Push update / Update board** — write that image to the CYD over USB (silent push when linked)
+- **Update board** — choose **Push update** (linked) or **Flash (BOOT)** to write that image over USB
 
 ## Companion extras (0.8.5+)
 - First-run setup wizard
