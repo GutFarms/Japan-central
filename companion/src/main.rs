@@ -2353,7 +2353,7 @@ impl CompanionApp {
         self.last_error = tip.clone();
         self.push_log(LogKind::Err, tip);
         self.clear_flash_overlay();
-        self.arm_flash_cooldown(20);
+        self.arm_flash_cooldown(8);
     }
 
     fn retry_post_flash_verify(&mut self, why: &str) {
