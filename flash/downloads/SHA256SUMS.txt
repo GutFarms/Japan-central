@@ -1,0 +1,14 @@
+# Njörðr Seas' CYD miner 0.8.125 — verify with: sha256sum -c SHA256SUMS.txt
+# Firmware images
+3848ee845f60ade841e806365dbf435a00235570e0bc40735d3530cc847b6782  esp32-2432s028-sha256-miner.bin
+0c220669397fafab7ac68abb7d34d5af5d3ea4ab203c429cb15ddbc72d76c4b8  esp32-2432s028-sha256-miner-merged.bin
+3848ee845f60ade841e806365dbf435a00235570e0bc40735d3530cc847b6782  esp32-2432s028-sha256-miner-d0.bin
+0c220669397fafab7ac68abb7d34d5af5d3ea4ab203c429cb15ddbc72d76c4b8  esp32-2432s028-sha256-miner-d0-merged.bin
+# Windows Companion packages
+27bb7ad814d675c1b51ff01e55d075dcdb18348beb957907821ca5f2cacef52d  cyd-companion.exe
+44b94b53fb18524646f5e7eb5741803ec0068f1136eba454dfcdf15667780aeb  CYD-Companion-App-Only.zip
+874ee6039183be00323b3249933b108b7a3e482e90fffa52db4ec10d282adbd3  CYD-Companion-Portable.zip
+c014ca1aa3132a0128c9e567766e197010fcc25b9476c6018c4c826075b9317c  CYD-Miner-Portable.zip
+8f7a49341585d32e53f5d642df4224ab43418d063f0bbe3819f4d34d2566cd6d  CYD-Miner-Setup.exe
+8f7a49341585d32e53f5d642df4224ab43418d063f0bbe3819f4d34d2566cd6d  CYD-Companion-Setup.exe
+0cc03364c70a86325236f18ad1aaed17eedf267d89312c0cdabe4964f5cb758e  espflash.exe
