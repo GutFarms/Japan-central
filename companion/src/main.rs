@@ -4758,10 +4758,18 @@ impl App for CompanionApp {
                         if !self.update_busy {
                             self.clear_hash_display();
                         }
+                        // Worker gone — refresh COM list so the dead port disappears.
+                        if was_open {
+                            self.refresh_com_ports(false, false);
+                        }
                     } else {
                         // After a new board links, point the combo at the next free USB.
                         if self.connected_workers.len() > prev_n {
                             let _ = self.select_next_unlinked_usb();
+                        }
+                        // Fleet shrank (unplug) — refresh ports and fix selection.
+                        if self.connected_workers.len() < prev_n {
+                            self.refresh_com_ports(false, false);
                         }
                         // Keep user's COM pick for Add board even when that COM is not
                         // linked yet. Only snap selection when empty or the COM vanished.
@@ -6587,6 +6595,98 @@ fn mine_worker(cmd_rx: Receiver<NetCmd>, msg_tx: Sender<NetMsg>) {
         let _ = tx.send(NetMsg::WorkersLive(live_from(boards, mesh)));
     }
 
+    fn usb_err_looks_unplugged(err: &str) -> bool {
+        let e = err.to_ascii_lowercase();
+        e.contains("write:")
+            || e.contains("access is denied")
+            || e.contains("no such file")
+            || e.contains("broken pipe")
+            || e.contains("not connected")
+            || e.contains("connection reset")
+            || e.contains("clearcomm")
+            || e.contains("device")
+            || e.contains("os error 5")
+            || e.contains("os error 6")
+            || e.contains("os error 21")
+            || e.contains("os error 22")
+            || e.contains("os error 1167")
+            || e.contains("the device does not recognize")
+            || e.contains("the semaphore timeout")
+    }
+
+    /// Drop USB boards whose COM vanished from the OS (unplug). Updates UI immediately.
+    fn prune_unplugged_boards(
+        boards: &mut Vec<UsbBoard>,
+        mesh: &mut Vec<MeshBoard>,
+        msg_tx: &Sender<NetMsg>,
+        mining: &mut bool,
+        stratum: &mut Option<StratumClient>,
+        reconnect_at: &mut Option<Instant>,
+        last_fleet_status: &mut StatusJson,
+        flash_hold: &Option<(String, Arc<AtomicBool>)>,
+    ) -> bool {
+        if boards.is_empty() {
+            return false;
+        }
+        let listed = list_serial_ports();
+        let mut removed: Vec<String> = Vec::new();
+        boards.retain(|b| {
+            if matches!(b.port, BoardIo::Tcp(_)) {
+                return true;
+            }
+            // Don't prune the COM Update board currently owns (port can bounce mid-flash).
+            if let Some((p, flag)) = flash_hold {
+                if flag.load(Ordering::SeqCst)
+                    && (port_names_match(p, &b.name) || *p == b.name)
+                {
+                    return true;
+                }
+            }
+            let present = listed
+                .iter()
+                .any(|p| port_names_match(&p.name, &b.name) || p.name == b.name);
+            if !present {
+                removed.push(b.name.clone());
+            }
+            present
+        });
+        if removed.is_empty() {
+            return false;
+        }
+        for name in &removed {
+            mesh.retain(|m| !(port_names_match(&m.gateway, name) || m.gateway == *name));
+            log_msg(
+                msg_tx,
+                LogKind::Warn,
+                format!("USB {name} unplugged — removed from fleet"),
+            );
+        }
+        // Refresh COM list so the UI combo drops the dead port immediately.
+        let _ = msg_tx.send(NetMsg::Ports(listed));
+        publish_live(msg_tx, boards, mesh);
+        if boards.is_empty() {
+            mesh.clear();
+            *mining = false;
+            *reconnect_at = None;
+            *last_fleet_status = StatusJson::default();
+            if let Some(mut s) = stratum.take() {
+                s.disconnect();
+            }
+            let _ = msg_tx.send(NetMsg::Status(Ok(StatusJson::default())));
+            let _ = msg_tx.send(NetMsg::Action(Ok(format!(
+                "All workers unplugged ({})",
+                removed.join(", ")
+            ))));
+        } else {
+            let _ = msg_tx.send(NetMsg::Action(Ok(format!(
+                "Unplugged {} · {} board(s) left",
+                removed.join(", "),
+                boards.len()
+            ))));
+        }
+        true
+    }
+
     fn parse_mesh_peers(line: &str) -> Vec<String> {
         let t = line.trim();
         let rest = t.strip_prefix("CMPMESH ").unwrap_or(t);
@@ -7822,6 +7922,20 @@ Power a 2nd board nearby with wall/power-bank only (no PC cable)."
                         let _ = msg_tx.send(NetMsg::Status(Ok(StatusJson::default())));
                         continue;
                     }
+                    // Unplug detection first — UI must update even if pool owns the thread.
+                    if prune_unplugged_boards(
+                        &mut boards,
+                        &mut mesh,
+                        &msg_tx,
+                        &mut mining,
+                        &mut stratum,
+                        &mut reconnect_at,
+                        &mut last_fleet_status,
+                        &flash_hold,
+                    ) && boards.is_empty()
+                    {
+                        continue;
+                    }
                     // Drain pool first — USB/mesh work below can take seconds.
                     if let Some(e) = pump_stratum_keepalive(&mut stratum, &msg_tx) {
                         let give_up = stratum
@@ -7917,12 +8031,22 @@ Power a 2nd board nearby with wall/power-bank only (no PC cable)."
                                             format!("status {}: {e}", b.name),
                                         );
                                     }
-                                    if b.status_fails >= 12 {
+                                    if b.status_fails >= 4 {
                                         drop_names.push(b.name.clone());
                                     }
                                 }
                             },
                             Err(e) => {
+                                // Hard I/O (unplug mid-write) → drop immediately.
+                                if usb_err_looks_unplugged(&e) {
+                                    drop_names.push(b.name.clone());
+                                    log_msg(
+                                        &msg_tx,
+                                        LogKind::Warn,
+                                        format!("USB {} gone ({e})", b.name),
+                                    );
+                                    continue;
+                                }
                                 b.status_fails = b.status_fails.saturating_add(1);
                                 total_hs += b.hashrate_hs;
                                 total_hashes = total_hashes.saturating_add(b.hashes);
@@ -7938,8 +8062,8 @@ Power a 2nd board nearby with wall/power-bank only (no PC cable)."
                                         ),
                                     );
                                 }
-                                // Need a longer streak before dropping — USB can stall briefly.
-                                if b.status_fails >= 12 {
+                                // Faster drop than before — 12×~2s left a ghost board in the UI.
+                                if b.status_fails >= 4 {
                                     drop_names.push(b.name.clone());
                                 }
                             }
@@ -8060,17 +8184,22 @@ Power a 2nd board nearby with wall/power-bank only (no PC cable)."
                     }
                     for name in drop_names {
                         if let Some(idx) = boards.iter().position(|b| b.name == name) {
-                            let mut dead = boards.remove(idx);
+                            let dead = boards.remove(idx);
                             mesh.retain(|m| {
                                 !(port_names_match(&m.gateway, &dead.name) || m.gateway == dead.name)
                             });
-                            let _ = usb_cmd(&mut dead.port, &mut dead.rx, "cmp stop");
+                            // Don't usb_cmd stop — port is often already gone (hangs the UI).
+                            drop(dead);
                             log_msg(
                                 &msg_tx,
                                 LogKind::Err,
-                                format!("Dropped dead board {name} after status failures"),
+                                format!("Dropped dead board {name}"),
                             );
                         }
+                    }
+                    // Keep COM combo in sync when boards die from status fails.
+                    if !boards.is_empty() {
+                        let _ = msg_tx.send(NetMsg::Ports(list_serial_ports()));
                     }
                     if boards.is_empty() {
                         mesh.clear();
@@ -8362,6 +8491,20 @@ Power a 2nd board nearby with wall/power-bank only (no PC cable)."
                     let _ = msg_tx.send(NetMsg::ApiFeedResult(outcome));
                 }
             }
+        }
+
+        // Detect unplug even while stratum has presidency (status polls may be deferred).
+        if !boards.is_empty() {
+            let _ = prune_unplugged_boards(
+                &mut boards,
+                &mut mesh,
+                &msg_tx,
+                &mut mining,
+                &mut stratum,
+                &mut reconnect_at,
+                &mut last_fleet_status,
+                &flash_hold,
+            );
         }
 
         // Prefer pool I/O before USB drain while authorizing — mesh/USB can starve the handshake.
