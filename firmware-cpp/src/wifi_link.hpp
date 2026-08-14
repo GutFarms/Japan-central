@@ -31,10 +31,13 @@ class WifiLink {
   WiFiUDP udp_;
   String apSsid_;
   String mac_;
+  String lastStaSsid_;
+  String lastStaPass_;
   uint32_t lastBeaconMs_ = 0;
   uint32_t lastWifiCheckMs_ = 0;
   bool started_ = false;
   bool staWanted_ = false;
+  bool softApUp_ = false;
 
   void ensureWifi(const AppConfig& cfg);
   void beacon();

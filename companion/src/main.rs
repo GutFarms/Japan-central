@@ -646,6 +646,8 @@ struct CompanionApp {
     update_status: String,
     auto_connect: bool,
     auto_connect_attempted: bool,
+    /// OpenUsb / ConnectWorker queued — block boot auto-connect from double-opening.
+    usb_connect_pending: bool,
     /// App start — delayed COM re-lists (USB enum often lags first paint).
     boot_at: Instant,
     port_rescans_done: u8,
@@ -841,6 +843,7 @@ impl CompanionApp {
             update_status: String::new(),
             auto_connect,
             auto_connect_attempted: false,
+            usb_connect_pending: false,
             boot_at: Instant::now(),
             port_rescans_done: 0,
             session_started: None,
@@ -1390,19 +1393,33 @@ impl CompanionApp {
     }
 
     fn apply_best_com_port(&mut self, force: bool) {
-        let Some(best) = prefer_cyd_port(&self.ports) else {
+        let best = prefer_cyd_port(&self.ports);
+        let selected = self.ports.iter().find(|p| p.name == self.com_port);
+        // Persisted PCI / gone selection with no usable CYD — clear so UI shows Select port.
+        if best.is_none() {
+            if self.com_port.is_empty() {
+                return;
+            }
+            let bad = selected
+                .map(|p| port_choice_is_pci(p) || cyd_port_score(p) < 0)
+                .unwrap_or(true);
+            if bad {
+                self.com_port.clear();
+            }
             return;
-        };
+        }
+        let best = best.unwrap();
         if force || self.com_port.is_empty() {
             self.com_port = best.name.clone();
             return;
         }
-        let selected = self.ports.iter().find(|p| p.name == self.com_port);
+        let selected_score = selected.map(cyd_port_score).unwrap_or(-999);
         let selected_bad = selected
             .map(|p| port_choice_is_pci(p) || cyd_port_score(p) < 0)
             .unwrap_or(true);
         let missing = selected.is_none();
-        if missing || selected_bad {
+        let upgrade = cyd_port_score(best) > selected_score + 15;
+        if missing || selected_bad || upgrade {
             self.com_port = best.name.clone();
             self.push_log(
                 LogKind::Usb,
@@ -1431,14 +1448,17 @@ impl CompanionApp {
             format!("COM list refreshed: {n} reported · selected {selected}"),
         );
         if allow_auto_connect {
-            self.auto_connect_attempted = false;
-            self.maybe_auto_connect_usb();
+            // Do not clear attempted while a connect is already in flight.
+            if !self.usb_connect_pending {
+                self.maybe_auto_connect_usb();
+            }
         }
     }
 
     fn maybe_auto_connect_usb(&mut self) {
         if self.auto_connect
             && !self.auto_connect_attempted
+            && !self.usb_connect_pending
             && !self.usb_open
             && !self.update_busy
             && !self.com_port.is_empty()
@@ -1457,6 +1477,10 @@ impl CompanionApp {
 
     fn connect_or_add_usb(&mut self) {
         self.last_error.clear();
+        if self.update_busy {
+            self.last_error = "Wait for Update board / flash to finish.".into();
+            return;
+        }
         if self.com_port.is_empty() {
             self.last_error = "Select a COM / serial port.".into();
             return;
@@ -1469,12 +1493,14 @@ impl CompanionApp {
             let _ = self
                 .cmd_tx
                 .send(NetCmd::ConnectWorker(self.com_port.clone()));
+            self.usb_connect_pending = true;
             self.last_ok = format!("Adding board {}…", self.com_port);
             self.push_log(LogKind::Usb, format!("Adding worker {}", self.com_port));
         } else {
             let _ = self.cmd_tx.send(NetCmd::OpenUsb {
                 name: self.com_port.clone(),
             });
+            self.usb_connect_pending = true;
             self.last_ok = format!("Opening {}…", self.com_port);
             self.push_log(LogKind::Usb, format!("Opening {}", self.com_port));
         }
@@ -2230,9 +2256,12 @@ impl CompanionApp {
             };
             let w = if wrap { 150.0 } else { 200.0 };
             if cta_button(ui, usb_label, !self.usb_open, w).clicked() {
-                if self.usb_open {
+                if self.update_busy {
+                    self.last_error = "Wait for Update board / flash to finish.".into();
+                } else if self.usb_open {
                     let _ = self.cmd_tx.send(NetCmd::CloseUsb);
                     self.usb_open = false;
+                    self.usb_connect_pending = false;
                     self.mining = false;
                     self.session_started = None;
                     self.connected_workers.clear();
@@ -2248,10 +2277,21 @@ impl CompanionApp {
                     ui.add_space(8.0);
                 }
                 if cta_button(ui, "Add board", true, w).clicked() {
-                    if self.worker_already_linked(&self.com_port) {
+                    if self.update_busy {
+                        self.last_error = "Wait for Update board / flash to finish.".into();
+                    } else if self.worker_already_linked(&self.com_port) {
                         self.select_next_unlinked_usb();
-                    }
-                    if !self.com_port.is_empty() && !self.worker_already_linked(&self.com_port) {
+                        if !self.com_port.is_empty() && !self.worker_already_linked(&self.com_port) {
+                            self.connect_or_add_usb();
+                        } else {
+                            self.worker_scan_busy = true;
+                            self.push_log(
+                                LogKind::Usb,
+                                "Find CYD workers (looking for more boards)…".into(),
+                            );
+                            let _ = self.cmd_tx.send(NetCmd::ScanWorkers);
+                        }
+                    } else if !self.com_port.is_empty() {
                         self.connect_or_add_usb();
                     } else {
                         self.worker_scan_busy = true;
@@ -3038,9 +3078,13 @@ impl CompanionApp {
                 "Find CYD workers"
             };
             if soft_button(ui, scan_label, 160.0).clicked() && !self.worker_scan_busy {
-                self.worker_scan_busy = true;
-                self.push_log(LogKind::Usb, "Scanning USB + LAN for CYD workers…".into());
-                let _ = self.cmd_tx.send(NetCmd::ScanWorkers);
+                if self.update_busy {
+                    self.last_error = "Wait for Update board / flash to finish.".into();
+                } else {
+                    self.worker_scan_busy = true;
+                    self.push_log(LogKind::Usb, "Scanning USB + LAN for CYD workers…".into());
+                    let _ = self.cmd_tx.send(NetCmd::ScanWorkers);
+                }
             }
             ui.label(
                 RichText::new(format!(
@@ -3722,6 +3766,7 @@ impl App for CompanionApp {
                     let low = s.to_lowercase();
                     if low.contains("usb open") || low.contains("worker linked") {
                         self.usb_open = true;
+                        self.usb_connect_pending = false;
                         // Keep the COM that just linked selected — do NOT jump to PCI COM1.
                         if self.post_flash_verify.is_some() && low.contains("usb open") {
                             self.absorb_flash_progress_line(
@@ -3731,7 +3776,11 @@ impl App for CompanionApp {
                     }
                     if low.contains("closed") {
                         self.usb_open = false;
+                        self.usb_connect_pending = false;
                         self.mining = false;
+                    }
+                    if low.contains("already linked") || low.contains("skip wi") {
+                        self.usb_connect_pending = false;
                     }
                     if low.contains("usb ← job") || low.contains("usb <- job") {
                         self.last_job_flow_at = Instant::now();
@@ -3760,6 +3809,7 @@ impl App for CompanionApp {
                     self.push_log(kind, s);
                 }
                 NetMsg::Action(Err(e)) => {
+                    self.usb_connect_pending = false;
                     if self.bench_busy {
                         self.bench_busy = false;
                     }
@@ -4094,6 +4144,9 @@ impl App for CompanionApp {
                     self.connected_workers = live;
                     let was_open = self.usb_open;
                     self.usb_open = !self.connected_workers.is_empty();
+                    if self.usb_open {
+                        self.usb_connect_pending = false;
+                    }
                     if !self.usb_open {
                         if was_open {
                             self.mining = false;
@@ -4101,17 +4154,25 @@ impl App for CompanionApp {
                         }
                         self.clear_hash_display();
                     } else {
-                        // Keep the user's COM selection when that board is still linked;
-                        // only fall back to the first board if selection is empty / gone.
+                        // Keep user's COM pick for Add board even when that COM is not
+                        // linked yet. Only snap selection when empty or the COM vanished.
+                        let selected_still_listed = self
+                            .ports
+                            .iter()
+                            .any(|p| port_names_match(&p.name, &self.com_port));
                         let selected_live = self
                             .connected_workers
                             .iter()
                             .find(|c| port_names_match(&c.endpoint, &self.com_port));
-                        let live = selected_live.or_else(|| self.connected_workers.first());
-                        if let Some(b) = live {
-                            if selected_live.is_none() {
+                        if self.com_port.is_empty()
+                            || (!selected_still_listed && selected_live.is_none())
+                        {
+                            if let Some(b) = self.connected_workers.first() {
                                 self.com_port = b.endpoint.clone();
                             }
+                        }
+                        let live = selected_live.or_else(|| self.connected_workers.first());
+                        if let Some(b) = live {
                             if !b.fw.is_empty() {
                                 self.fw_label = b.fw.clone();
                             }
@@ -6706,6 +6767,9 @@ fn mine_worker(cmd_rx: Receiver<NetCmd>, msg_tx: Sender<NetMsg>) {
                                 "USB ← job {} → {pushed} board(s)",
                                 job.job_id
                             ))));
+                        } else {
+                            // Don't drop the only copy — retry next loop tick.
+                            client.restore_job(job);
                         }
                     }
                     if last_stats_push.elapsed() > Duration::from_secs(2) {

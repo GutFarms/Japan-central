@@ -1153,22 +1153,14 @@ If prompted, hold BOOT, tap RESET, release BOOT."
     for &(baud, before, no_stub) in attempts {
         ensure_budget(progress)?;
         if before == "no-reset" {
-            // If a prior attempt already saw MAC, the chip may still be in download
-            // mode briefly — quick retry first, then a real BOOT window.
-            if saw_chip_connect {
-                progress(
-                    "Chip was seen earlier — quick no-reset retry (still in download mode?)…"
-                        .into(),
-                );
-                std::thread::sleep(Duration::from_millis(500));
-            } else {
-                wait_for_manual_boot(
-                    progress,
-                    cancel,
-                    8,
-                    "writing with before=no-reset",
-                )?;
-            }
+            // After a killed MAC-stall the chip is rarely still in download mode —
+            // always give a real BOOT window (Flash-Firmware.bat uses pause).
+            wait_for_manual_boot(
+                progress,
+                cancel,
+                8,
+                "writing with before=no-reset",
+            )?;
         } else {
             let stub = if no_stub { "no-stub" } else { "stub" };
             progress(format!(
@@ -1200,15 +1192,29 @@ If prompted, hold BOOT, tap RESET, release BOOT."
                     return Err(e);
                 }
                 let stall = low.contains("idle") && low.contains("chip connect");
+                let port_busy = low.contains("access is denied")
+                    || low.contains("access denied")
+                    || low.contains("sharing violation")
+                    || low.contains("resource busy")
+                    || low.contains("serial_not_found")
+                    || low.contains("not found right now")
+                    || (low.contains("port") && low.contains("busy"));
                 if stall {
                     saw_chip_connect = true;
                 }
-                if !stall {
+                // Port held / missing is not a reason to wipe flash.
+                if !stall && !port_busy {
                     connect_stall_only = false;
                 }
                 if stall && before == "default-reset" && !no_stub {
                     progress(
                         "Chip seen then stalled on stub — next tries use --no-stub / BOOT…"
+                            .into(),
+                    );
+                }
+                if port_busy {
+                    progress(
+                        "Port busy/missing — skipping erase; close other apps using the COM…"
                             .into(),
                     );
                 }
@@ -1399,12 +1405,12 @@ If prompted, hold BOOT, tap RESET, release BOOT."
                     py_timeout.as_secs()
                 ));
                 if connect_stall_only || chip_may_be_blank || saw_chip_connect {
-                    let _ = wait_for_manual_boot(
+                    wait_for_manual_boot(
                         progress,
                         cancel,
                         10,
                         "esptool connect",
-                    );
+                    )?;
                 }
                 let mut cmd = Command::new(&py);
                 if let Some(pp) = pythonpath {
@@ -1711,12 +1717,17 @@ fn join_pumps_brief(
 
 fn line_looks_connected(line: &str) -> bool {
     let l = line.to_ascii_lowercase();
-    l.contains("mac")
-        || l.contains("connected")
+    if l.contains("disconnected") || l.contains("not connected") || l.contains("failed to connect")
+    {
+        return false;
+    }
+    l.contains("mac:")
+        || l.contains("mac address")
         || l.contains("chip type")
         || l.contains("chip is")
-        || l.contains("stub")
-        || l.contains("uploading")
+        || (l.contains("connected") && !l.contains("reconnect"))
+        || l.contains("stub running")
+        || l.contains("uploading stub")
         || l.contains("writing at")
         || l.contains("flash size")
         || l.contains("crystal is")

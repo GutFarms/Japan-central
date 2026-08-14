@@ -321,8 +321,8 @@ static void mineTaskB(void*) {
       continue;
     }
     mineLane(g_minerB, 1, g_hwSha ? 12288 : 4096);
-    // Pending USB bytes: step aside so usbTask can drain + reply.
-    if (Serial.available() > 0) {
+    // Pending USB or SoftAP TCP bytes: step aside so cmp RX isn't starved.
+    if (Serial.available() > 0 || g_wifi.tcpConnected()) {
       vTaskDelay(1);
       esp_task_wdt_reset();
       continue;

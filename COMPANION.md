@@ -59,6 +59,7 @@ In **Settings**:
 - **0.8.22** — fix Windows self-update bat (retry while `.new` remains; do not relaunch a locked old exe)
 - **0.8.23** — fetch updates via GitHub API / commit-pinned raw (branch raw CDN can serve stale VERSION/bins)
 - **0.8.24** — fix Update board: espflash reject `ESPFLASH_SKIP_UPDATE_CHECK=1` (needs true/false); skip Windows Store python stubs
+- **0.8.95** — Full-program debug: COM selection/boot race, flash BOOT+no-erase-on-busy, job restore, SoftAP flap, Wi-Fi yield
 - **0.8.94** — Refresh only rescans COM list (no USB reconnect)
 - **0.8.93** — Blank-board flash: --no-stub first, real BOOT countdown, esptool --no-stub / no_reset
 - **0.8.92** — Board & pool Refresh: UI-thread COM rescan + wrap so button stays clickable

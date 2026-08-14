@@ -36,15 +36,30 @@ void WifiLink::ensureWifi(const AppConfig& cfg) {
     server_.end();
     WiFi.mode(WIFI_OFF);
     staWanted_ = false;
+    softApUp_ = false;
+    lastStaSsid_ = "";
+    lastStaPass_ = "";
     return;
   }
 
-  staWanted_ = cfg.wifiSsid.length() > 0;
+  const bool wantSta = cfg.wifiSsid.length() > 0;
+  const bool staCredsChanged =
+      wantSta && (cfg.wifiSsid != lastStaSsid_ || cfg.wifiPass != lastStaPass_);
+  const bool modeChanged = wantSta != staWanted_;
+  staWanted_ = wantSta;
+
   if (staWanted_) {
     WiFi.mode(WIFI_AP_STA);
-    WiFi.begin(cfg.wifiSsid.c_str(), cfg.wifiPass.c_str());
+    // Only call begin when SSID/pass change — avoid SoftAP flaps on every applyConfig.
+    if (staCredsChanged) {
+      WiFi.begin(cfg.wifiSsid.c_str(), cfg.wifiPass.c_str());
+      lastStaSsid_ = cfg.wifiSsid;
+      lastStaPass_ = cfg.wifiPass;
+    }
   } else {
     WiFi.mode(WIFI_AP);
+    lastStaSsid_ = "";
+    lastStaPass_ = "";
   }
 
   // Unique SoftAP subnet from MAC so multiple boards aren't all 192.168.4.1.
@@ -71,12 +86,16 @@ void WifiLink::ensureWifi(const AppConfig& cfg) {
   WiFi.softAPConfig(apIp, apGw, apMask);
 
   // Channel 1 SoftAP — Companion can join or hear UDP on the LAN when STA is up.
-  bool ok = WiFi.softAP(apSsid_.c_str(), CYD_SOFTAP_PASS, 1, 0, 4);
-  (void)ok;
-  delay(40);
-  server_.begin();
-  server_.setNoDelay(true);
-  udp_.begin(CYD_WIFI_UDP_PORT);
+  // Re-create SoftAP only when bringing Wi‑Fi up or subnet/SSID may have changed.
+  if (!softApUp_ || modeChanged || staCredsChanged) {
+    bool ok = WiFi.softAP(apSsid_.c_str(), CYD_SOFTAP_PASS, 1, 0, 4);
+    softApUp_ = ok;
+    (void)ok;
+    delay(40);
+    server_.begin();
+    server_.setNoDelay(true);
+    udp_.begin(CYD_WIFI_UDP_PORT);
+  }
   lastBeaconMs_ = 0;
 }
 
@@ -90,11 +109,11 @@ void WifiLink::beacon() {
   IPAddress advertise = (WiFi.status() == WL_CONNECTED) ? sta : ap;
   char msg[220];
 #if CYD_D0_BUILD
-  static constexpr const char* kFwTag = "0.8.94-sha256-d0";
-  static constexpr const char* kFwShort = "0.8.94-d0";
+  static constexpr const char* kFwTag = "0.8.95-sha256-d0";
+  static constexpr const char* kFwShort = "0.8.95-d0";
 #else
-  static constexpr const char* kFwTag = "0.8.94-sha256";
-  static constexpr const char* kFwShort = "0.8.94";
+  static constexpr const char* kFwTag = "0.8.95-sha256";
+  static constexpr const char* kFwShort = "0.8.95";
 #endif
   snprintf(msg, sizeof(msg),
            "%s|v=%s|mac=%s|fw=%s|tcp=%u|ip=%u.%u.%u.%u|ap=%s|mode=%s",

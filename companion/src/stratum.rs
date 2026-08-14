@@ -266,6 +266,13 @@ impl StratumClient {
         self.pending_job.take()
     }
 
+    /// Put a job back when no board accepted the push (USB timeout, etc.).
+    pub fn restore_job(&mut self, job: WorkJob) {
+        if self.pending_job.is_none() {
+            self.pending_job = Some(job);
+        }
+    }
+
     pub fn submit_share(
         &mut self,
         job_id: &str,
