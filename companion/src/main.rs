@@ -4615,7 +4615,7 @@ impl App for CompanionApp {
                             ui.add_space(8.0);
                             ui.label(
                                 RichText::new(
-                                    "Update board writes the kit image, then reconnects and verifies fw over USB. When asked: hold BOOT, tap RESET, keep BOOT, click Ready.",
+                                    "Linked boards: Push update (auto-reset, no BOOT). Blank boards: Update board + Ready with BOOT held.",
                                 )
                                 .color(C_MUTED)
                                 .size(13.0),
@@ -4810,6 +4810,8 @@ impl App for CompanionApp {
                                 "Flash complete — reconnecting"
                             } else if awaiting_boot {
                                 "Download mode — click Ready"
+                            } else if self.flash_phase.to_ascii_lowercase().contains("push") {
+                                "Pushing firmware update"
                             } else {
                                 "Flashing board firmware"
                             })

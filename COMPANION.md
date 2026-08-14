@@ -41,7 +41,7 @@ See [`flash/downloads/README.md`](flash/downloads/README.md) for checksums.
 In **Settings**:
 - **Update app** — download the latest Companion Windows build and restart
 - **Fetch latest FW** — pull the newest board `merged.bin` into `Firmware\`
-- **Update board** — flash that image to the CYD over USB
+- **Push update / Update board** — write that image to the CYD over USB (silent push when linked)
 
 ## Companion extras (0.8.5+)
 - First-run setup wizard
