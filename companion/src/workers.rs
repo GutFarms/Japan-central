@@ -204,24 +204,46 @@ fn port_info_to_choice(p: serialport::SerialPortInfo) -> PortChoice {
     }
 }
 
-/// Windows: merge every COM Windows knows about — SetupAPI alone often drops a
-/// 2nd CH340. Sources: SERIALCOMM + Enum\USB / FTDIBUS / USBSSER PortName values.
+/// Windows live COM map (`HARDWARE\DEVICEMAP\SERIALCOMM`) — present devices only.
 #[cfg(windows)]
-fn windows_registry_com_ports() -> Vec<(String, String)> {
+fn windows_serialcomm_ports() -> Vec<(String, String)> {
     use winreg::enums::{HKEY_LOCAL_MACHINE, KEY_READ};
     use winreg::types::FromRegValue;
     use winreg::RegKey;
 
-    fn push_com(out: &mut Vec<(String, String)>, com: String, hint: String) {
-        let com = com.trim().to_string();
-        let upper = com.to_ascii_uppercase();
-        if upper.starts_with("COM")
-            && upper.len() > 3
-            && upper[3..].chars().all(|c| c.is_ascii_digit())
-        {
-            out.push((upper, hint));
+    let hklm = RegKey::predef(HKEY_LOCAL_MACHINE);
+    let Ok(key) = hklm.open_subkey_with_flags(r"HARDWARE\DEVICEMAP\SERIALCOMM", KEY_READ) else {
+        return Vec::new();
+    };
+    let mut out = Vec::new();
+    for item in key.enum_values() {
+        let Ok((device, value)) = item else {
+            continue;
+        };
+        let Ok(com) = String::from_reg_value(&value) else {
+            continue;
+        };
+        let com = com.trim().to_ascii_uppercase();
+        if com.starts_with("COM") && com.len() > 3 && com[3..].chars().all(|c| c.is_ascii_digit()) {
+            let hint = if device.contains('\\') {
+                format!("registry · {}", device.rsplit('\\').next().unwrap_or(&device))
+            } else {
+                format!("registry · {device}")
+            };
+            out.push((com, hint));
         }
     }
+    out
+}
+
+/// Windows Enum PortName labels (USB/FTDI/…) for COMs that are already live.
+///
+/// Never used to *invent* COMs — Enum keeps PortName after unplug and caused
+/// ghost rows like COM7 that fail with "system cannot find the file".
+#[cfg(windows)]
+fn windows_enum_com_labels() -> Vec<(String, String)> {
+    use winreg::enums::{HKEY_LOCAL_MACHINE, KEY_READ};
+    use winreg::RegKey;
 
     fn read_port_name(key: &RegKey) -> Option<String> {
         key.get_value::<String, _>("PortName")
@@ -231,8 +253,10 @@ fn windows_registry_com_ports() -> Vec<(String, String)> {
                     .ok()
                     .and_then(|dp| dp.get_value::<String, _>("PortName").ok())
             })
-            .map(|s| s.trim().to_string())
-            .filter(|s| !s.is_empty())
+            .map(|s| s.trim().to_ascii_uppercase())
+            .filter(|s| {
+                s.starts_with("COM") && s.len() > 3 && s[3..].chars().all(|c| c.is_ascii_digit())
+            })
     }
 
     fn walk_enum(key: &RegKey, depth: u8, hint: &str, out: &mut Vec<(String, String)>) {
@@ -240,24 +264,19 @@ fn windows_registry_com_ports() -> Vec<(String, String)> {
             return;
         }
         if let Some(com) = read_port_name(key) {
-            let chip = if hint.to_ascii_uppercase().contains("VID_1A86")
-                || hint.to_ascii_uppercase().contains("PID_7523")
-            {
+            let u = hint.to_ascii_uppercase();
+            let chip = if u.contains("VID_1A86") || u.contains("PID_7523") {
                 "CH340/WCH"
-            } else if hint.to_ascii_uppercase().contains("VID_10C4")
-                || hint.to_ascii_uppercase().contains("CP210")
-            {
+            } else if u.contains("VID_10C4") || u.contains("CP210") {
                 "CP210x"
-            } else if hint.to_ascii_uppercase().contains("VID_0403")
-                || hint.to_ascii_uppercase().contains("FTDI")
-            {
+            } else if u.contains("VID_0403") || u.contains("FTDI") {
                 "FTDI"
-            } else if hint.to_ascii_uppercase().contains("VID_067B") {
+            } else if u.contains("VID_067B") {
                 "Prolific"
             } else {
                 "USB"
             };
-            push_com(out, com, format!("enum · {chip} · {hint}"));
+            out.push((com, format!("enum · {chip} · {hint}")));
         }
         let Ok(subs) = key.enum_keys().collect::<Result<Vec<_>, _>>() else {
             return;
@@ -269,7 +288,6 @@ fn windows_registry_com_ports() -> Vec<(String, String)> {
                 } else {
                     format!("{hint}\\{sub}")
                 };
-                // Keep hints short for the UI label.
                 let short = if child_hint.len() > 48 {
                     child_hint
                         .rsplit('\\')
@@ -289,24 +307,6 @@ fn windows_registry_com_ports() -> Vec<(String, String)> {
 
     let hklm = RegKey::predef(HKEY_LOCAL_MACHINE);
     let mut out = Vec::new();
-
-    if let Ok(key) = hklm.open_subkey_with_flags(r"HARDWARE\DEVICEMAP\SERIALCOMM", KEY_READ) {
-        for item in key.enum_values() {
-            let Ok((device, value)) = item else {
-                continue;
-            };
-            let Ok(com) = String::from_reg_value(&value) else {
-                continue;
-            };
-            let hint = if device.contains('\\') {
-                format!("registry · {}", device.rsplit('\\').next().unwrap_or(&device))
-            } else {
-                format!("registry · {device}")
-            };
-            push_com(&mut out, com, hint);
-        }
-    }
-
     for path in [
         r"SYSTEM\CurrentControlSet\Enum\USB",
         r"SYSTEM\CurrentControlSet\Enum\FTDIBUS",
@@ -318,31 +318,33 @@ fn windows_registry_com_ports() -> Vec<(String, String)> {
             walk_enum(&root, 0, leaf, &mut out);
         }
     }
-
-    // De-dupe by COM name, prefer richer hints (enum · chip over bare registry).
-    use std::collections::BTreeMap;
-    let mut best: BTreeMap<String, String> = BTreeMap::new();
-    for (com, hint) in out {
-        best.entry(com)
-            .and_modify(|h| {
-                if hint.contains("enum ·") && !h.contains("enum ·") {
-                    *h = hint.clone();
-                } else if hint.len() > h.len() && hint.contains("CH340") {
-                    *h = hint.clone();
-                }
-            })
-            .or_insert(hint);
-    }
-    best.into_iter().collect()
+    out
 }
 
 #[cfg(not(windows))]
-fn windows_registry_com_ports() -> Vec<(String, String)> {
+fn windows_serialcomm_ports() -> Vec<(String, String)> {
     Vec::new()
 }
 
-/// List every serial port the OS reports (no filtering) with USB details when available.
-/// On Windows, also merges SERIALCOMM + Enum PortName so a 2nd CH340 is not dropped.
+#[cfg(not(windows))]
+fn windows_enum_com_labels() -> Vec<(String, String)> {
+    Vec::new()
+}
+
+/// Prefer `\\.\COMx` for Windows CreateFile (required for COM10+; helps COM1–9 too).
+pub fn windows_com_path(name: &str) -> String {
+    let n = normalize_port_name(name);
+    if n.starts_with("COM") && n.len() > 3 && n[3..].chars().all(|c| c.is_ascii_digit()) {
+        format!(r"\\.\{n}")
+    } else {
+        name.trim().to_string()
+    }
+}
+
+/// List every *live* serial port the OS reports.
+///
+/// On Windows: SetupAPI + live SERIALCOMM. Enum PortName only enriches labels —
+/// it must not add ghost COMs from unplugged devices.
 pub fn list_serial_ports() -> Vec<PortChoice> {
     use std::collections::BTreeMap;
 
@@ -351,22 +353,29 @@ pub fn list_serial_ports() -> Vec<PortChoice> {
         let choice = port_info_to_choice(info);
         by_name.insert(normalize_port_name(&choice.name), choice);
     }
-    for (com, hint) in windows_registry_com_ports() {
+    // Live device map — add COMs SetupAPI missed (2nd CH340), never ghosts.
+    for (com, hint) in windows_serialcomm_ports() {
         let key = normalize_port_name(&com);
-        by_name
-            .entry(key)
-            .and_modify(|existing| {
-                // Prefer USB/chip labels from Enum when SetupAPI only said "serial".
-                let weak = existing.label.to_ascii_lowercase().contains("— serial")
-                    || existing.label.to_ascii_lowercase().contains("registry ·");
-                if weak && hint.contains("enum ·") {
+        by_name.entry(key).or_insert_with(|| PortChoice {
+            name: com.clone(),
+            label: format!("{com} — {hint}"),
+        });
+    }
+    // Enrich labels only for COMs already live.
+    for (com, hint) in windows_enum_com_labels() {
+        let key = normalize_port_name(&com);
+        if let Some(existing) = by_name.get_mut(&key) {
+            let weak = existing.label.to_ascii_lowercase().contains("— serial")
+                || existing.label.to_ascii_lowercase().contains("registry ·");
+            if weak || hint.contains("CH340") || hint.contains("CP210") || hint.contains("FTDI") {
+                if !existing.label.to_ascii_lowercase().contains("ch340")
+                    && !existing.label.to_ascii_lowercase().contains("cp210")
+                    && !existing.label.to_ascii_lowercase().contains("ftdi")
+                {
                     existing.label = format!("{com} — {hint}");
                 }
-            })
-            .or_insert_with(|| PortChoice {
-                name: com.clone(),
-                label: format!("{com} — {hint}"),
-            });
+            }
+        }
     }
     by_name.into_values().collect()
 }
@@ -496,17 +505,56 @@ pub fn open_usb_serial(
     baud: u32,
     timeout: Duration,
 ) -> Result<Box<dyn SerialPort>, String> {
-    let mut port = serialport::new(name, baud)
-        .timeout(timeout)
-        .dtr_on_open(false)
-        .open()
-        .map_err(|e| format!("USB open failed @ {baud}: {e}"))?;
-    let _ = port.write_data_terminal_ready(false);
-    let _ = port.write_request_to_send(false);
-    // Settle after open; CH340/CP210x may still glitch / reset the MCU.
-    std::thread::sleep(Duration::from_millis(350));
-    let _ = port.clear(serialport::ClearBuffer::All);
-    Ok(port)
+    let plain = normalize_port_name(name);
+    let extended = windows_com_path(&plain);
+    let candidates: Vec<String> = if plain.eq_ignore_ascii_case(&extended) {
+        vec![plain.clone()]
+    } else if plain.starts_with("COM") {
+        // Try extended path first on Windows — plain COMx fails with
+        // "The system cannot find the file specified" on some hosts / COM10+.
+        vec![extended, plain.clone()]
+    } else {
+        vec![name.trim().to_string()]
+    };
+
+    let mut last_err = String::new();
+    for path in &candidates {
+        match serialport::new(path.as_str(), baud)
+            .timeout(timeout)
+            .dtr_on_open(false)
+            .open()
+        {
+            Ok(mut port) => {
+                let _ = port.write_data_terminal_ready(false);
+                let _ = port.write_request_to_send(false);
+                // Settle after open; CH340/CP210x may still glitch / reset the MCU.
+                std::thread::sleep(Duration::from_millis(350));
+                let _ = port.clear(serialport::ClearBuffer::All);
+                return Ok(port);
+            }
+            Err(e) => {
+                last_err = e.to_string();
+            }
+        }
+    }
+
+    let low = last_err.to_ascii_lowercase();
+    let hint = if low.contains("cannot find the file")
+        || low.contains("the system cannot find")
+        || low.contains("os error 2")
+    {
+        format!(
+            " — {plain} is not a live Windows COM (ghost registry entry, unplugged, or wrong port). \
+Refresh the COM list and pick a port shown in Device Manager → Ports."
+        )
+    } else if low.contains("access is denied") || low.contains("os error 5") {
+        format!(
+            " — {plain} is busy (another app has it open). Close Arduino IDE / serial monitors, then retry."
+        )
+    } else {
+        String::new()
+    };
+    Err(format!("USB open failed @ {baud} on {plain}: {last_err}{hint}"))
 }
 
 fn slip_encode(payload: &[u8]) -> Vec<u8> {
@@ -1168,6 +1216,8 @@ mod tests {
         assert!(is_usb_serial_port(r"\\.\COM10"));
         assert!(!is_usb_serial_port("192.168.4.1:19284"));
         assert!(!is_usb_serial_port("cyd.local:19284"));
+        assert_eq!(windows_com_path("COM7"), r"\\.\COM7");
+        assert_eq!(windows_com_path(r"\\.\COM10"), r"\\.\COM10");
         // Prefer plain COMx — espflash exact-matches available_ports() names.
         let arg = flash_port_arg("COM6");
         assert!(
@@ -1175,6 +1225,22 @@ mod tests {
             "unexpected flash port arg {arg}"
         );
         assert_eq!(flash_port_arg(r"\\.\COM6").to_ascii_uppercase().replace(r"\\.\", ""), "COM6");
+    }
+
+    #[test]
+    fn pci_label_requires_deliberate_tag() {
+        let pci = PortChoice {
+            name: "COM1".into(),
+            label: "COM1 — PCI (not a CYD)".into(),
+        };
+        let usb_named_pci = PortChoice {
+            name: "COM8".into(),
+            label: "COM8 — Acme PCIE USB Serial".into(),
+        };
+        assert!(port_choice_is_pci(&pci));
+        assert!(!port_choice_is_pci(&usb_named_pci));
+        assert!(port_choice_is_system_junk(&pci));
+        assert!(!port_choice_is_system_junk(&usb_named_pci));
     }
 
     #[test]

@@ -4884,6 +4884,24 @@ impl App for CompanionApp {
                         self.mining = false;
                         self.session_started = None;
                     }
+                    // Ghost COM / unplugged — drop dead selection and re-enum live ports.
+                    if low.contains("usb open failed")
+                        || low.contains("cannot find the file")
+                        || low.contains("ghost registry")
+                        || low.contains("link ") && low.contains("failed")
+                    {
+                        let dead = self.com_port.clone();
+                        self.refresh_com_ports(false, false);
+                        if !dead.is_empty()
+                            && !self
+                                .ports
+                                .iter()
+                                .any(|p| port_names_match(&p.name, &dead) && !port_choice_is_system_junk(p))
+                        {
+                            self.com_port.clear();
+                            self.apply_best_com_port(true);
+                        }
+                    }
                     if self.post_flash_verify.is_some() {
                         self.retry_post_flash_verify(&e);
                     } else {
