@@ -534,7 +534,7 @@ fn schedule_windows_replace_and_restart(install: &Path) -> Result<(), String> {
          )\r\n\
          rd /s /q \"{staging}\" 2>nul\r\n\
          if not exist \"{exe}\" exit /b 1\r\n\
-         start \"\" /B \"{exe}\"\r\n\
+         start \"\" \"{exe}\"\r\n\
          del \"%~f0\"\r\n",
         dir = install.display(),
         exe = exe_name,

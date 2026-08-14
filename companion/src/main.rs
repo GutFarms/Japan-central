@@ -584,6 +584,8 @@ enum NetCmd {
         need_boot: Arc<AtomicBool>,
         /// UI sets true when the user clicks Ready.
         boot_ready: Arc<AtomicBool>,
+        /// True while flash tools own the COM — UI Cancel clears this too.
+        hold: Arc<AtomicBool>,
         /// Board was answering cmp — try auto-reset push without BOOT Ready first.
         live_push: bool,
     },
@@ -653,10 +655,12 @@ struct CompanionApp {
     update_busy: bool,
     /// When Update board started — UI watchdog clears spinner if flash never finishes.
     update_busy_since: Option<Instant>,
-    /// After a failed flash: block Scan/auto-link/OpenUsb so COM does not thrash.
+    /// After a failed flash: block auto-link/Scan briefly so COM does not thrash.
     flash_cooldown_until: Option<Instant>,
     /// Shared cancel flag for the in-flight flash tool.
     flash_cancel: Option<Arc<AtomicBool>>,
+    /// Shared with mine-worker — false when Cancel/watchdog/FlashDone releases the COM.
+    flash_hold: Option<Arc<AtomicBool>>,
     /// Flash thread asks UI to show Ready (BOOT held).
     flash_need_boot: Option<Arc<AtomicBool>>,
     /// UI → flash thread: user clicked Ready.
@@ -863,6 +867,7 @@ impl CompanionApp {
             update_busy_since: None,
             flash_cooldown_until: None,
             flash_cancel: None,
+            flash_hold: None,
             flash_need_boot: None,
             flash_boot_ready: None,
             flash_progress: 0.0,
@@ -1485,10 +1490,8 @@ impl CompanionApp {
 
     /// Queue ConnectWorker for every unlinked USB-UART that looks like a CYD.
     fn link_all_unlinked_usb(&mut self) {
-        if self.flash_blocked() {
-            self.last_error =
-                "Wait for Update board / flash to finish (COM cooldown after a failed update)."
-                    .into();
+        if self.flash_busy() {
+            self.last_error = "Wait for Update board / flash to finish.".into();
             return;
         }
         let linked = self.linked_endpoints();
@@ -1628,10 +1631,13 @@ impl CompanionApp {
         }
     }
 
-    fn flash_blocked(&self) -> bool {
-        if self.update_busy {
-            return true;
-        }
+    /// True only while Update board overlay is active (blocks Connect/Scan).
+    fn flash_busy(&self) -> bool {
+        self.update_busy
+    }
+
+    /// Cooldown after a failed flash — blocks auto-link/Scan, not manual Connect.
+    fn flash_cooldown_active(&self) -> bool {
         self.flash_cooldown_until
             .map(|t| Instant::now() < t)
             .unwrap_or(false)
@@ -1649,7 +1655,8 @@ impl CompanionApp {
             && !self.auto_connect_attempted
             && !self.usb_connect_pending
             && !self.usb_open
-            && !self.flash_blocked()
+            && !self.flash_busy()
+            && !self.flash_cooldown_active()
             && !self.com_port.is_empty()
             && self.ports.iter().any(|x| x.name == self.com_port)
             && self
@@ -1666,10 +1673,8 @@ impl CompanionApp {
 
     fn connect_or_add_usb(&mut self) {
         self.last_error.clear();
-        if self.flash_blocked() {
-            self.last_error =
-                "Wait for Update board / flash to finish (COM cooldown after a failed update)."
-                    .into();
+        if self.flash_busy() {
+            self.last_error = "Wait for Update board / flash to finish.".into();
             return;
         }
         if self.com_port.is_empty() {
@@ -2158,7 +2163,9 @@ impl CompanionApp {
         let cancel = Arc::new(AtomicBool::new(false));
         let need_boot = Arc::new(AtomicBool::new(false));
         let boot_ready = Arc::new(AtomicBool::new(false));
+        let hold = Arc::new(AtomicBool::new(true));
         self.flash_cancel = Some(cancel.clone());
+        self.flash_hold = Some(hold.clone());
         self.flash_need_boot = Some(need_boot.clone());
         self.flash_boot_ready = Some(boot_ready.clone());
         self.flash_progress = 0.02;
@@ -2197,6 +2204,7 @@ impl CompanionApp {
             cancel,
             need_boot,
             boot_ready,
+            hold,
             live_push,
         });
     }
@@ -2211,11 +2219,21 @@ impl CompanionApp {
         if let Some(c) = self.flash_cancel.take() {
             c.store(true, Ordering::SeqCst);
         }
+        // Release COM hold immediately so Connect/Scan work even if the flash
+        // tool thread is still winding down.
+        if let Some(h) = self.flash_hold.take() {
+            h.store(false, Ordering::SeqCst);
+        }
         if let Some(n) = self.flash_need_boot.take() {
             n.store(false, Ordering::SeqCst);
         }
         if let Some(r) = self.flash_boot_ready.take() {
             r.store(false, Ordering::SeqCst);
+        }
+        // Restore USB open from whatever boards are still linked.
+        self.usb_open = !self.connected_workers.is_empty();
+        if self.usb_open {
+            self.usb_connect_pending = false;
         }
     }
 
@@ -3470,10 +3488,8 @@ impl CompanionApp {
                 "Find CYD workers"
             };
             if soft_button(ui, scan_label, 160.0).clicked() && !self.worker_scan_busy {
-                if self.flash_blocked() {
-                    self.last_error =
-                        "Wait for Update board / flash to finish (COM cooldown after a failed update)."
-                            .into();
+                if self.flash_busy() {
+                    self.last_error = "Wait for Update board / flash to finish.".into();
                 } else {
                     self.worker_scan_busy = true;
                     self.push_log(LogKind::Usb, "Scanning USB + LAN for CYD workers…".into());
@@ -4442,13 +4458,13 @@ impl App for CompanionApp {
                         }
                         Err(e) => {
                             self.clear_flash_overlay();
-                            self.arm_flash_cooldown(25);
+                            self.arm_flash_cooldown(8);
                             self.update_status = e.clone();
                             self.last_error = e.clone();
                             self.push_log(LogKind::Err, e);
                             self.push_log(
                                 LogKind::Warn,
-                                "Flash failed — COM cooldown 25s (no auto-link / reopen thrash)"
+                                "Flash failed — brief COM cooldown (auto-link paused; Connect still works)"
                                     .into(),
                             );
                         }
@@ -4626,7 +4642,7 @@ impl App for CompanionApp {
                         });
                     }
                     for endpoint in auto_usb {
-                        if self.flash_blocked() {
+                        if self.flash_busy() || self.flash_cooldown_active() {
                             self.push_log(
                                 LogKind::Warn,
                                 format!(
@@ -4673,14 +4689,9 @@ impl App for CompanionApp {
                     let prev_n = self.connected_workers.len();
                     self.connected_workers = live;
                     let was_open = self.usb_open;
-                    // During Update board the flash target COM is released — do not
-                    // treat remaining boards as a green light to PollStatus/thrash.
-                    if self.update_busy {
-                        // Keep linked list for UI, but leave usb_open false until flash ends.
-                        self.usb_open = false;
-                    } else {
-                        self.usb_open = !self.connected_workers.is_empty();
-                    }
+                    // Always reflect linked boards — PollStatus is separately gated
+                    // while update_busy so we do not thrash the flash COM.
+                    self.usb_open = !self.connected_workers.is_empty();
                     if self.usb_open {
                         self.usb_connect_pending = false;
                     }
@@ -7124,9 +7135,10 @@ fn mine_worker(cmd_rx: Receiver<NetCmd>, msg_tx: Sender<NetMsg>) {
                     }
                 }
                 NetCmd::ConnectWorker(name) => {
-                    if flash_port_held(&flash_hold, &name) || flash_any_held(&flash_hold) {
+                    // Only block the flash target COM — other boards stay linkable.
+                    if flash_port_held(&flash_hold, &name) {
                         let _ = msg_tx.send(NetMsg::Action(Err(format!(
-                            "Wait — Update board / flash still owns the COM (skip link {name})"
+                            "Wait — Update board still owns {name}"
                         ))));
                         continue;
                     }
@@ -7961,10 +7973,10 @@ fn mine_worker(cmd_rx: Receiver<NetCmd>, msg_tx: Sender<NetMsg>) {
                     cancel,
                     need_boot,
                     boot_ready,
+                    hold,
                     live_push,
                 } => {
-                    let hold_flag = Arc::new(AtomicBool::new(true));
-                    flash_hold = Some((port.clone(), hold_flag.clone()));
+                    flash_hold = Some((port.clone(), hold.clone()));
                     // Only release the flash target COM — keep other linked boards.
                     if let Some(idx) = boards
                         .iter()
@@ -8004,7 +8016,7 @@ fn mine_worker(cmd_rx: Receiver<NetCmd>, msg_tx: Sender<NetMsg>) {
                     // Run flash off the mine-worker so Cancel / port list keep working.
                     let progress_tx = msg_tx.clone();
                     let done_tx = msg_tx.clone();
-                    let hold_clear = hold_flag.clone();
+                    let hold_clear = hold.clone();
                     thread::spawn(move || {
                         let progress = move |line: String| {
                             let _ = progress_tx.send(NetMsg::FlashProgress(line));
