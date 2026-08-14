@@ -1030,9 +1030,9 @@ fn parse_board_beacon(raw: &str, addr: SocketAddr) -> Option<DiscoveredWorker> {
     let detail = match mode.as_str() {
         "ap" if !ap.is_empty() => {
             if fw.is_empty() {
-                format!("setup SoftAP {ap} · open (no password)")
+                format!("setup SoftAP {ap} · open · phone http://{ip}/")
             } else {
-                format!("fw {fw} · setup SoftAP {ap} · open (no password)")
+                format!("fw {fw} · setup SoftAP {ap} · open · phone http://{ip}/")
             }
         }
         _ => match (fw.is_empty(), ap.is_empty()) {
