@@ -3271,7 +3271,7 @@ impl CompanionApp {
             ui.add_space(4.0);
             ui.label(
                 RichText::new(
-                    "Tip: plug the 2nd CYD on its own USB cable → Refresh → Add other COM (or Link all USB). SoftAP Wi‑Fi is one PC↔board link — use USB for multi-board.",
+                    "Tip: power extra CYDs nearby — they auto-mesh (ESP-NOW) to a USB-linked root for connectivity only (not more H/s per board). Or plug more USB cables → Link all USB.",
                 )
                 .color(C_MUTED)
                 .size(11.0),
@@ -5989,8 +5989,21 @@ fn mine_worker(cmd_rx: Receiver<NetCmd>, msg_tx: Sender<NetMsg>) {
         download_mode: bool,
     }
 
-    fn live_from(boards: &[UsbBoard]) -> Vec<WorkerLive> {
-        boards
+    /// Board reached only through a USB/Wi‑Fi root via ESP-NOW (`cmp via`).
+    struct MeshBoard {
+        name: String,
+        gateway: String,
+        mac: String,
+        legacy_job: bool,
+        fw: String,
+        hashrate_hs: f64,
+        hashes: u64,
+        mining: bool,
+        status_fails: u8,
+    }
+
+    fn live_from(boards: &[UsbBoard], mesh: &[MeshBoard]) -> Vec<WorkerLive> {
+        let mut out: Vec<WorkerLive> = boards
             .iter()
             .map(|b| WorkerLive {
                 endpoint: b.name.clone(),
@@ -6005,11 +6018,219 @@ fn mine_worker(cmd_rx: Receiver<NetCmd>, msg_tx: Sender<NetMsg>) {
                 hashes: b.hashes,
                 mining: b.mining,
             })
+            .collect();
+        for m in mesh {
+            out.push(WorkerLive {
+                endpoint: m.name.clone(),
+                mac: m.mac.clone(),
+                fw: if m.fw.is_empty() {
+                    "mesh".into()
+                } else {
+                    m.fw.clone()
+                },
+                connected: true,
+                hashrate_hs: m.hashrate_hs,
+                hashes: m.hashes,
+                mining: m.mining,
+            });
+        }
+        out
+    }
+
+    fn publish_live(tx: &Sender<NetMsg>, boards: &[UsbBoard], mesh: &[MeshBoard]) {
+        let _ = tx.send(NetMsg::WorkersLive(live_from(boards, mesh)));
+    }
+
+    fn parse_mesh_peers(line: &str) -> Vec<String> {
+        let t = line.trim();
+        let rest = t.strip_prefix("CMPMESH ").unwrap_or(t);
+        let mut peers = String::new();
+        for part in rest.split_whitespace() {
+            if let Some(v) = part.strip_prefix("peers=") {
+                peers = v.to_string();
+            }
+        }
+        if peers.is_empty() || peers == "-" {
+            return Vec::new();
+        }
+        peers
+            .split(',')
+            .filter_map(|p| {
+                let mac = normalize_mac(p.trim());
+                if mac_is_stable(&mac) {
+                    Some(mac)
+                } else {
+                    None
+                }
+            })
             .collect()
     }
 
-    fn publish_live(tx: &Sender<NetMsg>, boards: &[UsbBoard]) {
-        let _ = tx.send(NetMsg::WorkersLive(live_from(boards)));
+    fn mesh_via_cmd(
+        boards: &mut [UsbBoard],
+        gateway: &str,
+        mac: &str,
+        cmp_rest: &str,
+    ) -> Result<String, String> {
+        let gw = boards
+            .iter_mut()
+            .find(|b| port_names_match(&b.name, gateway) || b.name == gateway)
+            .ok_or_else(|| format!("mesh gateway {gateway} gone"))?;
+        let hex: String = normalize_mac(mac)
+            .chars()
+            .filter(|c| c.is_ascii_hexdigit())
+            .collect();
+        let cmd = format!("cmp via {hex} {cmp_rest}");
+        usb_cmd(&mut gw.port, &mut gw.rx, &cmd)
+    }
+
+    fn sync_mesh_peers(
+        boards: &mut [UsbBoard],
+        mesh: &mut Vec<MeshBoard>,
+        msg_tx: &Sender<NetMsg>,
+        mining: bool,
+    ) {
+        let gateways: Vec<(String, String)> = boards
+            .iter()
+            .filter(|b| !b.download_mode)
+            .map(|b| (b.name.clone(), b.mac.clone()))
+            .collect();
+        let mut seen: Vec<(String, String)> = Vec::new(); // (gateway, mac)
+        for (gname, gmac) in &gateways {
+            let reply = {
+                let Some(gw) = boards
+                    .iter_mut()
+                    .find(|b| port_names_match(&b.name, gname) || b.name == *gname)
+                else {
+                    continue;
+                };
+                usb_cmd(&mut gw.port, &mut gw.rx, "cmp mesh").ok()
+            };
+            let Some(line) = reply else { continue };
+            if !line.starts_with("CMPMESH ") {
+                continue;
+            }
+            for mac in parse_mesh_peers(&line) {
+                if mac_is_stable(gmac) && normalize_mac(gmac) == mac {
+                    continue;
+                }
+                // Prefer a direct USB/Wi‑Fi link for the same MAC.
+                if boards
+                    .iter()
+                    .any(|b| mac_is_stable(&b.mac) && normalize_mac(&b.mac) == mac)
+                {
+                    continue;
+                }
+                seen.push((gname.clone(), mac));
+            }
+        }
+        // Drop stale mesh peers (not advertised, or gateway gone).
+        mesh.retain(|m| {
+            let keep = seen
+                .iter()
+                .any(|(g, mac)| (port_names_match(g, &m.gateway) || g == &m.gateway) && *mac == m.mac)
+                && boards
+                    .iter()
+                    .any(|b| port_names_match(&b.name, &m.gateway) || b.name == m.gateway);
+            if !keep {
+                log_msg(
+                    msg_tx,
+                    LogKind::Usb,
+                    format!("Mesh peer {} dropped (left range / gateway)", m.mac),
+                );
+            }
+            keep
+        });
+        for (gname, mac) in seen {
+            if mesh.iter().any(|m| m.mac == mac) {
+                continue;
+            }
+            let name = format!("mesh:{mac}");
+            let mut mb = MeshBoard {
+                name: name.clone(),
+                gateway: gname.clone(),
+                mac: mac.clone(),
+                legacy_job: false,
+                fw: String::new(),
+                hashrate_hs: 0.0,
+                hashes: 0,
+                mining: false,
+                status_fails: 0,
+            };
+            if let Ok(line) = mesh_via_cmd(boards, &gname, &mac, "config") {
+                if let Ok(cfg) = parse_cmp_config(&line) {
+                    mb.legacy_job = !fw_supports_split_jobs(&cfg.fw);
+                    mb.fw = cfg.fw;
+                }
+            }
+            if let Ok(line) = mesh_via_cmd(boards, &gname, &mac, "status") {
+                if let Ok(st) = parse_cmp_status(&line) {
+                    mb.hashrate_hs = st.hashrate_hs;
+                    mb.hashes = st.hashes;
+                    mb.mining = st.mining;
+                }
+            }
+            log_msg(
+                msg_tx,
+                LogKind::Usb,
+                format!("Mesh peer {mac} via {gname} (connectivity only)"),
+            );
+            if mining {
+                let _ = arm_mesh_job(boards, &mut mb, msg_tx);
+            }
+            mesh.push(mb);
+        }
+    }
+
+    fn arm_mesh_job(
+        boards: &mut [UsbBoard],
+        mb: &mut MeshBoard,
+        msg_tx: &Sender<NetMsg>,
+    ) -> Result<(), String> {
+        let _ = mesh_via_cmd(boards, &mb.gateway, &mb.mac, "stats accepted=0&rejected=0");
+        if mb.legacy_job {
+            return Err("mesh peer needs split-job firmware (0.6.2+)".into());
+        }
+        let job = warmup_job();
+        for part in encode_job_parts(&job) {
+            let rest = part.strip_prefix("cmp ").unwrap_or(part.as_str());
+            let reply = mesh_via_cmd(boards, &mb.gateway, &mb.mac, rest)?;
+            if !(reply.starts_with("CMPACK") || reply.starts_with("CMP ok")) {
+                return Err(format!("mesh job reply: {reply}"));
+            }
+        }
+        mb.mining = true;
+        log_msg(
+            msg_tx,
+            LogKind::Usb,
+            format!("Mesh {} hashing (warmup)…", mb.mac),
+        );
+        Ok(())
+    }
+
+    fn push_mesh_job(
+        boards: &mut [UsbBoard],
+        mb: &mut MeshBoard,
+        job: &stratum::WorkJob,
+        msg_tx: &Sender<NetMsg>,
+    ) -> Result<(), String> {
+        if mb.legacy_job {
+            return Err("mesh peer needs split-job firmware".into());
+        }
+        for part in encode_job_parts(job) {
+            let rest = part.strip_prefix("cmp ").unwrap_or(part.as_str());
+            let reply = mesh_via_cmd(boards, &mb.gateway, &mb.mac, rest)?;
+            if !(reply.starts_with("CMPACK") || reply.starts_with("CMP ok")) {
+                log_msg(
+                    msg_tx,
+                    LogKind::Warn,
+                    format!("mesh {} job part failed: {reply}", mb.mac),
+                );
+                return Err(reply);
+            }
+        }
+        mb.mining = true;
+        Ok(())
     }
 
     fn open_board(name: &str) -> Result<(UsbBoard, bool), String> {
@@ -6231,7 +6452,9 @@ fn mine_worker(cmd_rx: Receiver<NetCmd>, msg_tx: Sender<NetMsg>) {
     }
 
     let mut boards: Vec<UsbBoard> = Vec::new();
+    let mut mesh: Vec<MeshBoard> = Vec::new();
     let mut stratum: Option<StratumClient> = None;
+    let mut last_mesh_sync = Instant::now() - Duration::from_secs(30);
     let mut recent_jobs: VecDeque<WorkJob> = VecDeque::new();
     // Board shares held while the pool socket is down (submit on reconnect).
     let mut held_board_shares: VecDeque<(String, String, String, String)> = VecDeque::new();
@@ -6318,6 +6541,9 @@ fn mine_worker(cmd_rx: Receiver<NetCmd>, msg_tx: Sender<NetMsg>) {
                         .position(|b| port_names_match(&b.name, &name))
                     {
                         let mut old = boards.remove(idx);
+                        mesh.retain(|m| {
+                            !(port_names_match(&m.gateway, &old.name) || m.gateway == old.name)
+                        });
                         let _ = usb_cmd(&mut old.port, &mut old.rx, "cmp stop");
                     }
                     log_msg(&msg_tx, LogKind::Usb, format!("Opening {name} (460800→115200)"));
@@ -6327,22 +6553,26 @@ fn mine_worker(cmd_rx: Receiver<NetCmd>, msg_tx: Sender<NetMsg>) {
                             configure_board(&mut board, &msg_tx);
                             arm_mining_if_needed(&mut board, &msg_tx, mining);
                             boards.push(board);
-                            publish_live(&msg_tx, &boards);
+                            sync_mesh_peers(&mut boards, &mut mesh, &msg_tx, mining);
+                            last_mesh_sync = Instant::now();
+                            publish_live(&msg_tx, &boards, &mesh);
                             let _ = msg_tx.send(NetMsg::Action(Ok(if dl {
                                 format!(
-                                    "USB open {name} (download mode / BOOT) · flash with Update board · {} board(s)",
-                                    boards.len()
+                                    "USB open {name} (download mode / BOOT) · flash with Update board · {} board(s)+mesh {}",
+                                    boards.len(),
+                                    mesh.len()
                                 )
                             } else {
                                 format!(
-                                    "USB open {name}{} · {} board(s)",
+                                    "USB open {name}{} · {} board(s)+mesh {}",
                                     if saw { " (pong)" } else { "" },
-                                    boards.len()
+                                    boards.len(),
+                                    mesh.len()
                                 )
                             })));
                         }
                         Err(e) => {
-                            publish_live(&msg_tx, &boards);
+                            publish_live(&msg_tx, &boards, &mesh);
                             let _ = msg_tx.send(NetMsg::Action(Err(e)));
                         }
                     }
@@ -6352,7 +6582,7 @@ fn mine_worker(cmd_rx: Receiver<NetCmd>, msg_tx: Sender<NetMsg>) {
                         let _ = msg_tx.send(NetMsg::Action(Ok(format!(
                             "Worker {name} already linked"
                         ))));
-                        publish_live(&msg_tx, &boards);
+                        publish_live(&msg_tx, &boards, &mesh);
                         continue;
                     }
                     // Pause jobs on already-linked boards while we open another COM —
@@ -6418,17 +6648,21 @@ fn mine_worker(cmd_rx: Receiver<NetCmd>, msg_tx: Sender<NetMsg>) {
                                     arm_mining_if_needed(b, &msg_tx, true);
                                 }
                             }
-                            publish_live(&msg_tx, &boards);
+                            sync_mesh_peers(&mut boards, &mut mesh, &msg_tx, resume_mine || mining);
+                            last_mesh_sync = Instant::now();
+                            publish_live(&msg_tx, &boards, &mesh);
                             let _ = msg_tx.send(NetMsg::Action(Ok(if dl {
                                 format!(
-                                    "Worker linked {name} (download mode / BOOT) · Update board to flash · {} total",
-                                    boards.len()
+                                    "Worker linked {name} (download mode / BOOT) · Update board to flash · {} total+mesh {}",
+                                    boards.len(),
+                                    mesh.len()
                                 )
                             } else {
                                 format!(
-                                    "Worker linked {name}{} · {} total",
+                                    "Worker linked {name}{} · {} total+mesh {}",
                                     if saw { " (pong)" } else { "" },
-                                    boards.len()
+                                    boards.len(),
+                                    mesh.len()
                                 )
                             })));
                         }
@@ -6438,7 +6672,7 @@ fn mine_worker(cmd_rx: Receiver<NetCmd>, msg_tx: Sender<NetMsg>) {
                                     arm_mining_if_needed(b, &msg_tx, true);
                                 }
                             }
-                            publish_live(&msg_tx, &boards);
+                            publish_live(&msg_tx, &boards, &mesh);
                             let _ = msg_tx.send(NetMsg::Action(Err(format!(
                                 "Link {name} failed: {e}"
                             ))));
@@ -6450,7 +6684,7 @@ fn mine_worker(cmd_rx: Receiver<NetCmd>, msg_tx: Sender<NetMsg>) {
                         let _ = msg_tx.send(NetMsg::Action(Ok(format!(
                             "Wi‑Fi worker {endpoint} already linked"
                         ))));
-                        publish_live(&msg_tx, &boards);
+                        publish_live(&msg_tx, &boards, &mesh);
                         continue;
                     }
                     log_msg(
@@ -6472,17 +6706,20 @@ fn mine_worker(cmd_rx: Receiver<NetCmd>, msg_tx: Sender<NetMsg>) {
                                         "Skip Wi‑Fi {endpoint} — already linked as {} (same MAC {})",
                                         existing.name, board.mac
                                     ))));
-                                    publish_live(&msg_tx, &boards);
+                                    publish_live(&msg_tx, &boards, &mesh);
                                     continue;
                                 }
                             }
                             arm_mining_if_needed(&mut board, &msg_tx, mining);
                             boards.push(board);
-                            publish_live(&msg_tx, &boards);
+                            sync_mesh_peers(&mut boards, &mut mesh, &msg_tx, mining);
+                            last_mesh_sync = Instant::now();
+                            publish_live(&msg_tx, &boards, &mesh);
                             let _ = msg_tx.send(NetMsg::Action(Ok(format!(
-                                "Wi‑Fi worker linked {endpoint}{} · {} total",
+                                "Wi‑Fi worker linked {endpoint}{} · {} total+mesh {}",
                                 if saw { " (pong)" } else { "" },
-                                boards.len()
+                                boards.len(),
+                                mesh.len()
                             ))));
                         }
                         Err(e) => {
@@ -6493,18 +6730,34 @@ fn mine_worker(cmd_rx: Receiver<NetCmd>, msg_tx: Sender<NetMsg>) {
                     }
                 }
                 NetCmd::DisconnectWorker(name) => {
+                    if let Some(idx) = mesh.iter().position(|m| m.name == name || m.mac == name) {
+                        let m = mesh.remove(idx);
+                        let _ = mesh_via_cmd(&mut boards, &m.gateway, &m.mac, "stop");
+                        publish_live(&msg_tx, &boards, &mesh);
+                        let _ = msg_tx.send(NetMsg::Action(Ok(format!(
+                            "Mesh peer dropped {} · {} mesh remain",
+                            m.mac,
+                            mesh.len()
+                        ))));
+                        continue;
+                    }
                     if let Some(idx) = boards
                         .iter()
                         .position(|b| port_names_match(&b.name, &name))
                     {
                         let mut b = boards.remove(idx);
+                        mesh.retain(|m| {
+                            !(port_names_match(&m.gateway, &b.name) || m.gateway == b.name)
+                        });
                         let _ = usb_cmd(&mut b.port, &mut b.rx, "cmp stop");
-                        publish_live(&msg_tx, &boards);
+                        publish_live(&msg_tx, &boards, &mesh);
                         let _ = msg_tx.send(NetMsg::Action(Ok(format!(
-                            "Worker dropped {name} · {} remain",
-                            boards.len()
+                            "Worker dropped {name} · {} remain+mesh {}",
+                            boards.len(),
+                            mesh.len()
                         ))));
                         if boards.is_empty() {
+                            mesh.clear();
                             mining = false;
                             if let Some(mut s) = stratum.take() {
                                 s.disconnect();
@@ -6527,8 +6780,14 @@ fn mine_worker(cmd_rx: Receiver<NetCmd>, msg_tx: Sender<NetMsg>) {
                         b.mining = false;
                         b.hashrate_hs = 0.0;
                     }
+                    for m in mesh.iter_mut() {
+                        let _ = mesh_via_cmd(&mut boards, &m.gateway, &m.mac, "stop");
+                        m.mining = false;
+                        m.hashrate_hs = 0.0;
+                    }
                     boards.clear();
-                    publish_live(&msg_tx, &boards);
+                    mesh.clear();
+                    publish_live(&msg_tx, &boards, &mesh);
                     let _ = msg_tx.send(NetMsg::Status(Ok(StatusJson::default())));
                     let _ = msg_tx.send(NetMsg::Action(Ok("USB closed".into())));
                 }
@@ -6576,12 +6835,27 @@ fn mine_worker(cmd_rx: Receiver<NetCmd>, msg_tx: Sender<NetMsg>) {
                             }
                         }
                     }
+                    sync_mesh_peers(&mut boards, &mut mesh, &msg_tx, true);
+                    last_mesh_sync = Instant::now();
+                    for m in mesh.iter_mut() {
+                        match arm_mesh_job(&mut boards, m, &msg_tx) {
+                            Ok(()) => {}
+                            Err(e) => {
+                                log_msg(
+                                    &msg_tx,
+                                    LogKind::Warn,
+                                    format!("Mesh warmup {}: {e}", m.mac),
+                                );
+                            }
+                        }
+                    }
                     log_msg(
                         &msg_tx,
                         LogKind::Stratum,
                         format!(
-                            "Connecting pool {endpoint} · {} worker(s)",
-                            boards.len()
+                            "Connecting pool {endpoint} · {} USB + {} mesh",
+                            boards.len(),
+                            mesh.len()
                         ),
                     );
                     let mut client = StratumClient::new(worker, password);
@@ -6624,7 +6898,12 @@ fn mine_worker(cmd_rx: Receiver<NetCmd>, msg_tx: Sender<NetMsg>) {
                         b.mining = false;
                         b.hashrate_hs = 0.0;
                     }
-                    publish_live(&msg_tx, &boards);
+                    for m in mesh.iter_mut() {
+                        let _ = mesh_via_cmd(&mut boards, &m.gateway, &m.mac, "stop");
+                        m.mining = false;
+                        m.hashrate_hs = 0.0;
+                    }
+                    publish_live(&msg_tx, &boards, &mesh);
                     let _ = msg_tx.send(NetMsg::Status(Ok(StatusJson {
                         mining: false,
                         connected: false,
@@ -6651,8 +6930,18 @@ fn mine_worker(cmd_rx: Receiver<NetCmd>, msg_tx: Sender<NetMsg>) {
                             any = true;
                         }
                     }
+                    let mesh_n = mesh.len();
+                    for m in mesh.iter() {
+                        let cmd = format!("clock cpu_mhz={mhz}");
+                        if mesh_via_cmd(&mut boards, &m.gateway, &m.mac, &cmd).is_ok() {
+                            any = true;
+                        }
+                    }
                     let _ = msg_tx.send(NetMsg::Action(if any {
-                        Ok(format!("Clock {mhz} MHz queued on {} board(s)", boards.len()))
+                        Ok(format!(
+                            "Clock {mhz} MHz queued on {} board(s)+mesh {mesh_n}",
+                            boards.len()
+                        ))
                     } else {
                         Err("USB not open".into())
                     }));
@@ -6747,9 +7036,70 @@ fn mine_worker(cmd_rx: Receiver<NetCmd>, msg_tx: Sender<NetMsg>) {
                             }
                         }
                     }
+                    if last_mesh_sync.elapsed() >= Duration::from_secs(4) {
+                        sync_mesh_peers(&mut boards, &mut mesh, &msg_tx, mining);
+                        last_mesh_sync = Instant::now();
+                    }
+                    let mut drop_mesh: Vec<String> = Vec::new();
+                    for m in mesh.iter_mut() {
+                        match mesh_via_cmd(&mut boards, &m.gateway, &m.mac, "status") {
+                            Ok(line) => match parse_cmp_status(&line) {
+                                Ok(st) => {
+                                    m.status_fails = 0;
+                                    if st.hashrate_hs > 0.0 {
+                                        m.hashrate_hs = st.hashrate_hs;
+                                    } else if !(mining || m.mining) {
+                                        m.hashrate_hs = 0.0;
+                                    }
+                                    if mining {
+                                        m.hashes = m.hashes.max(st.hashes);
+                                    } else if st.hashes > 0 || !m.mining {
+                                        m.hashes = st.hashes;
+                                    }
+                                    m.mining = st.mining || (mining && m.hashrate_hs > 0.0);
+                                    if !st.mac.is_empty() {
+                                        m.mac = normalize_mac(&st.mac);
+                                    }
+                                    total_hs += m.hashrate_hs;
+                                    total_hashes = total_hashes.saturating_add(m.hashes);
+                                    any_mining |= m.mining;
+                                    last_status = Some(st);
+                                }
+                                Err(_) => {
+                                    m.status_fails = m.status_fails.saturating_add(1);
+                                    total_hs += m.hashrate_hs;
+                                    total_hashes = total_hashes.saturating_add(m.hashes);
+                                    any_mining |= m.mining || mining;
+                                    if m.status_fails >= 8 {
+                                        drop_mesh.push(m.name.clone());
+                                    }
+                                }
+                            },
+                            Err(_) => {
+                                m.status_fails = m.status_fails.saturating_add(1);
+                                total_hs += m.hashrate_hs;
+                                total_hashes = total_hashes.saturating_add(m.hashes);
+                                any_mining |= m.mining || mining;
+                                if m.status_fails >= 8 {
+                                    drop_mesh.push(m.name.clone());
+                                }
+                            }
+                        }
+                    }
+                    for name in drop_mesh {
+                        mesh.retain(|m| m.name != name);
+                        log_msg(
+                            &msg_tx,
+                            LogKind::Warn,
+                            format!("Dropped mesh peer {name} after status failures"),
+                        );
+                    }
                     for name in drop_names {
                         if let Some(idx) = boards.iter().position(|b| b.name == name) {
                             let mut dead = boards.remove(idx);
+                            mesh.retain(|m| {
+                                !(port_names_match(&m.gateway, &dead.name) || m.gateway == dead.name)
+                            });
                             let _ = usb_cmd(&mut dead.port, &mut dead.rx, "cmp stop");
                             log_msg(
                                 &msg_tx,
@@ -6759,17 +7109,18 @@ fn mine_worker(cmd_rx: Receiver<NetCmd>, msg_tx: Sender<NetMsg>) {
                         }
                     }
                     if boards.is_empty() {
+                        mesh.clear();
                         mining = false;
                         reconnect_at = None;
                         last_fleet_status = StatusJson::default();
                         if let Some(mut s) = stratum.take() {
                             s.disconnect();
                         }
-                        publish_live(&msg_tx, &boards);
+                        publish_live(&msg_tx, &boards, &mesh);
                         let _ = msg_tx.send(NetMsg::Status(Ok(StatusJson::default())));
                         continue;
                     }
-                    publish_live(&msg_tx, &boards);
+                    publish_live(&msg_tx, &boards, &mesh);
                     let mut st = last_status.unwrap_or_else(|| last_fleet_status.clone());
                     st.hashrate_hs = total_hs;
                     st.hashrate_khs = total_hs / 1000.0;
@@ -6893,7 +7244,7 @@ fn mine_worker(cmd_rx: Receiver<NetCmd>, msg_tx: Sender<NetMsg>) {
                             }
                         }
                     }
-                    publish_live(&msg_tx, &boards);
+                    publish_live(&msg_tx, &boards, &mesh);
                     let summary = if lines.is_empty() {
                         "Bench done".into()
                     } else {
@@ -6942,8 +7293,13 @@ fn mine_worker(cmd_rx: Receiver<NetCmd>, msg_tx: Sender<NetMsg>) {
                         for b in boards.iter_mut() {
                             let _ = usb_cmd(&mut b.port, &mut b.rx, "cmp stop");
                         }
+                        for m in mesh.iter_mut() {
+                            let _ = mesh_via_cmd(&mut boards, &m.gateway, &m.mac, "stop");
+                        }
                     }
-                    publish_live(&msg_tx, &boards);
+                    // Drop mesh peers that used the released COM as gateway.
+                    mesh.retain(|m| !(port_names_match(&m.gateway, &port) || m.gateway == port));
+                    publish_live(&msg_tx, &boards, &mesh);
                     log_msg(
                         &msg_tx,
                         LogKind::Usb,
@@ -7109,13 +7465,24 @@ fn mine_worker(cmd_rx: Receiver<NetCmd>, msg_tx: Sender<NetMsg>) {
                                 }
                             }
                         }
+                        for m in mesh.iter_mut() {
+                            match push_mesh_job(&mut boards, m, &job, &msg_tx) {
+                                Ok(()) => pushed += 1,
+                                Err(e) => {
+                                    let _ = msg_tx.send(NetMsg::Action(Err(format!(
+                                        "mesh {} job push: {e}",
+                                        m.mac
+                                    ))));
+                                }
+                            }
+                        }
                         if pushed > 0 {
                             recent_jobs.push_back(job.clone());
                             while recent_jobs.len() > 32 {
                                 recent_jobs.pop_front();
                             }
                             let _ = msg_tx.send(NetMsg::Action(Ok(format!(
-                                "USB ← job {} → {pushed} board(s)",
+                                "USB ← job {} → {pushed} board(s)/mesh",
                                 job.job_id
                             ))));
                         } else {
@@ -7391,6 +7758,7 @@ fn cmp_reply_line(buf: &str) -> Option<String> {
             "CMPSTATUS ",
             "CMPCONFIG ",
             "CMPBENCH ",
+            "CMPMESH ",
             "CMPACK",
             "CMP ok",
             "CMPERR",
@@ -7413,6 +7781,9 @@ fn usb_cmd(port: &mut BoardIo, buf: &mut String, cmd: &str) -> Result<String, St
     let (wait_ms, retries, chunk, gap_ms) = if cmd.contains("bench") {
         // One long wait — retrying restarts a board that may still be mid-tune.
         (180_000u64, 1usize, 128usize, 1u64)
+    } else if cmd.contains(" via ") {
+        // ESP-NOW mesh relay — allow root wait + leaf reply.
+        (4_500u64, 2usize, 256usize, 0u64)
     } else if cmd.contains("status") {
         // Board may be mid mineB batch; firmware yields on RX, but allow headroom.
         (2_800u64, 3usize, 256usize, 0u64)

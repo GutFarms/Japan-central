@@ -1,6 +1,7 @@
 #include "companion.hpp"
 #include "config.hpp"
 #include "display_ui.hpp"
+#include "mesh_link.hpp"
 #include "sha256_hw.hpp"
 #include "sha256_miner.hpp"
 #include "wifi_link.hpp"
@@ -241,6 +242,12 @@ static void serviceCompanion() {
   auto stats = onStats;
   g_cmp.poll(g_cfg, g_snap, onApply, &g_net, job, stop, stats);
   g_wifi.poll(g_cmp, g_cfg, g_snap, onApply, &g_net, job, stop, stats);
+  g_mesh.poll(g_cmp, g_cfg, g_snap, onApply, &g_net, job, stop, stats);
+  // Connectivity mesh: leaf boards without a SoftAP TCP Companion mirror shares
+  // to the USB-linked root over ESP-NOW (does not multiply hashrate).
+  if (!g_mesh.isRoot() && g_mesh.hasRootPeer() && !g_wifi.tcpConnected()) {
+    g_cmp.setShareMirror(&g_mesh.leafOut());
+  }
   if (g_net.fresh) {
     g_net.fresh = false;
     if (!g_mining) g_snap.netTicker = g_net.ticker;
@@ -397,6 +404,7 @@ void setup() {
   applyCpu(240);
   cyd_sha_hw::set_preferred_mode(g_cfg.shaPath);
   g_wifi.begin(g_macStr, g_cfg);
+  g_mesh.begin(mac);
   g_cmp.setWifiApply([]() {
     g_store.save(g_cfg);
     g_wifi.applyConfig(g_cfg);

@@ -1,4 +1,5 @@
 #include "companion.hpp"
+#include "mesh_link.hpp"
 #include "sha256_hw.hpp"
 #include <cstring>
 #include <esp_system.h>
@@ -6,9 +7,9 @@
 extern "C" float cyd_run_bench(uint32_t n, bool tune);
 
 #if CYD_D0_BUILD
-static constexpr const char* kFwTag = "0.8.102-sha256-d0";
+static constexpr const char* kFwTag = "0.8.103-sha256-d0";
 #else
-static constexpr const char* kFwTag = "0.8.102-sha256";
+static constexpr const char* kFwTag = "0.8.103-sha256";
 #endif
 
 void CompanionLink::begin(uint32_t baud) {
@@ -127,6 +128,23 @@ void CompanionLink::handleLine(const String& line, AppConfig& cfg, const MinerSn
   String args = (sp < 0) ? "" : rest.substring(sp + 1);
   verb.toLowerCase();
   args.trim();
+
+  // USB Companion traffic elects this board as the ESP-NOW mesh root/bridge.
+  if (out_ == &Serial) g_mesh.noteUsbActivity();
+
+  if (verb == "mesh") {
+    g_mesh.replyMeshList(*out_);
+    return;
+  }
+  if (verb == "via") {
+    int sp2 = args.indexOf(' ');
+    String mac = (sp2 < 0) ? args : args.substring(0, sp2);
+    String rest = (sp2 < 0) ? "" : args.substring(sp2 + 1);
+    mac.trim();
+    rest.trim();
+    (void)g_mesh.handleVia(mac, rest, *this, cfg, snap, onApply, net, onJob, onStop, onStats);
+    return;
+  }
 
   if (verb == "ping") {
     char buf[48];
@@ -336,7 +354,8 @@ void CompanionLink::handleLine(const String& line, AppConfig& cfg, const MinerSn
     if (onWifi_) onWifi_();
     return;
   }
-  out_->println("CMPERR unknown (ping|status|config|wifi|jh|jt|ja|job|stop|stats|bench|clock|reboot|netdata)");
+  out_->println(
+      "CMPERR unknown (ping|status|config|wifi|mesh|via|jh|jt|ja|job|stop|stats|bench|clock|reboot|netdata)");
 }
 
 static void copyJsonSafe(char* dst, size_t dstLen, const char* src, size_t maxCopy) {
