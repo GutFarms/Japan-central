@@ -2570,7 +2570,7 @@ impl CompanionApp {
                     "· Bench boards (D0) → lock Full HW  ·  Clock 240 MHz  ·  More CYDs for more rate
 · Algorithm stays Bitcoin SHA-256d only
 · Do NOT raise board voltage — CYD is fixed ~3.3V; overvolting can kill flash/USB/ESP
-· SAFETY: blank / BOOT — hold BOOT, Connect (download mode), then Update board",
+· SAFETY: blank / BOOT — hold BOOT, Update board, click Ready while BOOT held",
                 )
                 .color(C_MUTED)
                 .font(mono_ui_font(11.0)),
@@ -4303,7 +4303,7 @@ impl App for CompanionApp {
                 );
             } else if flash_overdue && self.post_flash_verify.is_none() {
                 self.clear_flash_overlay();
-                let msg = "Board update timed out — try BOOT+RESET, then Update board again."
+                let msg = "Board update timed out — hold BOOT, tap RESET, click Ready, then Update board again."
                     .to_string();
                 self.update_status = msg.clone();
                 self.last_error = msg.clone();
@@ -4462,7 +4462,7 @@ impl App for CompanionApp {
                             ui.add_space(8.0);
                             ui.label(
                                 RichText::new(
-                                    "Update board writes the kit image, then reconnects and verifies fw over USB. Hold BOOT + tap RESET if download mode fails.",
+                                    "Update board writes the kit image, then reconnects and verifies fw over USB. When asked: hold BOOT, tap RESET, keep BOOT, click Ready.",
                                 )
                                 .color(C_MUTED)
                                 .size(13.0),
