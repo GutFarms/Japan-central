@@ -81,6 +81,8 @@ pub struct StratumClient {
     pub jobs_seen: u32,
     pub lines_rx: u64,
     pub lines_tx: u64,
+    /// Count of `mining.submit` lines successfully written (not accepts).
+    pub submits: u64,
     pub last_rx: String,
     pub last_tx: String,
     /// Last fatal pool error (authorize / subscribe) for the UI.
@@ -142,6 +144,7 @@ impl StratumClient {
             jobs_seen: 0,
             lines_rx: 0,
             lines_tx: 0,
+            submits: 0,
             last_rx: String::new(),
             last_tx: String::new(),
             last_error: String::new(),
@@ -448,6 +451,7 @@ impl StratumClient {
             Ok(()) => {
                 self.recent_submit_keys
                     .push_back((key, Instant::now()));
+                self.submits = self.submits.saturating_add(1);
                 Ok(())
             }
             Err(e) => {

@@ -399,6 +399,8 @@ struct StratumLive {
     rejected: u32,
     lines_rx: u64,
     lines_tx: u64,
+    /// mining.submit lines sent (Pool TX also counts subscribe/auth/suggest).
+    submits: u64,
     last_job: String,
     last_rx: String,
     last_tx: String,
@@ -3947,9 +3949,10 @@ impl CompanionApp {
                 (0, 0)
             };
             ui.horizontal_wrapped(|ui| {
-                mini_stat(ui, "Pool TX", &s.lines_tx.to_string());
-                mini_stat(ui, "Pool RX", &s.lines_rx.to_string());
+                mini_stat(ui, "Msgs↑", &s.lines_tx.to_string());
+                mini_stat(ui, "Msgs↓", &s.lines_rx.to_string());
                 mini_stat(ui, "Jobs", &s.jobs.to_string());
+                mini_stat(ui, "Submits", &s.submits.to_string());
                 mini_stat(ui, "Accept", &acc.to_string());
                 mini_stat(ui, "Reject", &rej.to_string());
                 mini_stat(ui, "Expect/h", &self.expected_shares_label());
@@ -3960,9 +3963,11 @@ impl CompanionApp {
                 );
             });
             ui.label(
-                RichText::new("Pool TX/RX = stratum JSON lines to/from the pool (not USB board traffic)")
-                    .color(C_DIM)
-                    .font(mono_ui_font(10.0)),
+                RichText::new(
+                    "Msgs↑/↓ = stratum JSON lines (subscribe/auth/jobs). Submits = mining.submit to pool.",
+                )
+                .color(C_DIM)
+                .font(mono_ui_font(10.0)),
             );
             ui.add_space(8.0);
             stratum_line(ui, "Last TX → pool", &trunc(&s.last_tx, 150));
@@ -6491,6 +6496,7 @@ fn push_stratum_live(tx: &Sender<NetMsg>, client: &StratumClient) {
         rejected: client.rejected,
         lines_rx: client.lines_rx,
         lines_tx: client.lines_tx,
+        submits: client.submits,
         last_job: client.job_id().to_string(),
         last_rx: client.last_rx.clone(),
         last_tx: client.last_tx.clone(),
@@ -7794,48 +7800,133 @@ Power a 2nd board nearby with wall/power-bank only (no PC cable)."
                         // Authorize failed — don't arm boards on a dead pool session.
                         continue;
                     }
-                    // Arm boards after pool handshake so USB chatter cannot block authorize.
-                    for b in boards.iter_mut() {
-                        let stats_cmd = "cmp stats accepted=0&rejected=0";
-                        {
-                            let mut pump = || {
-                                let _ = pump_stratum_keepalive(&mut stratum, &msg_tx);
-                            };
-                            let _ = usb_cmd_ex(
-                                &mut b.port,
-                                &mut b.rx,
-                                stats_cmd,
-                                &mut pump,
-                            );
-                        }
-                        let mut legacy = b.legacy_job;
-                        let push_res = {
-                            let mut pump = || {
-                                let _ = pump_stratum_keepalive(&mut stratum, &msg_tx);
-                            };
-                            usb_push_job_ex(
-                                &mut b.port,
-                                &mut b.rx,
-                                &warmup_job(),
-                                &mut legacy,
-                                &msg_tx,
-                                &mut pump,
-                            )
-                        };
-                        match push_res {
-                            Ok(_) => {
-                                b.legacy_job = legacy;
-                                let _ = msg_tx.send(NetMsg::Action(Ok(format!(
-                                    "Board {} hashing (warmup)…",
-                                    b.name
-                                ))));
+                    // Prefer real pool work over warmup. After authorize, wait briefly for
+                    // set_difficulty + notify so Msgs↑=3 / Jobs≥1 is backed by board headers
+                    // (warmup shares are discarded and look like a dead pool session).
+                    let mut armed_pool = 0usize;
+                    if let Some(client) = stratum.as_mut() {
+                        if client.authorized() && !client.has_pending_job() {
+                            let wait = Instant::now() + Duration::from_millis(1800);
+                            while Instant::now() < wait && !client.has_pending_job() {
+                                if let Err(e) = client.poll() {
+                                    log_msg(&msg_tx, LogKind::Warn, format!("Pool: {e}"));
+                                    break;
+                                }
+                                thread::sleep(Duration::from_millis(25));
                             }
-                            Err(e) => {
-                                b.legacy_job = legacy;
-                                let _ = msg_tx.send(NetMsg::Action(Err(format!(
-                                    "Warmup {} failed: {e}",
-                                    b.name
-                                ))));
+                        }
+                        for line in client.take_recent() {
+                            log_msg(&msg_tx, LogKind::Stratum, line);
+                        }
+                        push_stratum_live(&msg_tx, client);
+                        let fleet_n = boards.len().max(1);
+                        let jobs = client.take_job_batch(fleet_n);
+                        if !jobs.is_empty() {
+                            let mut remaining: VecDeque<WorkJob> = jobs.into();
+                            for b in boards.iter_mut() {
+                                let Some(job) = remaining.pop_front() else { break };
+                                let mut legacy = b.legacy_job;
+                                let _ = usb_cmd_ex(
+                                    &mut b.port,
+                                    &mut b.rx,
+                                    "cmp stats accepted=0&rejected=0",
+                                    &mut || {
+                                        let _ = client.poll();
+                                    },
+                                );
+                                let push_res = {
+                                    let mut pump = || {
+                                        let _ = client.poll();
+                                    };
+                                    usb_push_job_ex(
+                                        &mut b.port,
+                                        &mut b.rx,
+                                        &job,
+                                        &mut legacy,
+                                        &msg_tx,
+                                        &mut pump,
+                                    )
+                                };
+                                match push_res {
+                                    Ok(_) => {
+                                        b.legacy_job = legacy;
+                                        b.mining = true;
+                                        armed_pool += 1;
+                                        recent_jobs.push_back(job);
+                                        let _ = msg_tx.send(NetMsg::Action(Ok(format!(
+                                            "Board {} ← pool job (unique en2)",
+                                            b.name
+                                        ))));
+                                    }
+                                    Err(e) => {
+                                        b.legacy_job = legacy;
+                                        remaining.push_front(job);
+                                        let _ = msg_tx.send(NetMsg::Action(Err(format!(
+                                            "Pool job {} failed: {e}",
+                                            b.name
+                                        ))));
+                                        break;
+                                    }
+                                }
+                                if client.has_pending_job() {
+                                    remaining.clear();
+                                    break;
+                                }
+                            }
+                            while recent_jobs.len() > 64 {
+                                recent_jobs.pop_front();
+                            }
+                            if armed_pool == 0 {
+                                if let Some(job) = remaining.pop_front() {
+                                    client.restore_job(job);
+                                }
+                            }
+                        }
+                    }
+                    // Fallback: no pool header yet — keep boards warm until notify lands.
+                    if armed_pool == 0 {
+                        for b in boards.iter_mut() {
+                            let stats_cmd = "cmp stats accepted=0&rejected=0";
+                            {
+                                let mut pump = || {
+                                    let _ = pump_stratum_keepalive(&mut stratum, &msg_tx);
+                                };
+                                let _ = usb_cmd_ex(
+                                    &mut b.port,
+                                    &mut b.rx,
+                                    stats_cmd,
+                                    &mut pump,
+                                );
+                            }
+                            let mut legacy = b.legacy_job;
+                            let push_res = {
+                                let mut pump = || {
+                                    let _ = pump_stratum_keepalive(&mut stratum, &msg_tx);
+                                };
+                                usb_push_job_ex(
+                                    &mut b.port,
+                                    &mut b.rx,
+                                    &warmup_job(),
+                                    &mut legacy,
+                                    &msg_tx,
+                                    &mut pump,
+                                )
+                            };
+                            match push_res {
+                                Ok(_) => {
+                                    b.legacy_job = legacy;
+                                    let _ = msg_tx.send(NetMsg::Action(Ok(format!(
+                                        "Board {} hashing (warmup — waiting pool job)…",
+                                        b.name
+                                    ))));
+                                }
+                                Err(e) => {
+                                    b.legacy_job = legacy;
+                                    let _ = msg_tx.send(NetMsg::Action(Err(format!(
+                                        "Warmup {} failed: {e}",
+                                        b.name
+                                    ))));
+                                }
                             }
                         }
                     }
