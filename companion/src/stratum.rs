@@ -593,7 +593,11 @@ impl StratumClient {
                             self.clean_jobs_pending = true;
                             // Always invalidate any held pending job — do not ship stale headers.
                             self.pending_job = None;
-                            if !prev_job.is_empty() {
+                            // Only the *previous* id is stale. Pools often reuse the same
+                            // job_id with clean_jobs=true; marking that id stale (0.8.122)
+                            // made submit_share reject every share before the pool saw it
+                            // → UI stuck at 0 accepts / 0 rejects while boards kept hashing.
+                            if !prev_job.is_empty() && prev_job != self.job_id {
                                 self.mark_job_stale(&prev_job);
                             }
                             self.push_recent(format!(
@@ -831,6 +835,14 @@ impl StratumClient {
         }
     }
 
+    /// Current work must be submittable — drop this id from the clean_jobs denylist.
+    fn clear_job_stale(&mut self, job_id: &str) {
+        if job_id.is_empty() {
+            return;
+        }
+        self.stale_job_ids.retain(|id| id != job_id);
+    }
+
     /// Emit held notify after set_difficulty, or after a short timeout if the pool
     /// never sends difficulty (fall back to current default).
     fn release_held_job_if_ready(&mut self) {
@@ -858,6 +870,9 @@ impl StratumClient {
 
     fn emit_job_from_fields(&mut self) {
         if let Some(job) = self.build_job() {
+            // Never leave the active job_id on the stale list after we rebuild work
+            // for it (same-id clean_jobs / set_difficulty / set_extranonce).
+            self.clear_job_stale(&job.job_id);
             self.jobs_seen += 1;
             self.post_auth_job = true;
             self.push_recent(format!(
@@ -1204,4 +1219,59 @@ pub fn urlenc(s: &str) -> String {
         }
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn primed_client() -> StratumClient {
+        let mut c = StratumClient::new("worker".into(), "x".into());
+        c.authorized = true;
+        c.subscribed = true;
+        c.have_difficulty = true;
+        c.difficulty = 0.001;
+        c.extranonce1 = vec![0x00, 0x01];
+        c.extranonce2_size = 4;
+        c
+    }
+
+    fn notify(job: &str, clean: bool) -> String {
+        format!(
+            concat!(
+                r#"{{"id":null,"method":"mining.notify","params":["{job}","#,
+                r#""0000000000000000000000000000000000000000000000000000000000000000","#,
+                r#""","",[],"20000000","1a05a1f2","60000000",{clean}]}}"#
+            ),
+            job = job,
+            clean = clean
+        )
+    }
+
+    #[test]
+    fn clean_jobs_same_id_does_not_stale_current() {
+        let mut c = primed_client();
+        c.handle_line(&notify("abc", false)).unwrap();
+        assert!(!c.is_job_stale("abc"));
+        assert!(c.take_job().is_some());
+
+        c.handle_line(&notify("abc", true)).unwrap();
+        assert!(
+            !c.is_job_stale("abc"),
+            "same-id clean_jobs must not denylist the active job_id"
+        );
+        assert!(c.take_clean_jobs());
+        assert!(c.take_job().is_some(), "new unique-en2 work must be emitted");
+    }
+
+    #[test]
+    fn clean_jobs_new_id_stales_previous_only() {
+        let mut c = primed_client();
+        c.handle_line(&notify("old", false)).unwrap();
+        let _ = c.take_job();
+        c.handle_line(&notify("new", true)).unwrap();
+        assert!(c.is_job_stale("old"));
+        assert!(!c.is_job_stale("new"));
+        assert!(c.take_job().is_some());
+    }
 }
