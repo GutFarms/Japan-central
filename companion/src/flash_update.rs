@@ -38,6 +38,56 @@ pub struct FirmwareImage {
     pub version: String,
 }
 
+/// True when the image is a user-dropped / browsed .bin (not the auto-resolved kit image).
+pub fn firmware_is_custom(fw: &FirmwareImage) -> bool {
+    fw.version.to_ascii_lowercase().contains("dropped")
+}
+
+/// Load any `.bin` (merged @ 0x0 or app image) for Update board / flash.
+pub fn load_firmware_bin(path: &Path) -> Result<FirmwareImage, String> {
+    let path = path.to_path_buf();
+    if !path.is_file() {
+        return Err(format!("File not found: {}", path.display()));
+    }
+    let name = path
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("")
+        .to_ascii_lowercase();
+    if !name.ends_with(".bin") {
+        return Err("Drop a .bin firmware image (merged @ 0x0 preferred).".into());
+    }
+    let bytes = std::fs::metadata(&path)
+        .map(|m| m.len())
+        .map_err(|e| format!("stat {}: {e}", path.display()))?;
+    if bytes < 64_000 {
+        return Err(format!(
+            "{} is only {bytes} bytes — need a full ESP32 image (>64 KB).",
+            path.display()
+        ));
+    }
+    // Peek magic: ESP image at 0x0 (merged) or raw payload.
+    let mut hdr = [0u8; 1];
+    if let Ok(mut f) = std::fs::File::open(&path) {
+        let _ = std::io::Read::read(&mut f, &mut hdr);
+    }
+    let near = read_nearby_fw_version(&path);
+    let version = if near.is_empty() {
+        if hdr[0] == 0xE9 {
+            "dropped".into()
+        } else {
+            "dropped-raw".into()
+        }
+    } else {
+        format!("{near} · dropped")
+    };
+    Ok(FirmwareImage {
+        path,
+        bytes,
+        version,
+    })
+}
+
 /// Resolve the merged firmware image shipped next to the Companion exe / kit.
 pub fn find_firmware_image() -> Result<FirmwareImage, String> {
     let mut candidates: Vec<PathBuf> = Vec::new();

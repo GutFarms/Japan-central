@@ -29,8 +29,8 @@ use app_update::{
     check_app_update_ex, running_version, update_companion_app_ex, AppRemoteInfo,
 };
 use flash_update::{
-    ensure_firmware_image, fetch_latest_firmware, find_firmware_image, flash_merged_bin,
-    update_needed, FirmwareImage, FlashControl,
+    ensure_firmware_image, fetch_latest_firmware, find_firmware_image, firmware_is_custom,
+    flash_merged_bin, load_firmware_bin, update_needed, FirmwareImage, FlashControl,
 };
 use live_bar::{
     default_header_coins, format_change, format_usd, COIN_CATALOG, LiveFeed,
@@ -2115,7 +2115,15 @@ impl CompanionApp {
     }
 
     fn request_board_update(&mut self) {
-        self.firmware = find_firmware_image().ok().or_else(|| self.firmware.clone());
+        // Keep a user-dropped / custom .bin — do not clobber with the bundled merged image.
+        if !self
+            .firmware
+            .as_ref()
+            .map(firmware_is_custom)
+            .unwrap_or(false)
+        {
+            self.firmware = find_firmware_image().ok().or_else(|| self.firmware.clone());
+        }
         match self.resolve_flash_usb_port() {
             Ok(port) => {
                 if !port_names_match(&port, &self.com_port) {
@@ -2146,6 +2154,73 @@ impl CompanionApp {
             );
         }
         self.update_confirm = true;
+    }
+
+    fn absorb_firmware_path(&mut self, path: std::path::PathBuf) {
+        match load_firmware_bin(&path) {
+            Ok(img) => {
+                let label = format!(
+                    "Custom .bin · {} · {} KB",
+                    img.path
+                        .file_name()
+                        .and_then(|n| n.to_str())
+                        .unwrap_or("bin"),
+                    img.bytes / 1024
+                );
+                self.last_ok = label.clone();
+                self.push_log(LogKind::Info, format!("Flash image ← {}", img.path.display()));
+                self.firmware = Some(img);
+                self.update_status = "Custom .bin ready — Update board to flash it.".into();
+            }
+            Err(e) => {
+                self.last_error = e.clone();
+                self.push_log(LogKind::Err, e);
+            }
+        }
+    }
+
+    fn absorb_dropped_files(&mut self, files: Vec<egui::DroppedFile>) {
+        for f in files {
+            let path = if let Some(p) = f.path {
+                p
+            } else if let Some(bytes) = f.bytes {
+                let name = if f.name.is_empty() {
+                    "dropped.bin".to_string()
+                } else {
+                    f.name.clone()
+                };
+                if !name.to_ascii_lowercase().ends_with(".bin") {
+                    self.last_error = format!("Ignored drop “{name}” — need a .bin");
+                    continue;
+                }
+                let dir = std::env::temp_dir().join("cyd-companion-drop");
+                if let Err(e) = std::fs::create_dir_all(&dir) {
+                    self.last_error = format!("drop temp dir: {e}");
+                    continue;
+                }
+                let dest = dir.join(&name);
+                if let Err(e) = std::fs::write(&dest, bytes.as_ref()) {
+                    self.last_error = format!("save dropped bin: {e}");
+                    continue;
+                }
+                dest
+            } else {
+                continue;
+            };
+            let name = path
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("")
+                .to_ascii_lowercase();
+            if !name.ends_with(".bin") {
+                self.last_error = format!(
+                    "Ignored {} — drop a .bin firmware image",
+                    path.display()
+                );
+                continue;
+            }
+            self.absorb_firmware_path(path);
+        }
     }
 
     fn start_firmware_fetch(&mut self) {
@@ -3105,13 +3180,18 @@ impl CompanionApp {
                 ui.add_space(8.0);
                 ui.label(
                     RichText::new(format!(
-                        "Board image · {} · {} KB",
+                        "Board image · {} · {} KB{}",
                         if fw.version.is_empty() {
                             "unknown"
                         } else {
                             &fw.version
                         },
-                        fw.bytes / 1024
+                        fw.bytes / 1024,
+                        if firmware_is_custom(fw) {
+                            " · custom"
+                        } else {
+                            ""
+                        }
                     ))
                     .color(C_DIM)
                     .font(mono_ui_font(10.0)),
@@ -3121,6 +3201,65 @@ impl CompanionApp {
                         .color(C_DIM)
                         .font(mono_ui_font(10.0)),
                 );
+            }
+            ui.add_space(8.0);
+            // Drop any .bin for flash (merged @ 0x0 preferred).
+            {
+                let hovering = ui.ctx().input(|i| !i.raw.hovered_files.is_empty());
+                let fill = if hovering {
+                    Color32::from_rgb(20, 60, 90)
+                } else {
+                    C_PANEL_SOFT
+                };
+                Frame::none()
+                    .fill(fill)
+                    .stroke(Stroke::new(
+                        1.0,
+                        if hovering { C_LIME } else { C_STROKE },
+                    ))
+                    .rounding(Rounding::same(6.0))
+                    .inner_margin(Margin::symmetric(12.0, 10.0))
+                    .show(ui, |ui| {
+                        ui.set_min_width(ui.available_width());
+                        ui.label(
+                            RichText::new(if hovering {
+                                "Release to use this .bin for Update board"
+                            } else {
+                                "Drop any .bin here to flash (merged @ 0x0 preferred)"
+                            })
+                            .color(if hovering { C_LIME } else { C_MUTED })
+                            .size(12.0),
+                        );
+                        ui.label(
+                            RichText::new(
+                                "Works with kit images or any ESP32 .bin · then pick Board to update → Update board",
+                            )
+                            .color(C_DIM)
+                            .size(11.0),
+                        );
+                        ui.add_space(4.0);
+                        ui.horizontal(|ui| {
+                            if soft_button(ui, "Use bundled image", 150.0).clicked() {
+                                match find_firmware_image() {
+                                    Ok(img) => {
+                                        self.firmware = Some(img);
+                                        self.update_status =
+                                            "Bundled merged.bin selected.".into();
+                                        self.last_ok = self.update_status.clone();
+                                    }
+                                    Err(e) => {
+                                        self.last_error = e;
+                                    }
+                                }
+                            }
+                            if self.firmware.as_ref().map(firmware_is_custom).unwrap_or(false)
+                                && soft_button(ui, "Clear custom", 120.0).clicked()
+                            {
+                                self.firmware = find_firmware_image().ok();
+                                self.update_status = "Custom .bin cleared.".into();
+                            }
+                        });
+                    });
             }
             ui.add_space(8.0);
             {
@@ -4000,11 +4139,20 @@ impl CompanionApp {
             let label = format!("{} · {}", w.endpoint, w.detail);
             out.push((w.endpoint.clone(), label));
         }
-        // SoftAP setup targets first so Push picks the broadcasting board.
+        // SoftAP beacons stay visible while a USB board is linked — prefer linked
+        // USB/TCP workers so Push saves over the live cmp link (not a SoftAP one-shot).
         out.sort_by(|a, b| {
-            let a_ap = a.1.to_ascii_lowercase().contains("setup softap");
-            let b_ap = b.1.to_ascii_lowercase().contains("setup softap");
-            b_ap.cmp(&a_ap).then(a.0.cmp(&b.0))
+            let rank = |label: &str| -> u8 {
+                let l = label.to_ascii_lowercase();
+                if l.contains("· linked") || l.ends_with(" linked") {
+                    0
+                } else if l.contains("setup softap") {
+                    2
+                } else {
+                    1
+                }
+            };
+            rank(&a.1).cmp(&rank(&b.1)).then(a.0.cmp(&b.0))
         });
         out
     }
@@ -4017,6 +4165,7 @@ impl CompanionApp {
         }
         let mut endpoint = self.wifi_setup_target.trim().to_string();
         if endpoint.is_empty() {
+            // Prefer a linked USB board when auto-picking.
             if let Some((e, _)) = self.wifi_setup_target_choices().into_iter().next() {
                 endpoint = e;
                 self.wifi_setup_target = endpoint.clone();
@@ -4046,6 +4195,19 @@ impl CompanionApp {
     fn on_wifi_setup_pushed(&mut self, endpoint: String, ok: Result<String, String>) {
         match ok {
             Ok(msg) => {
+                let home_ssid = self.wifi_setup_ssid.trim().to_string();
+                // USB link already has cmp — credentials are in NVS; no SoftAP STA wait.
+                if is_usb_serial_port(&endpoint) {
+                    self.wifi_setup_phase = WifiSetupPhase::Done {
+                        ip: endpoint.clone(),
+                        ssid: home_ssid.clone(),
+                    };
+                    self.last_ok = format!(
+                        "{msg} — Wi‑Fi “{home_ssid}” saved over USB ({endpoint}). Board joins home Wi‑Fi; SoftAP may stay up for mesh."
+                    );
+                    self.push_log(LogKind::Usb, self.last_ok.clone());
+                    return;
+                }
                 let mac = self
                     .connected_workers
                     .iter()
@@ -4058,7 +4220,6 @@ impl CompanionApp {
                             .map(|w| w.mac.clone())
                     })
                     .unwrap_or_default();
-                let home_ssid = self.wifi_setup_ssid.trim().to_string();
                 self.wifi_setup_phase = WifiSetupPhase::WaitingSta {
                     since: Instant::now(),
                     endpoint,
@@ -4167,14 +4328,19 @@ impl CompanionApp {
         soft_panel(ui, "Board Wi‑Fi setup", |ui| {
             ui.label(
                 RichText::new(
-                    "Boards broadcast SoftAP Njordr-XXXX (password njordrseas). Join that network \
-(or use USB), Find workers, enter your home Wi‑Fi, then Push — credentials save on the board.",
+                    "Prefer a linked USB board below, enter home Wi‑Fi, then Push & save — credentials \
+write to board NVS over cmp. SoftAP Njordr-XXXX / njordrseas still works if you join that network first.",
                 )
                 .color(C_DIM)
                 .size(12.0),
             );
             ui.add_space(8.0);
             let choices = self.wifi_setup_target_choices();
+            if self.wifi_setup_target.is_empty() {
+                if let Some((e, _)) = choices.first() {
+                    self.wifi_setup_target = e.clone();
+                }
+            }
             ui.horizontal(|ui| {
                 ui.label(RichText::new("Board").color(C_MUTED).size(12.0));
                 let combo_w = (ui.available_width() - 80.0).clamp(160.0, 420.0);
@@ -4864,6 +5030,10 @@ impl App for CompanionApp {
     }
 
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        let dropped = ctx.input(|i| i.raw.dropped_files.clone());
+        if !dropped.is_empty() {
+            self.absorb_dropped_files(dropped);
+        }
         while let Ok(msg) = self.msg_rx.try_recv() {
             match msg {
                 NetMsg::Ports(p) => {
@@ -7752,7 +7922,7 @@ Power a 2nd board nearby with wall/power-bank only (no PC cable)."
         ))
     }
 
-    /// Push/clear STA Wi‑Fi on a linked board, or open a one-shot SoftAP TCP session.
+    /// Push/clear STA Wi‑Fi on a linked board, or one-shot SoftAP TCP / USB session.
     fn board_wifi_cmd(
         boards: &mut [UsbBoard],
         endpoint: &str,
@@ -7765,6 +7935,25 @@ Power a 2nd board nearby with wall/power-bank only (no PC cable)."
             return usb_cmd(&mut b.port, &mut b.rx, cmd);
         }
         let ep = endpoint.trim();
+        // One-shot USB open when Find-workers listed a COM that is not linked yet.
+        if is_usb_serial_port(ep) {
+            let mut port = BoardIo::Serial(open_usb_serial_timed(
+                ep,
+                115_200,
+                Duration::from_millis(8),
+                Duration::from_secs(3),
+            )?);
+            let mut rx = String::new();
+            match usb_cmd(&mut port, &mut rx, "cmp ping") {
+                Ok(_) => {}
+                Err(e) => {
+                    return Err(format!(
+                        "USB {ep} no pong: {e} — Link the board on Mine first, then Push Wi‑Fi"
+                    ));
+                }
+            }
+            return usb_cmd(&mut port, &mut rx, cmd);
+        }
         let looks_tcp = ep.contains(':')
             && !ep.to_ascii_uppercase().starts_with("COM")
             && !ep.starts_with("mesh:");
