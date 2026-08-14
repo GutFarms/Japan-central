@@ -86,7 +86,11 @@ if %ERRORLEVEL%==0 (
   )
   echo Hold BOOT, tap RESET, release BOOT if connect stalls, then press a key.
   pause >nul
-  py -3 -m esptool --chip esp32 --port %PORT% --baud 115200 --before no_reset --no-stub write_flash -z --flash_mode dio --flash_freq 40m --flash_size 4MB 0x0 "%FW%"
+  py -3 -m esptool --chip esp32 --port %PORT% --baud 115200 --before no_reset write_flash -z --flash_mode dio --flash_freq 40m --flash_size 4MB 0x0 "%FW%"
+  if %ERRORLEVEL%==0 goto DONE
+  echo.
+  echo Stub path failed — trying --no-stub --no-compress…
+  py -3 -m esptool --chip esp32 --port %PORT% --baud 115200 --before no_reset --no-stub write_flash --no-compress --flash_mode dio --flash_freq 40m --flash_size 4MB 0x0 "%FW%"
   if %ERRORLEVEL%==0 goto DONE
   echo.
   echo esptool failed. Install with:
@@ -98,14 +102,16 @@ if %ERRORLEVEL%==0 (
 where python >nul 2>nul
 if %ERRORLEVEL%==0 (
   echo.
-  echo Trying: python -m esptool --no-stub ...
+  echo Trying: python -m esptool write_flash …
   python -m esptool version >nul 2>nul
   if errorlevel 1 (
     python -m pip install --upgrade --disable-pip-version-check esptool
   )
   echo Hold BOOT, tap RESET, release BOOT if connect stalls, then press a key.
   pause >nul
-  python -m esptool --chip esp32 --port %PORT% --baud 115200 --before no_reset --no-stub write_flash -z --flash_mode dio --flash_freq 40m --flash_size 4MB 0x0 "%FW%"
+  python -m esptool --chip esp32 --port %PORT% --baud 115200 --before no_reset write_flash -z --flash_mode dio --flash_freq 40m --flash_size 4MB 0x0 "%FW%"
+  if %ERRORLEVEL%==0 goto DONE
+  python -m esptool --chip esp32 --port %PORT% --baud 115200 --before no_reset --no-stub write_flash --no-compress --flash_mode dio --flash_freq 40m --flash_size 4MB 0x0 "%FW%"
   if %ERRORLEVEL%==0 goto DONE
 )
 

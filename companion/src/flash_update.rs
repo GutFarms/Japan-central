@@ -812,9 +812,10 @@ const FLASH_BUDGET: Duration = Duration::from_secs(360);
 /// No useful output at all → stuck before connect.
 const IDLE_TIMEOUT: Duration = Duration::from_secs(35);
 /// Chip MAC/connect seen but no write progress yet.
-/// Patient (Terminator) mode waits much longer — CH340 stub/ROM can be slow.
-const IDLE_AFTER_CONNECT: Duration = Duration::from_secs(55);
-const IDLE_AFTER_CONNECT_PATIENT: Duration = Duration::from_secs(180);
+/// Keep short even in "patient" mode — MAC-then-stall (UI stuck ~14%) must fail
+/// fast so we can escalate (stub hang / ROM deflate hang), not sit for minutes.
+const IDLE_AFTER_CONNECT: Duration = Duration::from_secs(28);
+const IDLE_AFTER_CONNECT_PATIENT: Duration = Duration::from_secs(32);
 /// During active write/erase (% / `\r` ticks), allow longer silence between ticks.
 const IDLE_DURING_WRITE: Duration = Duration::from_secs(75);
 const IDLE_DURING_WRITE_PATIENT: Duration = Duration::from_secs(120);
@@ -1076,12 +1077,15 @@ fn run_espflash_reset(
     )
 }
 
-/// Python esptool write (same path ESP Terminator / esptool-js uses). More reliable
-/// than `espflash write-bin --no-stub` for ~1MB merged images on blank CYDs.
+/// Python esptool write (same engine as ESP Terminator / esptool-js).
+/// Prefer stub+compress first; for `--no-stub` use uncompressed (`--no-compress`) —
+/// ROM FlashDeflate on ~1MB images often hangs right after MAC (UI stuck ~14%).
 fn run_esptool_write(
     port: &str,
     image: &Path,
     before: &str,
+    no_stub: bool,
+    compress: bool,
     progress: &dyn Fn(String),
     budget: Duration,
     cancel: Option<&AtomicBool>,
@@ -1097,9 +1101,17 @@ fn run_esptool_write(
         "115200".into(),
         "--before".into(),
         before.to_string(),
-        "--no-stub".into(),
-        "write_flash".into(),
-        "-z".into(),
+    ]);
+    if no_stub {
+        args.push("--no-stub".into());
+    }
+    args.push("write_flash".into());
+    if compress {
+        args.push("-z".into());
+    } else {
+        args.push("--no-compress".into());
+    }
+    args.extend([
         "--flash_mode".into(),
         "dio".into(),
         "--flash_freq".into(),
@@ -1111,14 +1123,16 @@ fn run_esptool_write(
     ]);
     let py_timeout = clamp_timeout(
         if patient {
-            Duration::from_secs(240)
+            Duration::from_secs(300)
         } else {
             ESPTOOL_TIMEOUT
         },
         budget,
     );
+    let stub = if no_stub { "no-stub" } else { "stub" };
+    let comp = if compress { "compress" } else { "no-compress" };
     progress(format!(
-        "esptool write_flash --no-stub before={before} @ 115200 [timeout {}s]…",
+        "esptool write_flash {stub} {comp} before={before} @ 115200 [timeout {}s]…",
         py_timeout.as_secs()
     ));
     let mut cmd = Command::new(&py);
@@ -1184,9 +1198,9 @@ fn append_flash_log(line: &str) {
 /// Strategy (aligned with ESP Terminator / esptool-js):
 /// 1) User-gated Ready (hold BOOT → tap RESET → keep BOOT → Ready)
 /// 2) Do NOT open the COM for a pre-SYNC — closing CH340 often resets the chip
-/// 3) Immediate patient writes: espflash no-reset/no-stub, then default-reset/no-stub
-/// 4) Escalate quickly to Python esptool (Terminator's engine) with flash params
-/// 5) Fallbacks / erase only when failures are not connect-stalls
+/// 3) Prefer Python esptool stub+compress first (fast path); fail MAC-stall in ~32s
+/// 4) Then esptool --no-stub --no-compress; espflash last
+/// 5) Erase only when failures are not connect-stalls
 pub fn flash_merged_bin(
     port: &str,
     image: &Path,
@@ -1320,158 +1334,108 @@ Available: {hint}. Unplug/replug the CYD, pick the COM again, then Update board.
     let mut connect_stall_only = true;
     let mut saw_chip_connect = false;
 
-    // ── Primary: one Ready → immediate writes (no pre-SYNC port steal) ─────
+    // ── Primary: Ready → esptool first (Terminator), fail-fast on MAC stall ─
+    // espflash --no-stub often sits at MAC (~14% UI) for minutes; esptool stub
+    // is what usually finishes. Post-MAC idle is ~32s so slow paths abort quickly.
     for round in 1..=2 {
         ensure_budget(progress)?;
         wait_for_boot_ready(
             ctrl,
             progress,
-            &format!("blank-board write round {round}/2"),
+            &format!("write round {round}/2"),
         )?;
 
-        // 1) no-reset + no-stub — chip already in download mode (BOOT held)
-        progress(format!(
-            "Round {round}: espflash write-bin --no-stub before=no-reset…"
-        ));
-        match run_espflash_write(
-            &espflash,
-            &port_arg,
-            "115200",
-            "no-reset",
-            true,
-            true,
-            image,
-            progress,
-            budget_left(),
-            cancel,
-        ) {
-            Ok(()) => {
-                let _ = run_espflash_reset(&espflash, &port_arg, progress, budget_left(), cancel);
-                append_flash_log("success primary no-reset no-stub");
-                ctrl.need_boot.store(false, Ordering::SeqCst);
-                return Ok(());
-            }
-            Err(e) => {
-                if e.to_ascii_lowercase().contains("cancelled") {
-                    ctrl.need_boot.store(false, Ordering::SeqCst);
-                    return Err(e);
-                }
-                note_fail(
-                    &e,
-                    &mut esp_err,
-                    &mut saw_chip_connect,
-                    &mut connect_stall_only,
-                    progress,
-                    "espflash no-reset/no-stub",
-                );
-            }
-        }
+        // Attempts after one Ready: (label, before, no_stub, compress, use_esptool)
+        let attempts: &[(&str, &str, bool, bool, bool)] = &[
+            // Terminator default — stub + compress via esptool
+            ("esptool stub+compress no_reset", "no_reset", false, true, true),
+            ("esptool stub+compress default_reset", "default_reset", false, true, true),
+            // ROM path without deflate (deflate hangs after MAC on ~1MB images)
+            ("esptool no-stub no-compress no_reset", "no_reset", true, false, true),
+            ("esptool no-stub no-compress default_reset", "default_reset", true, false, true),
+            // espflash last — often the slow MAC-stall path
+            ("espflash no-stub no-reset", "no-reset", true, false, false),
+            ("espflash no-stub default-reset", "default-reset", true, false, false),
+        ];
 
-        // 2) default-reset + no-stub while BOOT still held (classic esptool path)
-        if flash_cancelled(cancel) {
-            ctrl.need_boot.store(false, Ordering::SeqCst);
-            return Err("flash cancelled".into());
-        }
-        progress(format!(
-            "Round {round}: espflash write-bin --no-stub before=default-reset (keep BOOT held)…"
-        ));
-        match run_espflash_write(
-            &espflash,
-            &port_arg,
-            "115200",
-            "default-reset",
-            true,
-            true,
-            image,
-            progress,
-            budget_left(),
-            cancel,
-        ) {
-            Ok(()) => {
-                let _ = run_espflash_reset(&espflash, &port_arg, progress, budget_left(), cancel);
-                append_flash_log("success primary default-reset no-stub");
+        let mut esptool_usable = true;
+        for &(label, before, no_stub, compress, use_esptool) in attempts {
+            if flash_cancelled(cancel) {
                 ctrl.need_boot.store(false, Ordering::SeqCst);
-                return Ok(());
+                return Err("flash cancelled".into());
             }
-            Err(e) => {
-                if e.to_ascii_lowercase().contains("cancelled") {
-                    ctrl.need_boot.store(false, Ordering::SeqCst);
-                    return Err(e);
-                }
-                note_fail(
-                    &e,
-                    &mut esp_err,
-                    &mut saw_chip_connect,
-                    &mut connect_stall_only,
+            if budget_left() < Duration::from_secs(20) {
+                break;
+            }
+            if use_esptool && !esptool_usable {
+                continue;
+            }
+            progress(format!("Round {round}: {label} (keep BOOT held)…"));
+            let result = if use_esptool {
+                match run_esptool_write(
+                    &port_arg,
+                    image,
+                    before,
+                    no_stub,
+                    compress,
                     progress,
-                    "espflash default-reset/no-stub",
-                );
-            }
-        }
-
-        // 3) Escalate to esptool immediately (Terminator / esptool-js engine)
-        if budget_left() > Duration::from_secs(30) {
-            progress(format!(
-                "Round {round}: escalating to Python esptool (keep BOOT held)…"
-            ));
-            match run_esptool_write(
-                &port_arg,
-                image,
-                "no_reset",
-                progress,
-                budget_left(),
-                cancel,
-                true,
-            ) {
+                    budget_left(),
+                    cancel,
+                    true,
+                ) {
+                    Ok(()) => Ok(()),
+                    Err(e) => {
+                        let low = e.to_ascii_lowercase();
+                        if e.contains("9009")
+                            || low.contains("microsoft store")
+                            || low.contains("no python")
+                        {
+                            py_err = e.clone();
+                            esptool_usable = false;
+                            progress(format!("esptool unavailable: {e}"));
+                            continue;
+                        }
+                        Err(e)
+                    }
+                }
+            } else {
+                run_espflash_write(
+                    &espflash,
+                    &port_arg,
+                    "115200",
+                    before,
+                    no_stub,
+                    true,
+                    image,
+                    progress,
+                    budget_left(),
+                    cancel,
+                )
+            };
+            match result {
                 Ok(()) => {
-                    append_flash_log("success primary esptool no_reset");
+                    let _ =
+                        run_espflash_reset(&espflash, &port_arg, progress, budget_left(), cancel);
+                    append_flash_log(&format!("success {label}"));
                     ctrl.need_boot.store(false, Ordering::SeqCst);
                     return Ok(());
                 }
                 Err(e) => {
-                    let low = e.to_ascii_lowercase();
-                    if low.contains("cancelled") {
+                    if e.to_ascii_lowercase().contains("cancelled") {
                         ctrl.need_boot.store(false, Ordering::SeqCst);
                         return Err(e);
                     }
-                    if !(e.contains("9009") || low.contains("microsoft store") || low.contains("no python"))
-                    {
+                    if use_esptool {
                         py_err = e.clone();
-                        note_fail(
-                            &e,
-                            &mut esp_err,
-                            &mut saw_chip_connect,
-                            &mut connect_stall_only,
-                            progress,
-                            "esptool no_reset",
-                        );
-                        // One more esptool try with default_reset while BOOT held
-                        match run_esptool_write(
-                            &port_arg,
-                            image,
-                            "default_reset",
-                            progress,
-                            budget_left(),
-                            cancel,
-                            true,
-                        ) {
-                            Ok(()) => {
-                                append_flash_log("success primary esptool default_reset");
-                                ctrl.need_boot.store(false, Ordering::SeqCst);
-                                return Ok(());
-                            }
-                            Err(e2) => {
-                                if e2.to_ascii_lowercase().contains("cancelled") {
-                                    ctrl.need_boot.store(false, Ordering::SeqCst);
-                                    return Err(e2);
-                                }
-                                py_err = e2;
-                            }
-                        }
-                    } else {
-                        py_err = e;
-                        progress(format!("esptool unavailable this round: {py_err}"));
                     }
+                    note_fail(
+                        &e,
+                        &mut esp_err,
+                        &mut saw_chip_connect,
+                        &mut connect_stall_only,
+                        progress,
+                        label,
+                    );
                 }
             }
         }
@@ -1560,6 +1524,8 @@ Available: {hint}. Unplug/replug the CYD, pick the COM again, then Update board.
                             &port_arg,
                             image,
                             before,
+                            true,
+                            false,
                             progress,
                             budget_left(),
                             cancel,
@@ -1631,6 +1597,8 @@ Available: {hint}. Unplug/replug the CYD, pick the COM again, then Update board.
                 &port_arg,
                 image,
                 "no_reset",
+                false,
+                true,
                 progress,
                 budget_left(),
                 cancel,
@@ -2148,6 +2116,13 @@ fn run_streaming_timeout(
                     || lower.contains("chip erase")
                     || lower.contains("hard resetting")
                     || lower.contains("hard_reset")
+                    || lower.contains("uploading stub")
+                    || lower.contains("running stub")
+                    || lower.contains("stub running")
+                    || lower.contains("configuring flash")
+                    || lower.contains("flash will be erased")
+                    || lower.contains("flash_defl")
+                    || lower.contains("wrote ")
                 {
                     saw_write = true;
                 }
