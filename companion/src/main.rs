@@ -8629,28 +8629,16 @@ Power a 2nd board nearby with wall/power-bank only (no PC cable)."
                     let _ = msg_tx.send(NetMsg::Share(ev));
                 }
                 // NerdMiner-style clean_jobs: drop cached work so late board shares die.
+                // Do NOT cmp-stop boards — that blanks LCD H/s and stalls hashing until the
+                // next job lands. Pushing the new header replaces work in-place (onJob).
                 let cleaned = client.take_clean_jobs();
                 if cleaned {
                     recent_jobs.clear();
                     held_board_shares.clear();
-                    // Stop boards from grinding invalidated work until the new job lands.
-                    for b in boards.iter_mut() {
-                        let _ = usb_cmd(&mut b.port, &mut b.rx, "cmp stop");
-                    }
-                    let mesh_targets: Vec<(String, String)> = mesh
-                        .iter()
-                        .map(|m| (m.gateway.clone(), m.mac.clone()))
-                        .collect();
-                    for (gw, mac) in mesh_targets {
-                        let mut pump = || {
-                            let _ = client.poll();
-                        };
-                        let _ = mesh_via_cmd_ex(&mut boards, &gw, &mac, "stop", &mut pump, 1);
-                    }
                     log_msg(
                         &msg_tx,
                         LogKind::Stratum,
-                        "Pool clean_jobs — cleared cache, stopped boards",
+                        "Pool clean_jobs — cleared share cache (boards keep hashing)",
                     );
                 }
                 recent_jobs.retain(|j| !client.is_job_stale(&j.job_id));

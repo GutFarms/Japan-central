@@ -106,12 +106,18 @@ void DisplayUi::paintLinkRateIp(const MinerSnapshot& snap, bool forceFull) {
 
   const float rateDelta = snap.hashrateHs > lastRate_ ? snap.hashrateHs - lastRate_
                                                       : lastRate_ - snap.hashrateHs;
-  const bool rateDirty = forceFull || lastRate_ < 0.0f || rateDelta >= 800.0f;
+  // Refresh often — 800 H/s was so coarse the strip looked stuck/blank at CYD rates.
+  const float rateThresh =
+      (lastRate_ < 1000.0f) ? 25.0f : (lastRate_ * 0.02f < 200.0f ? 200.0f : lastRate_ * 0.02f);
+  const bool rateDirty = forceFull || lastRate_ < 0.0f || rateDelta >= rateThresh ||
+                         (hashing && lastRate_ <= 0.0f && snap.hashrateHs > 0.0f);
   if (rateDirty) {
     tft_.fillRect(8, 214, 150, 18, cPanel_);
     char rate[28];
     float hs = snap.hashrateHs;
-    if (hs < 1000.0f) {
+    if (!hashing && hs <= 0.0f) {
+      snprintf(rate, sizeof(rate), "—");
+    } else if (hs < 1000.0f) {
       snprintf(rate, sizeof(rate), "%.0f H/s", hs);
     } else if (hs < 1000000.0f) {
       float khs = hs / 1000.0f;

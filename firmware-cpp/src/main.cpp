@@ -94,7 +94,7 @@ static constexpr float kMaxPlausibleHs = 2000000.0f;
 
 static void updateHashrate() {
   // Core-0 SW assist + USB share a core — short windows swing wildly.
-  // ~1.5s samples + heavy EMA keep LCD/Companion stable.
+  // ~0.6s first sample, then ~1.2s + EMA keep LCD/Companion stable.
   if (!g_jobLoaded || !g_mining) {
     if (g_hashrate > 0.0f) {
       g_hashrate *= 0.92f;
@@ -103,8 +103,15 @@ static void updateHashrate() {
     return;
   }
   uint32_t now = millis();
+  if (g_windowStart == 0) {
+    g_windowStart = now;
+    g_windowHashesStart = g_hashCounter.load(std::memory_order_relaxed);
+    return;
+  }
   uint32_t elapsed = now - g_windowStart;
-  if (elapsed < 1500) return;
+  // First reading ASAP so the LCD is not stuck on 0 H/s after each job.
+  const uint32_t needMs = (g_hashrate <= 1.0f) ? 500u : 1200u;
+  if (elapsed < needMs) return;
   if (elapsed > 10000) {
     // Stale window (e.g. long stall) — resync baseline without zeroing EMA.
     g_windowHashesStart = g_hashCounter.load(std::memory_order_relaxed);
@@ -200,13 +207,10 @@ static void onJob(const UsbJob& job) {
   g_mining = true;
   syncMinePriorities();
   refreshLabels();
-  // Do NOT reset the hashrate sample window here. Faster pool notifies (0.8.26+)
-  // were restarting the ≥1–2s window every job so the rate never matured and
-  // Companion showed 0 H/s. Keep EMA; the counter keeps rising across jobs.
-  if (g_windowStart == 0) {
-    g_windowStart = millis();
-    g_windowHashesStart = g_hashCounter.load(std::memory_order_relaxed);
-  }
+  // Keep EMA across job switches so the LCD does not flash 0 H/s on every notify.
+  // Only resync the sample window to the live counter.
+  g_windowStart = millis();
+  g_windowHashesStart = g_hashCounter.load(std::memory_order_relaxed);
 }
 
 static void onStop() {
@@ -514,19 +518,19 @@ void loop() {
     return;
   }
 
-  // Mining: keep logo static; refresh status strip every ~2s (light SPI only).
+  // Mining: keep logo static; refresh status strip every ~1s so H/s stays live.
   if (g_mining) {
     uint32_t now = millis();
     if (!g_ui.miningChromeDrawn()) {
       fillSnap();
       g_ui.showMining(g_cfg, g_snap, true);
       g_lastPaint = now;
-    } else if (now - g_lastPaint >= 2000) {
+    } else if (now - g_lastPaint >= 1000) {
       fillSnap();
       g_ui.showMining(g_cfg, g_snap, false);
       g_lastPaint = now;
     }
-    delay(100);
+    delay(50);
     return;
   }
 
