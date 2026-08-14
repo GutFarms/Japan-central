@@ -89,26 +89,9 @@ void WifiLink::ensureWifi(const AppConfig& cfg) {
     lastStaPass_ = "";
   }
 
-  // Unique SoftAP subnet from MAC so multiple boards aren't all 192.168.4.1.
-  // 10.<b4>.<b5>.1 /24 — PC/phone joins one Njordr-XXXX AP at a time, but beacons
-  // and TCP endpoints stay distinct when STA is used on a shared LAN.
-  uint8_t b4 = 1, b5 = 1;
-  {
-    String hex;
-    for (size_t i = 0; i < mac_.length(); i++) {
-      char c = mac_[i];
-      if ((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F')) hex += c;
-    }
-    hex.toLowerCase();
-    if (hex.length() >= 12) {
-      b4 = (uint8_t)strtoul(hex.substring(8, 10).c_str(), nullptr, 16);
-      b5 = (uint8_t)strtoul(hex.substring(10, 12).c_str(), nullptr, 16);
-      if (b4 == 0) b4 = 1;
-      if (b5 == 0) b5 = 1;
-    }
-  }
-  IPAddress apIp(10, b4, b5, 1);
-  IPAddress apGw(10, b4, b5, 1);
+  // Fixed SoftAP address 192.168.1.88 — phone Board Setup is always http://192.168.1.88/
+  IPAddress apIp(CYD_SOFTAP_IP0, CYD_SOFTAP_IP1, CYD_SOFTAP_IP2, CYD_SOFTAP_IP3);
+  IPAddress apGw(CYD_SOFTAP_IP0, CYD_SOFTAP_IP1, CYD_SOFTAP_IP2, CYD_SOFTAP_IP3);
   IPAddress apMask(255, 255, 255, 0);
   WiFi.softAPConfig(apIp, apGw, apMask);
 
@@ -369,11 +352,11 @@ void WifiLink::beacon() {
   IPAddress advertise = (WiFi.status() == WL_CONNECTED) ? sta : ap;
   char msg[220];
 #if CYD_D0_BUILD
-  static constexpr const char* kFwTag = "0.8.140-sha256-d0";
-  static constexpr const char* kFwShort = "0.8.140-d0";
+  static constexpr const char* kFwTag = "0.8.141-sha256-d0";
+  static constexpr const char* kFwShort = "0.8.141-d0";
 #else
-  static constexpr const char* kFwTag = "0.8.140-sha256";
-  static constexpr const char* kFwShort = "0.8.140";
+  static constexpr const char* kFwTag = "0.8.141-sha256";
+  static constexpr const char* kFwShort = "0.8.141";
 #endif
   snprintf(msg, sizeof(msg),
            "%s|v=%s|mac=%s|fw=%s|tcp=%u|ip=%u.%u.%u.%u|ap=%s|mode=%s",

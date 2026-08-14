@@ -16,6 +16,11 @@ static constexpr uint16_t CYD_WIFI_DNS_PORT = 53;
 static constexpr const char* CYD_WIFI_MAGIC = "CYDBOARD";
 // Initial SoftAP is open (no password) so first-time Setup is one tap in Windows / phone Wi‑Fi.
 static constexpr const char* CYD_SOFTAP_PASS = nullptr;
+// Fixed SoftAP address — phone / PC always open Board Setup here.
+static constexpr uint8_t CYD_SOFTAP_IP0 = 192;
+static constexpr uint8_t CYD_SOFTAP_IP1 = 168;
+static constexpr uint8_t CYD_SOFTAP_IP2 = 1;
+static constexpr uint8_t CYD_SOFTAP_IP3 = 88;
 
 class WifiLink {
  public:
