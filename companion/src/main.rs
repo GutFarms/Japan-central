@@ -7255,6 +7255,7 @@ Power a 2nd board nearby with wall/power-bank only (no PC cable)."
     let mut mining = false;
     let mut last_stats_push = Instant::now() - Duration::from_secs(10);
     let mut last_stratum_ui = Instant::now() - Duration::from_secs(10);
+    let mut last_unplug_check = Instant::now() - Duration::from_secs(1);
     let mut last_fleet_status = StatusJson::default();
     let mut mine_endpoint = String::new();
     let mut mine_worker_name = String::new();
@@ -8494,7 +8495,8 @@ Power a 2nd board nearby with wall/power-bank only (no PC cable)."
         }
 
         // Detect unplug even while stratum has presidency (status polls may be deferred).
-        if !boards.is_empty() {
+        if !boards.is_empty() && last_unplug_check.elapsed() >= Duration::from_millis(400) {
+            last_unplug_check = Instant::now();
             let _ = prune_unplugged_boards(
                 &mut boards,
                 &mut mesh,
