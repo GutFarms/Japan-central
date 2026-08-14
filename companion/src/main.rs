@@ -7954,6 +7954,14 @@ fn mine_worker(cmd_rx: Receiver<NetCmd>, msg_tx: Sender<NetMsg>) {
             .collect()
     }
 
+    fn usb_stable_macs(boards: &[UsbBoard]) -> Vec<String> {
+        boards
+            .iter()
+            .filter(|b| mac_is_stable(&b.mac))
+            .map(|b| normalize_mac(&b.mac))
+            .collect()
+    }
+
     fn mesh_via_cmd(
         boards: &mut [UsbBoard],
         gateway: &str,
@@ -8018,6 +8026,7 @@ fn mine_worker(cmd_rx: Receiver<NetCmd>, msg_tx: Sender<NetMsg>) {
             .filter(|b| !b.download_mode)
             .map(|b| (b.name.clone(), b.mac.clone()))
             .collect();
+        let usb_macs = usb_stable_macs(boards);
         let mut seen: Vec<(String, String)> = Vec::new(); // (gateway, mac)
         for (gname, gmac) in &gateways {
             pump();
@@ -8061,7 +8070,7 @@ Power a 2nd board nearby with wall/power-bank only (no PC cable)."
                         ),
                     );
                 }
-            } else {
+            } else if !list_only {
                 log_msg(
                     msg_tx,
                     LogKind::Usb,
@@ -8069,21 +8078,29 @@ Power a 2nd board nearby with wall/power-bank only (no PC cable)."
                 );
             }
             for mac in peers {
+                // Never mesh-proxy a board that already has USB/Wi‑Fi cmp (incl. gateway).
                 if mac_is_stable(gmac) && normalize_mac(gmac) == mac {
                     continue;
                 }
-                // Prefer a direct USB/Wi‑Fi link for the same MAC.
-                if boards
-                    .iter()
-                    .any(|b| mac_is_stable(&b.mac) && normalize_mac(&b.mac) == mac)
-                {
+                if usb_macs.iter().any(|u| u == &mac) {
                     continue;
                 }
                 seen.push((gname.clone(), mac));
             }
         }
-        // Drop stale mesh peers (not advertised, or gateway gone).
+        // Drop stale mesh peers (not advertised, gateway gone, or same MAC as USB).
         mesh.retain(|m| {
+            if usb_macs.iter().any(|u| u == &m.mac) {
+                log_msg(
+                    msg_tx,
+                    LogKind::Usb,
+                    format!(
+                        "Mesh peer {} dropped (same board as linked USB/Wi‑Fi — not a mesh leaf)",
+                        m.mac
+                    ),
+                );
+                return false;
+            }
             let keep = seen
                 .iter()
                 .any(|(g, mac)| (port_names_match(g, &m.gateway) || g == &m.gateway) && *mac == m.mac)
@@ -8104,6 +8121,9 @@ Power a 2nd board nearby with wall/power-bank only (no PC cable)."
         }
         for (gname, mac) in seen {
             if mesh.iter().any(|m| m.mac == mac) {
+                continue;
+            }
+            if usb_macs.iter().any(|u| u == &mac) {
                 continue;
             }
             pump();
@@ -9543,8 +9563,11 @@ Power a 2nd board nearby with wall/power-bank only (no PC cable)."
                     {
                         // Stratum presidency: skip mesh entirely while linking / job pending / reconnect.
                         if !pool_has_presidency(&stratum, reconnect_at) {
+                            // While mining (even if pool briefly down), never via config/status —
+                            // that stole the USB root from jobs and dropped fake mesh:self peers.
                             let list_only = mining
-                                && stratum.as_ref().map(|s| s.authorized()).unwrap_or(false);
+                                || reconnect_at.is_some()
+                                || stratum.as_ref().map(|s| s.authorized()).unwrap_or(false);
                             let mut pump = || {
                                 let _ = pump_stratum_keepalive(&mut stratum, &msg_tx);
                             };
@@ -9560,15 +9583,18 @@ Power a 2nd board nearby with wall/power-bank only (no PC cable)."
                             let _ = pump_stratum_keepalive(&mut stratum, &msg_tx);
                         }
                     }
-                    // Via status is chrome — defer whenever the pool needs the thread.
+                    // Via status is chrome — never while mining (jobs/shares own the USB root).
                     let via_due = last_mesh_via_status.elapsed()
                         >= if mining {
-                            Duration::from_secs(20)
+                            Duration::from_secs(45)
                         } else {
                             Duration::from_secs(4)
                         };
                     let mut drop_mesh: Vec<String> = Vec::new();
-                    if via_due && !pool_has_presidency(&stratum, reconnect_at) {
+                    if via_due
+                        && !mining
+                        && !pool_has_presidency(&stratum, reconnect_at)
+                    {
                         last_mesh_via_status = Instant::now();
                         for m in mesh.iter_mut() {
                             if pool_has_presidency(&stratum, reconnect_at) {
