@@ -58,11 +58,10 @@ void WifiLink::configureSoftApDns(const IPAddress& apIp) {
 
 IPAddress WifiLink::softApIpForMode(bool wantSta) const {
   if (!wantSta) {
-    // Initial setup SoftAP — fixed Board Setup address.
+    // Initial setup SoftAP — fixed portal off the home 192.168.1.x LAN.
     return IPAddress(CYD_SOFTAP_IP0, CYD_SOFTAP_IP1, CYD_SOFTAP_IP2, CYD_SOFTAP_IP3);
   }
-  // After home Wi‑Fi is saved, SoftAP moves off 192.168.1.88 so STA can use
-  // that address (or DHCP) on the home LAN without SoftAP/LAN clash.
+  // After home Wi‑Fi is saved, SoftAP stays for mesh on a unique 10.x subnet.
   uint8_t b4 = 1, b5 = 1;
   String hex;
   for (size_t i = 0; i < mac_.length(); i++) {
@@ -317,7 +316,7 @@ String WifiLink::portalPageHtml(bool saved, const char* flash) const {
     page += F("</div>");
   } else if (saved) {
     page += F("<div class=ok>Saved — board is joining home Wi‑Fi (prefers 192.168.1.88, "
-              "otherwise DHCP). SoftAP moves off .88 so the LAN can use it. "
+              "otherwise DHCP). SoftAP leaves 10.88.88.1 so your PC can keep the pool online. "
               "Reconnect this phone to your home network.</div>");
   }
 
@@ -447,11 +446,11 @@ void WifiLink::beacon() {
   IPAddress advertise = (WiFi.status() == WL_CONNECTED) ? sta : ap;
   char msg[220];
 #if CYD_D0_BUILD
-  static constexpr const char* kFwTag = "0.8.142-sha256-d0";
-  static constexpr const char* kFwShort = "0.8.142-d0";
+  static constexpr const char* kFwTag = "0.8.143-sha256-d0";
+  static constexpr const char* kFwShort = "0.8.143-d0";
 #else
-  static constexpr const char* kFwTag = "0.8.142-sha256";
-  static constexpr const char* kFwShort = "0.8.142";
+  static constexpr const char* kFwTag = "0.8.143-sha256";
+  static constexpr const char* kFwShort = "0.8.143";
 #endif
   snprintf(msg, sizeof(msg),
            "%s|v=%s|mac=%s|fw=%s|tcp=%u|ip=%u.%u.%u.%u|ap=%s|mode=%s",

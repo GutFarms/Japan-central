@@ -145,6 +145,24 @@ pub fn primary_lan_ipv4() -> Option<String> {
     }
 }
 
+/// Client IP when this PC is on the Njordr SoftAP setup network (10.88.88.0/24).
+/// SoftAP has no internet, so [`primary_lan_ipv4`] often fails there.
+pub fn softap_setup_client_ipv4() -> Option<String> {
+    let sock = UdpSocket::bind("0.0.0.0:0").ok()?;
+    sock.connect("10.88.88.1:80").ok()?;
+    match sock.local_addr().ok()?.ip() {
+        IpAddr::V4(v) => {
+            let o = v.octets();
+            if o[0] == 10 && o[1] == 88 && o[2] == 88 {
+                Some(v.to_string())
+            } else {
+                None
+            }
+        }
+        _ => None,
+    }
+}
+
 /// Deep-link payload encoded in the personal QR (unique per Companion install).
 pub fn pair_url(host: &str, port: u16, install_id: &str, token: &str) -> String {
     format!(
