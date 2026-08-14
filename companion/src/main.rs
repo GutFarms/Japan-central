@@ -28,7 +28,7 @@ use api_feeds::{
 use app_update::{check_app_update, running_version, update_companion_app, AppRemoteInfo};
 use flash_update::{
     ensure_firmware_image, fetch_latest_firmware, find_firmware_image, flash_merged_bin,
-    update_needed, FirmwareImage,
+    update_needed, FirmwareImage, FlashControl,
 };
 use live_bar::{
     default_header_coins, format_change, format_usd, COIN_CATALOG, LiveFeed,
@@ -570,6 +570,10 @@ enum NetCmd {
         reopen: bool,
         /// Set by UI Cancel — flash runner aborts and kills espflash.
         cancel: Arc<AtomicBool>,
+        /// Flash thread sets true while waiting for BOOT Ready.
+        need_boot: Arc<AtomicBool>,
+        /// UI sets true when the user clicks Ready.
+        boot_ready: Arc<AtomicBool>,
     },
     /// Push live ticker text to the ESP LCD.
     PushNet {
@@ -637,6 +641,10 @@ struct CompanionApp {
     update_busy_since: Option<Instant>,
     /// Shared cancel flag for the in-flight flash tool.
     flash_cancel: Option<Arc<AtomicBool>>,
+    /// Flash thread asks UI to show Ready (BOOT held).
+    flash_need_boot: Option<Arc<AtomicBool>>,
+    /// UI → flash thread: user clicked Ready.
+    flash_boot_ready: Option<Arc<AtomicBool>>,
     /// 0..=1 overall Update board progress for the overlay bar.
     flash_progress: f32,
     /// Short phase label under the bar (Writing / Erasing / Verifying…).
@@ -837,6 +845,8 @@ impl CompanionApp {
             update_busy: false,
             update_busy_since: None,
             flash_cancel: None,
+            flash_need_boot: None,
+            flash_boot_ready: None,
             flash_progress: 0.0,
             flash_phase: String::new(),
             bench_busy: false,
@@ -1860,7 +1870,11 @@ impl CompanionApp {
         self.update_busy = true;
         self.update_busy_since = Some(Instant::now());
         let cancel = Arc::new(AtomicBool::new(false));
+        let need_boot = Arc::new(AtomicBool::new(false));
+        let boot_ready = Arc::new(AtomicBool::new(false));
         self.flash_cancel = Some(cancel.clone());
+        self.flash_need_boot = Some(need_boot.clone());
+        self.flash_boot_ready = Some(boot_ready.clone());
         self.flash_progress = 0.02;
         self.flash_phase = "Starting flash".into();
         self.pending_post_flash_reconnect = None;
@@ -1885,6 +1899,8 @@ impl CompanionApp {
             // Always reconnect after a successful flash.
             reopen: true,
             cancel,
+            need_boot,
+            boot_ready,
         });
     }
 
@@ -1897,6 +1913,12 @@ impl CompanionApp {
         self.flash_phase.clear();
         if let Some(c) = self.flash_cancel.take() {
             c.store(true, Ordering::SeqCst);
+        }
+        if let Some(n) = self.flash_need_boot.take() {
+            n.store(false, Ordering::SeqCst);
+        }
+        if let Some(r) = self.flash_boot_ready.take() {
+            r.store(false, Ordering::SeqCst);
         }
     }
 
@@ -1922,6 +1944,13 @@ impl CompanionApp {
 
         let (phase, floor) = if lower.contains("cancelled") {
             ("Cancelled", self.flash_progress)
+        } else if lower.contains("waiting for ready")
+            || lower.contains("hold boot")
+            || lower.contains("click ready")
+        {
+            ("Hold BOOT — click Ready", 0.08)
+        } else if lower.contains("rom sync") || lower.contains("syncing esp rom") {
+            ("Syncing download mode", 0.10)
         } else if lower.contains("verif")
             || lower.contains("reading board config")
             || lower.contains("usb linked after flash")
@@ -1944,6 +1973,7 @@ impl CompanionApp {
         } else if lower.contains("write-bin")
             || lower.contains("writing firmware")
             || lower.contains("writing after")
+            || lower.contains("patient write")
         {
             ("Writing firmware", 0.12)
         } else if lower.contains("usb released") || lower.contains("waiting for com") {
@@ -2002,7 +2032,7 @@ impl CompanionApp {
 
     fn fail_post_flash_verify(&mut self, reason: String) {
         let tip = format!(
-            "{reason} Hold BOOT, tap RESET, release BOOT, then Update board again."
+            "{reason} Hold BOOT, tap RESET, keep BOOT held, click Ready, then Update board again."
         );
         self.update_status = tip.clone();
         self.last_error = tip.clone();
@@ -2632,7 +2662,7 @@ impl CompanionApp {
             );
             ui.add_space(8.0);
             ui.label(
-                RichText::new("Tip: hold BOOT, tap RESET, release BOOT if Update board fails.")
+                RichText::new("Tip: hold BOOT, tap RESET, keep BOOT held, then click Ready if Update board asks.")
                     .color(C_DIM)
                     .size(12.0),
             );
@@ -4556,7 +4586,7 @@ impl App for CompanionApp {
                     ui.add_space(8.0);
                     ui.label(
                         RichText::new(
-                            "Mining stops and USB disconnects for the flash. Hold BOOT, tap RESET, release BOOT if it fails.",
+                            "Mining stops and USB disconnects for the flash. When prompted: hold BOOT, tap RESET, keep BOOT held, then click Ready.",
                         )
                         .color(C_MUTED)
                         .size(13.0),
@@ -4588,6 +4618,15 @@ impl App for CompanionApp {
 
         // Board update: loading overlay with live progress bar.
         if self.update_busy {
+            let awaiting_boot = self
+                .flash_need_boot
+                .as_ref()
+                .map(|n| n.load(Ordering::SeqCst))
+                .unwrap_or(false);
+            if awaiting_boot {
+                // Keep the Ready CTA responsive while the flash thread waits.
+                ctx.request_repaint_after(Duration::from_millis(100));
+            }
             egui::Window::new("Updating board")
                 .collapsible(false)
                 .resizable(false)
@@ -4603,6 +4642,8 @@ impl App for CompanionApp {
                                 "Verifying board firmware"
                             } else if self.pending_post_flash_reconnect.is_some() {
                                 "Flash complete — reconnecting"
+                            } else if awaiting_boot {
+                                "Download mode — click Ready"
                             } else {
                                 "Flashing board firmware"
                             })
@@ -4640,15 +4681,40 @@ impl App for CompanionApp {
                             .font(mono_ui_font(11.0)),
                         );
                         ui.add_space(10.0);
-                        ui.label(
-                            RichText::new("Keep USB connected · hold BOOT + tap RESET if needed")
+                        if awaiting_boot {
+                            ui.label(
+                                RichText::new(
+                                    "1) Hold BOOT · 2) Tap RESET · 3) Keep BOOT held · 4) Click Ready",
+                                )
+                                .color(C_TEXT)
+                                .size(13.0),
+                            );
+                            ui.add_space(12.0);
+                            if cta_button(ui, "Ready", true, 160.0).clicked() {
+                                if let Some(r) = &self.flash_boot_ready {
+                                    r.store(true, Ordering::SeqCst);
+                                }
+                                self.flash_phase = "Syncing download mode".into();
+                                self.update_status =
+                                    "Ready — syncing ROM, then writing…".into();
+                            }
+                            ui.add_space(8.0);
+                        } else {
+                            ui.label(
+                                RichText::new(
+                                    "Keep USB connected · hold BOOT + tap RESET if needed",
+                                )
                                 .color(C_DIM)
                                 .size(12.0),
-                        );
-                        ui.add_space(8.0);
+                            );
+                            ui.add_space(8.0);
+                        }
                         if soft_button(ui, "Cancel", 120.0).clicked() {
                             if let Some(c) = &self.flash_cancel {
                                 c.store(true, Ordering::SeqCst);
+                            }
+                            if let Some(n) = &self.flash_need_boot {
+                                n.store(false, Ordering::SeqCst);
                             }
                             self.clear_flash_overlay();
                             self.update_status =
@@ -6641,6 +6707,8 @@ fn mine_worker(cmd_rx: Receiver<NetCmd>, msg_tx: Sender<NetMsg>) {
                     image,
                     reopen,
                     cancel,
+                    need_boot,
+                    boot_ready,
                 } => {
                     // Only release the flash target COM — keep other linked boards.
                     if let Some(idx) = boards
@@ -6699,7 +6767,12 @@ fn mine_worker(cmd_rx: Receiver<NetCmd>, msg_tx: Sender<NetMsg>) {
                                 }
                             };
                             let _ = done_tx.send(NetMsg::FirmwareFetched(Ok(img.clone())));
-                            flash_merged_bin(&port, &img.path, &progress, Some(&cancel))?;
+                            let ctrl = FlashControl {
+                                cancel,
+                                need_boot,
+                                boot_ready,
+                            };
+                            flash_merged_bin(&port, &img.path, &progress, &ctrl)?;
                             Ok(format!(
                                 "Firmware {} flashed on {port}",
                                 if img.version.is_empty() {

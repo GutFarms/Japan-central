@@ -6,9 +6,30 @@ use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, RecvTimeoutError, Sender};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 pub const MERGED_BIN_NAME: &str = "esp32-2432s028-sha256-miner-merged.bin";
+
+/// Shared cancel + Terminator-style BOOT Ready handshake with the UI.
+#[derive(Clone)]
+pub struct FlashControl {
+    pub cancel: Arc<AtomicBool>,
+    /// Flash thread sets true while waiting for the user to confirm BOOT.
+    pub need_boot: Arc<AtomicBool>,
+    /// UI sets true when the user clicks Ready (chip should be in download mode).
+    pub boot_ready: Arc<AtomicBool>,
+}
+
+impl FlashControl {
+    pub fn new(cancel: Arc<AtomicBool>) -> Self {
+        Self {
+            cancel,
+            need_boot: Arc::new(AtomicBool::new(false)),
+            boot_ready: Arc::new(AtomicBool::new(false)),
+        }
+    }
+}
 
 #[derive(Clone, Debug)]
 pub struct FirmwareImage {
@@ -790,11 +811,13 @@ const ESPTOOL_TIMEOUT: Duration = Duration::from_secs(180);
 const FLASH_BUDGET: Duration = Duration::from_secs(360);
 /// No useful output at all → stuck before connect.
 const IDLE_TIMEOUT: Duration = Duration::from_secs(35);
-/// Chip MAC/connect seen but no write/erase progress → stub/baud can be slow on CYD/CH340.
-/// no-stub writes should start sooner; keep this under ~1 minute so we can rotate strategies.
+/// Chip MAC/connect seen but no write progress yet.
+/// Patient (Terminator) mode waits much longer — CH340 stub/ROM can be slow.
 const IDLE_AFTER_CONNECT: Duration = Duration::from_secs(55);
+const IDLE_AFTER_CONNECT_PATIENT: Duration = Duration::from_secs(180);
 /// During active write/erase (% / `\r` ticks), allow longer silence between ticks.
 const IDLE_DURING_WRITE: Duration = Duration::from_secs(75);
+const IDLE_DURING_WRITE_PATIENT: Duration = Duration::from_secs(120);
 /// After stdout/stderr EOF, wait for the tool to exit (hard-reset / flush) before kill.
 /// Matches esptool-js / ESP Terminator: never yank the serial mid-operation.
 const EXIT_GRACE: Duration = Duration::from_secs(45);
@@ -810,6 +833,10 @@ fn flash_cancelled(cancel: Option<&AtomicBool>) -> bool {
     cancel.map(|c| c.load(Ordering::SeqCst)).unwrap_or(false)
 }
 
+fn flash_cancelled_ctrl(ctrl: &FlashControl) -> bool {
+    ctrl.cancel.load(Ordering::SeqCst)
+}
+
 /// Run an espflash subcommand, retrying skip-update-check flag forms for Windows clap quirks.
 fn run_espflash_argv(
     espflash: &Path,
@@ -819,6 +846,7 @@ fn run_espflash_argv(
     timeout: Duration,
     cancel: Option<&AtomicBool>,
     kind: FlashToolKind,
+    patient: bool,
 ) -> Result<(), String> {
     // Global skip-update-check must come *before* the subcommand (espflash 4.x).
     // Never set ESPFLASH_SKIP_UPDATE_CHECK=1 — some Windows clap builds only accept
@@ -845,7 +873,7 @@ fn run_espflash_argv(
             cmd.env("ESPFLASH_SKIP_UPDATE_CHECK", "true");
         }
         cmd.args(skip).args(sub_args);
-        match run_streaming_timeout(&mut cmd, progress, label, timeout, cancel, kind) {
+        match run_streaming_timeout(&mut cmd, progress, label, timeout, cancel, kind, patient) {
             Ok(()) => return Ok(()),
             Err(e) => {
                 let lower = e.to_ascii_lowercase();
@@ -913,6 +941,7 @@ fn run_espflash_erase(
         timeout,
         cancel,
         FlashToolKind::Erase,
+        false,
     )
 }
 
@@ -922,15 +951,24 @@ fn run_espflash_write(
     baud: &str,
     before: &str,
     no_stub: bool,
+    patient: bool,
     image: &Path,
     progress: &dyn Fn(String),
     budget: Duration,
     cancel: Option<&AtomicBool>,
 ) -> Result<(), String> {
-    let timeout = clamp_timeout(WRITE_TIMEOUT, budget);
+    let timeout = clamp_timeout(
+        if patient {
+            Duration::from_secs(200)
+        } else {
+            WRITE_TIMEOUT
+        },
+        budget,
+    );
     let stub = if no_stub { "no-stub" } else { "stub" };
     progress(format!(
-        "espflash write-bin → {port} @ {baud} before={before} {stub} ({}) [timeout {}s]",
+        "espflash write-bin → {port} @ {baud} before={before} {stub}{} ({}) [timeout {}s]",
+        if patient { " · patient" } else { "" },
         espflash.display(),
         timeout.as_secs()
     ));
@@ -965,29 +1003,79 @@ fn run_espflash_write(
         timeout,
         cancel,
         FlashToolKind::Write,
+        patient,
     )
 }
 
-/// Give the user time to hold BOOT → tap RESET → release BOOT before no-reset sync.
-fn wait_for_manual_boot(
+/// Terminator-style: wait until the UI Ready button (or Cancel), not a blind countdown.
+fn wait_for_boot_ready(
+    ctrl: &FlashControl,
     progress: &dyn Fn(String),
-    cancel: Option<&AtomicBool>,
-    secs: u32,
     why: &str,
 ) -> Result<(), String> {
+    ctrl.boot_ready.store(false, Ordering::SeqCst);
+    ctrl.need_boot.store(true, Ordering::SeqCst);
     progress(format!(
-        "Hold BOOT, tap RESET, release BOOT — {why} ({secs}s)…"
+        "Hold BOOT, tap RESET, keep BOOT held — then click Ready ({why})"
     ));
-    for left in (1..=secs).rev() {
-        if flash_cancelled(cancel) {
+    let mut tick = 0u32;
+    loop {
+        if flash_cancelled_ctrl(ctrl) {
+            ctrl.need_boot.store(false, Ordering::SeqCst);
             return Err("flash cancelled".into());
         }
-        if left == secs || left % 2 == 0 || left <= 3 {
-            progress(format!("BOOT window · {left}s left — keep BOOT held through RESET…"));
+        if ctrl.boot_ready.load(Ordering::SeqCst) {
+            ctrl.need_boot.store(false, Ordering::SeqCst);
+            ctrl.boot_ready.store(false, Ordering::SeqCst);
+            progress("Ready received — syncing ROM download mode…".into());
+            return Ok(());
         }
-        std::thread::sleep(Duration::from_secs(1));
+        if tick % 20 == 0 {
+            progress(format!(
+                "Waiting for Ready… hold BOOT + RESET, then click Ready ({why})"
+            ));
+        }
+        tick = tick.saturating_add(1);
+        std::thread::sleep(Duration::from_millis(100));
     }
-    Ok(())
+}
+
+/// Probe ESP ROM SYNC in a loop (like Terminator keep-trying-until-chip-answers).
+fn sync_rom_download_mode(
+    port: &str,
+    ctrl: &FlashControl,
+    progress: &dyn Fn(String),
+    secs: u32,
+) -> Result<bool, String> {
+    use crate::workers::{open_usb_serial, probe_esp_download_mode};
+    progress(format!("Syncing ESP ROM on {port} (up to {secs}s)…"));
+    let deadline = Instant::now() + Duration::from_secs(secs as u64);
+    let mut attempt = 0u32;
+    while Instant::now() < deadline {
+        if flash_cancelled_ctrl(ctrl) {
+            return Err("flash cancelled".into());
+        }
+        attempt += 1;
+        match open_usb_serial(port, 115_200, Duration::from_millis(50)) {
+            Ok(mut p) => {
+                if probe_esp_download_mode(p.as_mut()) {
+                    progress(format!("ROM sync OK on attempt {attempt}"));
+                    drop(p);
+                    std::thread::sleep(Duration::from_millis(200));
+                    return Ok(true);
+                }
+                drop(p);
+            }
+            Err(e) => {
+                if attempt == 1 || attempt % 5 == 0 {
+                    progress(format!("Sync open retry: {e}"));
+                }
+            }
+        }
+        std::thread::sleep(Duration::from_millis(350));
+    }
+    progress("ROM sync timed out — click Ready again with BOOT held".into());
+    Ok(false)
 }
 
 fn run_espflash_reset(
@@ -1015,6 +1103,7 @@ fn run_espflash_reset(
         timeout,
         cancel,
         FlashToolKind::Other,
+        false,
     )
 }
 
@@ -1037,21 +1126,21 @@ fn append_flash_log(line: &str) {
 
 /// Flash merged image @ 0x0 (DIO / 4MB / 40MHz layout inside the merge).
 ///
-/// Strategy (blank-board friendly, aligned with esptool / ESP Terminator):
-/// 1) Direct writes — prefer `--no-stub` (ROM loader) first; blank/CH340 often
-///    stall after MAC while uploading the RAM stub
-/// 2) `before=no-reset` with a real BOOT countdown (not a 700ms hint)
-/// 3) Recovery erase ONLY when failures are not connect-stalls
-/// 4) After erase: rewrite no-stub + BOOT/no-reset first
-/// 5) Python esptool `--no-stub` write (no wipe after stall / already blank)
-/// 6) On failure: hard-reset + SAFETY tip if the chip may be blank
+/// Strategy (aligned with ESP Terminator / esptool-js):
+/// 1) User-gated Ready (hold BOOT → tap RESET → click Ready) — not a blind countdown
+/// 2) ROM SYNC loop until the chip answers
+/// 3) Patient `--no-stub` + `before=no-reset` write (long idle after MAC)
+/// 4) Fallback auto-reset / stub / erase only when stalls are not connect-only
+/// 5) Python esptool `--no-stub` (patient) as last resort
 pub fn flash_merged_bin(
     port: &str,
     image: &Path,
     progress: &dyn Fn(String),
-    cancel: Option<&AtomicBool>,
+    ctrl: &FlashControl,
 ) -> Result<(), String> {
     use crate::workers::{flash_port_arg, is_usb_serial_port};
+
+    let cancel = Some(ctrl.cancel.as_ref());
 
     if port.trim().is_empty() {
         return Err("Select a USB COM port before updating.".into());
@@ -1099,8 +1188,7 @@ Available: {hint}. Unplug/replug the CYD, pick the COM again, then Update board.
         std::fs::metadata(image).map(|m| m.len()).unwrap_or(0),
     ));
     progress(
-        "Blank / stubborn boards: first tries use ROM loader (--no-stub). \
-If prompted, hold BOOT, tap RESET, release BOOT."
+        "Terminator-style flash: hold BOOT, tap RESET, keep BOOT held, then click Ready."
             .into(),
     );
     append_flash_log(&format!(
@@ -1123,7 +1211,7 @@ If prompted, hold BOOT, tap RESET, release BOOT."
         let left = budget_left();
         if left.is_zero() {
             Err(format!(
-                "Flash timed out after {}s overall — hold BOOT, tap RESET, release BOOT, then Update again.",
+                "Flash timed out after {}s overall — hold BOOT, tap RESET, keep BOOT held, click Ready, then Update again.",
                 FLASH_BUDGET.as_secs()
             ))
         } else {
@@ -1135,32 +1223,114 @@ If prompted, hold BOOT, tap RESET, release BOOT."
         }
     };
 
+    let note_fail = |e: &str,
+                     esp_err: &mut String,
+                     saw_chip_connect: &mut bool,
+                     connect_stall_only: &mut bool,
+                     progress: &dyn Fn(String),
+                     label: &str| {
+        *esp_err = format!("{label}: {e}");
+        progress(format!("espflash write failed: {esp_err}"));
+        let low = e.to_ascii_lowercase();
+        let stall = (low.contains("idle") && low.contains("chip connect"))
+            || (low.contains("idle") && low.contains("mac"));
+        let port_busy = low.contains("access is denied")
+            || low.contains("access denied")
+            || low.contains("sharing violation")
+            || low.contains("resource busy")
+            || low.contains("serial_not_found")
+            || low.contains("not found right now")
+            || (low.contains("port") && low.contains("busy"));
+        if stall {
+            *saw_chip_connect = true;
+        }
+        if !stall && !port_busy {
+            *connect_stall_only = false;
+        }
+        if port_busy {
+            progress(
+                "Port busy/missing — skipping erase; close other apps using the COM…"
+                    .into(),
+            );
+        }
+    };
+
     let espflash = ensure_espflash(progress)?;
     let mut esp_err = String::new();
     let mut chip_may_be_blank = false;
     let mut connect_stall_only = true;
     let mut saw_chip_connect = false;
 
-    // baud, before, no_stub — blank boards often need no-stub before stub works.
-    let attempts: &[(&str, &str, bool)] = &[
-        ("115200", "default-reset", true),
-        ("115200", "default-reset", false),
-        ("115200", "no-reset", true),
-        ("115200", "no-reset", false),
-        ("460800", "default-reset", true),
-    ];
-
-    for &(baud, before, no_stub) in attempts {
+    // ── Primary: Ready → ROM sync → patient no-stub / no-reset ─────────────
+    for attempt in 1..=3 {
         ensure_budget(progress)?;
-        if before == "no-reset" {
-            // After a killed MAC-stall the chip is rarely still in download mode —
-            // always give a real BOOT window (Flash-Firmware.bat uses pause).
-            wait_for_manual_boot(
+        wait_for_boot_ready(
+            ctrl,
+            progress,
+            &format!("primary patient write {attempt}/3"),
+        )?;
+        let synced = sync_rom_download_mode(&port_arg, ctrl, progress, 14)?;
+        if !synced {
+            progress(format!(
+                "ROM sync missed on attempt {attempt} — click Ready again with BOOT held"
+            ));
+            continue;
+        }
+        progress(format!(
+            "ROM synced — patient write-bin --no-stub before=no-reset ({attempt}/3)…"
+        ));
+        match run_espflash_write(
+            &espflash,
+            &port_arg,
+            "115200",
+            "no-reset",
+            true,
+            true,
+            image,
+            progress,
+            budget_left(),
+            cancel,
+        ) {
+            Ok(()) => {
+                let _ = run_espflash_reset(&espflash, &port_arg, progress, budget_left(), cancel);
+                append_flash_log("success terminator primary write");
+                ctrl.need_boot.store(false, Ordering::SeqCst);
+                return Ok(());
+            }
+            Err(e) => {
+                if e.to_ascii_lowercase().contains("cancelled") {
+                    ctrl.need_boot.store(false, Ordering::SeqCst);
+                    return Err(e);
+                }
+                note_fail(
+                    &e,
+                    &mut esp_err,
+                    &mut saw_chip_connect,
+                    &mut connect_stall_only,
+                    progress,
+                    &format!("terminator {attempt}"),
+                );
+            }
+        }
+    }
+
+    // Secondary: auto-reset no-stub (no Ready) then Ready+no-reset stub
+    let fallback: &[(&str, &str, bool, bool)] = &[
+        ("115200", "default-reset", true, false),
+        ("115200", "default-reset", false, false),
+        ("115200", "no-reset", true, true),
+        ("115200", "no-reset", false, true),
+        ("460800", "default-reset", true, false),
+    ];
+    for &(baud, before, no_stub, need_ready) in fallback {
+        ensure_budget(progress)?;
+        if need_ready {
+            wait_for_boot_ready(
+                ctrl,
                 progress,
-                cancel,
-                8,
-                "writing with before=no-reset",
+                &format!("fallback {baud}/{before}"),
             )?;
+            let _ = sync_rom_download_mode(&port_arg, ctrl, progress, 10)?;
         } else {
             let stub = if no_stub { "no-stub" } else { "stub" };
             progress(format!(
@@ -1173,6 +1343,7 @@ If prompted, hold BOOT, tap RESET, release BOOT."
             baud,
             before,
             no_stub,
+            need_ready,
             image,
             progress,
             budget_left(),
@@ -1181,40 +1352,26 @@ If prompted, hold BOOT, tap RESET, release BOOT."
             Ok(()) => {
                 let _ = run_espflash_reset(&espflash, &port_arg, progress, budget_left(), cancel);
                 append_flash_log("success write");
+                ctrl.need_boot.store(false, Ordering::SeqCst);
                 return Ok(());
             }
             Err(e) => {
                 let stub = if no_stub { "no-stub" } else { "stub" };
-                esp_err = format!("write {baud}/{before}/{stub}: {e}");
-                progress(format!("espflash write failed: {esp_err}"));
-                let low = e.to_ascii_lowercase();
-                if low.contains("cancelled") {
+                if e.to_ascii_lowercase().contains("cancelled") {
+                    ctrl.need_boot.store(false, Ordering::SeqCst);
                     return Err(e);
                 }
-                let stall = low.contains("idle") && low.contains("chip connect");
-                let port_busy = low.contains("access is denied")
-                    || low.contains("access denied")
-                    || low.contains("sharing violation")
-                    || low.contains("resource busy")
-                    || low.contains("serial_not_found")
-                    || low.contains("not found right now")
-                    || (low.contains("port") && low.contains("busy"));
-                if stall {
-                    saw_chip_connect = true;
-                }
-                // Port held / missing is not a reason to wipe flash.
-                if !stall && !port_busy {
-                    connect_stall_only = false;
-                }
-                if stall && before == "default-reset" && !no_stub {
+                note_fail(
+                    &e,
+                    &mut esp_err,
+                    &mut saw_chip_connect,
+                    &mut connect_stall_only,
+                    progress,
+                    &format!("write {baud}/{before}/{stub}"),
+                );
+                if before == "default-reset" && !no_stub && saw_chip_connect {
                     progress(
-                        "Chip seen then stalled on stub — next tries use --no-stub / BOOT…"
-                            .into(),
-                    );
-                }
-                if port_busy {
-                    progress(
-                        "Port busy/missing — skipping erase; close other apps using the COM…"
+                        "Chip seen then stalled on stub — next tries use --no-stub / Ready…"
                             .into(),
                     );
                 }
@@ -1222,19 +1379,21 @@ If prompted, hold BOOT, tap RESET, release BOOT."
         }
     }
 
-    // Extra blank-board path: after MAC-stalls only, one more no-stub + long BOOT.
+    // Extra blank-board path: after MAC-stalls only, Ready + patient no-stub.
     if connect_stall_only && budget_left() > Duration::from_secs(50) {
         ensure_budget(progress)?;
         progress(
-            "Still stalled after connect — blank-board recovery: BOOT + no-stub write…"
+            "Still stalled after connect — blank-board recovery: Ready + patient no-stub…"
                 .into(),
         );
-        wait_for_manual_boot(progress, cancel, 10, "blank-board recovery")?;
+        wait_for_boot_ready(ctrl, progress, "blank-board recovery")?;
+        let _ = sync_rom_download_mode(&port_arg, ctrl, progress, 12)?;
         match run_espflash_write(
             &espflash,
             &port_arg,
             "115200",
             "no-reset",
+            true,
             true,
             image,
             progress,
@@ -1244,12 +1403,14 @@ If prompted, hold BOOT, tap RESET, release BOOT."
             Ok(()) => {
                 let _ = run_espflash_reset(&espflash, &port_arg, progress, budget_left(), cancel);
                 append_flash_log("success blank-recovery write");
+                ctrl.need_boot.store(false, Ordering::SeqCst);
                 return Ok(());
             }
             Err(e) => {
                 esp_err = format!("blank-recovery no-stub: {e}");
                 progress(format!("espflash blank recovery failed: {esp_err}"));
                 if e.to_ascii_lowercase().contains("cancelled") {
+                    ctrl.need_boot.store(false, Ordering::SeqCst);
                     return Err(e);
                 }
             }
@@ -1257,7 +1418,6 @@ If prompted, hold BOOT, tap RESET, release BOOT."
     }
 
     // Recovery erase ONLY when writes failed for reasons other than connect-stall.
-    // Erasing after a MAC-stall blanks the board and rewrite often stalls the same way.
     let allow_erase = !connect_stall_only && budget_left() > Duration::from_secs(45);
     if allow_erase {
         ensure_budget(progress)?;
@@ -1271,10 +1431,9 @@ If prompted, hold BOOT, tap RESET, release BOOT."
                 chip_may_be_blank = true;
                 append_flash_log("erase ok — chip wiped; rewrite required");
                 progress(
-                    "Erase OK — SAFETY: flash is wiped until rewrite finishes. Rewriting with no-stub + BOOT first…"
+                    "Erase OK — SAFETY: flash is wiped until rewrite finishes. Rewriting with Ready + no-stub first…"
                         .into(),
                 );
-                // After erase the ROM is empty — stub upload often hangs after MAC.
                 let rewrite_attempts: &[(&str, &str, bool)] = &[
                     ("115200", "no-reset", true),
                     ("115200", "no-reset", true),
@@ -1292,12 +1451,8 @@ If prompted, hold BOOT, tap RESET, release BOOT."
                         break;
                     }
                     if before == "no-reset" {
-                        wait_for_manual_boot(
-                            progress,
-                            cancel,
-                            8,
-                            "rewrite after erase",
-                        )?;
+                        wait_for_boot_ready(ctrl, progress, "rewrite after erase")?;
+                        let _ = sync_rom_download_mode(&port_arg, ctrl, progress, 10)?;
                     } else {
                         let stub = if no_stub { "no-stub" } else { "stub" };
                         progress(format!(
@@ -1310,6 +1465,7 @@ If prompted, hold BOOT, tap RESET, release BOOT."
                         baud,
                         before,
                         no_stub,
+                        before == "no-reset",
                         image,
                         progress,
                         budget_left(),
@@ -1324,6 +1480,7 @@ If prompted, hold BOOT, tap RESET, release BOOT."
                                 cancel,
                             );
                             append_flash_log("success erase+write");
+                            ctrl.need_boot.store(false, Ordering::SeqCst);
                             return Ok(());
                         }
                         Err(e) => {
@@ -1332,6 +1489,7 @@ If prompted, hold BOOT, tap RESET, release BOOT."
                             progress(format!("espflash rewrite failed: {esp_err}"));
                             if e.to_ascii_lowercase().contains("cancelled") {
                                 best_effort_reset(&espflash, &port_arg, progress, cancel);
+                                ctrl.need_boot.store(false, Ordering::SeqCst);
                                 return Err(safety_fail_tip(
                                     started.elapsed(),
                                     &esp_err,
@@ -1348,6 +1506,7 @@ If prompted, hold BOOT, tap RESET, release BOOT."
                 progress(format!("espflash erase failed: {esp_err}"));
                 if e.to_ascii_lowercase().contains("cancelled") {
                     best_effort_reset(&espflash, &port_arg, progress, cancel);
+                    ctrl.need_boot.store(false, Ordering::SeqCst);
                     return Err(e);
                 }
             }
@@ -1357,7 +1516,7 @@ If prompted, hold BOOT, tap RESET, release BOOT."
             "Skipping recovery erase (chip connected but write stalled) — trying Python esptool --no-stub without wipe…"
                 .into(),
         );
-        chip_may_be_blank = true; // treat as possibly blank for SAFETY tip
+        chip_may_be_blank = true;
     }
 
     // Python esptool fallback — auto-install into Tools/ if missing.
@@ -1377,13 +1536,11 @@ If prompted, hold BOOT, tap RESET, release BOOT."
                     "--baud".into(),
                     "115200".into(),
                 ]);
-                // Prefer no_reset when we already saw the chip / may be blank.
                 if connect_stall_only || chip_may_be_blank || saw_chip_connect {
                     args.extend(["--before".into(), "no_reset".into()]);
                 }
                 args.push("--no-stub".into());
                 args.push("write_flash".into());
-                // Don't wipe again if we already erased (or if we skipped erase on purpose).
                 if !chip_may_be_blank && !connect_stall_only {
                     args.push("--erase-all".into());
                     chip_may_be_blank = true;
@@ -1405,12 +1562,8 @@ If prompted, hold BOOT, tap RESET, release BOOT."
                     py_timeout.as_secs()
                 ));
                 if connect_stall_only || chip_may_be_blank || saw_chip_connect {
-                    wait_for_manual_boot(
-                        progress,
-                        cancel,
-                        10,
-                        "esptool connect",
-                    )?;
+                    wait_for_boot_ready(ctrl, progress, "esptool connect")?;
+                    let _ = sync_rom_download_mode(&port_arg, ctrl, progress, 10)?;
                 }
                 let mut cmd = Command::new(&py);
                 if let Some(pp) = pythonpath {
@@ -1449,9 +1602,11 @@ If prompted, hold BOOT, tap RESET, release BOOT."
                     py_timeout,
                     cancel,
                     FlashToolKind::Write,
+                    true,
                 ) {
                     Ok(()) => {
                         append_flash_log("success esptool");
+                        ctrl.need_boot.store(false, Ordering::SeqCst);
                         return Ok(());
                     }
                     Err(e) => {
@@ -1471,6 +1626,7 @@ If prompted, hold BOOT, tap RESET, release BOOT."
         }
     }
 
+    ctrl.need_boot.store(false, Ordering::SeqCst);
     // Leave the board out of download mode when possible (ESP Terminator "Force Reset").
     best_effort_reset(&espflash, &port_arg, progress, cancel);
 
@@ -1615,7 +1771,7 @@ fn safety_fail_tip(elapsed: Duration, esp_err: &str, py_err: &str, chip_may_be_b
         format!(
             "SAFETY: flash erase/rewrite did not finish cleanly after {}s (espflash: {esp_err}{py}). \
 The board flash may be BLANK until a rewrite succeeds — keep USB connected. \
-Hold BOOT, tap RESET, release BOOT, then Update board again (or Flash-Firmware.bat). \
+Hold BOOT, tap RESET, keep BOOT held, then click Ready and Update board again (or Flash-Firmware.bat). \
 Browser fallback: https://espressif.github.io/esptool-js/ — pick Firmware\\merged.bin @ 0x0. \
 See last-flash.log next to the app.",
             elapsed.as_secs()
@@ -1624,7 +1780,7 @@ See last-flash.log next to the app.",
         format!(
             "Flash failed after {}s (espflash: {esp_err}{py}). \
 See last-flash.log next to the app. \
-Hold BOOT, tap RESET, release BOOT, then Update again. \
+Hold BOOT, tap RESET, keep BOOT held, click Ready, then Update again. \
 Or run Flash-Firmware.bat / https://espressif.github.io/esptool-js/ (merged.bin @ 0x0). \
 Ensure Tools\\espflash.exe sits next to the app.",
             elapsed.as_secs()
@@ -1788,6 +1944,7 @@ fn pump_crlf_stream(out: impl Read, tx: Sender<String>) {
 /// - Treat `\r` progress ticks as activity (erase/write bars often omit newlines)
 /// - After pipes close, wait EXIT_GRACE for hard-reset/exit before killing
 /// - Erase ops get a longer post-connect idle (full-chip erase is quiet)
+/// - `patient`: Terminator-style — long idle after MAC (do not kill ~55s after connect)
 fn run_streaming_timeout(
     cmd: &mut Command,
     progress: &dyn Fn(String),
@@ -1795,6 +1952,7 @@ fn run_streaming_timeout(
     timeout: Duration,
     cancel: Option<&AtomicBool>,
     kind: FlashToolKind,
+    patient: bool,
 ) -> Result<(), String> {
     hide_console_window(cmd);
     // Critical: close stdin. espflash can print MAC then wait forever on a prompt
@@ -1887,19 +2045,30 @@ fn run_streaming_timeout(
             );
         }
         let idle_limit = if saw_write {
-            IDLE_DURING_WRITE
-        } else if saw_connect {
-            match kind {
-                FlashToolKind::Erase => Duration::from_secs(90),
-                _ => IDLE_AFTER_CONNECT,
+            if patient {
+                IDLE_DURING_WRITE_PATIENT
+            } else {
+                IDLE_DURING_WRITE
             }
+        } else if saw_connect {
+            if patient {
+                IDLE_AFTER_CONNECT_PATIENT
+            } else {
+                match kind {
+                    FlashToolKind::Erase => Duration::from_secs(90),
+                    _ => IDLE_AFTER_CONNECT,
+                }
+            }
+        } else if patient {
+            // User may still be holding BOOT / waiting for Ready — don't kill early.
+            Duration::from_secs(90)
         } else {
             IDLE_TIMEOUT
         };
         if last_beat.elapsed() >= idle_limit {
             return abort(
                 format!(
-                    "{label} idle {}s after {} — killing stuck flash tool",
+                    "{label} idle {}s after {} — killing stuck flash tool{}",
                     idle_limit.as_secs(),
                     if saw_write {
                         "write/erase progress"
@@ -1907,6 +2076,11 @@ fn run_streaming_timeout(
                         "chip connect/MAC"
                     } else {
                         "start"
+                    },
+                    if saw_connect && !saw_write {
+                        ". Hold BOOT, tap RESET, keep BOOT held, then click Ready."
+                    } else {
+                        ""
                     }
                 ),
                 &mut child,
@@ -1924,16 +2098,20 @@ fn run_streaming_timeout(
                     if !saw_connect {
                         saw_connect = true;
                         // Full-chip erase is quiet after MAC — don't demand write ticks ASAP.
-                        if !matches!(kind, FlashToolKind::Erase) {
-                            progress(format!(
-                                "{label}: chip seen — need write progress within {}s (or will abort)…",
-                                IDLE_AFTER_CONNECT.as_secs()
-                            ));
-                        } else {
+                        if matches!(kind, FlashToolKind::Erase) {
                             progress(format!(
                                 "{label}: chip seen — erasing (allowing up to 90s quiet)…"
                             ));
                             saw_write = true;
+                        } else {
+                            let wait_s = if patient {
+                                IDLE_AFTER_CONNECT_PATIENT.as_secs()
+                            } else {
+                                IDLE_AFTER_CONNECT.as_secs()
+                            };
+                            progress(format!(
+                                "{label}: chip seen — need write progress within {wait_s}s (or will abort)…"
+                            ));
                         }
                     }
                 }
