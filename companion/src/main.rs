@@ -1412,23 +1412,28 @@ impl CompanionApp {
     }
 
     /// Rescan OS serial ports on the UI thread (do not wait on the USB worker).
-    fn refresh_com_ports(&mut self, force_best: bool) {
+    ///
+    /// `allow_auto_connect` is only for boot/delayed discovery — the Board & pool
+    /// **Refresh** button must never open/reconnect USB; it only refreshes the COM list.
+    fn refresh_com_ports(&mut self, force_best: bool, allow_auto_connect: bool) {
         let ports = list_serial_ports();
         let n = ports.len();
         self.ports = ports;
         self.apply_best_com_port(force_best);
-        self.auto_connect_attempted = false;
         let selected = if self.com_port.is_empty() {
             "—".into()
         } else {
             self.com_port.clone()
         };
-        self.last_ok = format!("COM refresh · {n} port(s) · selected {selected}");
+        self.last_ok = format!("COM list · {n} port(s) · selected {selected}");
         self.push_log(
             LogKind::Usb,
-            format!("Serial ports refreshed: {n} reported · selected {selected}"),
+            format!("COM list refreshed: {n} reported · selected {selected}"),
         );
-        self.maybe_auto_connect_usb();
+        if allow_auto_connect {
+            self.auto_connect_attempted = false;
+            self.maybe_auto_connect_usb();
+        }
     }
 
     fn maybe_auto_connect_usb(&mut self) {
@@ -2912,7 +2917,8 @@ impl CompanionApp {
                         }
                     });
                 if soft_button(ui, "Refresh", 98.0).clicked() {
-                    self.refresh_com_ports(true);
+                    // List only — never OpenUsb / auto-reconnect.
+                    self.refresh_com_ports(false, false);
                 }
                 // Always offer Add board once at least one board is linked.
                 if self.usb_open {
@@ -4164,9 +4170,9 @@ impl App for CompanionApp {
             };
             if self.boot_at.elapsed() >= due {
                 self.port_rescans_done = self.port_rescans_done.saturating_add(1);
-                // UI-thread enum — same path as Refresh (worker may be busy opening USB).
+                // UI-thread enum — same path as Refresh list scan; auto-connect only here.
                 let force = !self.usb_open && prefer_cyd_port(&self.ports).is_none();
-                self.refresh_com_ports(force);
+                self.refresh_com_ports(force, true);
             }
         }
         // LAN peer discovery / advertise local CYD USB fleet.
@@ -4335,7 +4341,7 @@ impl App for CompanionApp {
                                         }
                                     });
                                 if soft_button(ui, "Refresh", 90.0).clicked() {
-                                    self.refresh_com_ports(true);
+                                    self.refresh_com_ports(false, false);
                                 }
                                 if soft_button(
                                     ui,
