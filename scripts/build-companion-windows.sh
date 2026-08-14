@@ -11,10 +11,15 @@ rustup target add x86_64-pc-windows-gnu >/dev/null
 cargo build --release --target x86_64-pc-windows-gnu
 
 MERGED="$ROOT/flash/esp32-2432s028-sha256-miner-merged.bin"
+APP_BIN="$ROOT/flash/esp32-2432s028-sha256-miner.bin"
 SUMS="$ROOT/flash/SHA256SUMS.txt"
 EXE_BUILT="$ROOT/companion/target/x86_64-pc-windows-gnu/release/cyd-companion.exe"
 if [[ ! -f "$MERGED" ]]; then
   echo "error: missing $MERGED — run ./scripts/build-flash-images.sh first" >&2
+  exit 1
+fi
+if [[ ! -f "$APP_BIN" ]]; then
+  echo "error: missing $APP_BIN — Wi‑Fi OTA needs the app-only image" >&2
   exit 1
 fi
 test -f "$EXE_BUILT"
@@ -78,6 +83,7 @@ cp -f "$ROOT/packaging/Flash-Firmware.bat" "$KIT/"
 cp -f "$ROOT/COMPANION.md" "$KIT/"
 cp -f "$ROOT/packaging/README-windows.txt" "$KIT/README.txt"
 cp -f "$MERGED" "$KIT/Firmware/"
+cp -f "$APP_BIN" "$KIT/Firmware/"
 cp -f "$SUMS" "$KIT/Firmware/"
 cp -f "$ROOT/FLASH.md" "$KIT/Firmware/"
 echo "${VER}-sha256" > "$KIT/Firmware/VERSION.txt"
@@ -86,9 +92,9 @@ cp -f "$ESPFLASH_EXE" "$KIT/Tools/"
   echo "CYD Miner Kit ${VER}"
   echo "Companion: ${VER}"
   echo "Firmware: ${VER}-sha256"
-  echo "Firmware image: esp32-2432s028-sha256-miner-merged.bin"
-  echo "Flash offset: 0x0 (DIO, 4MB, 40MHz)"
-  echo "In-app Update: Tools/espflash.exe + Firmware/"
+  echo "USB flash: esp32-2432s028-sha256-miner-merged.bin @ 0x0"
+  echo "Wi-Fi OTA: esp32-2432s028-sha256-miner.bin (app-only)"
+  echo "In-app Update: Push (USB) / Push (Wi-Fi) / Flash (BOOT)"
   date -u +"Built: %Y-%m-%dT%H:%MZ"
 } > "$KIT/VERSION.txt"
 
@@ -101,6 +107,7 @@ cp -f "$KIT/README.txt" "$ROOT/dist/cyd-companion-windows/README.txt"
 cp -f "$KIT/START-HERE.txt" "$ROOT/dist/cyd-companion-windows/"
 cp -f "$KIT/FLASH-WINDOWS.txt" "$ROOT/dist/cyd-companion-windows/"
 cp -f "$MERGED" "$ROOT/dist/cyd-companion-windows/Firmware/"
+cp -f "$APP_BIN" "$ROOT/dist/cyd-companion-windows/Firmware/"
 cp -f "$SUMS" "$ROOT/dist/cyd-companion-windows/Firmware/"
 echo "${VER}-sha256" > "$ROOT/dist/cyd-companion-windows/Firmware/VERSION.txt"
 cp -f "$ESPFLASH_EXE" "$ROOT/dist/cyd-companion-windows/Tools/"
@@ -119,6 +126,7 @@ cp -f dist/cyd-companion-windows/cyd-companion.exe dist/cyd-companion-app-only/
 cp -f dist/cyd-companion-windows/cyd-miner.ico dist/cyd-companion-app-only/ 2>/dev/null || \
   cp -f "$ROOT/packaging/icons/cyd-miner.ico" dist/cyd-companion-app-only/cyd-miner.ico
 cp -f "$MERGED" dist/cyd-companion-app-only/Firmware/
+cp -f "$APP_BIN" dist/cyd-companion-app-only/Firmware/
 cp -f "$SUMS" dist/cyd-companion-app-only/Firmware/
 echo "${VER}-sha256" > dist/cyd-companion-app-only/Firmware/VERSION.txt
 cp -f "$ESPFLASH_EXE" dist/cyd-companion-app-only/Tools/
@@ -213,7 +221,7 @@ Primary firmware is the **ESP32-D0** auto-tune build (\`esp32-2432s028-sha256-mi
 | [esp32-2432s028-sha256-miner-d0-merged.bin](./esp32-2432s028-sha256-miner-d0-merged.bin) | D0 firmware (preferred) |
 | **[SHA256SUMS.txt](./SHA256SUMS.txt)** | SHA-256 of every downloadable file (verify before run) |
 
-Firmware: [merged.bin](./esp32-2432s028-sha256-miner-merged.bin) @ \`0x0\` · [d0-merged.bin](./esp32-2432s028-sha256-miner-d0-merged.bin) · [VERSION.txt](./VERSION.txt)
+Firmware: [merged.bin](./esp32-2432s028-sha256-miner-merged.bin) @ \`0x0\` · [app.bin](./esp32-2432s028-sha256-miner.bin) (Wi‑Fi OTA) · [VERSION.txt](./VERSION.txt)
 
 ### Windows security / verified files
 - PE metadata embeds publisher **GutFarms** + product/version (Explorer Details).
