@@ -25,7 +25,9 @@ use api_feeds::{
     load_feeds, next_feed_id, pull_feed, save_feeds, ApiContentKind, ApiFeed, ApiPullOutcome,
     ApiSource,
 };
-use app_update::{check_app_update, running_version, update_companion_app, AppRemoteInfo};
+use app_update::{
+    check_app_update_ex, running_version, update_companion_app_ex, AppRemoteInfo,
+};
 use flash_update::{
     ensure_firmware_image, fetch_latest_firmware, find_firmware_image, flash_merged_bin,
     update_needed, FirmwareImage, FlashControl,
@@ -552,6 +554,8 @@ enum NetMsg {
     FirmwareFetched(Result<FirmwareImage, String>),
     /// Result of Check / Update Companion app.
     AppUpdate(Result<AppRemoteInfo, String>),
+    /// Live status line while Companion self-update runs (not board flash).
+    AppUpdateProgress(String),
     ApiFeedResult(ApiPullOutcome),
     WorkersFound(Vec<DiscoveredWorker>),
     WorkersLive(Vec<WorkerLive>),
@@ -696,6 +700,10 @@ struct CompanionApp {
     fetch_busy: bool,
     /// Companion self-update in progress.
     app_update_busy: bool,
+    /// When Update app started — watchdog clears if download never finishes.
+    app_update_busy_since: Option<Instant>,
+    /// UI Cancel → update thread aborts mirror retries.
+    app_update_cancel: Option<Arc<AtomicBool>>,
     /// Last check/update result for the Companion app itself.
     app_remote: Option<AppRemoteInfo>,
     /// User-configured HTTP APIs that pull external info into the app.
@@ -892,6 +900,8 @@ impl CompanionApp {
             wizard_step: if wizard_done { None } else { Some(0) },
             fetch_busy: false,
             app_update_busy: false,
+            app_update_busy_since: None,
+            app_update_cancel: None,
             app_remote: None,
             api_feeds,
             api_draft_name: String::new(),
@@ -2041,12 +2051,16 @@ impl CompanionApp {
 
     fn spawn_app_update_check(&mut self) {
         let tx = self.msg_tx.clone();
+        let cancel = self
+            .app_update_cancel
+            .clone()
+            .unwrap_or_else(|| Arc::new(AtomicBool::new(false)));
         thread::spawn(move || {
             let progress = {
                 let tx = tx.clone();
                 move |line: String| log_msg(&tx, LogKind::Info, line)
             };
-            let result = check_app_update(&progress);
+            let result = check_app_update_ex(&progress, Some(cancel.as_ref()));
             let _ = tx.send(NetMsg::AppUpdate(result));
         });
     }
@@ -2055,7 +2069,10 @@ impl CompanionApp {
         if self.app_update_busy {
             return;
         }
+        let cancel = Arc::new(AtomicBool::new(false));
+        self.app_update_cancel = Some(cancel);
         self.app_update_busy = true;
+        self.app_update_busy_since = Some(Instant::now());
         self.update_status = "Checking for Companion updates…".into();
         self.push_log(LogKind::Info, "Checking for Companion updates…".into());
         self.spawn_app_update_check();
@@ -2068,7 +2085,10 @@ impl CompanionApp {
         if self.mining {
             self.stop_mine();
         }
+        let cancel = Arc::new(AtomicBool::new(false));
+        self.app_update_cancel = Some(cancel.clone());
         self.app_update_busy = true;
+        self.app_update_busy_since = Some(Instant::now());
         self.update_status = format!("Updating Companion {}…", running_version());
         self.last_ok = self.update_status.clone();
         self.push_log(LogKind::Info, self.update_status.clone());
@@ -2077,13 +2097,24 @@ impl CompanionApp {
             let progress = {
                 let tx = tx.clone();
                 move |line: String| {
-                    let _ = tx.send(NetMsg::FlashProgress(line.clone()));
-                    log_msg(&tx, LogKind::Info, line);
+                    // Do NOT send FlashProgress — that drives the board-flash overlay.
+                    log_msg(&tx, LogKind::Info, line.clone());
+                    let _ = tx.send(NetMsg::AppUpdateProgress(line));
                 }
             };
-            let result = update_companion_app(&progress);
+            let result = update_companion_app_ex(&progress, Some(cancel.as_ref()));
             let _ = tx.send(NetMsg::AppUpdate(result));
         });
+    }
+
+    fn cancel_app_update(&mut self) {
+        if let Some(c) = self.app_update_cancel.take() {
+            c.store(true, Ordering::SeqCst);
+        }
+        self.app_update_busy = false;
+        self.app_update_busy_since = None;
+        self.update_status = "Companion update cancelled".into();
+        self.push_log(LogKind::Warn, self.update_status.clone());
     }
 
     /// ROM/bootloader download mode (BOOT held / blank chip) — not companion firmware.
@@ -2705,6 +2736,11 @@ impl CompanionApp {
                 };
                 if soft_button(ui, update_app_label, 140.0).clicked() && !self.app_update_busy {
                     self.start_app_update();
+                }
+                if self.app_update_busy
+                    && soft_button(ui, "Cancel update", 120.0).clicked()
+                {
+                    self.cancel_app_update();
                 }
                 if soft_button(ui, "Show setup wizard", 150.0).clicked() {
                     self.wizard_step = Some(0);
@@ -4542,6 +4578,8 @@ impl App for CompanionApp {
                 NetMsg::AppUpdate(result) => {
                     let user_initiated = self.app_update_busy;
                     self.app_update_busy = false;
+                    self.app_update_busy_since = None;
+                    self.app_update_cancel = None;
                     match result {
                         Ok(info) => {
                             self.update_status = info.detail.clone();
@@ -4562,7 +4600,10 @@ impl App for CompanionApp {
                             self.app_remote = Some(info);
                         }
                         Err(e) => {
-                            if user_initiated {
+                            if e.to_ascii_lowercase().contains("cancelled") {
+                                self.update_status = e.clone();
+                                self.push_log(LogKind::Warn, e);
+                            } else if user_initiated {
                                 self.update_status = e.clone();
                                 self.last_error = e.clone();
                                 self.push_log(LogKind::Err, e);
@@ -4570,6 +4611,11 @@ impl App for CompanionApp {
                                 self.push_log(LogKind::Warn, format!("App update check: {e}"));
                             }
                         }
+                    }
+                }
+                NetMsg::AppUpdateProgress(line) => {
+                    if self.app_update_busy {
+                        self.update_status = trunc(&line, 140);
                     }
                 }
                 NetMsg::ApiFeedResult(outcome) => {
@@ -4817,6 +4863,21 @@ impl App for CompanionApp {
         self.lan.maybe_beacon(&board_ads, &host);
         if self.update_busy || self.fetch_busy || self.app_update_busy || self.bench_busy {
             ctx.request_repaint();
+        }
+        // App update watchdog — downloads used to retry mirrors for many minutes.
+        if self.app_update_busy {
+            let overdue = self
+                .app_update_busy_since
+                .map(|since| since.elapsed() > Duration::from_secs(180))
+                .unwrap_or(false);
+            if overdue {
+                self.cancel_app_update();
+                let msg = "Companion update timed out after 3 minutes — click Update app to retry."
+                    .to_string();
+                self.update_status = msg.clone();
+                self.last_error = msg.clone();
+                self.push_log(LogKind::Err, msg);
+            }
         }
         // UI watchdog: flash (~160s) + verify. Unlock if FlashDone/verify never finishes.
         if self.update_busy {
@@ -5315,6 +5376,48 @@ impl App for CompanionApp {
                                 "Board update cancelled — killing flash tool if stuck…"
                                     .into();
                             self.push_log(LogKind::Usb, self.update_status.clone());
+                        }
+                        ui.add_space(8.0);
+                    });
+                });
+        }
+
+        // Companion self-update overlay — Cancel must always be available.
+        if self.app_update_busy && !self.update_busy {
+            egui::Window::new("Updating Companion")
+                .collapsible(false)
+                .resizable(false)
+                .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+                .show(ctx, |ui| {
+                    ui.set_min_width(420.0);
+                    ui.vertical_centered(|ui| {
+                        ui.add_space(12.0);
+                        ui.add(egui::Spinner::new().size(44.0).color(C_LIME));
+                        ui.add_space(12.0);
+                        ui.label(
+                            RichText::new("Updating Companion app")
+                                .color(C_LIME)
+                                .font(display_font(22.0)),
+                        );
+                        ui.add_space(10.0);
+                        ui.label(
+                            RichText::new(if self.update_status.is_empty() {
+                                "Downloading…"
+                            } else {
+                                &self.update_status
+                            })
+                            .color(C_TEXT)
+                            .font(mono_ui_font(12.0)),
+                        );
+                        ui.add_space(14.0);
+                        ui.label(
+                            RichText::new("Stops automatically on timeout · or Cancel now")
+                                .color(C_DIM)
+                                .size(12.0),
+                        );
+                        ui.add_space(8.0);
+                        if soft_button(ui, "Cancel", 120.0).clicked() {
+                            self.cancel_app_update();
                         }
                         ui.add_space(8.0);
                     });

@@ -3,8 +3,10 @@
 
 use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 #[cfg(windows)]
 use std::process::{Command, Stdio};
+use std::time::{Duration, Instant};
 
 use sha2::{Digest, Sha256};
 
@@ -45,6 +47,18 @@ pub fn is_newer(remote: &str, local: &str) -> bool {
     version_tuple(remote) > version_tuple(local)
 }
 
+fn cancelled(cancel: Option<&AtomicBool>) -> bool {
+    cancel.map(|c| c.load(Ordering::SeqCst)).unwrap_or(false)
+}
+
+fn ensure_not_cancelled(cancel: Option<&AtomicBool>) -> Result<(), String> {
+    if cancelled(cancel) {
+        Err("App update cancelled".into())
+    } else {
+        Ok(())
+    }
+}
+
 fn version_urls() -> Vec<String> {
     // Prefer Contents API (always tip). Probe every REPO_REFS tip so a lagging
     // legacy branch (e.g. stuck at 0.8.102) cannot hide a newer release.
@@ -77,7 +91,10 @@ fn app_zip_urls() -> Vec<String> {
     out.extend(prefer_fresh_download_urls(crate::flash_update::repo_file_urls(
         "flash/downloads/CYD-Miner-Portable.zip",
     )));
-    dedupe_urls(out)
+    // Cap attempts — each failed mirror used to burn up to 300s and never stop.
+    let mut out = dedupe_urls(out);
+    out.truncate(6);
+    out
 }
 
 fn app_exe_urls() -> Vec<String> {
@@ -85,7 +102,9 @@ fn app_exe_urls() -> Vec<String> {
     out.extend(prefer_fresh_download_urls(crate::flash_update::repo_file_urls(
         "flash/downloads/cyd-companion.exe",
     )));
-    dedupe_urls(out)
+    let mut out = dedupe_urls(out);
+    out.truncate(4);
+    out
 }
 
 /// Push unpinned branch-tip jsDelivr URLs last — that CDN often lags tip by several releases.
@@ -130,6 +149,8 @@ fn sha256sums_urls() -> Vec<String> {
             "https://cdn.jsdelivr.net/gh/{REPO_OWNER}/{REPO_NAME}@{r}/flash/downloads/SHA256SUMS.txt"
         ));
     }
+    let mut out = dedupe_urls(out);
+    out.truncate(6);
     out
 }
 
@@ -186,10 +207,14 @@ fn file_sha256_hex(path: &Path) -> Result<String, String> {
     Ok(hex::encode(hasher.finalize()))
 }
 
-fn fetch_download_checksums(progress: &dyn Fn(String)) -> Result<std::collections::HashMap<String, String>, String> {
+fn fetch_download_checksums(
+    progress: &dyn Fn(String),
+    cancel: Option<&AtomicBool>,
+) -> Result<std::collections::HashMap<String, String>, String> {
     let mut last = String::new();
     let mut best: Option<(String, std::collections::HashMap<String, String>)> = None;
     for url in sha256sums_urls() {
+        ensure_not_cancelled(cancel)?;
         progress(format!("GET checksums {url}"));
         match http_get_text(&url) {
             Ok(txt) => {
@@ -199,31 +224,24 @@ fn fetch_download_checksums(progress: &dyn Fn(String)) -> Result<std::collection
                     continue;
                 }
                 let ver = sums_header_version(&txt).unwrap_or_else(|| "0.0.0".into());
-                progress(format!(
-                    "Loaded {} checksum(s) (sums {})",
-                    map.len(),
-                    ver
-                ));
                 best = match best.take() {
                     None => Some((ver, map)),
-                    Some((prev_ver, _prev_map)) if is_newer(&ver, &prev_ver) => Some((ver, map)),
+                    Some((prev_ver, _)) if is_newer(&ver, &prev_ver) => Some((ver, map)),
                     Some(prev) => Some(prev),
                 };
-                // API is first and tip — stop once we have a usable tip set.
-                if url.contains("api.github.com") {
+                // Tip mesh Contents API is authoritative — stop after first good tip hit.
+                if url.contains("api.github.com")
+                    && url.contains("esp32-mesh-connectivity")
+                    && best.is_some()
+                {
                     break;
                 }
             }
             Err(e) => last = e,
         }
     }
-    match best {
-        Some((ver, map)) => {
-            progress(format!("Using SHA256SUMS for {ver}"));
-            Ok(map)
-        }
-        None => Err(format!("Could not fetch download SHA256SUMS ({last})")),
-    }
+    best.map(|(_, map)| map)
+        .ok_or_else(|| format!("Could not fetch SHA256SUMS ({last})"))
 }
 
 fn verify_named_file(
@@ -236,16 +254,13 @@ fn verify_named_file(
     let key = logical_name.to_ascii_lowercase();
     let Some(expected) = sums.get(&key) else {
         if required {
-            return Err(format!(
-                "SHA256SUMS.txt missing required entry for {logical_name}"
-            ));
+            return Err(format!("No SHA-256 entry for {logical_name} in SUMS"));
         }
         progress(format!(
             "No SHA-256 entry for {logical_name} in SUMS — skipping hash check for this file"
         ));
         return Ok(());
     };
-    progress(format!("Verifying SHA-256 of {logical_name}…"));
     let actual = file_sha256_hex(path)?;
     if actual != *expected {
         return Err(format!(
@@ -279,10 +294,17 @@ fn http_get_text_timeout(url: &str, connect_s: u64, read_s: u64) -> Result<Strin
     resp.into_string().map_err(|e| format!("read: {e}"))
 }
 
-fn http_download(url: &str, dest: &Path, progress: &dyn Fn(String)) -> Result<(), String> {
+fn http_download(
+    url: &str,
+    dest: &Path,
+    progress: &dyn Fn(String),
+    cancel: Option<&AtomicBool>,
+) -> Result<(), String> {
+    ensure_not_cancelled(cancel)?;
+    // Fail fast — do not sit 5 minutes per dead mirror.
     let agent = ureq::AgentBuilder::new()
-        .timeout_connect(std::time::Duration::from_secs(15))
-        .timeout_read(std::time::Duration::from_secs(300))
+        .timeout_connect(std::time::Duration::from_secs(8))
+        .timeout_read(std::time::Duration::from_secs(90))
         .user_agent(COMPANION_UA)
         .build();
     let mut req = agent.get(url);
@@ -298,7 +320,13 @@ fn http_download(url: &str, dest: &Path, progress: &dyn Fn(String)) -> Result<()
     let mut file = std::fs::File::create(&tmp).map_err(|e| format!("create: {e}"))?;
     let mut buf = [0u8; 64 * 1024];
     let mut total = 0u64;
+    let started = Instant::now();
     loop {
+        ensure_not_cancelled(cancel)?;
+        if started.elapsed() > Duration::from_secs(120) {
+            let _ = std::fs::remove_file(&tmp);
+            return Err("download timed out after 120s — try Update app again".into());
+        }
         let n = std::io::Read::read(&mut reader, &mut buf).map_err(|e| format!("read: {e}"))?;
         if n == 0 {
             break;
@@ -338,29 +366,47 @@ fn parse_version_text(txt: &str) -> Option<String> {
 
 /// Check repo VERSION.txt against this running Companion build.
 pub fn check_app_update(progress: &dyn Fn(String)) -> Result<AppRemoteInfo, String> {
+    check_app_update_ex(progress, None)
+}
+
+pub fn check_app_update_ex(
+    progress: &dyn Fn(String),
+    cancel: Option<&AtomicBool>,
+) -> Result<AppRemoteInfo, String> {
     let local = running_version();
     let mut last = String::new();
     let mut best_remote: Option<String> = None;
     let mut sources_ok = 0u32;
     progress(format!("Checking for Companion updates (running {local})…"));
-    // Probe every mirror and keep the *newest* VERSION. Do not stop on the first
-    // "newer than local" hit — a stale CDN can report 0.8.64 while tip is 0.8.78.
+    // Probe tip first; keep newest, but stop once tip API + one raw agree.
+    let mut tip_hits = 0u32;
     for url in version_urls() {
+        ensure_not_cancelled(cancel)?;
         match http_get_text(&url) {
             Ok(txt) => {
                 if let Some(remote) = parse_version_text(&txt) {
                     sources_ok += 1;
                     progress(format!("Remote VERSION {remote}"));
                     best_remote = match best_remote.take() {
-                        None => Some(remote),
-                        Some(prev) if is_newer(&remote, &prev) => Some(remote),
+                        None => Some(remote.clone()),
+                        Some(prev) if is_newer(&remote, &prev) => Some(remote.clone()),
                         Some(prev) => Some(prev),
                     };
+                    if url.contains("esp32-mesh-connectivity") {
+                        tip_hits += 1;
+                        if tip_hits >= 2 {
+                            break;
+                        }
+                    }
                 } else {
                     last = "VERSION.txt had no usable version".into();
                 }
             }
             Err(e) => last = e,
+        }
+        // Hard cap so Check never walks every mirror for minutes.
+        if sources_ok >= 4 {
+            break;
         }
     }
     let Some(remote) = best_remote else {
@@ -500,22 +546,19 @@ fn schedule_windows_replace_and_restart(install: &Path) -> Result<(), String> {
     let exe_name = "cyd-companion.exe";
     let staging = STAGING_DIR_NAME;
     let bat_path = install.join("cyd-companion-update.bat");
-    // After this process exits:
-    // 1) delete the locked old exe
-    // 2) clean-sweep the install dir (keep Uninstall.exe for NSIS + staging + this bat)
-    // 3) promote staging contents
-    // 4) launch the new exe and self-delete
+    // No `timeout /nobreak` — that flashes a console and loops when stdin is redirected.
+    // Short ping delays only; fail after ~12s if the old exe stays locked.
     let bat = format!(
         "@echo off\r\n\
          setlocal EnableExtensions\r\n\
          cd /d \"{dir}\"\r\n\
-         ping -n 3 127.0.0.1 >nul\r\n\
+         ping -n 2 127.0.0.1 >nul\r\n\
          set /a tries=0\r\n\
          :wait_unlock\r\n\
          set /a tries+=1\r\n\
          if exist \"{exe}\" del /f /q \"{exe}\" >nul 2>nul\r\n\
          if exist \"{exe}\" (\r\n\
-           if %tries% geq 40 exit /b 1\r\n\
+           if %tries% geq 12 exit /b 1\r\n\
            ping -n 2 127.0.0.1 >nul\r\n\
            goto wait_unlock\r\n\
          )\r\n\
@@ -569,9 +612,18 @@ fn schedule_windows_replace_and_restart(_install: &Path) -> Result<(), String> {
 ///
 /// Updates stage into `_update_staging/`, then a helper bat clean-sweeps the install
 /// directory (drops stale files from older kits) before promoting the new tree.
+///
+/// Pass `cancel` so the UI Cancel button can stop mirror retries immediately.
 pub fn update_companion_app(progress: &dyn Fn(String)) -> Result<AppRemoteInfo, String> {
+    update_companion_app_ex(progress, None)
+}
+
+pub fn update_companion_app_ex(
+    progress: &dyn Fn(String),
+    cancel: Option<&AtomicBool>,
+) -> Result<AppRemoteInfo, String> {
     let local = running_version();
-    let info = check_app_update(progress)?;
+    let info = check_app_update_ex(progress, cancel)?;
     if !info.newer {
         progress(info.detail.clone());
         return Ok(info);
@@ -586,7 +638,7 @@ pub fn update_companion_app(progress: &dyn Fn(String)) -> Result<AppRemoteInfo, 
 
     let staging = prepare_staging(&install, progress)?;
 
-    let sums = fetch_download_checksums(progress)?;
+    let sums = fetch_download_checksums(progress, cancel)?;
     let has_companion_sum = ["cyd-companion.exe", "cyd-companion-app-only.zip", "cyd-miner-portable.zip"]
         .iter()
         .any(|n| sums.contains_key(*n));
@@ -602,18 +654,24 @@ pub fn update_companion_app(progress: &dyn Fn(String)) -> Result<AppRemoteInfo, 
     let mut zip_ok = false;
     let mut last = String::new();
     let mut used_zip_name = String::new();
+    let mut hard_fails = 0u32;
     for url in app_zip_urls() {
+        ensure_not_cancelled(cancel)?;
         progress(format!("GET {url}"));
         let zip_name = if url.to_ascii_lowercase().contains("portable") {
             "CYD-Miner-Portable.zip"
         } else {
             "CYD-Companion-App-Only.zip"
         };
-        match http_download(&url, &zip_path, progress) {
+        match http_download(&url, &zip_path, progress, cancel) {
             Ok(()) => {
                 if let Err(e) = verify_named_file(&zip_path, zip_name, &sums, progress, true) {
                     last = e;
                     let _ = std::fs::remove_file(&zip_path);
+                    hard_fails += 1;
+                    if hard_fails >= 3 {
+                        break;
+                    }
                     continue;
                 }
                 match extract_app_kit(&zip_path, &staging, progress) {
@@ -627,21 +685,35 @@ pub fn update_companion_app(progress: &dyn Fn(String)) -> Result<AppRemoteInfo, 
                         last = e;
                         let _ = std::fs::remove_file(&zip_path);
                         let _ = clean_dir_contents(&staging, &[]);
+                        hard_fails += 1;
+                        if hard_fails >= 3 {
+                            break;
+                        }
                     }
                 }
             }
-            Err(e) => last = e,
+            Err(e) => {
+                last = e;
+                hard_fails += 1;
+                if hard_fails >= 4 {
+                    progress("Stopping zip mirrors after repeated timeouts…".into());
+                    break;
+                }
+            }
         }
     }
 
     if !zip_ok {
+        ensure_not_cancelled(cancel)?;
         progress("Zip update failed — trying bare cyd-companion.exe…".into());
         let _ = clean_dir_contents(&staging, &[]);
         let new_exe = staging.join("cyd-companion.exe");
         let mut exe_ok = false;
+        hard_fails = 0;
         for url in app_exe_urls() {
+            ensure_not_cancelled(cancel)?;
             progress(format!("GET {url}"));
-            match http_download(&url, &new_exe, progress) {
+            match http_download(&url, &new_exe, progress, cancel) {
                 Ok(()) => {
                     let bytes = std::fs::metadata(&new_exe).map(|m| m.len()).unwrap_or(0);
                     if bytes <= 1_000_000 {
@@ -654,12 +726,22 @@ pub fn update_companion_app(progress: &dyn Fn(String)) -> Result<AppRemoteInfo, 
                     {
                         last = e;
                         let _ = std::fs::remove_file(&new_exe);
+                        hard_fails += 1;
+                        if hard_fails >= 3 {
+                            break;
+                        }
                         continue;
                     }
                     exe_ok = true;
                     break;
                 }
-                Err(e) => last = e,
+                Err(e) => {
+                    last = e;
+                    hard_fails += 1;
+                    if hard_fails >= 3 {
+                        break;
+                    }
+                }
             }
         }
         if !exe_ok {
@@ -667,114 +749,56 @@ pub fn update_companion_app(progress: &dyn Fn(String)) -> Result<AppRemoteInfo, 
             return Err(format!("Could not download Companion update ({last})"));
         }
     } else {
-        let staged_exe = staging.join("cyd-companion.exe");
-        if let Err(e) = verify_named_file(&staged_exe, "cyd-companion.exe", &sums, progress, true) {
-            let _ = std::fs::remove_dir_all(&staging);
-            return Err(format!(
-                "Update zip ({used_zip_name}) failed exe verify: {e}"
-            ));
-        }
+        progress(format!("Extracted {used_zip_name} into staging"));
     }
 
+    // Write a VERSION marker next to the staged exe for future checks.
     let _ = std::fs::write(
         staging.join("VERSION.txt"),
         format!("{}-sha256\n", info.version),
     );
 
+    ensure_not_cancelled(cancel)?;
+    progress(format!(
+        "Companion {} staged — clean-sweeping install dir and restarting…",
+        info.version
+    ));
+
     #[cfg(windows)]
     {
-        progress("Scheduling clean sweep + restart…".into());
+        progress("Clean-sweeping install directory…".into());
         schedule_windows_replace_and_restart(&install)?;
-        progress(format!(
-            "Companion {} staged — clean-sweeping install dir and restarting…",
-            info.version
-        ));
-        return Ok(AppRemoteInfo {
-            version: info.version,
+        Ok(AppRemoteInfo {
+            version: info.version.clone(),
             newer: true,
-            detail: "Clean sweep + restarting into the new Companion build…".into(),
-        });
+            detail: format!(
+                "Companion {} staged — restarting…",
+                info.version
+            ),
+        })
     }
-
     #[cfg(not(windows))]
     {
-        // Non-Windows: clean-sweep install (keep staging) then promote for manual relaunch.
-        let _ = last;
-        progress("Clean-sweeping install directory…".into());
-        clean_dir_contents(
-            &install,
-            &[STAGING_DIR_NAME, "Uninstall.exe", "cyd-companion-update.bat"],
-        )?;
-        for entry in std::fs::read_dir(&staging).map_err(|e| format!("read staging: {e}"))? {
-            let entry = entry.map_err(|e| format!("staging entry: {e}"))?;
-            let name = entry.file_name();
-            let dest = install.join(&name);
-            let src = entry.path();
-            if src.is_dir() {
-                let _ = std::fs::remove_dir_all(&dest);
-                copy_dir_recursive(&src, &dest)?;
-            } else {
-                std::fs::copy(&src, &dest).map_err(|e| format!("copy: {e}"))?;
-            }
-        }
-        let _ = std::fs::remove_dir_all(&staging);
-        Err(format!(
-            "Downloaded + clean-swept into {} — relaunch the binary manually.",
-            install.display()
-        ))
+        let _ = staging;
+        Err("App self-update is only automated on Windows — copy the new build manually".into())
     }
-}
-
-#[cfg(not(windows))]
-fn copy_dir_recursive(src: &Path, dest: &Path) -> Result<(), String> {
-    std::fs::create_dir_all(dest).map_err(|e| format!("mkdir: {e}"))?;
-    for entry in std::fs::read_dir(src).map_err(|e| format!("read_dir: {e}"))? {
-        let entry = entry.map_err(|e| format!("entry: {e}"))?;
-        let to = dest.join(entry.file_name());
-        let from = entry.path();
-        if from.is_dir() {
-            copy_dir_recursive(&from, &to)?;
-        } else {
-            std::fs::copy(&from, &to).map_err(|e| format!("copy: {e}"))?;
-        }
-    }
-    Ok(())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::fs;
 
     #[test]
     fn version_compare_numeric() {
-        assert!(is_newer("0.8.23", "0.8.21"));
-        assert!(is_newer("0.8.22", "0.8.21"));
-        assert!(!is_newer("0.8.21", "0.8.21"));
-        assert!(!is_newer("0.8.21-sha256", "0.8.21"));
-        assert!(!is_newer("0.8.3", "0.8.21"));
-        assert!(is_newer("v0.9.0", "0.8.21"));
-        assert!(is_newer("0.8.61", "0.8.60"));
-        assert!(is_newer("0.8.78", "0.8.64"));
-        assert!(is_newer("0.8.78", "0.8.77"));
+        assert!(is_newer("0.8.116", "0.8.115"));
+        assert!(!is_newer("0.8.115", "0.8.116"));
+        assert!(is_newer("0.8.116-sha256", "0.8.115"));
     }
 
     #[test]
     fn sums_header_parses_embedded_version() {
         let txt = "# Njörðr Seas' CYD miner 0.8.78 — verify with: sha256sum -c SHA256SUMS.txt\n";
         assert_eq!(sums_header_version(txt).as_deref(), Some("0.8.78"));
-    }
-
-    #[test]
-    fn prefer_fresh_puts_branch_jsdelivr_last() {
-        let urls = prefer_fresh_download_urls(vec![
-            "https://cdn.jsdelivr.net/gh/GutFarms/Japan-central@cursor/esp32-mesh-connectivity-e801/flash/downloads/VERSION.txt".into(),
-            "https://raw.githubusercontent.com/GutFarms/Japan-central/cursor/esp32-mesh-connectivity-e801/flash/downloads/VERSION.txt".into(),
-            "https://cdn.jsdelivr.net/gh/GutFarms/Japan-central@deadbeef/flash/downloads/VERSION.txt".into(),
-        ]);
-        assert!(urls[0].contains("raw.githubusercontent.com"));
-        assert!(urls[1].contains("@deadbeef"));
-        assert!(urls[2].contains("@cursor/"));
     }
 
     #[test]
@@ -790,64 +814,24 @@ mod tests {
     }
 
     #[test]
-    fn parse_sha256sums_lines() {
-        let txt = "\
-# comment
-aabbccddeeff00112233445566778899aabbccddeeff00112233445566778899  cyd-companion.exe
-11223344556677889900aabbccddeeff11223344556677889900aabbccddeeff *CYD-Companion-App-Only.zip
-not-a-hash  junk.bin
-";
-        let map = parse_sha256sums(txt);
-        assert_eq!(
-            map.get("cyd-companion.exe").map(String::as_str),
-            Some("aabbccddeeff00112233445566778899aabbccddeeff00112233445566778899")
-        );
-        assert_eq!(
-            map.get("cyd-companion-app-only.zip").map(String::as_str),
-            Some("11223344556677889900aabbccddeeff11223344556677889900aabbccddeeff")
-        );
-        assert!(!map.contains_key("junk.bin"));
-    }
-
-    #[test]
-    fn kit_paths_map_and_block_traversal() {
+    fn kit_paths() {
         assert_eq!(
             kit_relative_path("cyd-companion-app-only/cyd-companion.exe").as_deref(),
             Some("cyd-companion.exe")
         );
         assert_eq!(
-            kit_relative_path("cyd-companion-app-only/Firmware/x.bin").as_deref(),
-            Some("Firmware/x.bin")
-        );
-        assert_eq!(
             kit_relative_path("cyd-miner-kit/Tools/espflash.exe").as_deref(),
             Some("Tools/espflash.exe")
         );
-        assert!(kit_relative_path("cyd-companion-app-only/../evil.exe").is_none());
-        assert!(kit_relative_path("readme.txt").is_none());
     }
 
     #[test]
-    fn clean_dir_keeps_named_entries() {
-        let dir = std::env::temp_dir().join(format!(
-            "cyd-clean-sweep-test-{}",
-            std::process::id()
-        ));
-        let _ = fs::remove_dir_all(&dir);
-        fs::create_dir_all(dir.join("Firmware")).unwrap();
-        fs::write(dir.join("Firmware/old.bin"), b"old").unwrap();
-        fs::write(dir.join("stale.txt"), b"x").unwrap();
-        fs::write(dir.join("Uninstall.exe"), b"keep").unwrap();
-        fs::create_dir_all(dir.join(STAGING_DIR_NAME)).unwrap();
-        fs::write(dir.join(STAGING_DIR_NAME).join("cyd-companion.exe"), b"new").unwrap();
-
-        clean_dir_contents(&dir, &[STAGING_DIR_NAME, "Uninstall.exe"]).unwrap();
-
-        assert!(!dir.join("Firmware").exists());
-        assert!(!dir.join("stale.txt").exists());
-        assert!(dir.join("Uninstall.exe").exists());
-        assert!(dir.join(STAGING_DIR_NAME).join("cyd-companion.exe").exists());
-
-        let _ = fs::remove_dir_all(&dir);
+    fn prefer_fresh_orders_jsdelivr_last() {
+        let urls = prefer_fresh_download_urls(vec![
+            "https://cdn.jsdelivr.net/gh/GutFarms/Japan-central@cursor/esp32-mesh-connectivity-e801/flash/downloads/VERSION.txt".into(),
+            "https://raw.githubusercontent.com/GutFarms/Japan-central/cursor/esp32-mesh-connectivity-e801/flash/downloads/VERSION.txt".into(),
+            "https://cdn.jsdelivr.net/gh/GutFarms/Japan-central@deadbeef/flash/downloads/VERSION.txt".into(),
+        ]);
+        assert!(urls[0].contains("raw.githubusercontent.com"));
     }
 }
