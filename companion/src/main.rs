@@ -8631,18 +8631,32 @@ Power a 2nd board nearby with wall/power-bank only (no PC cable)."
                 // NerdMiner-style clean_jobs: drop cached work so late board shares die.
                 // Do NOT cmp-stop boards — that blanks LCD H/s and stalls hashing until the
                 // next job lands. Pushing the new header replaces work in-place (onJob).
+                //
+                // Unique-en2 matching is (job_id, en2). A blanket recent_jobs.clear() on
+                // every clean_jobs opened a window where *all* board CMPSHAREs were dropped
+                // as "not in recent job cache" until the new per-board en2 batch was pushed
+                // — and with same-id clean_jobs + stale marking, submits never recovered.
                 let cleaned = client.take_clean_jobs();
                 if cleaned {
-                    recent_jobs.clear();
                     held_board_shares.clear();
                     log_msg(
                         &msg_tx,
                         LogKind::Stratum,
-                        "Pool clean_jobs — cleared share cache (boards keep hashing)",
+                        "Pool clean_jobs — purged stale share cache (boards keep hashing)",
                     );
                 }
+                // Drop superseded job_ids (prev != new on clean_jobs).
                 recent_jobs.retain(|j| !client.is_job_stale(&j.job_id));
                 held_board_shares.retain(|(job, _, _, _)| !client.is_job_stale(job));
+                if cleaned {
+                    // Same job_id + clean_jobs: prior unique-en2 headers for this id are dead,
+                    // but the id itself must stay submittable for the new en2 batch.
+                    let cur = client.job_id().to_string();
+                    if !cur.is_empty() {
+                        recent_jobs.retain(|j| j.job_id != cur);
+                        held_board_shares.retain(|(job, _, _, _)| job != &cur);
+                    }
+                }
                 // Fleet: one unique extranonce2 per USB/mesh worker (NerdMiner/multi-worker style).
                 let fleet_n = boards.len().saturating_add(mesh.len()).max(1);
                 let jobs = client.take_job_batch(fleet_n);
