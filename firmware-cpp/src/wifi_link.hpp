@@ -8,7 +8,7 @@
 #include <functional>
 
 // SoftAP (+ optional STA) so Companion can find boards on Wi‑Fi and speak `cmp` over TCP.
-// SoftAP also hosts a phone-friendly HTTP setup portal (port 80) for home Wi‑Fi credentials.
+// SoftAP hosts a phone captive portal (DNS + HTTP :80) that auto-opens Board Setup.
 static constexpr uint16_t CYD_WIFI_TCP_PORT = 19284;
 static constexpr uint16_t CYD_WIFI_UDP_PORT = 19284;
 static constexpr uint16_t CYD_WIFI_HTTP_PORT = 80;
@@ -43,6 +43,7 @@ class WifiLink {
   DNSServer dns_;
   PersistFn persist_;
   AppConfig* portalCfg_ = nullptr;
+  const MinerSnapshot* portalSnap_ = nullptr;
   String apSsid_;
   String mac_;
   String lastStaSsid_;
@@ -59,9 +60,12 @@ class WifiLink {
   void acceptClient();
   void startPortal();
   void stopPortal();
-  void pollPortal(AppConfig& cfg);
+  void pollPortal(AppConfig& cfg, const MinerSnapshot& snap);
+  void configureSoftApDns(const IPAddress& apIp);
   void handlePortalRoot();
   void handlePortalSave();
+  void handlePortalClear();
+  void handlePortalReboot();
   void handlePortalCaptive();
-  String portalPageHtml(bool saved) const;
+  String portalPageHtml(bool saved, const char* flash) const;
 };

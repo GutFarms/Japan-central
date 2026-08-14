@@ -4288,7 +4288,7 @@ impl CompanionApp {
                 ui.label(
                     RichText::new(
                         "Join open SoftAP Njordr-XXXX (no password) on phone or PC — \
-phone opens http://10.x.x.1 for home Wi‑Fi, or use Setup / USB here.",
+phone opens Board Setup automatically (captive Sign-in), or use Setup / USB here.",
                     )
                     .color(C_DIM)
                     .size(12.0),
@@ -4325,11 +4325,11 @@ phone opens http://10.x.x.1 for home Wi‑Fi, or use Setup / USB here.",
         soft_panel(ui, "How to connect", |ui| {
             let softap = self.fresh_softap_board();
             let step1 = if softap.is_some() {
-                "1. SoftAP is up — on phone: tap Sign-in or open http://10.x.x.1 (board IP on screen). \
-On PC: use the form below."
+                "1. SoftAP is up — phone should auto-open Board Setup (Sign-in). \
+Or open http://10.x.x.1 (IP on screen). PC: use the form below."
             } else {
-                "1. Join open SoftAP Njordr-XXXX on phone or PC (no password). \
-Phone: tap Sign-in / open http://10.x.x.1. PC: form below or USB Link."
+                "1. Join open SoftAP Njordr-XXXX (no password). Phone auto-opens Board Setup \
+(captive Sign-in). PC: form below or USB Link."
             };
             ui.label(
                 RichText::new(step1)
@@ -4598,7 +4598,7 @@ Phone: tap Sign-in / open http://10.x.x.1. PC: form below or USB Link."
                 RichText::new(
                     "Select the SoftAP or linked USB board, enter home Wi‑Fi, then Push & save — \
 credentials write to board NVS over cmp. SoftAP Njordr-XXXX is open (no password). \
-Phone: join SoftAP → open http://board-ip (captive Sign-in) to set home Wi‑Fi.",
+Phone: join SoftAP — Board Setup opens automatically to set home Wi‑Fi.",
                 )
                 .color(C_DIM)
                 .size(12.0),

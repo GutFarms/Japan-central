@@ -1,5 +1,7 @@
 #include "wifi_link.hpp"
+#include <esp_netif.h>
 #include <esp_wifi.h>
+#include "dhcpserver/dhcpserver.h"
 #include <cstdio>
 #include <cstring>
 
@@ -30,6 +32,28 @@ const char* WifiLink::modeLabel() const {
   if (m == WIFI_AP) return "ap";
   if (m == WIFI_STA) return "sta";
   return "off";
+}
+
+void WifiLink::configureSoftApDns(const IPAddress& apIp) {
+  // Phones only hit our DNSServer when DHCP advertises SoftAP as DNS.
+  esp_netif_t* netif = esp_netif_get_handle_from_ifkey("WIFI_AP_DEF");
+  if (!netif) return;
+
+  esp_err_t err = esp_netif_dhcps_stop(netif);
+  if (err != ESP_OK && err != ESP_ERR_ESP_NETIF_DHCP_ALREADY_STOPPED) {
+    return;
+  }
+
+  dhcps_offer_t offer = OFFER_DNS;
+  (void)esp_netif_dhcps_option(netif, ESP_NETIF_OP_SET, ESP_NETIF_DOMAIN_NAME_SERVER, &offer,
+                               sizeof(offer));
+
+  esp_netif_dns_info_t dns{};
+  dns.ip.u_addr.ip4.addr = static_cast<uint32_t>(apIp);
+  dns.ip.type = ESP_IPADDR_TYPE_V4;
+  (void)esp_netif_set_dns_info(netif, ESP_NETIF_DNS_MAIN, &dns);
+
+  (void)esp_netif_dhcps_start(netif);
 }
 
 void WifiLink::ensureWifi(const AppConfig& cfg) {
@@ -97,10 +121,11 @@ void WifiLink::ensureWifi(const AppConfig& cfg) {
     delay(40);
     // SoftAP recreate can leave the radio off ch1 — re-pin for ESP-NOW mesh.
     esp_wifi_set_channel(1, WIFI_SECOND_CHAN_NONE);
+    // Advertise SoftAP IP as DNS so captive probes hit our DNSServer → phone Sign-in UI.
+    configureSoftApDns(WiFi.softAPIP());
     server_.begin();
     server_.setNoDelay(true);
     udp_.begin(CYD_WIFI_UDP_PORT);
-    // Phone captive portal + HTTP setup for home Wi‑Fi credentials.
     startPortal();
   }
   lastBeaconMs_ = 0;
@@ -108,7 +133,6 @@ void WifiLink::ensureWifi(const AppConfig& cfg) {
 
 void WifiLink::startPortal() {
   if (portalUp_) {
-    // SoftAP IP may have changed after recreate — restart DNS bind.
     stopPortal();
   }
   IPAddress ap = WiFi.softAPIP();
@@ -117,17 +141,26 @@ void WifiLink::startPortal() {
 
   http_.on("/", HTTP_GET, [this]() { handlePortalRoot(); });
   http_.on("/setup", HTTP_GET, [this]() { handlePortalRoot(); });
+  http_.on("/control", HTTP_GET, [this]() { handlePortalRoot(); });
   http_.on("/save", HTTP_GET, [this]() { handlePortalSave(); });
   http_.on("/save", HTTP_POST, [this]() { handlePortalSave(); });
-  // Captive-portal probes — open the phone "Sign in" browser onto Setup.
-  http_.on("/generate_204", HTTP_GET, [this]() { handlePortalCaptive(); });
-  http_.on("/gen_204", HTTP_GET, [this]() { handlePortalCaptive(); });
-  http_.on("/hotspot-detect.html", HTTP_GET, [this]() { handlePortalCaptive(); });
-  http_.on("/library/test/success.html", HTTP_GET, [this]() { handlePortalCaptive(); });
-  http_.on("/connecttest.txt", HTTP_GET, [this]() { handlePortalCaptive(); });
-  http_.on("/ncsi.txt", HTTP_GET, [this]() { handlePortalCaptive(); });
-  http_.on("/fwlink/", HTTP_GET, [this]() { handlePortalCaptive(); });
-  http_.on("/fwlink", HTTP_GET, [this]() { handlePortalCaptive(); });
+  http_.on("/clear", HTTP_GET, [this]() { handlePortalClear(); });
+  http_.on("/clear", HTTP_POST, [this]() { handlePortalClear(); });
+  http_.on("/reboot", HTTP_GET, [this]() { handlePortalReboot(); });
+  http_.on("/reboot", HTTP_POST, [this]() { handlePortalReboot(); });
+  // Captive probes — serve the control page directly so the phone Sign-in browser
+  // lands on Board Setup immediately (302 alone often never opens on modern Android).
+  http_.on("/generate_204", HTTP_ANY, [this]() { handlePortalCaptive(); });
+  http_.on("/gen_204", HTTP_ANY, [this]() { handlePortalCaptive(); });
+  http_.on("/hotspot-detect.html", HTTP_ANY, [this]() { handlePortalCaptive(); });
+  http_.on("/library/test/success.html", HTTP_ANY, [this]() { handlePortalCaptive(); });
+  http_.on("/connecttest.txt", HTTP_ANY, [this]() { handlePortalCaptive(); });
+  http_.on("/ncsi.txt", HTTP_ANY, [this]() { handlePortalCaptive(); });
+  http_.on("/fwlink/", HTTP_ANY, [this]() { handlePortalCaptive(); });
+  http_.on("/fwlink", HTTP_ANY, [this]() { handlePortalCaptive(); });
+  http_.on("/canonical.html", HTTP_ANY, [this]() { handlePortalCaptive(); });
+  http_.on("/success.txt", HTTP_ANY, [this]() { handlePortalCaptive(); });
+  http_.on("/mobile/status.php", HTTP_ANY, [this]() { handlePortalCaptive(); });
   http_.onNotFound([this]() { handlePortalCaptive(); });
   http_.begin();
   portalUp_ = true;
@@ -140,39 +173,94 @@ void WifiLink::stopPortal() {
   portalUp_ = false;
 }
 
-void WifiLink::pollPortal(AppConfig& cfg) {
+void WifiLink::pollPortal(AppConfig& cfg, const MinerSnapshot& snap) {
   if (!portalUp_) return;
   portalCfg_ = &cfg;
-  dns_.processNextRequest();
+  portalSnap_ = &snap;
+  // Drain DNS quickly — phones spam captive lookups on join.
+  for (int i = 0; i < 12; i++) {
+    dns_.processNextRequest();
+  }
   http_.handleClient();
 }
 
-String WifiLink::portalPageHtml(bool saved) const {
+String WifiLink::portalPageHtml(bool saved, const char* flash) const {
   IPAddress ap = WiFi.softAPIP();
   char ip[20];
   snprintf(ip, sizeof(ip), "%u.%u.%u.%u", ap[0], ap[1], ap[2], ap[3]);
+
+  const char* mode = modeLabel();
+  String home = portalCfg_ && portalCfg_->wifiSsid.length() ? portalCfg_->wifiSsid : String("—");
+  String boardMac = mac_.length() ? mac_ : String("—");
+  String fw = "—";
+  String rate = "—";
+  if (portalSnap_) {
+    if (portalSnap_->shaMode.length()) fw = portalSnap_->shaMode;
+    if (portalSnap_->hashrateHs > 0.0f) {
+      char rbuf[24];
+      if (portalSnap_->hashrateHs >= 1000.0f) {
+        snprintf(rbuf, sizeof(rbuf), "%.1f kH/s", portalSnap_->hashrateHs / 1000.0f);
+      } else {
+        snprintf(rbuf, sizeof(rbuf), "%.0f H/s", portalSnap_->hashrateHs);
+      }
+      rate = rbuf;
+    }
+  }
+
   String page;
-  page.reserve(1600);
+  page.reserve(2800);
   page += F("<!DOCTYPE html><html><head><meta charset=utf-8>"
             "<meta name=viewport content=\"width=device-width,initial-scale=1\">"
-            "<title>Njörðr Setup</title><style>"
+            "<meta http-equiv=\"Cache-Control\" content=\"no-cache\">"
+            "<title>Njörðr Board Setup</title><style>"
             "body{font-family:system-ui,-apple-system,sans-serif;background:#04141f;"
-            "color:#e6f2fc;margin:0;padding:22px;line-height:1.35}"
-            "h1{color:#7edcff;font-size:1.55rem;margin:0 0 6px}"
-            "p{color:#9bb8cc;margin:0 0 14px;font-size:.95rem}"
+            "color:#e6f2fc;margin:0;padding:20px;line-height:1.35}"
+            "h1{color:#7edcff;font-size:1.55rem;margin:0 0 4px}"
+            "h2{color:#c5dceb;font-size:1.05rem;margin:18px 0 8px}"
+            "p{color:#9bb8cc;margin:0 0 12px;font-size:.95rem}"
+            ".card{background:#0b2433;border-radius:12px;padding:14px;margin:12px 0}"
+            ".row{display:flex;justify-content:space-between;gap:10px;margin:6px 0;"
+            "font-size:.9rem}.k{color:#789eba}.v{color:#e6f2fc;text-align:right}"
             "label{display:block;margin:12px 0 6px;color:#c5dceb;font-size:.9rem}"
             "input{width:100%;box-sizing:border-box;padding:14px;border:0;border-radius:10px;"
-            "font-size:16px;background:#0b2433;color:#e6f2fc}"
-            "button{width:100%;margin-top:18px;padding:15px;border:0;border-radius:10px;"
-            "background:#7edcff;color:#04141f;font-size:1.05rem;font-weight:700}"
-            ".ok{background:#12301f;color:#9dffb0;padding:12px;border-radius:10px;margin-bottom:14px}"
-            ".meta{margin-top:18px;font-size:.8rem;color:#6f8fa8}"
-            "</style></head><body><h1>Njörðr</h1>");
-  if (saved) {
+            "font-size:16px;background:#071a26;color:#e6f2fc}"
+            "button,.btn{display:block;width:100%;margin-top:12px;padding:15px;border:0;"
+            "border-radius:10px;background:#7edcff;color:#04141f;font-size:1.05rem;"
+            "font-weight:700;text-align:center;text-decoration:none}"
+            ".btn2{background:#1a3a52;color:#e6f2fc;font-weight:600}"
+            ".ok{background:#12301f;color:#9dffb0;padding:12px;border-radius:10px;margin:10px 0}"
+            ".warn{background:#3a2a10;color:#ffd27a;padding:12px;border-radius:10px;margin:10px 0}"
+            ".meta{margin-top:16px;font-size:.8rem;color:#6f8fa8}"
+            "</style></head><body>"
+            "<h1>Njörðr</h1><p>Board Setup — control this miner over SoftAP</p>");
+
+  if (flash && flash[0]) {
+    page += F("<div class=ok>");
+    page += flash;
+    page += F("</div>");
+  } else if (saved) {
     page += F("<div class=ok>Saved — board is joining home Wi‑Fi. "
               "Reconnect this phone to your home network.</div>");
   }
-  page += F("<p>Enter your home Wi‑Fi so this board can mine on your LAN.</p>"
+
+  page += F("<div class=card><h2>Board</h2>");
+  auto row = [&](const char* k, const String& v) {
+    page += F("<div class=row><span class=k>");
+    page += k;
+    page += F("</span><span class=v>");
+    page += v;
+    page += F("</span></div>");
+  };
+  row("SoftAP", apSsid_);
+  row("Setup URL", String("http://") + ip + "/");
+  row("Mode", String(mode));
+  row("MAC", boardMac);
+  row("Home Wi‑Fi", home);
+  row("Hashrate", rate);
+  page += F("</div>");
+
+  page += F("<div class=card><h2>Home Wi‑Fi</h2>"
+            "<p>Enter your router credentials so the board can mine on your LAN.</p>"
             "<form method=POST action=/save>"
             "<label>Home Wi‑Fi name (SSID)</label>"
             "<input name=ssid maxlength=32 required autocomplete=username "
@@ -180,24 +268,33 @@ String WifiLink::portalPageHtml(bool saved) const {
             "<label>Password</label>"
             "<input name=pass type=password maxlength=63 autocomplete=current-password "
             "placeholder=\"Leave blank if open\">"
-            "<button type=submit>Save &amp; connect</button></form><p class=meta>");
-  page += apSsid_;
-  page += F(" · open SoftAP · http://");
+            "<button type=submit>Save &amp; connect</button></form>"
+            "<form method=POST action=/clear style=\"margin-top:8px\">"
+            "<button class=btn2 type=submit>Clear home Wi‑Fi</button></form>"
+            "</div>");
+
+  page += F("<div class=card>"
+            "<form method=POST action=/reboot>"
+            "<button class=btn2 type=submit>Reboot board</button></form>"
+            "</div>");
+
+  page += F("<p class=meta>Open SoftAP · phone Sign-in opens this page automatically · ");
   page += ip;
   page += F("</p></body></html>");
   return page;
 }
 
 void WifiLink::handlePortalRoot() {
-  http_.send(200, "text/html", portalPageHtml(false));
+  http_.sendHeader("Cache-Control", "no-cache, no-store, must-revalidate");
+  http_.send(200, "text/html", portalPageHtml(false, nullptr));
 }
 
 void WifiLink::handlePortalCaptive() {
-  // Force the phone captive browser onto our setup page.
-  String loc = String("http://") + WiFi.softAPIP().toString() + "/";
-  http_.sendHeader("Location", loc, true);
-  http_.sendHeader("Cache-Control", "no-cache");
-  http_.send(302, "text/plain", "Redirecting to Njörðr Setup");
+  // Serve the control page as 200 so the OS captive browser shows Board Setup
+  // immediately. Avoid the word "Success" (iOS treats that as online).
+  http_.sendHeader("Cache-Control", "no-cache, no-store, must-revalidate");
+  http_.sendHeader("Connection", "close");
+  http_.send(200, "text/html", portalPageHtml(false, nullptr));
 }
 
 void WifiLink::handlePortalSave() {
@@ -211,8 +308,7 @@ void WifiLink::handlePortalSave() {
   ssid.trim();
   if (ssid.isEmpty()) {
     http_.send(400, "text/html",
-               F("<!DOCTYPE html><html><body><p>SSID required.</p>"
-                 "<a href=/>Back</a></body></html>"));
+               portalPageHtml(false, "SSID required — enter your home Wi‑Fi name."));
     return;
   }
   if (ssid.length() > 32) ssid = ssid.substring(0, 32);
@@ -222,15 +318,45 @@ void WifiLink::handlePortalSave() {
   portalCfg_->wifiSsid = ssid;
   portalCfg_->wifiPass = pass;
 
-  http_.send(200, "text/html", portalPageHtml(true));
+  http_.sendHeader("Cache-Control", "no-cache");
+  http_.send(200, "text/html", portalPageHtml(true, nullptr));
   http_.client().flush();
-  delay(30);
+  delay(40);
 
   if (persist_) {
     persist_();
   } else {
     applyConfig(*portalCfg_);
   }
+}
+
+void WifiLink::handlePortalClear() {
+  if (!portalCfg_) {
+    http_.send(503, "text/plain", "Portal busy — retry");
+    return;
+  }
+  portalCfg_->wifiSsid = "";
+  portalCfg_->wifiPass = "";
+  portalCfg_->wifiEnabled = true;
+  http_.send(200, "text/html",
+             portalPageHtml(false, "Home Wi‑Fi cleared — SoftAP setup mode."));
+  http_.client().flush();
+  delay(40);
+  if (persist_) {
+    persist_();
+  } else {
+    applyConfig(*portalCfg_);
+  }
+}
+
+void WifiLink::handlePortalReboot() {
+  http_.send(200, "text/html",
+             F("<!DOCTYPE html><html><body style=\"background:#04141f;color:#7edcff;"
+               "font-family:system-ui;padding:24px\"><h1>Rebooting…</h1>"
+               "<p>Reconnect to Njordr SoftAP in a few seconds.</p></body></html>"));
+  http_.client().flush();
+  delay(120);
+  ESP.restart();
 }
 
 void WifiLink::beacon() {
@@ -243,18 +369,17 @@ void WifiLink::beacon() {
   IPAddress advertise = (WiFi.status() == WL_CONNECTED) ? sta : ap;
   char msg[220];
 #if CYD_D0_BUILD
-  static constexpr const char* kFwTag = "0.8.139-sha256-d0";
-  static constexpr const char* kFwShort = "0.8.139-d0";
+  static constexpr const char* kFwTag = "0.8.140-sha256-d0";
+  static constexpr const char* kFwShort = "0.8.140-d0";
 #else
-  static constexpr const char* kFwTag = "0.8.139-sha256";
-  static constexpr const char* kFwShort = "0.8.139";
+  static constexpr const char* kFwTag = "0.8.140-sha256";
+  static constexpr const char* kFwShort = "0.8.140";
 #endif
   snprintf(msg, sizeof(msg),
            "%s|v=%s|mac=%s|fw=%s|tcp=%u|ip=%u.%u.%u.%u|ap=%s|mode=%s",
            CYD_WIFI_MAGIC, kFwShort, mac_.c_str(), kFwTag, (unsigned)CYD_WIFI_TCP_PORT,
            advertise[0], advertise[1], advertise[2], advertise[3], apSsid_.c_str(), modeLabel());
 
-  // Broadcast on SoftAP subnet and STA subnet when available.
   IPAddress bcast(255, 255, 255, 255);
   udp_.beginPacket(bcast, CYD_WIFI_UDP_PORT);
   udp_.write((const uint8_t*)msg, strlen(msg));
@@ -296,12 +421,11 @@ void WifiLink::poll(CompanionLink& cmp, AppConfig& cfg, const MinerSnapshot& sna
   uint32_t now = millis();
   if (now - lastWifiCheckMs_ > 8000) {
     lastWifiCheckMs_ = now;
-    // SoftAP can drop after mode flaps — refresh lightly.
     if (WiFi.getMode() == WIFI_OFF) ensureWifi(cfg);
   }
 
-  // Phone SoftAP setup portal (DNS + HTTP) — keep ahead of cmp so captive probes stay snappy.
-  pollPortal(cfg);
+  // Captive portal first so Sign-in probes stay snappy when a phone joins SoftAP.
+  pollPortal(cfg, snap);
 
   acceptClient();
   if (client_ && client_.connected()) {
