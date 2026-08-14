@@ -1,14 +1,13 @@
-# Njörðr Seas' CYD miner 0.8.113 — verify with: sha256sum -c SHA256SUMS.txt
-# Firmware images
-5d26f2b7e9d74d3eb6204dfec639710ea7b7d5c129b80e1fb816f1a68096836a  esp32-2432s028-sha256-miner.bin
-64088cd2f4d01fa99d0994bc5c2fdd19a8469b59e9cea422e6024a01ccabd6af  esp32-2432s028-sha256-miner-merged.bin
-5d26f2b7e9d74d3eb6204dfec639710ea7b7d5c129b80e1fb816f1a68096836a  esp32-2432s028-sha256-miner-d0.bin
-64088cd2f4d01fa99d0994bc5c2fdd19a8469b59e9cea422e6024a01ccabd6af  esp32-2432s028-sha256-miner-d0-merged.bin
-# Windows Companion packages
-d75e4d05807aedd8ac1afad6878a31b80080bc561ba7e78befaf648a2f6c6347  cyd-companion.exe
-50faae286a51116e0a52e1e0af533eda8869eb085eb6dc7746af786477a88f5f  CYD-Companion-App-Only.zip
-d7146847e6acfeb80865ca566284499ec939785187b674ad1f4b266df6a20fe5  CYD-Companion-Portable.zip
-4eb282120a0d9d4c5ca7d73cc175bc41a74dd8a1e44b2f06e5ddf6e9aa81b158  CYD-Miner-Portable.zip
-7e6a7047d05d489368762ce95bad00314bb09665a379f833d2e9b4c8cae55eea  CYD-Miner-Setup.exe
-7e6a7047d05d489368762ce95bad00314bb09665a379f833d2e9b4c8cae55eea  CYD-Companion-Setup.exe
+# Njörðr Seas' CYD miner 0.8.114 — verify with: sha256sum -c SHA256SUMS.txt
+f1cc486d0dba324cc3fdee0e2cc1d754f0b27256234153f8fc503ae8e2af6060  CYD-Miner-Setup.exe
+f1cc486d0dba324cc3fdee0e2cc1d754f0b27256234153f8fc503ae8e2af6060  CYD-Companion-Setup.exe
+385e51e8dc39acdad16f5b631dab45f59a7c12f2102ac42ef9ac4aa57e58ddb6  cyd-companion.exe
+bd0634db331efab67b1e77591090037ec1b283fc8a81d087034f8800823e9ea4  CYD-Companion-App-Only.zip
+719a05128bad76d9f54af9ec5fe099c61e88a14789af4a6e114ff2e011f6728e  CYD-Companion-Portable.zip
+1aa7afbbd83bc120523607ae40894f8e3d769235729f2eec8f7054502b4652a8  CYD-Miner-Portable.zip
+58f09db58d41553c4f8afe006fa45d0acf3c3e2bf2b5e1d85fb42ada2cea9d82  esp32-2432s028-sha256-miner-merged.bin
+14b9d0fee2d56a2dc155211d7fc8c1b5ecd1e7799ee239734450a8fd8b7a64ad  esp32-2432s028-sha256-miner.bin
+58f09db58d41553c4f8afe006fa45d0acf3c3e2bf2b5e1d85fb42ada2cea9d82  esp32-2432s028-sha256-miner-d0-merged.bin
+14b9d0fee2d56a2dc155211d7fc8c1b5ecd1e7799ee239734450a8fd8b7a64ad  esp32-2432s028-sha256-miner-d0.bin
 0cc03364c70a86325236f18ad1aaed17eedf267d89312c0cdabe4964f5cb758e  espflash.exe
+a47e89a6cc3e43c0539926d320ff8aa7baae81333777c5d9a6fc103648723a08  VERSION.txt
