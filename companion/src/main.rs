@@ -43,9 +43,10 @@ use stratum::{
     WorkJob,
 };
 use workers::{
-    count_usb_uart_ports, cyd_port_score, is_usb_serial_port, list_serial_ports, mac_is_stable,
-    mac_worker_id, normalize_mac, open_usb_serial_timed, open_wifi_tcp, port_choice_is_pci,
-    port_names_match, prefer_cyd_port, prefer_cyd_port_excluding, probe_esp_download_mode,
+    count_usb_uart_ports, cyd_port_score, flashable_ports, is_usb_serial_port, list_serial_ports,
+    mac_is_stable, mac_worker_id, normalize_mac, normalize_port_name, open_usb_serial_timed,
+    open_wifi_tcp, port_choice_is_pci, port_choice_is_system_junk, port_names_match,
+    prefer_cyd_port, prefer_cyd_port_excluding, probe_esp_download_mode,
     scan_usb_workers_with_progress, transport_mac_id, BoardWifiDiscovery, DiscoveredWorker,
     LanDiscovery, PortChoice, WorkerKind, WorkerLive,
 };
@@ -1438,7 +1439,7 @@ impl CompanionApp {
         let candidates: Vec<String> = self
             .ports
             .iter()
-            .filter(|p| !port_choice_is_pci(p) && cyd_port_score(p) >= 0)
+            .filter(|p| !port_choice_is_system_junk(p) && cyd_port_score(p) >= 0)
             .filter(|p| !linked.iter().any(|e| port_names_match(e, &p.name)))
             .map(|p| p.name.clone())
             .collect();
@@ -1486,7 +1487,7 @@ impl CompanionApp {
                 return;
             }
             let bad = selected
-                .map(|p| port_choice_is_pci(p) || cyd_port_score(p) < 0)
+                .map(|p| port_choice_is_system_junk(p) || cyd_port_score(p) < 0)
                 .unwrap_or(true);
             if bad {
                 self.com_port.clear();
@@ -1506,7 +1507,7 @@ impl CompanionApp {
             // Keep current if it is a free USB; else snap to next unlinked.
             let selected_free = selected
                 .map(|p| {
-                    !port_choice_is_pci(p)
+                    !port_choice_is_system_junk(p)
                         && cyd_port_score(p) >= 0
                         && !linked.iter().any(|e| port_names_match(e, &p.name))
                 })
@@ -1518,7 +1519,7 @@ impl CompanionApp {
         }
         let selected_score = selected.map(cyd_port_score).unwrap_or(-999);
         let selected_bad = selected
-            .map(|p| port_choice_is_pci(p) || cyd_port_score(p) < 0)
+            .map(|p| port_choice_is_system_junk(p) || cyd_port_score(p) < 0)
             .unwrap_or(true);
         let missing = selected.is_none();
         let upgrade = cyd_port_score(best) > selected_score + 15;
@@ -1583,7 +1584,7 @@ impl CompanionApp {
                 .ports
                 .iter()
                 .find(|x| x.name == self.com_port)
-                .map(|p| !port_choice_is_pci(p))
+                .map(|p| !port_choice_is_system_junk(p))
                 .unwrap_or(false)
         {
             self.auto_connect_attempted = true;
@@ -1599,6 +1600,19 @@ impl CompanionApp {
         }
         if self.com_port.is_empty() {
             self.last_error = "Select a COM / serial port.".into();
+            return;
+        }
+        if self
+            .port_lookup(&self.com_port)
+            .map(port_choice_is_system_junk)
+            .unwrap_or_else(|| {
+                let n = normalize_port_name(&self.com_port);
+                n == "COM1"
+            })
+        {
+            self.last_error =
+                "COM1 / PCI motherboard ports are not CYD boards — pick the USB-UART COM."
+                    .into();
             return;
         }
         if self.worker_already_linked(&self.com_port) {
@@ -1839,23 +1853,54 @@ impl CompanionApp {
         ctx.output_mut(|o| o.copied_text = out);
     }
 
-    fn resolve_flash_usb_port(&self) -> Result<String, String> {
-        if is_usb_serial_port(&self.com_port) {
-            return Ok(self.com_port.clone());
+    fn port_lookup(&self, name: &str) -> Option<&PortChoice> {
+        self.ports
+            .iter()
+            .find(|p| port_names_match(&p.name, name))
+    }
+
+    fn port_is_flashable_name(&self, name: &str) -> bool {
+        if !is_usb_serial_port(name) {
+            return false;
         }
-        // Prefer a linked USB board when the UI selection is Wi‑Fi / LAN.
+        match self.port_lookup(name) {
+            Some(p) => !port_choice_is_system_junk(p),
+            // Unknown label — allow COM3+; still reject bare COM1.
+            None => {
+                let n = normalize_port_name(name);
+                n != "COM1" && n.starts_with("COM")
+            }
+        }
+    }
+
+    /// USB COM for Update board / flash — never COM1/PCI; prefer a linked CYD.
+    fn resolve_flash_usb_port(&self) -> Result<String, String> {
+        // 1) Linked USB boards (real CYDs already answering cmp).
         for w in &self.connected_workers {
-            if is_usb_serial_port(&w.endpoint) {
+            if self.port_is_flashable_name(&w.endpoint)
+                && !Self::fw_looks_download_mode(&w.fw)
+            {
                 return Ok(w.endpoint.clone());
             }
         }
-        for p in &self.ports {
-            if is_usb_serial_port(&p.name) {
-                return Ok(p.name.clone());
+        for w in &self.connected_workers {
+            if self.port_is_flashable_name(&w.endpoint) {
+                return Ok(w.endpoint.clone());
             }
         }
+        // 2) Current selection when it's a real USB-UART (not COM1/PCI).
+        if self.port_is_flashable_name(&self.com_port) {
+            return Ok(self.com_port.clone());
+        }
+        // 3) Best scored CYD from the port list.
+        if let Some(p) = prefer_cyd_port(&self.ports) {
+            return Ok(p.name.clone());
+        }
+        if let Some(p) = flashable_ports(&self.ports).into_iter().next() {
+            return Ok(p.name.clone());
+        }
         Err(
-            "Select a USB COM port to flash (Wi‑Fi boards cannot be flashed over TCP)."
+            "Select a USB board COM (COM1 / PCI motherboard ports are hidden — plug the CYD data cable)."
                 .into(),
         )
     }
@@ -1864,10 +1909,17 @@ impl CompanionApp {
         self.firmware = find_firmware_image().ok().or_else(|| self.firmware.clone());
         match self.resolve_flash_usb_port() {
             Ok(port) => {
-                if port != self.com_port {
+                if !port_names_match(&port, &self.com_port) {
                     self.push_log(
                         LogKind::Info,
-                        format!("Flash will use USB port {port} (selection was {})", self.com_port),
+                        format!(
+                            "Update board will use {port} (skipped {} — not a CYD USB port)",
+                            if self.com_port.is_empty() {
+                                "empty".into()
+                            } else {
+                                self.com_port.clone()
+                            }
+                        ),
                     );
                     self.com_port = port;
                 }
@@ -3146,14 +3198,18 @@ impl CompanionApp {
                     .width(combo_w)
                     .selected_text(RichText::new(com_label).color(C_TEXT).size(13.0))
                     .show_ui(ui, |ui| {
-                        if self.ports.is_empty() {
+                        let choices: Vec<PortChoice> =
+                            flashable_ports(&self.ports).into_iter().cloned().collect();
+                        if choices.is_empty() {
                             ui.label(
-                                RichText::new("No serial ports reported by the OS")
-                                    .color(C_WARN)
-                                    .size(12.0),
+                                RichText::new(
+                                    "No USB board COM (COM1 / PCI motherboard ports are hidden)",
+                                )
+                                .color(C_WARN)
+                                .size(12.0),
                             );
                         }
-                        for p in self.ports.clone() {
+                        for p in choices {
                             let label = if self.worker_already_linked(&p.name) {
                                 format!("{} · linked", p.label)
                             } else {
@@ -4629,7 +4685,20 @@ impl App for CompanionApp {
                                         RichText::new(wiz_com_label).color(C_TEXT).size(13.0),
                                     )
                                     .show_ui(ui, |ui| {
-                                        for p in self.ports.clone() {
+                                        let choices: Vec<PortChoice> = flashable_ports(&self.ports)
+                                            .into_iter()
+                                            .cloned()
+                                            .collect();
+                                        if choices.is_empty() {
+                                            ui.label(
+                                                RichText::new(
+                                                    "No USB board COM (COM1 / PCI hidden)",
+                                                )
+                                                .color(C_WARN)
+                                                .size(12.0),
+                                            );
+                                        }
+                                        for p in choices {
                                             ui.selectable_value(
                                                 &mut self.com_port,
                                                 p.name.clone(),

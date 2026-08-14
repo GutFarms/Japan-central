@@ -62,6 +62,37 @@ pub fn port_choice_is_pci(p: &PortChoice) -> bool {
     p.label.to_ascii_uppercase().contains("PCI")
 }
 
+/// Motherboard / non-CYD serial — never use for Connect / Update / flash.
+/// COM1 is almost always the PC's built-in UART on Windows.
+pub fn port_choice_is_system_junk(p: &PortChoice) -> bool {
+    if port_choice_is_pci(p) || cyd_port_score(p) < 0 {
+        return true;
+    }
+    let n = normalize_port_name(&p.name);
+    // Bare COM1 with no USB/CH340 hint — hide from flash/update.
+    if n == "COM1" {
+        let l = p.label.to_ascii_lowercase();
+        if !(l.contains("ch340")
+            || l.contains("cp210")
+            || l.contains("ftdi")
+            || l.contains("wch")
+            || l.contains("silicon")
+            || (l.contains("usb") && !l.contains("pci")))
+        {
+            return true;
+        }
+    }
+    false
+}
+
+/// Ports safe to offer for CYD connect / Update board / flash.
+pub fn flashable_ports(ports: &[PortChoice]) -> Vec<&PortChoice> {
+    ports
+        .iter()
+        .filter(|p| is_usb_serial_port(&p.name) && !port_choice_is_system_junk(p))
+        .collect()
+}
+
 /// Score higher for likely CYD USB-UART adapters (CH340 / CP210x / …).
 pub fn cyd_port_score(p: &PortChoice) -> i32 {
     if !is_usb_serial_port(&p.name) || port_choice_is_pci(p) {
@@ -100,7 +131,7 @@ pub fn cyd_port_score(p: &PortChoice) -> i32 {
     s
 }
 
-/// Best COM for a CYD: real USB-UART, never PCI.
+/// Best COM for a CYD: real USB-UART, never PCI / bare COM1.
 pub fn prefer_cyd_port(ports: &[PortChoice]) -> Option<&PortChoice> {
     prefer_cyd_port_excluding(ports, &[])
 }
@@ -112,16 +143,16 @@ pub fn prefer_cyd_port_excluding<'a>(
 ) -> Option<&'a PortChoice> {
     ports
         .iter()
-        .filter(|p| cyd_port_score(p) >= 0)
+        .filter(|p| !port_choice_is_system_junk(p) && cyd_port_score(p) >= 0)
         .filter(|p| !exclude.iter().any(|e| port_names_match(e, &p.name)))
         .max_by_key(|p| cyd_port_score(p))
 }
 
-/// Count USB-UART style COMs (excludes motherboard PCI).
+/// Count USB-UART style COMs (excludes motherboard PCI / bare COM1).
 pub fn count_usb_uart_ports(ports: &[PortChoice]) -> usize {
     ports
         .iter()
-        .filter(|p| cyd_port_score(p) >= 0)
+        .filter(|p| !port_choice_is_system_junk(p) && cyd_port_score(p) >= 0)
         .count()
 }
 
@@ -1110,5 +1141,37 @@ mod tests {
         let best = prefer_cyd_port(&ports).unwrap();
         assert_eq!(best.name, "COM6");
         assert!(cyd_port_score(&ports[1]) > cyd_port_score(&ports[2]));
+    }
+
+    #[test]
+    fn system_junk_hides_bare_com1_and_flashable_list() {
+        let pci = PortChoice {
+            name: "COM1".into(),
+            label: "COM1 — PCI".into(),
+        };
+        let bare = PortChoice {
+            name: "COM1".into(),
+            label: "COM1".into(),
+        };
+        let usb_com1 = PortChoice {
+            name: "COM1".into(),
+            label: "COM1 — USB CH340".into(),
+        };
+        let cyd = PortChoice {
+            name: "COM6".into(),
+            label: "COM6 — USB CH340".into(),
+        };
+        assert!(port_choice_is_system_junk(&pci));
+        assert!(port_choice_is_system_junk(&bare));
+        assert!(!port_choice_is_system_junk(&usb_com1));
+        assert!(!port_choice_is_system_junk(&cyd));
+        let ports = vec![pci, bare.clone(), cyd.clone()];
+        let flashable = flashable_ports(&ports);
+        assert_eq!(flashable.len(), 1);
+        assert_eq!(flashable[0].name, "COM6");
+        assert_eq!(
+            prefer_cyd_port(&[bare, cyd.clone()]).map(|p| p.name.as_str()),
+            Some("COM6")
+        );
     }
 }
