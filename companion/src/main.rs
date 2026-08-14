@@ -2046,9 +2046,49 @@ impl CompanionApp {
         }
     }
 
-    /// USB COM for Update board / flash — never COM1/PCI; prefer a linked CYD.
+    /// USB COM / linked worker choices for Update board.
+    fn flash_target_choices(&self) -> Vec<(String, String)> {
+        let mut out: Vec<(String, String)> = Vec::new();
+        for w in &self.connected_workers {
+            if !self.port_is_flashable_name(&w.endpoint) {
+                continue;
+            }
+            let mac = if w.mac.is_empty() {
+                "mac?".to_string()
+            } else {
+                w.mac.clone()
+            };
+            let fw = if w.fw.is_empty() {
+                "fw?".to_string()
+            } else {
+                w.fw.clone()
+            };
+            let tag = if Self::fw_looks_download_mode(&w.fw) {
+                "download-mode"
+            } else {
+                "linked"
+            };
+            out.push((
+                w.endpoint.clone(),
+                format!("{} · {mac} · {fw} · {tag}", w.endpoint),
+            ));
+        }
+        for p in flashable_ports(&self.ports) {
+            if out.iter().any(|(e, _)| port_names_match(e, &p.name)) {
+                continue;
+            }
+            out.push((p.name.clone(), format!("{} · not linked", p.label)));
+        }
+        out
+    }
+
+    /// USB COM for Update board / flash — respect the user’s selected worker first.
     fn resolve_flash_usb_port(&self) -> Result<String, String> {
-        // 1) Linked USB boards (real CYDs already answering cmp).
+        // 1) Explicit selection (Mine / Update picker) when it’s a real USB-UART.
+        if self.port_is_flashable_name(&self.com_port) {
+            return Ok(self.com_port.clone());
+        }
+        // 2) Linked USB boards (prefer live companion over download-mode).
         for w in &self.connected_workers {
             if self.port_is_flashable_name(&w.endpoint)
                 && !Self::fw_looks_download_mode(&w.fw)
@@ -2061,10 +2101,6 @@ impl CompanionApp {
                 return Ok(w.endpoint.clone());
             }
         }
-        // 2) Current selection when it's a real USB-UART (not COM1/PCI).
-        if self.port_is_flashable_name(&self.com_port) {
-            return Ok(self.com_port.clone());
-        }
         // 3) Best scored CYD from the port list.
         if let Some(p) = prefer_cyd_port(&self.ports) {
             return Ok(p.name.clone());
@@ -2073,7 +2109,7 @@ impl CompanionApp {
             return Ok(p.name.clone());
         }
         Err(
-            "Select a USB board COM (COM1 / PCI motherboard ports are hidden — plug the CYD data cable)."
+            "Select which board to update (USB COM / linked worker). COM1 / PCI motherboard ports are not flashable."
                 .into(),
         )
     }
@@ -2086,7 +2122,7 @@ impl CompanionApp {
                     self.push_log(
                         LogKind::Info,
                         format!(
-                            "Update board will use {port} (skipped {} — not a CYD USB port)",
+                            "Update board target → {port} (was {} — not a CYD USB port)",
                             if self.com_port.is_empty() {
                                 "empty".into()
                             } else {
@@ -3087,6 +3123,62 @@ impl CompanionApp {
                 );
             }
             ui.add_space(8.0);
+            {
+                let choices = self.flash_target_choices();
+                ui.horizontal(|ui| {
+                    ui.label(
+                        RichText::new("Board to update")
+                            .color(C_MUTED)
+                            .font(mono_ui_font(11.0)),
+                    );
+                    let combo_w = (ui.available_width() - 8.0).clamp(160.0, 420.0);
+                    let selected = if self.com_port.is_empty() {
+                        "— select linked worker / COM —".to_string()
+                    } else {
+                        choices
+                            .iter()
+                            .find(|(e, _)| port_names_match(e, &self.com_port))
+                            .map(|(_, l)| l.clone())
+                            .unwrap_or_else(|| self.com_port.clone())
+                    };
+                    egui::ComboBox::from_id_source("settings_flash_target")
+                        .width(combo_w)
+                        .selected_text(RichText::new(selected).color(C_TEXT).size(12.0))
+                        .show_ui(ui, |ui| {
+                            if choices.is_empty() {
+                                ui.label(
+                                    RichText::new("No USB board yet — Link a worker on Mine first.")
+                                        .color(C_WARN)
+                                        .size(12.0),
+                                );
+                            }
+                            for (ep, label) in &choices {
+                                if ui
+                                    .selectable_label(
+                                        port_names_match(ep, &self.com_port),
+                                        label,
+                                    )
+                                    .clicked()
+                                {
+                                    self.com_port = ep.clone();
+                                    if let Some(w) = self
+                                        .connected_workers
+                                        .iter()
+                                        .find(|w| port_names_match(&w.endpoint, ep))
+                                    {
+                                        if !w.fw.is_empty() {
+                                            self.fw_label = w.fw.clone();
+                                        }
+                                        if !w.mac.is_empty() {
+                                            self.board_mac = w.mac.clone();
+                                        }
+                                    }
+                                }
+                            }
+                        });
+                });
+            }
+            ui.add_space(6.0);
             ui.label(
                 RichText::new(format!(
                     "Port · {}  ·  board fw {}",
@@ -5781,6 +5873,61 @@ impl App for CompanionApp {
                                 .color(C_DIM)
                                 .font(mono_ui_font(10.0)),
                         );
+                    }
+                    ui.add_space(6.0);
+                    {
+                        let choices = self.flash_target_choices();
+                        ui.label(
+                            RichText::new("Which worker / COM to update")
+                                .color(C_MUTED)
+                                .size(12.0),
+                        );
+                        let selected = if self.com_port.is_empty() {
+                            "— select board —".to_string()
+                        } else {
+                            choices
+                                .iter()
+                                .find(|(e, _)| port_names_match(e, &self.com_port))
+                                .map(|(_, l)| l.clone())
+                                .unwrap_or_else(|| self.com_port.clone())
+                        };
+                        egui::ComboBox::from_id_source("update_confirm_flash_target")
+                            .width(420.0)
+                            .selected_text(RichText::new(selected).color(C_TEXT).size(13.0))
+                            .show_ui(ui, |ui| {
+                                if choices.is_empty() {
+                                    ui.label(
+                                        RichText::new(
+                                            "No USB targets — Link a board on Mine, then retry.",
+                                        )
+                                        .color(C_WARN)
+                                        .size(12.0),
+                                    );
+                                }
+                                for (ep, label) in &choices {
+                                    if ui
+                                        .selectable_label(
+                                            port_names_match(ep, &self.com_port),
+                                            label,
+                                        )
+                                        .clicked()
+                                    {
+                                        self.com_port = ep.clone();
+                                        if let Some(w) = self
+                                            .connected_workers
+                                            .iter()
+                                            .find(|w| port_names_match(&w.endpoint, ep))
+                                        {
+                                            if !w.fw.is_empty() {
+                                                self.fw_label = w.fw.clone();
+                                            }
+                                            if !w.mac.is_empty() {
+                                                self.board_mac = w.mac.clone();
+                                            }
+                                        }
+                                    }
+                                }
+                            });
                     }
                     ui.add_space(6.0);
                     ui.label(
