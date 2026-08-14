@@ -811,8 +811,14 @@ const ERASE_TIMEOUT: Duration = Duration::from_secs(120);
 const RESET_TIMEOUT: Duration = Duration::from_secs(15);
 const ESPTOOL_TIMEOUT: Duration = Duration::from_secs(180);
 /// Hard wall-clock budget for the whole Update board flash sequence.
-/// Blank-board path includes BOOT countdowns + several no-stub retries.
-const FLASH_BUDGET: Duration = Duration::from_secs(360);
+/// Push + one BOOT Ready round — fail fast instead of thrashing the COM for minutes.
+const FLASH_BUDGET: Duration = Duration::from_secs(180);
+/// Abort a write round after this many connect/MAC stalls (stops terminal/COM thrash).
+const MAX_CONNECT_STALLS_PER_ROUND: u8 = 2;
+/// Abort immediately after this many Access Denied / port-busy errors.
+const MAX_PORT_BUSY: u8 = 1;
+/// Quiet gap between tool launches so Windows can release the COM handle.
+const ATTEMPT_GAP: Duration = Duration::from_millis(450);
 /// No useful output at all → stuck before connect.
 const IDLE_TIMEOUT: Duration = Duration::from_secs(35);
 /// Chip MAC/connect seen but no write progress yet.
@@ -1310,6 +1316,8 @@ Available: {hint}. Unplug/replug the CYD, pick the COM again, then Update board.
                      esp_err: &mut String,
                      saw_chip_connect: &mut bool,
                      connect_stall_only: &mut bool,
+                     stall_hits: &mut u8,
+                     busy_hits: &mut u8,
                      progress: &dyn Fn(String),
                      label: &str| {
         *esp_err = format!("{label}: {e}");
@@ -1330,14 +1338,18 @@ Available: {hint}. Unplug/replug the CYD, pick the COM again, then Update board.
         if stall || low.contains("chip seen") {
             *saw_chip_connect = true;
         }
-        if !stall && !port_busy {
-            *connect_stall_only = false;
+        if stall {
+            *stall_hits = stall_hits.saturating_add(1);
         }
         if port_busy {
+            *busy_hits = busy_hits.saturating_add(1);
             progress(
                 "Port busy/missing — close other apps using the COM, then retry…"
                     .into(),
             );
+        }
+        if !stall && !port_busy {
+            *connect_stall_only = false;
         }
     };
 
@@ -1347,58 +1359,76 @@ Available: {hint}. Unplug/replug the CYD, pick the COM again, then Update board.
     let mut chip_may_be_blank = false;
     let mut connect_stall_only = true;
     let mut saw_chip_connect = false;
+    let mut stall_hits: u8 = 0;
+    let mut busy_hits: u8 = 0;
 
     // Helper: run one write attempt matrix. `need_ready` gates BOOT Ready once per round.
     let run_attempt_matrix = |need_ready: bool,
                               round_label: &str,
                               prefer_default_reset: bool,
+                              compact: bool,
                               esp_err: &mut String,
                               py_err: &mut String,
                               saw_chip_connect: &mut bool,
-                              connect_stall_only: &mut bool|
+                              connect_stall_only: &mut bool,
+                              stall_hits: &mut u8,
+                              busy_hits: &mut u8|
      -> Result<bool, String> {
-        // Returns Ok(true) on success, Ok(false) if all attempts failed (continue), Err on cancel.
+        // Returns Ok(true) on success, Ok(false) if all attempts failed (continue), Err on cancel/abort.
         if need_ready {
             wait_for_boot_ready(ctrl, progress, round_label)?;
         }
-        let attempts: &[(&str, &str, bool, bool, bool)] = if prefer_default_reset {
+        // Compact = fail-fast (Push / post-stall). Full = blank-board BOOT path.
+        let attempts: &[(&str, &str, bool, bool, bool)] = if prefer_default_reset && compact {
+            &[
+                ("esptool stub+compress default_reset", "default_reset", false, true, true),
+                ("espflash stub default-reset", "default-reset", false, false, false),
+                ("espflash no-stub default-reset", "default-reset", true, false, false),
+            ]
+        } else if prefer_default_reset {
             &[
                 ("esptool stub+compress default_reset", "default_reset", false, true, true),
                 ("esptool stub+compress no_reset", "no_reset", false, true, true),
-                (
-                    "esptool no-stub no-compress default_reset",
-                    "default_reset",
-                    true,
-                    false,
-                    true,
-                ),
                 ("espflash stub default-reset", "default-reset", false, false, false),
+                ("espflash no-stub default-reset", "default-reset", true, false, false),
+            ]
+        } else if compact {
+            &[
+                ("esptool stub+compress no_reset", "no_reset", false, true, true),
+                ("espflash no-stub no-reset", "no-reset", true, false, false),
                 ("espflash no-stub default-reset", "default-reset", true, false, false),
             ]
         } else {
             &[
                 ("esptool stub+compress no_reset", "no_reset", false, true, true),
                 ("esptool stub+compress default_reset", "default_reset", false, true, true),
-                ("esptool no-stub no-compress no_reset", "no_reset", true, false, true),
-                (
-                    "esptool no-stub no-compress default_reset",
-                    "default_reset",
-                    true,
-                    false,
-                    true,
-                ),
                 ("espflash no-stub no-reset", "no-reset", true, false, false),
                 ("espflash no-stub default-reset", "default-reset", true, false, false),
             ]
         };
 
         let mut esptool_usable = true;
+        let round_stall_start = *stall_hits;
         for &(label, before, no_stub, compress, use_esptool) in attempts {
             if flash_cancelled(cancel) {
                 ctrl.need_boot.store(false, Ordering::SeqCst);
                 return Err("flash cancelled".into());
             }
-            if budget_left() < Duration::from_secs(20) {
+            if *busy_hits >= MAX_PORT_BUSY {
+                progress(
+                    "Stopping flash retries — COM still busy/denied (close Terminal/Arduino/other flash tools)."
+                        .into(),
+                );
+                return Ok(false);
+            }
+            if stall_hits.saturating_sub(round_stall_start) >= MAX_CONNECT_STALLS_PER_ROUND {
+                progress(
+                    "Stopping this round — chip connect stalled (hold BOOT + Ready, or pick the CYD COM)."
+                        .into(),
+                );
+                return Ok(false);
+            }
+            if budget_left() < Duration::from_secs(15) {
                 break;
             }
             if use_esptool && !esptool_usable {
@@ -1467,9 +1497,12 @@ Available: {hint}. Unplug/replug the CYD, pick the COM again, then Update board.
                         esp_err,
                         saw_chip_connect,
                         connect_stall_only,
+                        stall_hits,
+                        busy_hits,
                         progress,
                         label,
                     );
+                    std::thread::sleep(ATTEMPT_GAP);
                 }
             }
         }
@@ -1484,40 +1517,68 @@ Available: {hint}. Unplug/replug the CYD, pick the COM again, then Update board.
             false,
             "push",
             true,
+            true,
             &mut esp_err,
             &mut py_err,
             &mut saw_chip_connect,
             &mut connect_stall_only,
+            &mut stall_hits,
+            &mut busy_hits,
         )? {
             return Ok(());
         }
+        if busy_hits >= MAX_PORT_BUSY {
+            ctrl.need_boot.store(false, Ordering::SeqCst);
+            let tip = safety_fail_tip(started.elapsed(), &esp_err, &py_err, false);
+            append_flash_log(&tip);
+            return Err(format!(
+                "Update failed — COM port busy (close other Terminal/Arduino/flash tools), then try again. {tip}"
+            ));
+        }
         progress(
-            "Auto-reset push stalled — falling back to BOOT Ready…"
+            "Auto-reset push stalled — one BOOT Ready attempt (then stop; no COM thrash)…"
                 .into(),
         );
     }
 
-    // ── Ready → write (blank boards, or live push fallback) ────────────────
-    for round in 1..=2 {
+    // ── Ready → write (blank boards, or live push single fallback) ─────────
+    let ready_rounds: u32 = if live_push { 1 } else { 2 };
+    for round in 1..=ready_rounds {
         ensure_budget(progress)?;
+        if busy_hits >= MAX_PORT_BUSY {
+            break;
+        }
         if run_attempt_matrix(
             true,
-            &format!("ready {round}/2"),
+            &format!("ready {round}/{ready_rounds}"),
             live_push,
+            live_push || round > 1,
             &mut esp_err,
             &mut py_err,
             &mut saw_chip_connect,
             &mut connect_stall_only,
+            &mut stall_hits,
+            &mut busy_hits,
         )? {
             return Ok(());
         }
+    }
+
+    // Skip long baud fallback / erase when we only saw connect stalls or port busy —
+    // those paths reopen the COM repeatedly and look like looping terminals on Windows.
+    if connect_stall_only || busy_hits >= MAX_PORT_BUSY {
+        ctrl.need_boot.store(false, Ordering::SeqCst);
+        let tip = safety_fail_tip(started.elapsed(), &esp_err, &py_err, false);
+        append_flash_log(&tip);
+        return Err(format!(
+            "Update failed — chip did not enter download mode (hold BOOT, tap RESET, keep BOOT held, click Ready). {tip}"
+        ));
     }
 
     // Secondary: stub / higher baud without another Ready spam
     let fallback: &[(&str, &str, bool)] = &[
         ("115200", "default-reset", false),
         ("115200", "no-reset", false),
-        ("460800", "default-reset", true),
     ];
     for &(baud, before, no_stub) in fallback {
         ensure_budget(progress)?;
@@ -1558,15 +1619,23 @@ Available: {hint}. Unplug/replug the CYD, pick the COM again, then Update board.
                     &mut esp_err,
                     &mut saw_chip_connect,
                     &mut connect_stall_only,
+                    &mut stall_hits,
+                    &mut busy_hits,
                     progress,
                     &format!("write {baud}/{before}/{stub}"),
                 );
+                if busy_hits >= MAX_PORT_BUSY || stall_hits >= 4 {
+                    break;
+                }
+                std::thread::sleep(ATTEMPT_GAP);
             }
         }
     }
 
     // Recovery erase ONLY when writes failed for reasons other than connect-stall.
-    let allow_erase = !connect_stall_only && budget_left() > Duration::from_secs(45);
+    let allow_erase = !connect_stall_only
+        && busy_hits < MAX_PORT_BUSY
+        && budget_left() > Duration::from_secs(45);
     if allow_erase {
         ensure_budget(progress)?;
         progress(
@@ -1659,41 +1728,16 @@ Available: {hint}. Unplug/replug the CYD, pick the COM again, then Update board.
         }
     } else if connect_stall_only {
         progress(
-            "Skipping recovery erase (connect/MAC stall only) — final esptool attempt…"
+            "Skipping recovery erase and final retries (connect/MAC stall only) — stop COM thrash."
                 .into(),
         );
-        chip_may_be_blank = true;
-        if budget_left() > Duration::from_secs(25) {
-            wait_for_boot_ready(ctrl, progress, "final esptool")?;
-            match run_esptool_write(
-                &port_arg,
-                image,
-                "no_reset",
-                false,
-                true,
-                progress,
-                budget_left(),
-                cancel,
-                true,
-            ) {
-                Ok(()) => {
-                    append_flash_log("success final esptool");
-                    ctrl.need_boot.store(false, Ordering::SeqCst);
-                    return Ok(());
-                }
-                Err(e) => {
-                    if e.to_ascii_lowercase().contains("cancelled") {
-                        ctrl.need_boot.store(false, Ordering::SeqCst);
-                        return Err(e);
-                    }
-                    py_err = e;
-                }
-            }
-        }
     }
 
     ctrl.need_boot.store(false, Ordering::SeqCst);
-    best_effort_reset(&espflash, &port_arg, progress, cancel);
+    // Extra reset after failure reopens COM again — only when we actually wrote something.
+    if !connect_stall_only && busy_hits < MAX_PORT_BUSY {
+        best_effort_reset(&espflash, &port_arg, progress, cancel);
+    }
 
     let tip = safety_fail_tip(started.elapsed(), &esp_err, &py_err, chip_may_be_blank);
     append_flash_log(&tip);

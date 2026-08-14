@@ -509,14 +509,14 @@ fn schedule_windows_replace_and_restart(install: &Path) -> Result<(), String> {
         "@echo off\r\n\
          setlocal EnableExtensions\r\n\
          cd /d \"{dir}\"\r\n\
-         timeout /t 2 /nobreak >nul\r\n\
+         ping -n 3 127.0.0.1 >nul\r\n\
          set /a tries=0\r\n\
          :wait_unlock\r\n\
          set /a tries+=1\r\n\
          if exist \"{exe}\" del /f /q \"{exe}\" >nul 2>nul\r\n\
          if exist \"{exe}\" (\r\n\
            if %tries% geq 40 exit /b 1\r\n\
-           timeout /t 1 /nobreak >nul\r\n\
+           ping -n 2 127.0.0.1 >nul\r\n\
            goto wait_unlock\r\n\
          )\r\n\
          REM Clean sweep — remove stale files/dirs left by older builds\r\n\
@@ -534,7 +534,7 @@ fn schedule_windows_replace_and_restart(install: &Path) -> Result<(), String> {
          )\r\n\
          rd /s /q \"{staging}\" 2>nul\r\n\
          if not exist \"{exe}\" exit /b 1\r\n\
-         start \"\" \"{exe}\"\r\n\
+         start \"\" /B \"{exe}\"\r\n\
          del \"%~f0\"\r\n",
         dir = install.display(),
         exe = exe_name,
