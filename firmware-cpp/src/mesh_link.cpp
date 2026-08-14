@@ -81,6 +81,12 @@ void MeshPrint::flushLine() {
   len_ = 0;
 }
 
+void MeshLink::pinChannel() {
+  // STA roam / SoftAP refresh can steal the radio off ch1 and break ESP-NOW.
+  esp_wifi_set_channel(1, WIFI_SECOND_CHAN_NONE);
+  lastChannelPinMs_ = millis();
+}
+
 void MeshLink::begin(const uint8_t selfMac[6]) {
   memcpy(selfMac_, selfMac, 6);
   leafOut_.begin(this);
@@ -88,7 +94,7 @@ void MeshLink::begin(const uint8_t selfMac[6]) {
     WiFi.mode(WIFI_AP);
   }
   // SoftAP is channel 1 — keep ESP-NOW on the same channel.
-  esp_wifi_set_channel(1, WIFI_SECOND_CHAN_NONE);
+  pinChannel();
 
   if (esp_now_init() != ESP_OK) {
     ready_ = false;
@@ -110,6 +116,36 @@ void MeshLink::begin(const uint8_t selfMac[6]) {
   }
   ready_ = true;
   lastHelloMs_ = 0;
+}
+
+bool MeshLink::popRx(RxItem& out) {
+  bool got = false;
+  portENTER_CRITICAL(&rxMux_);
+  for (size_t i = 0; i < kRxQ; i++) {
+    if (rxQ_[i].used) {
+      out = rxQ_[i];
+      rxQ_[i].used = false;
+      got = true;
+      break;
+    }
+  }
+  portEXIT_CRITICAL(&rxMux_);
+  return got;
+}
+
+bool MeshLink::pushRx(const RxItem& item) {
+  bool ok = false;
+  portENTER_CRITICAL(&rxMux_);
+  for (size_t i = 0; i < kRxQ; i++) {
+    if (!rxQ_[i].used) {
+      rxQ_[i] = item;
+      rxQ_[i].used = true;
+      ok = true;
+      break;
+    }
+  }
+  portEXIT_CRITICAL(&rxMux_);
+  return ok;
 }
 
 void MeshLink::noteUsbActivity() { lastUsbMs_ = millis(); }
@@ -264,6 +300,7 @@ bool MeshLink::sendLineTo(const uint8_t dstIn[6], const char* line) {
 
 void MeshLink::sendHello() {
   if (!ready_) return;
+  pinChannel();
   uint8_t pkt[sizeof(MeshPkt) + 8];
   MeshPkt* h = (MeshPkt*)pkt;
   h->magic = kMagic;
@@ -275,6 +312,15 @@ void MeshLink::sendHello() {
   h->seq = ++seq_;
   h->len = 0;
   esp_now_send(kBcast, pkt, sizeof(MeshPkt));
+  // Leaf: also unicast hello to the known root so discovery survives broadcast loss.
+  if (!isRoot()) {
+    uint8_t root[6];
+    if (pickRoot(root)) {
+      memcpy(h->dst, root, 6);
+      ensurePeer(root);
+      esp_now_send(root, pkt, sizeof(MeshPkt));
+    }
+  }
 }
 
 void MeshLink::onEspNowRecv(const uint8_t* mac, const uint8_t* data, int len, int8_t rssi) {
@@ -296,15 +342,27 @@ void MeshLink::onEspNowRecv(const uint8_t* mac, const uint8_t* data, int len, in
   upsertPeer(h->src, (h->flags & 1) != 0, rssi);
 
   portENTER_CRITICAL(&rxMux_);
+  size_t slot = kRxQ;
   for (size_t i = 0; i < kRxQ; i++) {
     if (!rxQ_[i].used) {
-      memcpy(rxQ_[i].mac, h->src, 6);
-      memcpy(rxQ_[i].line, data + sizeof(MeshPkt), h->len);
-      rxQ_[i].line[h->len] = 0;
-      rxQ_[i].used = true;
+      slot = i;
       break;
     }
   }
+  if (slot == kRxQ) {
+    // Prefer keeping shares — overwrite a non-share slot if needed.
+    for (size_t i = 0; i < kRxQ; i++) {
+      if (strncmp(rxQ_[i].line, "CMPSHARE ", 9) != 0) {
+        slot = i;
+        break;
+      }
+    }
+    if (slot == kRxQ) slot = 0;
+  }
+  memcpy(rxQ_[slot].mac, h->src, 6);
+  memcpy(rxQ_[slot].line, data + sizeof(MeshPkt), h->len);
+  rxQ_[slot].line[h->len] = 0;
+  rxQ_[slot].used = true;
   portEXIT_CRITICAL(&rxMux_);
 }
 
@@ -405,6 +463,8 @@ bool MeshLink::handleVia(const String& macArg, const String& cmdRest) {
   viaPending_ = true;
   memcpy(viaMac_, mac, 6);
   viaStartMs_ = millis();
+  pinChannel();
+  ensurePeer(mac);
 
   if (!sendLineTo(mac, wire.c_str())) {
     viaPending_ = false;
@@ -413,37 +473,55 @@ bool MeshLink::handleVia(const String& macArg, const String& cmdRest) {
     return true;
   }
 
-  // Busy-wait briefly for ESP-NOW reply (Companion usb_cmd is blocked on us).
-  while (millis() - viaStartMs_ < MESH_VIA_TIMEOUT_MS) {
-    RxItem item{};
-    bool got = false;
-    portENTER_CRITICAL(&rxMux_);
-    for (size_t i = 0; i < kRxQ; i++) {
-      if (rxQ_[i].used) {
-        item = rxQ_[i];
-        rxQ_[i].used = false;
-        got = true;
-        break;
+  // Hold non-target frames aside so we never drop shares / other peer traffic
+  // while Companion is blocked waiting on this via.
+  RxItem deferred[kRxQ];
+  size_t nDef = 0;
+  auto restoreDeferred = [&]() {
+    for (size_t i = 0; i < nDef; i++) {
+      if (!pushRx(deferred[i])) {
+        // Queue full — forward shares so Companion still sees them.
+        if (strncmp(deferred[i].line, "CMPSHARE ", 9) == 0) {
+          Serial.println(deferred[i].line);
+          Serial.flush();
+        }
       }
     }
-    portEXIT_CRITICAL(&rxMux_);
-    if (got) {
-      if (macEq(item.mac, viaMac_) && item.line[0]) {
-        if (strncmp(item.line, "CMP", 3) == 0) {
-          Serial.println(item.line);
-          Serial.flush();
-          // Keep waiting if this was an unsolicited share during via.
-          if (strncmp(item.line, "CMPSHARE ", 9) != 0) {
-            viaPending_ = false;
-            return true;
-          }
+    nDef = 0;
+  };
+
+  while (millis() - viaStartMs_ < MESH_VIA_TIMEOUT_MS) {
+    RxItem item{};
+    if (popRx(item)) {
+      const bool fromTarget = macEq(item.mac, viaMac_) && item.line[0];
+      const bool isCmp = strncmp(item.line, "CMP", 3) == 0;
+      const bool isShare = strncmp(item.line, "CMPSHARE ", 9) == 0;
+      if (fromTarget && isCmp) {
+        Serial.println(item.line);
+        Serial.flush();
+        if (!isShare) {
+          viaPending_ = false;
+          restoreDeferred();
+          return true;
         }
+        // Unsolicited share from the via target — keep waiting for the reply.
+      } else if (isShare) {
+        // Any leaf share during via: forward immediately (cmp_reply_line ignores them).
+        Serial.println(item.line);
+        Serial.flush();
+      } else if (nDef < kRxQ) {
+        deferred[nDef++] = item;
+      } else if (isCmp && isRoot()) {
+        // Last resort: bridge CMP lines so they are not lost forever.
+        Serial.println(item.line);
+        Serial.flush();
       }
     }
     delay(2);
     yield();
   }
   viaPending_ = false;
+  restoreDeferred();
   Serial.println("CMPERR via timeout");
   Serial.flush();
   return true;
@@ -456,7 +534,12 @@ void MeshLink::poll(CompanionLink& cmp, AppConfig& cfg, const MinerSnapshot& sna
   prunePeers();
 
   uint32_t now = millis();
-  if (now - lastHelloMs_ >= MESH_HELLO_MS) {
+  if (now - lastChannelPinMs_ >= 4000) {
+    pinChannel();
+  }
+  const uint32_t helloPeriod =
+      (!isRoot() && !hasRootPeer()) ? MESH_HELLO_SEEK_MS : MESH_HELLO_MS;
+  if (now - lastHelloMs_ >= helloPeriod) {
     lastHelloMs_ = now;
     sendHello();
   }
@@ -472,18 +555,7 @@ void MeshLink::poll(CompanionLink& cmp, AppConfig& cfg, const MinerSnapshot& sna
 
   for (;;) {
     RxItem item{};
-    bool got = false;
-    portENTER_CRITICAL(&rxMux_);
-    for (size_t i = 0; i < kRxQ; i++) {
-      if (rxQ_[i].used) {
-        item = rxQ_[i];
-        rxQ_[i].used = false;
-        got = true;
-        break;
-      }
-    }
-    portEXIT_CRITICAL(&rxMux_);
-    if (!got) break;
+    if (!popRx(item)) break;
 
     if (isRoot() && viaPending_ && macEq(item.mac, viaMac_) && strncmp(item.line, "CMP", 3) == 0 &&
         strncmp(item.line, "CMPSHARE ", 9) != 0) {

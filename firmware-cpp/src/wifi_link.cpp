@@ -1,5 +1,6 @@
 #include "wifi_link.hpp"
 #include <WiFiUdp.h>
+#include <esp_wifi.h>
 
 void WifiLink::begin(const char* macStr, const AppConfig& cfg) {
   mac_ = macStr ? macStr : "unknown";
@@ -92,6 +93,8 @@ void WifiLink::ensureWifi(const AppConfig& cfg) {
     softApUp_ = ok;
     (void)ok;
     delay(40);
+    // SoftAP recreate can leave the radio off ch1 — re-pin for ESP-NOW mesh.
+    esp_wifi_set_channel(1, WIFI_SECOND_CHAN_NONE);
     server_.begin();
     server_.setNoDelay(true);
     udp_.begin(CYD_WIFI_UDP_PORT);
@@ -109,11 +112,11 @@ void WifiLink::beacon() {
   IPAddress advertise = (WiFi.status() == WL_CONNECTED) ? sta : ap;
   char msg[220];
 #if CYD_D0_BUILD
-  static constexpr const char* kFwTag = "0.8.118-sha256-d0";
-  static constexpr const char* kFwShort = "0.8.118-d0";
+  static constexpr const char* kFwTag = "0.8.119-sha256-d0";
+  static constexpr const char* kFwShort = "0.8.119-d0";
 #else
-  static constexpr const char* kFwTag = "0.8.118-sha256";
-  static constexpr const char* kFwShort = "0.8.118";
+  static constexpr const char* kFwTag = "0.8.119-sha256";
+  static constexpr const char* kFwShort = "0.8.119";
 #endif
   snprintf(msg, sizeof(msg),
            "%s|v=%s|mac=%s|fw=%s|tcp=%u|ip=%u.%u.%u.%u|ap=%s|mode=%s",

@@ -9,9 +9,12 @@ static constexpr size_t MESH_MAX_PEERS = 8;
 static constexpr size_t MESH_LINE_CAP = 220;
 static constexpr uint32_t MESH_PEER_TTL_MS = 20000;
 static constexpr uint32_t MESH_HELLO_MS = 1500;
+// Leaves without a known root hello faster so discovery is snappy.
+static constexpr uint32_t MESH_HELLO_SEEK_MS = 500;
 // Keep USB-elected root long enough across slow Companion poll / stratum stalls.
 static constexpr uint32_t MESH_USB_ROOT_MS = 30000;
-static constexpr uint32_t MESH_VIA_TIMEOUT_MS = 2000;
+// Leaf job parts + shares need headroom beyond a single ESP-NOW hop.
+static constexpr uint32_t MESH_VIA_TIMEOUT_MS = 6500;
 
 struct MeshPeer {
   uint8_t mac[6]{};
@@ -81,8 +84,8 @@ class MeshLink {
   MeshPeer peers_[MESH_MAX_PEERS]{};
   MeshPrint leafOut_;
 
-  // RX queue (filled from ESP-NOW cb, drained in poll).
-  static constexpr size_t kRxQ = 6;
+  // RX queue (filled from ESP-NOW cb, drained in poll / via wait).
+  static constexpr size_t kRxQ = 16;
   struct RxItem {
     uint8_t mac[6];
     char line[MESH_LINE_CAP];
@@ -95,13 +98,17 @@ class MeshLink {
   bool viaPending_ = false;
   uint8_t viaMac_[6]{};
   uint32_t viaStartMs_ = 0;
+  uint32_t lastChannelPinMs_ = 0;
 
   void sendHello();
+  void pinChannel();
   void prunePeers();
   MeshPeer* findPeer(const uint8_t mac[6]);
   MeshPeer* upsertPeer(const uint8_t mac[6], bool root, int8_t rssi);
   bool pickRoot(uint8_t out[6]) const;
   void ensurePeer(const uint8_t mac[6]);
+  bool popRx(RxItem& out);
+  bool pushRx(const RxItem& item);
   void handleIncomingLine(const uint8_t* from, const char* line, CompanionLink& cmp, AppConfig& cfg,
                           const MinerSnapshot& snap, CompanionLink::ApplyFn onApply, NetFeed* net,
                           CompanionLink::JobFn onJob, CompanionLink::StopFn onStop,

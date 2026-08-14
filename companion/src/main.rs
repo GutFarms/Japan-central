@@ -6638,7 +6638,26 @@ fn mine_worker(cmd_rx: Receiver<NetCmd>, msg_tx: Sender<NetMsg>) {
             .filter(|c| c.is_ascii_hexdigit())
             .collect();
         let cmd = format!("cmp via {hex} {cmp_rest}");
-        usb_cmd_ex(&mut gw.port, &mut gw.rx, &cmd, pump)
+        // Soft-retry ESP-NOW flake (root via timeout / send fail) without treating
+        // leaf CMPERR as retryable application errors.
+        let mut last = String::new();
+        for attempt in 0..3u32 {
+            match usb_cmd_ex(&mut gw.port, &mut gw.rx, &cmd, pump) {
+                Ok(line) => return Ok(line),
+                Err(e) => {
+                    last = e;
+                    let soft = last.contains("via timeout")
+                        || last.contains("via send failed")
+                        || last.contains("USB timeout");
+                    if !soft || attempt == 2 {
+                        return Err(last);
+                    }
+                    pump();
+                    thread::sleep(Duration::from_millis(40 + attempt as u64 * 60));
+                }
+            }
+        }
+        Err(last)
     }
 
     fn sync_mesh_peers(
@@ -6767,7 +6786,8 @@ Power a 2nd board nearby with wall/power-bank only (no PC cable)."
                 format!("Mesh peer {mac} via {gname} (connectivity only)"),
             );
             if mining {
-                let _ = arm_mesh_job(boards, &mut mb, msg_tx);
+                let mut noop = || {};
+                let _ = arm_mesh_job(boards, &mut mb, msg_tx, &mut noop);
             }
             mesh.push(mb);
         }
@@ -6777,18 +6797,26 @@ Power a 2nd board nearby with wall/power-bank only (no PC cable)."
         boards: &mut [UsbBoard],
         mb: &mut MeshBoard,
         msg_tx: &Sender<NetMsg>,
+        pump: &mut dyn FnMut(),
     ) -> Result<(), String> {
-        let _ = mesh_via_cmd(boards, &mb.gateway, &mb.mac, "stats accepted=0&rejected=0");
+        let _ = mesh_via_cmd_ex(
+            boards,
+            &mb.gateway,
+            &mb.mac,
+            "stats accepted=0&rejected=0",
+            pump,
+        );
         if mb.legacy_job {
             return Err("mesh peer needs split-job firmware (0.6.2+)".into());
         }
         let job = warmup_job();
         for part in encode_job_parts(&job) {
             let rest = part.strip_prefix("cmp ").unwrap_or(part.as_str());
-            let reply = mesh_via_cmd(boards, &mb.gateway, &mb.mac, rest)?;
+            let reply = mesh_via_cmd_ex(boards, &mb.gateway, &mb.mac, rest, pump)?;
             if !(reply.starts_with("CMPACK") || reply.starts_with("CMP ok")) {
                 return Err(format!("mesh job reply: {reply}"));
             }
+            pump();
         }
         mb.mining = true;
         log_msg(
@@ -6804,13 +6832,14 @@ Power a 2nd board nearby with wall/power-bank only (no PC cable)."
         mb: &mut MeshBoard,
         job: &stratum::WorkJob,
         msg_tx: &Sender<NetMsg>,
+        pump: &mut dyn FnMut(),
     ) -> Result<(), String> {
         if mb.legacy_job {
             return Err("mesh peer needs split-job firmware".into());
         }
         for part in encode_job_parts(job) {
             let rest = part.strip_prefix("cmp ").unwrap_or(part.as_str());
-            let reply = mesh_via_cmd(boards, &mb.gateway, &mb.mac, rest)?;
+            let reply = mesh_via_cmd_ex(boards, &mb.gateway, &mb.mac, rest, pump)?;
             if !(reply.starts_with("CMPACK") || reply.starts_with("CMP ok")) {
                 log_msg(
                     msg_tx,
@@ -6819,6 +6848,8 @@ Power a 2nd board nearby with wall/power-bank only (no PC cable)."
                 );
                 return Err(reply);
             }
+            // Between via parts, keep the pool alive and leave CMPSHARE in gw.rx.
+            pump();
         }
         mb.mining = true;
         Ok(())
@@ -7627,7 +7658,13 @@ Power a 2nd board nearby with wall/power-bank only (no PC cable)."
                         sync_mesh_peers(&mut boards, &mut mesh, &msg_tx, true);
                         last_mesh_sync = Instant::now();
                         for m in mesh.iter_mut() {
-                            match arm_mesh_job(&mut boards, m, &msg_tx) {
+                            let arm_res = {
+                                let mut pump = || {
+                                    let _ = pump_stratum_keepalive(&mut stratum, &msg_tx);
+                                };
+                                arm_mesh_job(&mut boards, m, &msg_tx, &mut pump)
+                            };
+                            match arm_res {
                                 Ok(()) => {}
                                 Err(e) => {
                                     log_msg(
@@ -8397,7 +8434,13 @@ Power a 2nd board nearby with wall/power-bank only (no PC cable)."
                         }
                     }
                     for m in mesh.iter_mut() {
-                        match push_mesh_job(&mut boards, m, &job, &msg_tx) {
+                        let mesh_res = {
+                            let mut pump = || {
+                                let _ = client.poll();
+                            };
+                            push_mesh_job(&mut boards, m, &job, &msg_tx, &mut pump)
+                        };
+                        match mesh_res {
                             Ok(()) => pushed += 1,
                             Err(e) => {
                                 let _ = msg_tx.send(NetMsg::Action(Err(format!(
@@ -8503,7 +8546,15 @@ Power a 2nd board nearby with wall/power-bank only (no PC cable)."
                                 }
                             }
                             for m in mesh.iter_mut() {
-                                if push_mesh_job(&mut boards, m, &job, &msg_tx).is_ok() {
+                                let ok = {
+                                    let mut pump = || {
+                                        if let Some(c) = stratum.as_mut() {
+                                            let _ = c.poll();
+                                        }
+                                    };
+                                    push_mesh_job(&mut boards, m, &job, &msg_tx, &mut pump).is_ok()
+                                };
+                                if ok {
                                     m.mining = true;
                                 }
                             }
@@ -8730,8 +8781,8 @@ fn usb_cmd_ex(
         // One long wait — retrying restarts a board that may still be mid-tune.
         (180_000u64, 1usize, 128usize, 1u64)
     } else if cmd.contains(" via ") {
-        // ESP-NOW mesh relay — allow root wait + leaf reply.
-        (3_200u64, 2usize, 256usize, 0u64)
+        // ESP-NOW mesh relay — root waits up to ~6.5s; mesh_via_cmd_ex soft-retries.
+        (8_500u64, 1usize, 256usize, 0u64)
     } else if cmd.contains("status") {
         // Board may be mid mineB batch; firmware yields on RX, but allow headroom.
         (1_800u64, 3usize, 256usize, 0u64)
