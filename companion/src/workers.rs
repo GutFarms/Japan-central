@@ -1,4 +1,4 @@
-//! Discover CYD workers on USB / Bluetooth serial, Wi‑Fi (UDP beacon + TCP cmp),
+//! Discover CYD workers on USB serial, Wi‑Fi (UDP beacon + TCP cmp),
 //! and Companion peers on the LAN.
 
 use serde::{Deserialize, Serialize};
@@ -15,7 +15,6 @@ pub const BOARD_WIFI_MAGIC: &str = "CYDBOARD";
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum WorkerKind {
     Usb,
-    Bluetooth,
     Wifi,
     Lan,
 }
@@ -99,6 +98,10 @@ pub fn cyd_port_score(p: &PortChoice) -> i32 {
         return -100;
     }
     let l = p.label.to_ascii_lowercase();
+    // Bluetooth serial never speaks `cmp` and hangs Windows opens — never offer it.
+    if l.contains("bluetooth") {
+        return -100;
+    }
     let mut s = 10;
     if l.contains("ch340") || l.contains("wch") {
         s += 50;
@@ -372,7 +375,6 @@ pub fn transport_mac_id(kind: WorkerKind, mac: &str) -> String {
     let prefix = match kind {
         WorkerKind::Wifi => "wifi",
         WorkerKind::Lan => "lan",
-        WorkerKind::Bluetooth => "bt",
         WorkerKind::Usb => "usb",
     };
     format!("{prefix}:mac:{}", normalize_mac(mac))
@@ -596,36 +598,19 @@ fn probe_usb_port_at(name: &str, baud: u32) -> Result<DiscoveredWorker, String> 
 /// Ports worth probing for CYD boards.
 ///
 /// Uses `list_serial_ports` (Windows SERIALCOMM merge) so a 2nd CH340 is not
-/// missed when SetupAPI only reports one COM. Skip PCI / bare COM1 junk.
-/// Bluetooth is optional and probed only after USB finishes.
-fn scan_candidate_ports(include_bluetooth: bool) -> Vec<(String, WorkerKind)> {
+/// missed when SetupAPI only reports one COM. Skip PCI / Bluetooth / bare COM1.
+fn scan_candidate_ports() -> Vec<(String, WorkerKind)> {
     let mut out: Vec<(String, WorkerKind)> = Vec::new();
     for p in list_serial_ports() {
         if port_choice_is_system_junk(&p) {
             continue;
         }
-        let label = p.label.to_ascii_lowercase();
-        let kind = if label.contains("bluetooth") {
-            WorkerKind::Bluetooth
-        } else {
-            WorkerKind::Usb
-        };
-        if matches!(kind, WorkerKind::Bluetooth) && !include_bluetooth {
-            continue;
-        }
         if !is_usb_serial_port(&p.name) {
             continue;
         }
-        out.push((p.name.clone(), kind));
+        out.push((p.name.clone(), WorkerKind::Usb));
     }
-    out.sort_by(|a, b| {
-        let rank = |k: WorkerKind| match k {
-            WorkerKind::Usb => 0,
-            WorkerKind::Bluetooth => 1,
-            _ => 2,
-        };
-        rank(a.1).cmp(&rank(b.1)).then_with(|| a.0.cmp(&b.0))
-    });
+    out.sort_by(|a, b| a.0.cmp(&b.0));
     out
 }
 
@@ -645,8 +630,9 @@ pub fn scan_usb_workers_with_progress(
 ) -> Vec<DiscoveredWorker> {
     let mut found = Vec::new();
 
-    // USB / Unknown first — never parallel: shared hubs brown out / reset both CYDs.
-    let usb_candidates: Vec<(String, WorkerKind)> = scan_candidate_ports(false)
+    // USB only — never parallel: shared hubs brown out / reset both CYDs.
+    // Bluetooth serial is excluded (hangs opens; does not speak `cmp`).
+    let usb_candidates: Vec<(String, WorkerKind)> = scan_candidate_ports()
         .into_iter()
         .filter(|(name, _)| !skip.iter().any(|s| port_names_match(s, name)))
         .collect();
@@ -655,28 +641,6 @@ pub fn scan_usb_workers_with_progress(
         match probe_usb_port_detailed(&name) {
             Ok(mut w) => {
                 w.kind = kind;
-                on_port(&name, &format!("ok · {}", w.detail));
-                found.push(w);
-            }
-            Err(e) => on_port(&name, &format!("miss · {e}")),
-        }
-    }
-
-    // Bluetooth last, still serial, short open deadline (often hangs on Windows).
-    let bt_candidates: Vec<(String, WorkerKind)> = scan_candidate_ports(true)
-        .into_iter()
-        .filter(|(_, k)| *k == WorkerKind::Bluetooth)
-        .filter(|(name, _)| !skip.iter().any(|s| port_names_match(s, name)))
-        .collect();
-    for (name, _) in bt_candidates {
-        on_port(&name, "probing (bluetooth)");
-        match probe_usb_port_detailed(&name) {
-            Ok(mut w) => {
-                w.kind = WorkerKind::Bluetooth;
-                w.detail = format!("Bluetooth serial · {}", w.detail);
-                if w.id.starts_with("usb:") {
-                    w.id = w.id.replacen("usb:", "bt:", 1);
-                }
                 on_port(&name, &format!("ok · {}", w.detail));
                 found.push(w);
             }
@@ -1169,5 +1133,24 @@ mod tests {
             prefer_cyd_port(&[bare, cyd.clone()]).map(|p| p.name.as_str()),
             Some("COM6")
         );
+    }
+
+    #[test]
+    fn bluetooth_ports_are_junk_not_scanned() {
+        let bt = PortChoice {
+            name: "COM9".into(),
+            label: "COM9 — Bluetooth".into(),
+        };
+        let usb = PortChoice {
+            name: "COM6".into(),
+            label: "COM6 — USB CH340".into(),
+        };
+        assert!(cyd_port_score(&bt) < 0);
+        assert!(port_choice_is_system_junk(&bt));
+        assert!(!port_choice_is_system_junk(&usb));
+        let ports = vec![bt, usb];
+        let flashable = flashable_ports(&ports);
+        assert_eq!(flashable.len(), 1);
+        assert_eq!(flashable[0].name, "COM6");
     }
 }
