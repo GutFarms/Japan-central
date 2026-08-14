@@ -931,8 +931,8 @@ pub fn open_wifi_tcp(endpoint: &str) -> Result<TcpStream, String> {
         .next()
         .ok_or_else(|| format!("no address for {endpoint}"))?;
     let host = endpoint.split(':').next().unwrap_or(endpoint);
-    // SoftAP 192.168.1.88 / legacy 10.x and busy LAN boards may need a bit longer than 3s.
-    let softap = host == "192.168.1.88" || host.starts_with("10.");
+    // SoftAP 10.88.88.1 / legacy 10.x / 192.168.1.88 and busy LAN boards may need longer.
+    let softap = host == "10.88.88.1" || host == "192.168.1.88" || host.starts_with("10.");
     let timeout = if softap {
         Duration::from_secs(5)
     } else {
@@ -940,7 +940,7 @@ pub fn open_wifi_tcp(endpoint: &str) -> Result<TcpStream, String> {
     };
     let stream = TcpStream::connect_timeout(&addr, timeout).map_err(|e| {
         let softap_hint = if softap {
-            " — SoftAP: join open Njordr-XXXX, then open http://192.168.1.88/ (or Link over USB)"
+            " — SoftAP: join open Njordr-XXXX, then open http://10.88.88.1/ (or Link over USB)"
         } else {
             " — board offline / wrong network / firewall"
         };

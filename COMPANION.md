@@ -179,7 +179,7 @@ Same line protocol also runs over **Wi‑Fi TCP :19284**.
 
 ## Wi‑Fi workers (0.8.42+)
 
-- Board SoftAP: `Njordr-XXXX` open / no password; Setup SoftAP at http://192.168.1.88; after home Wi‑Fi save STA prefers 192.168.1.88 else DHCP (SoftAP moves to 10.x)
+- Board SoftAP: `Njordr-XXXX` open / no password; Setup SoftAP at http://10.88.88.1 (off home LAN); after save STA prefers 192.168.1.88 else DHCP
 - Optional STA: `cmp wifi ssid=…&pass=…` (saved in NVS)
 - UDP beacon `CYDBOARD|…` on port **19284**; Companion **Find CYD workers** listens and auto-links
 - Join the SoftAP from the PC **or** put the board on your LAN via STA, then scan

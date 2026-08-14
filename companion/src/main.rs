@@ -36,7 +36,7 @@ use live_bar::{
     default_header_coins, format_change, format_usd, COIN_CATALOG, LiveFeed,
 };
 use monitor_api::{
-    generate_install_id, generate_token, pair_url, primary_lan_ipv4, qr_modules,
+    generate_install_id, generate_token, pair_url, primary_lan_ipv4, softap_setup_client_ipv4, qr_modules,
     start as start_monitor_api, web_pair_url, MonitorBoard, MonitorCreds, MonitorHub,
     MonitorSnapshot, MONITOR_PORT,
 };
@@ -1287,10 +1287,27 @@ impl CompanionApp {
             };
             (label, C_WARN)
         } else if self.mining {
-            ("POOL DOWN", C_WARN)
+            // SoftAP setup has no internet — pool cannot stay up while the PC is on Njordr.
+            if self.pc_on_softap_setup_net() {
+                ("SOFTAP — REJOIN HOME", C_WARN)
+            } else {
+                ("POOL DOWN", C_WARN)
+            }
         } else {
             ("IDLE", C_MUTED)
         }
+    }
+
+    /// True when this PC is on Njordr SoftAP (no internet → pool cannot stay up).
+    fn pc_on_softap_setup_net(&self) -> bool {
+        if let Some(ip) = softap_setup_client_ipv4() {
+            return ip.starts_with("10.88.88.");
+        }
+        if self.monitor_lan_ip.starts_with("10.88.88.") {
+            return true;
+        }
+        // Fresh SoftAP beacon usually means this PC joined Njordr (no uplink).
+        self.fresh_softap_board().is_some() && self.mining && !self.stratum_live.connected
     }
 
     fn update_motion(&mut self, ctx: &egui::Context) {
@@ -4326,10 +4343,10 @@ phone opens Board Setup automatically (captive Sign-in), or use Setup / USB here
             let softap = self.fresh_softap_board();
             let step1 = if softap.is_some() {
                 "1. SoftAP is up — phone should auto-open Board Setup (Sign-in). \
-Or open http://192.168.1.88/. After save, board prefers 192.168.1.88 on home LAN else DHCP. PC: form below."
+Or open http://10.88.88.1/ (SoftAP). After save, board prefers 192.168.1.88 on home LAN else DHCP. PC: form below."
             } else {
                 "1. Join open SoftAP Njordr-XXXX (no password). Phone auto-opens Board Setup \
-(captive Sign-in → http://192.168.1.88/). PC: form below or USB Link."
+(captive Sign-in → http://10.88.88.1/). PC: form below or USB Link."
             };
             ui.label(
                 RichText::new(step1)

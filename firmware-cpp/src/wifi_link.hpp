@@ -16,11 +16,12 @@ static constexpr uint16_t CYD_WIFI_DNS_PORT = 53;
 static constexpr const char* CYD_WIFI_MAGIC = "CYDBOARD";
 // Initial SoftAP is open (no password) so first-time Setup is one tap in Windows / phone Wi‑Fi.
 static constexpr const char* CYD_SOFTAP_PASS = nullptr;
-// Fixed SoftAP address during initial setup — phone / PC Board Setup.
-static constexpr uint8_t CYD_SOFTAP_IP0 = 192;
-static constexpr uint8_t CYD_SOFTAP_IP1 = 168;
-static constexpr uint8_t CYD_SOFTAP_IP2 = 1;
-static constexpr uint8_t CYD_SOFTAP_IP3 = 88;
+// SoftAP setup portal address — NOT on 192.168.1.0/24 (avoids home LAN / pool routing clash).
+// Phone Board Setup: http://10.88.88.1/
+static constexpr uint8_t CYD_SOFTAP_IP0 = 10;
+static constexpr uint8_t CYD_SOFTAP_IP1 = 88;
+static constexpr uint8_t CYD_SOFTAP_IP2 = 88;
+static constexpr uint8_t CYD_SOFTAP_IP3 = 1;
 // Preferred STA address on home LAN after setup (falls back to DHCP if unavailable).
 static constexpr uint8_t CYD_STA_PREF_IP0 = 192;
 static constexpr uint8_t CYD_STA_PREF_IP1 = 168;
