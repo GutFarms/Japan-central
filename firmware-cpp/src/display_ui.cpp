@@ -87,7 +87,12 @@ void DisplayUi::paintLinkRateIp(const MinerSnapshot& snap, bool forceFull) {
   } else if (linked) {
     snprintf(link, sizeof(link), "LINK  OK");
   } else if (showIp) {
-    snprintf(link, sizeof(link), "LINK  WiFi");
+    // SoftAP-only: nudge phone users to the captive HTTP setup portal.
+    if (snap.wifiMode == "ap") {
+      snprintf(link, sizeof(link), "PHONE SETUP");
+    } else {
+      snprintf(link, sizeof(link), "LINK  WiFi");
+    }
   } else {
     snprintf(link, sizeof(link), "LINK  WAIT");
   }

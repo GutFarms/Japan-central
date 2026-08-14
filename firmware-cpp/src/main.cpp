@@ -471,6 +471,11 @@ void setup() {
     g_store.save(g_cfg);
     g_wifi.applyConfig(g_cfg);
   });
+  // Phone SoftAP portal uses the same NVS + SoftAP/STA apply path.
+  g_wifi.setPersist([]() {
+    g_store.save(g_cfg);
+    g_wifi.applyConfig(g_cfg);
+  });
 
   g_minerA.begin();
   g_minerB.begin();
