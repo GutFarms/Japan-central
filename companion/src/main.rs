@@ -43,10 +43,10 @@ use stratum::{
     WorkJob,
 };
 use workers::{
-    is_usb_serial_port, list_serial_ports, mac_is_stable, mac_worker_id, normalize_mac,
-    open_usb_serial_timed, open_wifi_tcp, port_names_match, scan_usb_workers_with_progress,
-    transport_mac_id, BoardWifiDiscovery, DiscoveredWorker, LanDiscovery, PortChoice, WorkerKind,
-    WorkerLive,
+    cyd_port_score, is_usb_serial_port, list_serial_ports, mac_is_stable, mac_worker_id,
+    normalize_mac, open_usb_serial_timed, open_wifi_tcp, port_choice_is_pci, port_names_match,
+    prefer_cyd_port, scan_usb_workers_with_progress, transport_mac_id, BoardWifiDiscovery,
+    DiscoveredWorker, LanDiscovery, PortChoice, WorkerKind, WorkerLive,
 };
 
 use eframe::egui::{
@@ -634,6 +634,9 @@ struct CompanionApp {
     update_status: String,
     auto_connect: bool,
     auto_connect_attempted: bool,
+    /// App start — delayed COM re-lists (USB enum often lags first paint).
+    boot_at: Instant,
+    port_rescans_done: u8,
     session_started: Option<Instant>,
     session_hash_start: u64,
     share_history: VecDeque<ShareRow>,
@@ -702,7 +705,7 @@ impl CompanionApp {
         let mut edit_password = "x".into();
         let mut target_mhz = 240u8;
         let mut com_port = String::new();
-        let mut auto_connect = false;
+        let mut auto_connect = true; // new installs: link the CYD USB port on launch
         let mut wizard_done = false;
         let mut monitor_install_id = String::new();
         let mut monitor_token = String::new();
@@ -826,6 +829,8 @@ impl CompanionApp {
             update_status: String::new(),
             auto_connect,
             auto_connect_attempted: false,
+            boot_at: Instant::now(),
+            port_rescans_done: 0,
             session_started: None,
             session_hash_start: 0,
             share_history: VecDeque::new(),
@@ -1359,11 +1364,38 @@ impl CompanionApp {
     }
 
     /// Prefer the next USB COM that is not already linked (for Add board).
+    /// Never pick motherboard PCI — that made the UI “lose” the ESP after Connect.
     fn select_next_unlinked_usb(&mut self) {
-        if let Some(p) = self.ports.iter().find(|p| {
-            is_usb_serial_port(&p.name) && !self.worker_already_linked(&p.name)
-        }) {
+        if let Some(p) = self
+            .ports
+            .iter()
+            .filter(|p| !port_choice_is_pci(p) && cyd_port_score(p) >= 0)
+            .filter(|p| !self.worker_already_linked(&p.name))
+            .max_by_key(|p| cyd_port_score(p))
+        {
             self.com_port = p.name.clone();
+        }
+    }
+
+    fn apply_best_com_port(&mut self, force: bool) {
+        let Some(best) = prefer_cyd_port(&self.ports) else {
+            return;
+        };
+        if force || self.com_port.is_empty() {
+            self.com_port = best.name.clone();
+            return;
+        }
+        let selected = self.ports.iter().find(|p| p.name == self.com_port);
+        let selected_bad = selected
+            .map(|p| port_choice_is_pci(p) || cyd_port_score(p) < 0)
+            .unwrap_or(true);
+        let missing = selected.is_none();
+        if missing || selected_bad {
+            self.com_port = best.name.clone();
+            self.push_log(
+                LogKind::Usb,
+                format!("COM selection → {} (preferred USB-UART for CYD)", best.name),
+            );
         }
     }
 
@@ -2825,6 +2857,7 @@ impl CompanionApp {
                     });
                 if soft_button(ui, "Refresh", 98.0).clicked() {
                     let _ = self.cmd_tx.send(NetCmd::ListPorts);
+                    self.auto_connect_attempted = false;
                 }
                 // Always offer Add board once at least one board is linked.
                 if self.usb_open {
@@ -2852,6 +2885,29 @@ impl CompanionApp {
                     }
                 }
             });
+            if self.ports.is_empty() {
+                ui.label(
+                    RichText::new(
+                        "No COM ports yet — plug the CYD USB-C data cable, then Refresh.",
+                    )
+                    .color(C_WARN)
+                    .size(12.0),
+                );
+            } else if self
+                .ports
+                .iter()
+                .find(|p| p.name == self.com_port)
+                .map(port_choice_is_pci)
+                .unwrap_or(false)
+            {
+                ui.label(
+                    RichText::new(
+                        "Selected port is motherboard PCI — pick the USB CH340/CP210x COM for the CYD.",
+                    )
+                    .color(C_WARN)
+                    .size(12.0),
+                );
+            }
             ui.add_space(12.0);
             self.ui_worker_discovery(ui);
             ui.add_space(16.0);
@@ -3586,23 +3642,17 @@ impl App for CompanionApp {
                 NetMsg::Ports(p) => {
                     let n = p.len();
                     self.ports = p;
-                    if self.com_port.is_empty() {
-                        // Prefer USB-UART over motherboard PCI COM (PCI often hangs).
-                        if let Some(usb) = self
-                            .ports
-                            .iter()
-                            .find(|p| is_usb_serial_port(&p.name) && !p.label.contains("PCI"))
-                        {
-                            self.com_port = usb.name.clone();
-                        } else if let Some(first) = self.ports.first() {
-                            self.com_port = first.name.clone();
-                        }
-                    } else if !self.ports.iter().any(|x| x.name == self.com_port) {
-                        // Keep remembered port even if not listed yet (driver lag).
-                    }
+                    self.apply_best_com_port(false);
                     self.push_log(
                         LogKind::Usb,
-                        format!("Serial ports: {n} reported by OS (all listed, none filtered)"),
+                        format!(
+                            "Serial ports: {n} reported · selected {}",
+                            if self.com_port.is_empty() {
+                                "—".into()
+                            } else {
+                                self.com_port.clone()
+                            }
+                        ),
                     );
                     if self.auto_connect
                         && !self.auto_connect_attempted
@@ -3610,6 +3660,12 @@ impl App for CompanionApp {
                         && !self.update_busy
                         && !self.com_port.is_empty()
                         && self.ports.iter().any(|x| x.name == self.com_port)
+                        && self
+                            .ports
+                            .iter()
+                            .find(|x| x.name == self.com_port)
+                            .map(|p| !port_choice_is_pci(p))
+                            .unwrap_or(false)
                     {
                         self.auto_connect_attempted = true;
                         self.connect_or_add_usb();
@@ -3620,7 +3676,7 @@ impl App for CompanionApp {
                     let low = s.to_lowercase();
                     if low.contains("usb open") || low.contains("worker linked") {
                         self.usb_open = true;
-                        self.select_next_unlinked_usb();
+                        // Keep the COM that just linked selected — do NOT jump to PCI COM1.
                         if self.post_flash_verify.is_some() && low.contains("usb open") {
                             self.absorb_flash_progress_line(
                                 "USB linked after flash — reading board config…",
@@ -4059,6 +4115,22 @@ impl App for CompanionApp {
 
         self.update_motion(ctx);
         self.live.poll();
+        // USB serial enum often finishes after the first ListPorts — re-scan briefly.
+        if self.port_rescans_done < 2 {
+            let due = if self.port_rescans_done == 0 {
+                Duration::from_millis(900)
+            } else {
+                Duration::from_millis(2_400)
+            };
+            if self.boot_at.elapsed() >= due {
+                self.port_rescans_done = self.port_rescans_done.saturating_add(1);
+                let _ = self.cmd_tx.send(NetCmd::ListPorts);
+                // Allow auto-connect again if first attempt had no usable USB yet.
+                if !self.usb_open && prefer_cyd_port(&self.ports).is_none() {
+                    self.auto_connect_attempted = false;
+                }
+            }
+        }
         // LAN peer discovery / advertise local CYD USB fleet.
         for peer in self.lan.poll_peers() {
             self.merge_discovered(peer);

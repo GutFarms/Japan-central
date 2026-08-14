@@ -54,6 +54,53 @@ pub struct PortChoice {
     pub label: String,
 }
 
+/// True when the OS labeled this as a motherboard PCI UART (never a CYD).
+pub fn port_choice_is_pci(p: &PortChoice) -> bool {
+    p.label.to_ascii_uppercase().contains("PCI")
+}
+
+/// Score higher for likely CYD USB-UART adapters (CH340 / CP210x / …).
+pub fn cyd_port_score(p: &PortChoice) -> i32 {
+    if !is_usb_serial_port(&p.name) || port_choice_is_pci(p) {
+        return -100;
+    }
+    let l = p.label.to_ascii_lowercase();
+    let mut s = 10;
+    if l.contains("ch340") || l.contains("wch") {
+        s += 50;
+    }
+    if l.contains("cp210") || l.contains("silicon labs") {
+        s += 45;
+    }
+    if l.contains("ftdi") || l.contains("usb serial") || l.contains("usb-enhanced") {
+        s += 40;
+    }
+    if l.contains("usb") {
+        s += 20;
+    }
+    // Higher COM numbers are often the plugged-in dongle vs COM1/COM3 system ports.
+    if let Some(n) = normalize_port_name(&p.name)
+        .strip_prefix("COM")
+        .and_then(|x| x.parse::<u32>().ok())
+    {
+        if n >= 4 {
+            s += 5;
+        }
+        if n >= 6 {
+            s += 3;
+        }
+    }
+    s
+}
+
+/// Best COM for a CYD: real USB-UART, never PCI.
+pub fn prefer_cyd_port(ports: &[PortChoice]) -> Option<&PortChoice> {
+    ports
+        .iter()
+        .filter(|p| cyd_port_score(p) >= 0)
+        .max_by_key(|p| cyd_port_score(p))
+}
+
 /// List every serial port the OS reports (no filtering) with USB details when available.
 pub fn list_serial_ports() -> Vec<PortChoice> {
     let mut infos = serialport::available_ports().unwrap_or_default();
@@ -890,5 +937,28 @@ mod tests {
             transport_mac_id(WorkerKind::Usb, "aabbccddee01"),
             transport_mac_id(WorkerKind::Wifi, "aabbccddee01")
         );
+    }
+
+    #[test]
+    fn prefer_cyd_skips_pci_and_ranks_ch340() {
+        let ports = vec![
+            PortChoice {
+                name: "COM1".into(),
+                label: "COM1 — PCI".into(),
+            },
+            PortChoice {
+                name: "COM6".into(),
+                label: "COM6 — USB CH340".into(),
+            },
+            PortChoice {
+                name: "COM3".into(),
+                label: "COM3 — Unknown".into(),
+            },
+        ];
+        assert!(port_choice_is_pci(&ports[0]));
+        assert!(!port_choice_is_pci(&ports[1]));
+        let best = prefer_cyd_port(&ports).unwrap();
+        assert_eq!(best.name, "COM6");
+        assert!(cyd_port_score(&ports[1]) > cyd_port_score(&ports[2]));
     }
 }
