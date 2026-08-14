@@ -57,8 +57,12 @@ pub struct PortChoice {
 }
 
 /// True when the OS labeled this as a motherboard PCI UART (never a CYD).
+///
+/// Match the deliberate `"— PCI"` tag from `port_info_to_choice` — do **not**
+/// use a bare `"PCI"` substring (USB product strings occasionally contain it).
 pub fn port_choice_is_pci(p: &PortChoice) -> bool {
-    p.label.to_ascii_uppercase().contains("PCI")
+    let u = p.label.to_ascii_uppercase();
+    u.contains("— PCI") || u.contains("- PCI") || u.contains("PCI (NOT A CYD)")
 }
 
 /// Motherboard / non-CYD serial — never use for Connect / Update / flash.
@@ -200,40 +204,136 @@ fn port_info_to_choice(p: serialport::SerialPortInfo) -> PortChoice {
     }
 }
 
-/// Windows: merge HARDWARE\DEVICEMAP\SERIALCOMM so COMs missed by SetupAPI still appear.
+/// Windows: merge every COM Windows knows about — SetupAPI alone often drops a
+/// 2nd CH340. Sources: SERIALCOMM + Enum\USB / FTDIBUS / USBSSER PortName values.
 #[cfg(windows)]
 fn windows_registry_com_ports() -> Vec<(String, String)> {
-    use winreg::enums::HKEY_LOCAL_MACHINE;
+    use winreg::enums::{HKEY_LOCAL_MACHINE, KEY_READ};
     use winreg::types::FromRegValue;
     use winreg::RegKey;
 
-    let hklm = RegKey::predef(HKEY_LOCAL_MACHINE);
-    let Ok(key) = hklm.open_subkey(r"HARDWARE\DEVICEMAP\SERIALCOMM") else {
-        return Vec::new();
-    };
-    let mut out = Vec::new();
-    for item in key.enum_values() {
-        let Ok((device, value)) = item else {
-            continue;
-        };
-        let Ok(com) = String::from_reg_value(&value) else {
-            continue;
-        };
+    fn push_com(out: &mut Vec<(String, String)>, com: String, hint: String) {
         let com = com.trim().to_string();
         let upper = com.to_ascii_uppercase();
         if upper.starts_with("COM")
             && upper.len() > 3
             && upper[3..].chars().all(|c| c.is_ascii_digit())
         {
+            out.push((upper, hint));
+        }
+    }
+
+    fn read_port_name(key: &RegKey) -> Option<String> {
+        key.get_value::<String, _>("PortName")
+            .ok()
+            .or_else(|| {
+                key.open_subkey("Device Parameters")
+                    .ok()
+                    .and_then(|dp| dp.get_value::<String, _>("PortName").ok())
+            })
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+    }
+
+    fn walk_enum(key: &RegKey, depth: u8, hint: &str, out: &mut Vec<(String, String)>) {
+        if depth > 5 {
+            return;
+        }
+        if let Some(com) = read_port_name(key) {
+            let chip = if hint.to_ascii_uppercase().contains("VID_1A86")
+                || hint.to_ascii_uppercase().contains("PID_7523")
+            {
+                "CH340/WCH"
+            } else if hint.to_ascii_uppercase().contains("VID_10C4")
+                || hint.to_ascii_uppercase().contains("CP210")
+            {
+                "CP210x"
+            } else if hint.to_ascii_uppercase().contains("VID_0403")
+                || hint.to_ascii_uppercase().contains("FTDI")
+            {
+                "FTDI"
+            } else if hint.to_ascii_uppercase().contains("VID_067B") {
+                "Prolific"
+            } else {
+                "USB"
+            };
+            push_com(out, com, format!("enum · {chip} · {hint}"));
+        }
+        let Ok(subs) = key.enum_keys().collect::<Result<Vec<_>, _>>() else {
+            return;
+        };
+        for sub in subs {
+            if let Ok(child) = key.open_subkey_with_flags(&sub, KEY_READ) {
+                let child_hint = if hint.is_empty() {
+                    sub.clone()
+                } else {
+                    format!("{hint}\\{sub}")
+                };
+                // Keep hints short for the UI label.
+                let short = if child_hint.len() > 48 {
+                    child_hint
+                        .rsplit('\\')
+                        .take(2)
+                        .collect::<Vec<_>>()
+                        .into_iter()
+                        .rev()
+                        .collect::<Vec<_>>()
+                        .join("\\")
+                } else {
+                    child_hint
+                };
+                walk_enum(&child, depth + 1, &short, out);
+            }
+        }
+    }
+
+    let hklm = RegKey::predef(HKEY_LOCAL_MACHINE);
+    let mut out = Vec::new();
+
+    if let Ok(key) = hklm.open_subkey_with_flags(r"HARDWARE\DEVICEMAP\SERIALCOMM", KEY_READ) {
+        for item in key.enum_values() {
+            let Ok((device, value)) = item else {
+                continue;
+            };
+            let Ok(com) = String::from_reg_value(&value) else {
+                continue;
+            };
             let hint = if device.contains('\\') {
                 format!("registry · {}", device.rsplit('\\').next().unwrap_or(&device))
             } else {
                 format!("registry · {device}")
             };
-            out.push((com, hint));
+            push_com(&mut out, com, hint);
         }
     }
-    out
+
+    for path in [
+        r"SYSTEM\CurrentControlSet\Enum\USB",
+        r"SYSTEM\CurrentControlSet\Enum\FTDIBUS",
+        r"SYSTEM\CurrentControlSet\Enum\USBSSER",
+        r"SYSTEM\CurrentControlSet\Enum\PORTS",
+    ] {
+        if let Ok(root) = hklm.open_subkey_with_flags(path, KEY_READ) {
+            let leaf = path.rsplit('\\').next().unwrap_or(path);
+            walk_enum(&root, 0, leaf, &mut out);
+        }
+    }
+
+    // De-dupe by COM name, prefer richer hints (enum · chip over bare registry).
+    use std::collections::BTreeMap;
+    let mut best: BTreeMap<String, String> = BTreeMap::new();
+    for (com, hint) in out {
+        best.entry(com)
+            .and_modify(|h| {
+                if hint.contains("enum ·") && !h.contains("enum ·") {
+                    *h = hint.clone();
+                } else if hint.len() > h.len() && hint.contains("CH340") {
+                    *h = hint.clone();
+                }
+            })
+            .or_insert(hint);
+    }
+    best.into_iter().collect()
 }
 
 #[cfg(not(windows))]
@@ -242,7 +342,7 @@ fn windows_registry_com_ports() -> Vec<(String, String)> {
 }
 
 /// List every serial port the OS reports (no filtering) with USB details when available.
-/// On Windows, also merges registry SERIALCOMM so a 2nd CH340 is not dropped.
+/// On Windows, also merges SERIALCOMM + Enum PortName so a 2nd CH340 is not dropped.
 pub fn list_serial_ports() -> Vec<PortChoice> {
     use std::collections::BTreeMap;
 
@@ -253,10 +353,20 @@ pub fn list_serial_ports() -> Vec<PortChoice> {
     }
     for (com, hint) in windows_registry_com_ports() {
         let key = normalize_port_name(&com);
-        by_name.entry(key).or_insert_with(|| PortChoice {
-            name: com.clone(),
-            label: format!("{com} — {hint}"),
-        });
+        by_name
+            .entry(key)
+            .and_modify(|existing| {
+                // Prefer USB/chip labels from Enum when SetupAPI only said "serial".
+                let weak = existing.label.to_ascii_lowercase().contains("— serial")
+                    || existing.label.to_ascii_lowercase().contains("registry ·");
+                if weak && hint.contains("enum ·") {
+                    existing.label = format!("{com} — {hint}");
+                }
+            })
+            .or_insert_with(|| PortChoice {
+                name: com.clone(),
+                label: format!("{com} — {hint}"),
+            });
     }
     by_name.into_values().collect()
 }
@@ -644,7 +754,22 @@ pub fn scan_usb_workers_with_progress(
                 on_port(&name, &format!("ok · {}", w.detail));
                 found.push(w);
             }
-            Err(e) => on_port(&name, &format!("miss · {e}")),
+            Err(e) => {
+                on_port(&name, &format!("miss · {e}"));
+                // Still surface the COM so the UI shows every USB port Windows listed,
+                // even when the board is blank / download-mode / not speaking cmp yet.
+                let id = format!("usb-present:{}", normalize_port_name(&name));
+                found.push(DiscoveredWorker {
+                    id,
+                    kind,
+                    endpoint: name.clone(),
+                    mac: String::new(),
+                    fw: String::new(),
+                    detail: format!("USB COM present · no cmp ({e})"),
+                    host: "local".into(),
+                    last_seen_ms: now_ms(),
+                });
+            }
         }
     }
 
