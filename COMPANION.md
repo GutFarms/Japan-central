@@ -179,7 +179,7 @@ Same line protocol also runs over **Wi‑Fi TCP :19284**.
 
 ## Wi‑Fi workers (0.8.42+)
 
-- Board SoftAP: `Njordr-XXXX` / password `njordrseas` (XXXX from MAC)
+- Board SoftAP: `Njordr-XXXX` open / no password (XXXX from MAC)
 - Optional STA: `cmp wifi ssid=…&pass=…` (saved in NVS)
 - UDP beacon `CYDBOARD|…` on port **19284**; Companion **Find CYD workers** listens and auto-links
 - Join the SoftAP from the PC **or** put the board on your LAN via STA, then scan

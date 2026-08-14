@@ -1796,7 +1796,7 @@ impl CompanionApp {
             }
             if wifi_is_softap_setup(w) {
                 self.last_error = format!(
-                    "SoftAP {endpoint} — join Njordr-XXXX / njordrseas in Windows Wi‑Fi first, then Connect. Prefer Link over USB when the board is plugged in."
+                    "SoftAP {endpoint} — join open Njordr-XXXX in Windows Wi‑Fi (no password), then Connect. Prefer Link over USB when the board is plugged in."
                 );
                 self.push_log(LogKind::Warn, self.last_error.clone());
                 // Still attempt — PC may already be on SoftAP.
@@ -4150,7 +4150,7 @@ impl CompanionApp {
                         let btn = if softap { "Set up Wi‑Fi" } else { "Connect" };
                         if soft_button(ui, btn, 120.0)
                             .on_hover_text(if softap {
-                                "Open Setup to push home Wi‑Fi (PC must be on Njordr-XXXX / njordrseas)."
+                                "Open Setup to push home Wi‑Fi (PC must be on open Njordr-XXXX SoftAP)."
                             } else {
                                 "TCP cmp to board on your LAN / SoftAP."
                             })
@@ -4248,7 +4248,7 @@ impl CompanionApp {
                     .into();
             self.push_log(
                 LogKind::Info,
-                "Routed to Setup — push home Wi‑Fi to the board (SoftAP pass njordrseas)."
+                "Routed to Setup — push home Wi‑Fi to the board (SoftAP is open / no password)."
                     .into(),
             );
         }
@@ -4274,7 +4274,7 @@ impl CompanionApp {
                 ui.label(
                     RichText::new(format!(
                         "SoftAP {} — PC is on the board network. Open Setup to push home Wi‑Fi \
-(pass njordrseas).",
+(SoftAP has no password).",
                         w.endpoint
                     ))
                     .color(C_WARN)
@@ -4287,7 +4287,7 @@ impl CompanionApp {
             } else {
                 ui.label(
                     RichText::new(
-                        "Join SoftAP Njordr-XXXX / njordrseas, or Link USB — then open Setup to \
+                        "Join open SoftAP Njordr-XXXX (no password), or Link USB — then open Setup to \
 save home Wi‑Fi to the board.",
                     )
                     .color(C_DIM)
@@ -4325,9 +4325,9 @@ save home Wi‑Fi to the board.",
         soft_panel(ui, "How to connect", |ui| {
             let softap = self.fresh_softap_board();
             let step1 = if softap.is_some() {
-                "1. PC is on board SoftAP (Njordr-XXXX / njordrseas) — ready."
+                "1. PC is on board SoftAP (Njordr-XXXX, open / no password) — ready."
             } else {
-                "1. Join SoftAP Njordr-XXXX / password njordrseas in Windows Wi‑Fi \
+                "1. Join open SoftAP Njordr-XXXX in Windows Wi‑Fi (no password) \
 (or Link the board over USB)."
             };
             ui.label(
@@ -4440,7 +4440,7 @@ save home Wi‑Fi to the board.",
         }
         if endpoint.is_empty() {
             self.last_error =
-                "Link a USB board or join SoftAP Njordr-XXXX / njordrseas, then Find workers."
+                "Link a USB board or join open SoftAP Njordr-XXXX (no password), then Find workers."
                     .into();
             return;
         }
@@ -4509,7 +4509,7 @@ save home Wi‑Fi to the board.",
         match ok {
             Ok(msg) => {
                 self.wifi_setup_phase = WifiSetupPhase::Idle;
-                self.last_ok = format!("{msg} — board SoftAP Njordr-XXXX / njordrseas");
+                self.last_ok = format!("{msg} — board SoftAP Njordr-XXXX (open / no password)");
                 self.last_error.clear();
                 self.push_log(LogKind::Usb, format!("Wi‑Fi cleared on {endpoint}: {msg}"));
             }
@@ -4596,7 +4596,7 @@ save home Wi‑Fi to the board.",
             ui.label(
                 RichText::new(
                     "Select the SoftAP or linked USB board, enter home Wi‑Fi, then Push & save — \
-credentials write to board NVS over cmp. SoftAP password is njordrseas.",
+credentials write to board NVS over cmp. SoftAP Njordr-XXXX is open (no password).",
                 )
                 .color(C_DIM)
                 .size(12.0),
@@ -8281,7 +8281,7 @@ Power a 2nd board nearby with wall/power-bank only (no PC cable)."
             && !ep.starts_with("mesh:");
         if !looks_tcp {
             return Err(format!(
-                "Board {endpoint} not linked — join SoftAP Njordr-XXXX / njordrseas or Link USB first"
+                "Board {endpoint} not linked — join open SoftAP Njordr-XXXX or Link USB first"
             ));
         }
         let stream = open_wifi_tcp(ep)?;
