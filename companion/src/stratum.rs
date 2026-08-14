@@ -52,6 +52,10 @@ pub struct StratumClient {
     active_en2_hex: String,
     active_ntime_hex: String,
     pending_job: Option<WorkJob>,
+    /// Job ids invalidated by `clean_jobs=true` (NerdMiner/ESP-Miner style).
+    stale_job_ids: VecDeque<String>,
+    /// Pool asked to drop all prior work (`params[8]=true`).
+    clean_jobs_pending: bool,
     /// Share submit ids waiting for a pool reply (ignore other RPC noise).
     pending_shares: HashMap<u64, Instant>,
     /// job|en2|nonce recently submitted — drop board duplicates across reconnect.
@@ -66,6 +70,8 @@ pub struct StratumClient {
     have_difficulty: bool,
     /// Notify/authorize arrived but we are waiting for set_difficulty (or timeout).
     job_wait_since: Option<Instant>,
+    /// Suggested share difficulty for ESP-class hashrate (NerdMiner-style).
+    suggest_difficulty: f64,
     pub accepted: u32,
     pub rejected: u32,
     pub phase: String,
@@ -115,6 +121,8 @@ impl StratumClient {
             active_en2_hex: String::new(),
             active_ntime_hex: String::new(),
             pending_job: None,
+            stale_job_ids: VecDeque::new(),
+            clean_jobs_pending: false,
             pending_shares: HashMap::new(),
             recent_submit_keys: VecDeque::new(),
             pending_share_meta: HashMap::new(),
@@ -122,6 +130,8 @@ impl StratumClient {
             post_auth_job: false,
             have_difficulty: false,
             job_wait_since: None,
+            // Match NerdMiner / public-pool ESP defaults — pool may ignore or vardiff up.
+            suggest_difficulty: 0.001,
             accepted: 0,
             rejected: 0,
             phase: "off".into(),
@@ -181,6 +191,8 @@ impl StratumClient {
         self.subscribed = false;
         self.authorized = false;
         self.pending_job = None;
+        self.stale_job_ids.clear();
+        self.clean_jobs_pending = false;
         self.pending_shares.clear();
         self.pending_share_meta.clear();
         self.reject_grace_until = None;
@@ -237,6 +249,40 @@ impl StratumClient {
 
     pub fn has_pending_job(&self) -> bool {
         self.pending_job.is_some()
+    }
+
+    /// Job ids the pool invalidated via `clean_jobs=true` (drain each poll).
+    pub fn take_stale_job_ids(&mut self) -> Vec<String> {
+        self.stale_job_ids.drain(..).collect()
+    }
+
+    /// True once after a notify with `clean_jobs=true` (clear recent job cache).
+    pub fn take_clean_jobs(&mut self) -> bool {
+        let v = self.clean_jobs_pending;
+        self.clean_jobs_pending = false;
+        v
+    }
+
+    pub fn is_job_stale(&self, job_id: &str) -> bool {
+        self.stale_job_ids.iter().any(|id| id == job_id)
+    }
+
+    /// First pending job plus `extra` more unique-extranonce2 variants (fleet).
+    /// NerdMiner / multi-worker fleets assign distinct en2 so boards do not collide.
+    pub fn take_job_batch(&mut self, total: usize) -> Vec<WorkJob> {
+        let Some(first) = self.pending_job.take() else {
+            return Vec::new();
+        };
+        let n = total.max(1);
+        let mut out = Vec::with_capacity(n);
+        out.push(first);
+        for _ in 1..n {
+            match self.build_job() {
+                Some(j) => out.push(j),
+                None => break,
+            }
+        }
+        out
     }
 
     pub fn difficulty(&self) -> f64 {
@@ -364,6 +410,9 @@ impl StratumClient {
     ) -> Result<(), String> {
         if !self.authorized {
             return Err("not authorized".into());
+        }
+        if self.is_job_stale(job_id) {
+            return Err("stale job (clean_jobs)".into());
         }
         let key = format!("{job_id}|{en2}|{nonce_hex}");
         self.prune_submit_keys();
@@ -507,6 +556,11 @@ impl StratumClient {
             if method == "mining.notify" {
                 if let Some(arr) = params.as_array() {
                     if arr.len() >= 8 {
+                        let clean_jobs = arr
+                            .get(8)
+                            .and_then(|v| v.as_bool())
+                            .unwrap_or(false);
+                        let prev_job = self.job_id.clone();
                         self.job_id = arr[0].as_str().unwrap_or("").to_string();
                         self.prevhash_hex = arr[1].as_str().unwrap_or("").to_string();
                         self.coinb1_hex = arr[2].as_str().unwrap_or("").to_string();
@@ -522,6 +576,17 @@ impl StratumClient {
                         self.version_hex = arr[5].as_str().unwrap_or("").to_string();
                         self.nbits_hex = arr[6].as_str().unwrap_or("").to_string();
                         self.ntime_hex = arr[7].as_str().unwrap_or("").to_string();
+                        // NerdMiner/ESP-Miner: clean_jobs → drop prior work so stale shares die.
+                        if clean_jobs {
+                            self.clean_jobs_pending = true;
+                            if !prev_job.is_empty() && prev_job != self.job_id {
+                                self.mark_job_stale(&prev_job);
+                            }
+                            self.push_recent(format!(
+                                "← mining.notify job={} clean_jobs=true",
+                                self.job_id
+                            ));
+                        }
                         // Hold work until authorize — early board shares against pre-auth
                         // jobs are a common source of the first 1–2 pool rejects.
                         if !self.authorized {
@@ -709,6 +774,9 @@ impl StratumClient {
         self.reject_grace_until = Some(Instant::now() + Duration::from_secs(5));
         self.phase = "idle".into();
         self.push_recent("← authorized (share counters reset; reject grace 5s)".into());
+        // NerdMiner-class: suggest a low share difficulty so ESP fleets are visible
+        // on solo/public pools before vardiff settles.
+        let _ = self.send_suggest_difficulty(self.suggest_difficulty);
         // If notify already arrived during subscribe, release work once difficulty is known.
         if !self.job_id.is_empty() {
             if self.have_difficulty {
@@ -719,6 +787,32 @@ impl StratumClient {
                 self.push_recent(
                     "← authorized · waiting for set_difficulty before first job".into(),
                 );
+            }
+        }
+    }
+
+    fn send_suggest_difficulty(&mut self, diff: f64) -> Result<(), String> {
+        if !(diff > 0.0) {
+            return Ok(());
+        }
+        let id = self.msg_id;
+        self.msg_id += 1;
+        let msg = json!({
+            "id": id,
+            "method": "mining.suggest_difficulty",
+            "params": [diff]
+        });
+        self.send_json(&msg)
+    }
+
+    fn mark_job_stale(&mut self, job_id: &str) {
+        if job_id.is_empty() {
+            return;
+        }
+        if !self.stale_job_ids.iter().any(|id| id == job_id) {
+            self.stale_job_ids.push_back(job_id.to_string());
+            while self.stale_job_ids.len() > 64 {
+                self.stale_job_ids.pop_front();
             }
         }
     }

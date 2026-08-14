@@ -34,11 +34,16 @@ static volatile bool g_jobLoaded = false;
 static volatile bool g_mining = false;
 static std::atomic<uint64_t> g_hashCounter{0};
 static volatile uint64_t g_shareCounter = 0;
-static volatile uint32_t g_lastShareNonce = 0;
-static volatile bool g_sharePending = false;
-static char g_shareJob[48];
-static char g_shareEn2[48];
-static char g_shareNtime[24];
+// Small ring so dual-lane hits are not overwritten before USB/ESP-NOW emit (NerdMiner queues work).
+static constexpr size_t kShareQ = 4;
+struct ShareSlot {
+  uint32_t nonce = 0;
+  char job[48]{};
+  char en2[48]{};
+  char ntime[24]{};
+  bool used = false;
+};
+static ShareSlot g_shareQ[kShareQ];
 static float g_lastBenchHs = 0;
 
 static uint32_t g_windowStart = 0;
@@ -223,11 +228,23 @@ static void noteShare(uint32_t nonce) {
   ntime[sizeof(ntime) - 1] = 0;
   portENTER_CRITICAL(&g_mux);
   g_shareCounter++;
-  g_lastShareNonce = nonce;
-  memcpy(g_shareJob, job, sizeof(g_shareJob));
-  memcpy(g_shareEn2, en2, sizeof(g_shareEn2));
-  memcpy(g_shareNtime, ntime, sizeof(g_shareNtime));
-  g_sharePending = true;
+  size_t slot = kShareQ;
+  for (size_t i = 0; i < kShareQ; i++) {
+    if (!g_shareQ[i].used) {
+      slot = i;
+      break;
+    }
+  }
+  if (slot == kShareQ) {
+    // Queue full — keep older shares; drop this hit rather than overwrite.
+    portEXIT_CRITICAL(&g_mux);
+    return;
+  }
+  g_shareQ[slot].nonce = nonce;
+  memcpy(g_shareQ[slot].job, job, sizeof(job));
+  memcpy(g_shareQ[slot].en2, en2, sizeof(en2));
+  memcpy(g_shareQ[slot].ntime, ntime, sizeof(ntime));
+  g_shareQ[slot].used = true;
   portEXIT_CRITICAL(&g_mux);
 }
 
@@ -257,16 +274,24 @@ static void serviceCompanion() {
     g_net.fresh = false;
     if (!g_mining) g_snap.netTicker = g_net.ticker;
   }
-  if (g_sharePending) {
+  for (;;) {
     PendingShare s;
+    bool got = false;
     portENTER_CRITICAL(&g_mux);
-    s.nonce = g_lastShareNonce;
-    s.jobId = g_shareJob;
-    s.extranonce2 = g_shareEn2;
-    s.ntime = g_shareNtime;
-    s.pending = true;
-    g_sharePending = false;
+    for (size_t i = 0; i < kShareQ; i++) {
+      if (g_shareQ[i].used) {
+        s.nonce = g_shareQ[i].nonce;
+        s.jobId = g_shareQ[i].job;
+        s.extranonce2 = g_shareQ[i].en2;
+        s.ntime = g_shareQ[i].ntime;
+        s.pending = true;
+        g_shareQ[i].used = false;
+        got = true;
+        break;
+      }
+    }
     portEXIT_CRITICAL(&g_mux);
+    if (!got) break;
     g_cmp.emitShare(s);
   }
 }

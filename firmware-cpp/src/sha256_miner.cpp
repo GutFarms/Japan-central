@@ -314,6 +314,9 @@ bool Sha256Miner::mineBatchSw(size_t count, uint32_t stride) {
       shares_++;
       lastShareNonce_ = n;
       found = true;
+      n += stride;
+      nonce_ = n;
+      return true;  // Emit first hit (ESP-Miner / NerdMiner style) — don't overwrite in-batch.
     }
     n += stride;
   }

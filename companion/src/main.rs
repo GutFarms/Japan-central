@@ -8483,10 +8483,29 @@ Power a 2nd board nearby with wall/power-bank only (no PC cable)."
                 for ev in client.take_share_events() {
                     let _ = msg_tx.send(NetMsg::Share(ev));
                 }
-                if let Some(job) = client.take_job() {
+                // NerdMiner-style clean_jobs: drop cached work so late board shares die.
+                if client.take_clean_jobs() {
+                    recent_jobs.clear();
+                    held_board_shares.clear();
+                    log_msg(
+                        &msg_tx,
+                        LogKind::Stratum,
+                        "Pool clean_jobs — cleared job/share cache",
+                    );
+                }
+                for id in client.take_stale_job_ids() {
+                    recent_jobs.retain(|j| j.job_id != id);
+                    held_board_shares.retain(|(job, _, _, _)| job != &id);
+                }
+                // Fleet: one unique extranonce2 per USB/mesh worker (NerdMiner/multi-worker style).
+                let fleet_n = boards.len().saturating_add(mesh.len()).max(1);
+                let jobs = client.take_job_batch(fleet_n);
+                if !jobs.is_empty() {
                     let mut pushed = 0usize;
                     let mut stale_abort = false;
+                    let mut job_iter = jobs.into_iter();
                     for b in boards.iter_mut() {
+                        let Some(job) = job_iter.next() else { break };
                         let mut legacy = b.legacy_job;
                         let push_res = {
                             let mut pump = || {
@@ -8505,6 +8524,7 @@ Power a 2nd board nearby with wall/power-bank only (no PC cable)."
                             Ok(_) => {
                                 b.legacy_job = legacy;
                                 pushed += 1;
+                                recent_jobs.push_back(job);
                             }
                             Err(e) => {
                                 b.legacy_job = legacy;
@@ -8526,6 +8546,7 @@ Power a 2nd board nearby with wall/power-bank only (no PC cable)."
                                 stale_abort = true;
                                 break;
                             }
+                            let Some(job) = job_iter.next() else { break };
                             let mesh_res = {
                                 let mut pump = || {
                                     let _ = client.poll();
@@ -8533,7 +8554,10 @@ Power a 2nd board nearby with wall/power-bank only (no PC cable)."
                                 push_mesh_job(&mut boards, m, &job, &msg_tx, &mut pump)
                             };
                             match mesh_res {
-                                Ok(()) => pushed += 1,
+                                Ok(()) => {
+                                    pushed += 1;
+                                    recent_jobs.push_back(job);
+                                }
                                 Err(e) => {
                                     let _ = msg_tx.send(NetMsg::Action(Err(format!(
                                         "mesh {} job push: {e}",
@@ -8543,23 +8567,20 @@ Power a 2nd board nearby with wall/power-bank only (no PC cable)."
                             }
                         }
                     }
+                    while recent_jobs.len() > 64 {
+                        recent_jobs.pop_front();
+                    }
                     if stale_abort {
-                        // Drop this job; the newer pending job is handled next loop.
                         log_msg(
                             &msg_tx,
                             LogKind::Stratum,
-                            format!("Job {} superseded mid-push — pool stays first", job.job_id),
+                            "Job superseded mid-push — pool stays first",
                         );
                     } else if pushed > 0 {
-                        recent_jobs.push_back(job.clone());
-                        while recent_jobs.len() > 32 {
-                            recent_jobs.pop_front();
-                        }
                         let _ = msg_tx.send(NetMsg::Action(Ok(format!(
-                            "USB ← job {} → {pushed} board(s)/mesh",
-                            job.job_id
+                            "USB ← job → {pushed} board(s)/mesh (unique en2)"
                         ))));
-                    } else {
+                    } else if let Some(job) = job_iter.next() {
                         client.restore_job(job);
                     }
                 }
