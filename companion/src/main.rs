@@ -4684,7 +4684,7 @@ impl App for CompanionApp {
                         if awaiting_boot {
                             ui.label(
                                 RichText::new(
-                                    "1) Hold BOOT · 2) Tap RESET · 3) Keep BOOT held · 4) Click Ready",
+                                    "1) Hold BOOT · 2) Tap RESET · 3) Keep BOOT held · 4) Ready · keep BOOT until Writing %",
                                 )
                                 .color(C_TEXT)
                                 .size(13.0),
