@@ -1361,28 +1361,33 @@ impl CompanionApp {
     }
 
     fn merge_discovered(&mut self, worker: DiscoveredWorker) {
-        // Prefer stable MAC identity within the same transport. Never merge USB↔Wi‑Fi
-        // by MAC (that hid the second path and collapsed multi-board SoftAP rows).
-        // Never merge on mac=unknown — that collapsed distinct boards into one.
+        // Prefer stable MAC identity within the same *non-USB* transport.
+        // USB is always keyed by COM endpoint — eFuse MAC collisions on cheap
+        // boards must not collapse two Find-workers rows into one.
+        // Never merge USB↔Wi‑Fi by MAC. Never merge on mac=unknown.
         if let Some(existing) = self.discovered_workers.iter_mut().find(|w| {
             w.id == worker.id
-                || (w.kind == worker.kind
-                    && mac_is_stable(&worker.mac)
-                    && mac_is_stable(&w.mac)
-                    && normalize_mac(&w.mac) == normalize_mac(&worker.mac))
                 || (w.kind == WorkerKind::Usb
                     && worker.kind == WorkerKind::Usb
                     && port_names_match(&w.endpoint, &worker.endpoint))
                 || (w.kind == WorkerKind::Wifi
                     && worker.kind == WorkerKind::Wifi
-                    && w.endpoint == worker.endpoint)
+                    && (w.endpoint == worker.endpoint
+                        || (mac_is_stable(&worker.mac)
+                            && mac_is_stable(&w.mac)
+                            && normalize_mac(&w.mac) == normalize_mac(&worker.mac))))
+                || (w.kind == worker.kind
+                    && !matches!(w.kind, WorkerKind::Usb | WorkerKind::Wifi)
+                    && mac_is_stable(&worker.mac)
+                    && mac_is_stable(&w.mac)
+                    && normalize_mac(&w.mac) == normalize_mac(&worker.mac))
         }) {
             *existing = worker;
         } else {
             self.discovered_workers.push(worker);
         }
         self.discovered_workers
-            .sort_by(|a, b| a.mac.cmp(&b.mac).then(a.endpoint.cmp(&b.endpoint)));
+            .sort_by(|a, b| a.endpoint.cmp(&b.endpoint).then(a.mac.cmp(&b.mac)));
     }
 
     fn worker_already_linked(&self, endpoint: &str) -> bool {
@@ -1396,6 +1401,22 @@ impl CompanionApp {
             && self.connected_workers.iter().any(|c| {
                 mac_is_stable(&c.mac) && normalize_mac(&c.mac) == normalize_mac(mac)
             })
+    }
+
+    /// True when two+ linked boards report the same stable eFuse MAC.
+    fn connected_mac_collision(&self) -> bool {
+        let mut seen: Vec<String> = Vec::new();
+        for w in &self.connected_workers {
+            if !mac_is_stable(&w.mac) {
+                continue;
+            }
+            let m = normalize_mac(&w.mac);
+            if seen.iter().any(|s| s == &m) {
+                return true;
+            }
+            seen.push(m);
+        }
+        false
     }
 
     /// Prefer the next USB COM that is not already linked (for Add board).
@@ -2466,11 +2487,25 @@ impl CompanionApp {
                                         .font(display_font(22.0)),
                                 );
                                 ui.label(
-                                    RichText::new(format!(
-                                        "{} · {}",
-                                        self.sha_mode_label(),
-                                        if self.usb_open { "USB linked" } else { "USB idle" }
-                                    ))
+                                    RichText::new({
+                                        let n = self.connected_workers.len().max(if self.usb_open {
+                                            1
+                                        } else {
+                                            0
+                                        });
+                                        if n > 1 {
+                                            format!(
+                                                "{} · fleet {} board{}",
+                                                self.sha_mode_label(),
+                                                n,
+                                                if n == 1 { "" } else { "s" }
+                                            )
+                                        } else if self.usb_open {
+                                            format!("{} · USB linked", self.sha_mode_label())
+                                        } else {
+                                            format!("{} · USB idle", self.sha_mode_label())
+                                        }
+                                    })
                                     .color(C_DIM)
                                     .font(mono_ui_font(11.0)),
                                 );
@@ -3275,7 +3310,7 @@ impl CompanionApp {
             } else if self.usb_open && count_usb_uart_ports(&self.ports) <= 1 {
                 ui.label(
                     RichText::new(
-                        "Windows only sees 1 USB board COM (plus PCI junk like COM1). Plug the 2nd CYD with a data USB-C cable into another port, open Device Manager → Ports (COM & LPT), confirm a new COMx appears, then Refresh.",
+                        "Windows only sees 1 USB board COM (plus PCI junk like COM1). Plug the 2nd CYD with a data USB-C cable into another port, open Device Manager → Ports (COM & LPT), confirm a new COMx appears, then Refresh. Power-only boards join as mesh (should show a different MAC).",
                     )
                     .color(C_WARN)
                     .size(12.0),
@@ -3381,32 +3416,31 @@ impl CompanionApp {
 
         if !self.connected_workers.is_empty() {
             ui.add_space(8.0);
+            let dup_mac = self.connected_mac_collision();
             for w in self.connected_workers.clone() {
                 ui.horizontal(|ui| {
+                    let rate = format_hashrate(w.hashrate_hs);
+                    let mac = if w.mac.is_empty() {
+                        "mac?".to_string()
+                    } else {
+                        w.mac.clone()
+                    };
+                    let mesh_tag = if w.mesh_bridging {
+                        format!(" · mesh-root×{}", w.mesh_peers)
+                    } else if w.endpoint.starts_with("mesh:") {
+                        " · mesh-leaf".to_string()
+                    } else {
+                        String::new()
+                    };
                     ui.label(
-                        RichText::new({
-                            let mac = if w.mac.is_empty() {
-                                "mac?".to_string()
-                            } else {
-                                w.mac.clone()
-                            };
-                            format!(
-                                "● {} · {} · {} · {}{}",
-                                mac,
-                                w.endpoint,
-                                if w.fw.is_empty() { "fw?" } else { &w.fw },
-                                format_hashrate(w.hashrate_hs),
-                                if w.mesh_bridging {
-                                    format!(" · mesh-root×{}", w.mesh_peers)
-                                } else if w.endpoint.starts_with("mesh:") {
-                                    " · mesh".to_string()
-                                } else {
-                                    String::new()
-                                }
-                            )
-                        })
+                        RichText::new(format!(
+                            "● {}  {rate}  · {mac} · {}{}",
+                            w.endpoint,
+                            if w.fw.is_empty() { "fw?" } else { &w.fw },
+                            mesh_tag
+                        ))
                         .color(C_LIME)
-                        .font(mono_ui_font(11.0)),
+                        .font(mono_ui_font(12.0)),
                     );
                     if soft_button(ui, "Drop", 64.0).clicked() {
                         let _ = self
@@ -3415,6 +3449,15 @@ impl CompanionApp {
                         self.push_log(LogKind::Usb, format!("Drop worker {}", w.endpoint));
                     }
                 });
+            }
+            if dup_mac {
+                ui.label(
+                    RichText::new(
+                        "Shared eFuse MAC on two links — boards are tracked by COM / mesh endpoint; rates above are per board.",
+                    )
+                    .color(C_WARN)
+                    .size(11.0),
+                );
             }
         }
 
@@ -3555,7 +3598,7 @@ impl CompanionApp {
                 } else {
                     self.status.hashrate_hs
                 };
-                mini_stat(ui, "Rate", &format_hashrate(rate_hs));
+                mini_stat(ui, "Fleet", &format_hashrate(rate_hs));
                 mini_stat(ui, "Total Hash", &format_hash_count(self.status.hashes));
                 let sha = self.sha_path_display();
                 mini_stat(ui, "SHA", &sha);
@@ -3568,7 +3611,32 @@ impl CompanionApp {
                         .unwrap_or_else(|| "—".into()),
                 );
                 mini_stat(ui, "Sess H", &self.session_hashes_label());
+                mini_stat(
+                    ui,
+                    "Boards",
+                    &self.connected_workers.len().max(if self.usb_open { 1 } else { 0 }).to_string(),
+                );
             });
+            if !self.connected_workers.is_empty() {
+                ui.add_space(4.0);
+                ui.label(
+                    RichText::new("Per-board rate")
+                        .color(C_MUTED)
+                        .size(11.0),
+                );
+                for w in &self.connected_workers {
+                    ui.label(
+                        RichText::new(format!(
+                            "  {}  {}{}",
+                            w.endpoint,
+                            format_hashrate(w.hashrate_hs),
+                            if w.mining { "" } else { " · idle" }
+                        ))
+                        .color(if w.hashrate_hs > 0.0 { C_LIME } else { C_DIM })
+                        .font(mono_ui_font(11.0)),
+                    );
+                }
+            }
             ui.label(
                 RichText::new(
                     "SHA path · Full HW = silicon · HW+ = midstate · HW/SW = hybrid",
@@ -3704,8 +3772,8 @@ impl CompanionApp {
                 (0, 0)
             };
             ui.horizontal_wrapped(|ui| {
-                mini_stat(ui, "TX", &s.lines_tx.to_string());
-                mini_stat(ui, "RX", &s.lines_rx.to_string());
+                mini_stat(ui, "Pool TX", &s.lines_tx.to_string());
+                mini_stat(ui, "Pool RX", &s.lines_rx.to_string());
                 mini_stat(ui, "Jobs", &s.jobs.to_string());
                 mini_stat(ui, "Accept", &acc.to_string());
                 mini_stat(ui, "Reject", &rej.to_string());
@@ -3716,6 +3784,11 @@ impl CompanionApp {
                     if s.last_job.is_empty() { "—" } else { &s.last_job },
                 );
             });
+            ui.label(
+                RichText::new("Pool TX/RX = stratum JSON lines to/from the pool (not USB board traffic)")
+                    .color(C_DIM)
+                    .font(mono_ui_font(10.0)),
+            );
             ui.add_space(8.0);
             stratum_line(ui, "Last TX → pool", &trunc(&s.last_tx, 150));
             stratum_line(ui, "Last RX ← pool", &trunc(&s.last_rx, 150));
@@ -4326,9 +4399,12 @@ impl App for CompanionApp {
                     let mut auto_usb: Vec<String> = Vec::new();
                     let mut auto_wifi: Vec<String> = Vec::new();
                     for w in found {
-                        if !self.worker_already_linked(&w.endpoint)
-                            && !self.worker_mac_already_linked(&w.mac)
-                        {
+                        // USB/BT: link every distinct COM even when eFuse MACs collide.
+                        // Wi‑Fi: still skip when that MAC is already on USB (same board).
+                        let skip = self.worker_already_linked(&w.endpoint)
+                            || (matches!(w.kind, WorkerKind::Wifi)
+                                && self.worker_mac_already_linked(&w.mac));
+                        if !skip {
                             match w.kind {
                                 WorkerKind::Usb | WorkerKind::Bluetooth => {
                                     auto_usb.push(w.endpoint.clone());
@@ -6719,6 +6795,23 @@ fn mine_worker(cmd_rx: Receiver<NetCmd>, msg_tx: Sender<NetMsg>) {
                         Ok((mut board, saw)) => {
                             let dl = board.download_mode;
                             configure_board(&mut board, &msg_tx);
+                            if mac_is_stable(&board.mac) {
+                                let collision = boards.iter().any(|b| {
+                                    mac_is_stable(&b.mac)
+                                        && normalize_mac(&b.mac) == normalize_mac(&board.mac)
+                                        && !port_names_match(&b.name, &name)
+                                });
+                                if collision {
+                                    log_msg(
+                                        &msg_tx,
+                                        LogKind::Warn,
+                                        format!(
+                                            "Board {name} shares eFuse MAC {} with another linked COM — tracked by COM",
+                                            board.mac
+                                        ),
+                                    );
+                                }
+                            }
                             arm_mining_if_needed(&mut board, &msg_tx, mining);
                             boards.push(board);
                             sync_mesh_peers(&mut boards, &mut mesh, &msg_tx, mining);
@@ -6783,17 +6876,18 @@ fn mine_worker(cmd_rx: Receiver<NetCmd>, msg_tx: Sender<NetMsg>) {
                                         && normalize_mac(&b.mac) == normalize_mac(&board.mac)
                                 }) {
                                     let old_name = boards[idx].name.clone();
-                                    let old_still_listed = serialport::available_ports()
-                                        .unwrap_or_default()
+                                    // Use registry-merged COM list — SetupAPI alone often
+                                    // misses the 2nd CH340 and wrongly "replaces" a live board.
+                                    let old_still_listed = list_serial_ports()
                                         .iter()
-                                        .any(|p| port_names_match(&p.port_name, &old_name));
+                                        .any(|p| port_names_match(&p.name, &old_name));
                                     if old_still_listed && !port_names_match(&old_name, &name) {
                                         log_msg(
                                             &msg_tx,
                                             LogKind::Warn,
                                             format!(
-                                                "Keep {} — same MAC {} as {name} but both COMs present (two boards?)",
-                                                old_name, board.mac
+                                                "Keep {old_name} + {name} — same eFuse MAC {} (identity is COM, not MAC)",
+                                                board.mac
                                             ),
                                         );
                                     } else {
@@ -7227,9 +7321,8 @@ fn mine_worker(cmd_rx: Receiver<NetCmd>, msg_tx: Sender<NetMsg>) {
                                         m.hashes = st.hashes;
                                     }
                                     m.mining = st.mining || (mining && m.hashrate_hs > 0.0);
-                                    if !st.mac.is_empty() {
-                                        m.mac = normalize_mac(&st.mac);
-                                    }
+                                    // Keep mesh identity MAC from peer list — never overwrite
+                                    // from via status (a misrouted reply could clone the root MAC).
                                     total_hs += m.hashrate_hs;
                                     total_hashes = total_hashes.saturating_add(m.hashes);
                                     any_mining |= m.mining;

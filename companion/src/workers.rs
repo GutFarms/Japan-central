@@ -570,14 +570,9 @@ fn probe_usb_port_at(name: &str, baud: u32) -> Result<DiscoveredWorker, String> 
         std::thread::sleep(Duration::from_millis(20));
     }
 
-    let id = {
-        let mid = transport_mac_id(WorkerKind::Usb, &mac);
-        if mid.is_empty() {
-            format!("usb:{name}")
-        } else {
-            mid
-        }
-    };
+    // Always key USB discovery by COM — cheap CYD clones can share an eFuse MAC;
+    // MAC-based ids collapsed two boards into one Find-workers row.
+    let id = format!("usb:{}", normalize_port_name(name));
     let detail = if fw.is_empty() {
         format!("CYD companion USB · pong @ {baud}")
     } else if mode.is_empty() {
@@ -600,37 +595,38 @@ fn probe_usb_port_at(name: &str, baud: u32) -> Result<DiscoveredWorker, String> 
 
 /// Ports worth probing for CYD boards.
 ///
-/// Skip PCI (motherboard COM1 often hangs forever and is never a CYD).
-/// Prefer real USB; include Unknown (some CH340 stacks mis-report).
+/// Uses `list_serial_ports` (Windows SERIALCOMM merge) so a 2nd CH340 is not
+/// missed when SetupAPI only reports one COM. Skip PCI / bare COM1 junk.
 /// Bluetooth is optional and probed only after USB finishes.
 fn scan_candidate_ports(include_bluetooth: bool) -> Vec<(String, WorkerKind)> {
-    let mut infos = serialport::available_ports().unwrap_or_default();
-    infos.retain(|p| match p.port_type {
-        SerialPortType::PciPort => false,
-        SerialPortType::BluetoothPort => include_bluetooth,
-        SerialPortType::UsbPort(_) | SerialPortType::Unknown => true,
-    });
-    infos.sort_by(|a, b| {
-        let rank = |p: &serialport::SerialPortInfo| match p.port_type {
-            SerialPortType::UsbPort(_) => 0,
-            SerialPortType::Unknown => 1,
-            SerialPortType::BluetoothPort => 2,
-            SerialPortType::PciPort => 3,
+    let mut out: Vec<(String, WorkerKind)> = Vec::new();
+    for p in list_serial_ports() {
+        if port_choice_is_system_junk(&p) {
+            continue;
+        }
+        let label = p.label.to_ascii_lowercase();
+        let kind = if label.contains("bluetooth") {
+            WorkerKind::Bluetooth
+        } else {
+            WorkerKind::Usb
         };
-        rank(a)
-            .cmp(&rank(b))
-            .then_with(|| a.port_name.cmp(&b.port_name))
+        if matches!(kind, WorkerKind::Bluetooth) && !include_bluetooth {
+            continue;
+        }
+        if !is_usb_serial_port(&p.name) {
+            continue;
+        }
+        out.push((p.name.clone(), kind));
+    }
+    out.sort_by(|a, b| {
+        let rank = |k: WorkerKind| match k {
+            WorkerKind::Usb => 0,
+            WorkerKind::Bluetooth => 1,
+            _ => 2,
+        };
+        rank(a.1).cmp(&rank(b.1)).then_with(|| a.0.cmp(&b.0))
     });
-    infos
-        .into_iter()
-        .map(|p| {
-            let kind = match p.port_type {
-                SerialPortType::BluetoothPort => WorkerKind::Bluetooth,
-                _ => WorkerKind::Usb,
-            };
-            (p.port_name, kind)
-        })
-        .collect()
+    out
 }
 
 /// Scan serial ports for CYD boards. Skips ports listed in `skip`.
