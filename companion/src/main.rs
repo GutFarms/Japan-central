@@ -1966,7 +1966,7 @@ impl CompanionApp {
         })
     }
 
-    fn begin_board_update(&mut self) {
+    fn begin_board_update(&mut self, prefer_live_push: bool) {
         self.update_confirm = false;
         let port = match self.resolve_flash_usb_port() {
             Ok(p) => p,
@@ -1976,7 +1976,14 @@ impl CompanionApp {
             }
         };
         self.com_port = port.clone();
-        let live_push = self.board_supports_live_push(&port);
+        // Push only when the user chose it *and* a live companion board is on this COM.
+        let live_push = prefer_live_push && self.board_supports_live_push(&port);
+        if prefer_live_push && !live_push {
+            self.last_error =
+                "Push update needs a linked companion board on this COM — use Flash (BOOT) for blank boards."
+                    .into();
+            return;
+        }
         if self.mining {
             self.stop_mine();
         }
@@ -2013,9 +2020,9 @@ impl CompanionApp {
             if live_push {
                 format!("Push update → {port} (no BOOT; auto-reset)")
             } else if image.is_empty() {
-                format!("Update board → fetch firmware + flash on {port}")
+                format!("Flash (BOOT) → fetch firmware + flash on {port}")
             } else {
-                format!("Update board → {image} on {port}")
+                format!("Flash (BOOT) → {image} on {port}")
             },
         );
         // Release USB in the worker before flash (port must be free).
@@ -2677,7 +2684,7 @@ impl CompanionApp {
         soft_panel(ui, "Board firmware", |ui| {
             ui.label(
                 RichText::new(
-                    "Fetch the latest board image, then Push update on a linked board (auto-reset). Blank boards still use Update board + BOOT Ready.",
+                    "Fetch the latest board image, then Update board — choose Push update (linked) or Flash with BOOT (blank).",
                 )
                 .color(C_MUTED)
                 .size(13.0),
@@ -2718,8 +2725,6 @@ impl CompanionApp {
                 }
                 let update_label = if self.update_busy {
                     "Updating…"
-                } else if self.board_supports_live_push(&self.com_port) {
-                    "Push update"
                 } else {
                     "Update board"
                 };
@@ -2787,7 +2792,7 @@ impl CompanionApp {
             );
             ui.add_space(8.0);
             ui.label(
-                RichText::new("Tip: hold BOOT, tap RESET, keep BOOT held, then click Ready if Update board asks.")
+                RichText::new("Tip: Update board → Push update (linked) or Flash (BOOT). Hold BOOT + Ready only for the Flash path.")
                     .color(C_DIM)
                     .size(12.0),
             );
@@ -4628,7 +4633,7 @@ impl App for CompanionApp {
                             ui.add_space(8.0);
                             ui.label(
                                 RichText::new(
-                                    "Linked boards: Push update (auto-reset, no BOOT). Blank boards: Update board + Ready with BOOT held.",
+                                    "Update board lets you choose Push update (linked, auto-reset) or Flash with BOOT (blank / full rewrite).",
                                 )
                                 .color(C_MUTED)
                                 .size(13.0),
@@ -4706,17 +4711,13 @@ impl App for CompanionApp {
         }
 
         if self.update_confirm {
-            let live_push = self.board_supports_live_push(&self.com_port);
-            egui::Window::new(if live_push {
-                "Push firmware update"
-            } else {
-                "Update board firmware"
-            })
+            let can_push = self.board_supports_live_push(&self.com_port);
+            egui::Window::new("Update board")
                 .collapsible(false)
                 .resizable(false)
                 .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
                 .show(ctx, |ui| {
-                    ui.set_min_width(440.0);
+                    ui.set_min_width(460.0);
                     let (st, col) = self.firmware_status_label();
                     ui.label(RichText::new(st).color(col).size(14.0));
                     ui.add_space(8.0);
@@ -4754,39 +4755,68 @@ impl App for CompanionApp {
                         .color(C_MUTED)
                         .font(mono_ui_font(11.0)),
                     );
-                    ui.add_space(8.0);
-                    ui.label(
-                        RichText::new(if live_push {
-                            "Linked board will get a silent push update (auto-reset). No BOOT button unless auto-reset fails. Mining stops briefly."
-                        } else {
-                            "Blank / download-mode board: mining stops, then hold BOOT → tap RESET → keep BOOT → Ready when asked."
-                        })
-                        .color(C_MUTED)
-                        .size(13.0),
-                    );
+                    ui.add_space(10.0);
+                    if can_push {
+                        ui.label(
+                            RichText::new(
+                                "Choose how to write firmware to this linked board:",
+                            )
+                            .color(C_TEXT)
+                            .size(13.0),
+                        );
+                        ui.add_space(6.0);
+                        ui.label(
+                            RichText::new(
+                                "· Push update — auto-reset, no BOOT (usual for live companion boards)\n· Flash (BOOT) — full rewrite; hold BOOT → tap RESET → Ready when asked",
+                            )
+                            .color(C_MUTED)
+                            .size(12.0),
+                        );
+                    } else {
+                        ui.label(
+                            RichText::new(
+                                "This COM looks blank / download-mode — use Flash with BOOT held, then Ready when asked.",
+                            )
+                            .color(C_MUTED)
+                            .size(13.0),
+                        );
+                    }
                     ui.add_space(14.0);
+                    let up_to_date = update_needed(
+                        &self.fw_label,
+                        &self
+                            .firmware
+                            .as_ref()
+                            .map(|f| f.version.clone())
+                            .unwrap_or_default(),
+                    ) == Some(false);
                     ui.horizontal(|ui| {
-                        let up_to_date = update_needed(
-                            &self.fw_label,
-                            &self
-                                .firmware
-                                .as_ref()
-                                .map(|f| f.version.clone())
-                                .unwrap_or_default(),
-                        ) == Some(false);
-                        let flash_label = if live_push {
-                            if up_to_date {
+                        if can_push {
+                            let push_label = if up_to_date {
                                 "Push anyway"
                             } else {
                                 "Push update"
+                            };
+                            if cta_button(ui, push_label, true, 140.0).clicked() {
+                                self.begin_board_update(true);
                             }
-                        } else if up_to_date {
-                            "Flash anyway"
+                            let flash_label = if up_to_date {
+                                "Flash anyway"
+                            } else {
+                                "Flash (BOOT)"
+                            };
+                            if soft_button(ui, flash_label, 130.0).clicked() {
+                                self.begin_board_update(false);
+                            }
                         } else {
-                            "Flash now"
-                        };
-                        if cta_button(ui, flash_label, true, 140.0).clicked() {
-                            self.begin_board_update();
+                            let flash_label = if up_to_date {
+                                "Flash anyway"
+                            } else {
+                                "Flash (BOOT)"
+                            };
+                            if cta_button(ui, flash_label, true, 140.0).clicked() {
+                                self.begin_board_update(false);
+                            }
                         }
                         if soft_button(ui, "Cancel", 100.0).clicked() {
                             self.update_confirm = false;
