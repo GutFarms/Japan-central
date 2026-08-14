@@ -930,8 +930,21 @@ pub fn open_wifi_tcp(endpoint: &str) -> Result<TcpStream, String> {
         .map_err(|e| format!("resolve {endpoint}: {e}"))?
         .next()
         .ok_or_else(|| format!("no address for {endpoint}"))?;
-    let stream = TcpStream::connect_timeout(&addr, Duration::from_secs(3))
-        .map_err(|e| format!("TCP connect {endpoint}: {e}"))?;
+    let host = endpoint.split(':').next().unwrap_or(endpoint);
+    // SoftAP 10.x and busy LAN boards may need a bit longer than 3s.
+    let timeout = if host.starts_with("10.") {
+        Duration::from_secs(5)
+    } else {
+        Duration::from_secs(4)
+    };
+    let stream = TcpStream::connect_timeout(&addr, timeout).map_err(|e| {
+        let softap_hint = if host.starts_with("10.") {
+            " — SoftAP IP: join Njordr-XXXX / njordrseas in Windows Wi‑Fi, or Link the board over USB instead"
+        } else {
+            " — board offline / wrong network / firewall"
+        };
+        format!("TCP connect {endpoint}: {e}{softap_hint}")
+    })?;
     let _ = stream.set_nodelay(true);
     let _ = stream.set_read_timeout(Some(Duration::from_millis(50)));
     let _ = stream.set_write_timeout(Some(Duration::from_millis(2_000)));
@@ -1060,6 +1073,24 @@ fn now_ms() -> u64 {
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_millis() as u64)
         .unwrap_or(0)
+}
+
+/// Age of a discovery beacon/probe row in milliseconds (`0` = unknown / synthetic).
+pub fn discovery_age_ms(w: &DiscoveredWorker) -> u64 {
+    if w.last_seen_ms == 0 {
+        return u64::MAX;
+    }
+    now_ms().saturating_sub(w.last_seen_ms)
+}
+
+/// SoftAP setup beacon — only reachable after the PC joins Njordr-XXXX.
+pub fn wifi_is_softap_setup(w: &DiscoveredWorker) -> bool {
+    w.detail.to_ascii_lowercase().contains("setup softap")
+}
+
+/// True when a Wi‑Fi beacon is recent enough to attempt TCP link.
+pub fn wifi_beacon_fresh(w: &DiscoveredWorker, max_age_ms: u64) -> bool {
+    w.kind == WorkerKind::Wifi && discovery_age_ms(w) <= max_age_ms
 }
 
 /// LAN beacon + listener for other Companion instances advertising CYD workers.
