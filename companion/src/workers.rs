@@ -206,6 +206,20 @@ pub fn mac_worker_id(mac: &str) -> String {
     }
 }
 
+/// Stable discovery id that keeps USB and Wi‑Fi rows distinct for the same board.
+pub fn transport_mac_id(kind: WorkerKind, mac: &str) -> String {
+    if !mac_is_stable(mac) {
+        return String::new();
+    }
+    let prefix = match kind {
+        WorkerKind::Wifi => "wifi",
+        WorkerKind::Lan => "lan",
+        WorkerKind::Bluetooth => "bt",
+        WorkerKind::Usb => "usb",
+    };
+    format!("{prefix}:mac:{}", normalize_mac(mac))
+}
+
 /// Open a USB-UART port without asserting DTR (ESP32 often resets on DTR/RTS).
 pub fn open_usb_serial(
     name: &str,
@@ -349,7 +363,7 @@ fn probe_usb_port_at(name: &str, baud: u32) -> Result<DiscoveredWorker, String> 
     }
 
     let id = {
-        let mid = mac_worker_id(&mac);
+        let mid = transport_mac_id(WorkerKind::Usb, &mac);
         if mid.is_empty() {
             format!("usb:{name}")
         } else {
@@ -546,7 +560,7 @@ pub fn probe_wifi_endpoint(endpoint: &str) -> Option<DiscoveredWorker> {
         }
     }
     let id = {
-        let mid = mac_worker_id(&mac);
+        let mid = transport_mac_id(WorkerKind::Wifi, &mac);
         if mid.is_empty() {
             format!("wifi:{endpoint}")
         } else {
@@ -590,8 +604,9 @@ pub struct BoardWifiDiscovery {
 
 impl BoardWifiDiscovery {
     pub fn start() -> Self {
+        // Single listener on BOARD_WIFI_PORT. ScanWorkers must not create a second
+        // bind (ephemeral fallback never receives CYDBOARD beacons).
         let sock = UdpSocket::bind(format!("0.0.0.0:{BOARD_WIFI_PORT}"))
-            .or_else(|_| UdpSocket::bind("0.0.0.0:0"))
             .ok()
             .and_then(|s| {
                 s.set_broadcast(true).ok()?;
@@ -651,7 +666,7 @@ fn parse_board_beacon(raw: &str, addr: SocketAddr) -> Option<DiscoveredWorker> {
     }
     let endpoint = format!("{ip}:{tcp}");
     let id = {
-        let mid = mac_worker_id(&mac);
+        let mid = transport_mac_id(WorkerKind::Wifi, &mac);
         if mid.is_empty() {
             format!("wifi:{endpoint}")
         } else {
@@ -867,5 +882,13 @@ mod tests {
         assert!(mac_is_stable("aa:bb:cc:dd:ee:01"));
         assert_eq!(mac_worker_id("aabbccddee01"), "usb:mac:aa:bb:cc:dd:ee:01");
         assert!(mac_worker_id("unknown").is_empty());
+        assert_eq!(
+            transport_mac_id(WorkerKind::Wifi, "aabbccddee01"),
+            "wifi:mac:aa:bb:cc:dd:ee:01"
+        );
+        assert_ne!(
+            transport_mac_id(WorkerKind::Usb, "aabbccddee01"),
+            transport_mac_id(WorkerKind::Wifi, "aabbccddee01")
+        );
     }
 }

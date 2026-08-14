@@ -44,9 +44,9 @@ use stratum::{
 };
 use workers::{
     is_usb_serial_port, list_serial_ports, mac_is_stable, mac_worker_id, normalize_mac,
-    open_usb_serial_timed, open_wifi_tcp, port_names_match, probe_wifi_endpoint,
-    scan_usb_workers_with_progress, BoardWifiDiscovery, DiscoveredWorker, LanDiscovery, PortChoice,
-    WorkerKind, WorkerLive,
+    open_usb_serial_timed, open_wifi_tcp, port_names_match, scan_usb_workers_with_progress,
+    transport_mac_id, BoardWifiDiscovery, DiscoveredWorker, LanDiscovery, PortChoice, WorkerKind,
+    WorkerLive,
 };
 
 use eframe::egui::{
@@ -1321,16 +1321,21 @@ impl CompanionApp {
     }
 
     fn merge_discovered(&mut self, worker: DiscoveredWorker) {
-        // Prefer stable MAC identity over COM path when matching USB boards.
+        // Prefer stable MAC identity within the same transport. Never merge USB↔Wi‑Fi
+        // by MAC (that hid the second path and collapsed multi-board SoftAP rows).
         // Never merge on mac=unknown — that collapsed distinct boards into one.
         if let Some(existing) = self.discovered_workers.iter_mut().find(|w| {
             w.id == worker.id
-                || (mac_is_stable(&worker.mac)
+                || (w.kind == worker.kind
+                    && mac_is_stable(&worker.mac)
                     && mac_is_stable(&w.mac)
                     && normalize_mac(&w.mac) == normalize_mac(&worker.mac))
                 || (w.kind == WorkerKind::Usb
                     && worker.kind == WorkerKind::Usb
                     && port_names_match(&w.endpoint, &worker.endpoint))
+                || (w.kind == WorkerKind::Wifi
+                    && worker.kind == WorkerKind::Wifi
+                    && w.endpoint == worker.endpoint)
         }) {
             *existing = worker;
         } else {
@@ -1343,7 +1348,23 @@ impl CompanionApp {
     fn worker_already_linked(&self, endpoint: &str) -> bool {
         self.connected_workers
             .iter()
-            .any(|c| port_names_match(&c.endpoint, endpoint))
+            .any(|c| port_names_match(&c.endpoint, endpoint) || c.endpoint == endpoint)
+    }
+
+    fn worker_mac_already_linked(&self, mac: &str) -> bool {
+        mac_is_stable(mac)
+            && self.connected_workers.iter().any(|c| {
+                mac_is_stable(&c.mac) && normalize_mac(&c.mac) == normalize_mac(mac)
+            })
+    }
+
+    /// Prefer the next USB COM that is not already linked (for Add board).
+    fn select_next_unlinked_usb(&mut self) {
+        if let Some(p) = self.ports.iter().find(|p| {
+            is_usb_serial_port(&p.name) && !self.worker_already_linked(&p.name)
+        }) {
+            self.com_port = p.name.clone();
+        }
     }
 
     fn connect_or_add_usb(&mut self) {
@@ -2133,6 +2154,27 @@ impl CompanionApp {
                     self.connect_or_add_usb();
                 }
             }
+            if self.usb_open {
+                if wrap {
+                } else {
+                    ui.add_space(8.0);
+                }
+                if cta_button(ui, "Add board", true, w).clicked() {
+                    if self.worker_already_linked(&self.com_port) {
+                        self.select_next_unlinked_usb();
+                    }
+                    if !self.com_port.is_empty() && !self.worker_already_linked(&self.com_port) {
+                        self.connect_or_add_usb();
+                    } else {
+                        self.worker_scan_busy = true;
+                        self.push_log(
+                            LogKind::Usb,
+                            "Find CYD workers (looking for more boards)…".into(),
+                        );
+                        let _ = self.cmd_tx.send(NetCmd::ScanWorkers);
+                    }
+                }
+            }
             if wrap {
                 // stay in same wrap row
             } else {
@@ -2784,11 +2826,29 @@ impl CompanionApp {
                 if soft_button(ui, "Refresh", 98.0).clicked() {
                     let _ = self.cmd_tx.send(NetCmd::ListPorts);
                 }
-                // Primary Connect / Disconnect live in the hero CTAs.
-                let selected_linked = self.worker_already_linked(&self.com_port);
-                if self.usb_open && !selected_linked && !self.com_port.is_empty() {
-                    if soft_button(ui, "Add board", 112.0).clicked() {
-                        self.connect_or_add_usb();
+                // Always offer Add board once at least one board is linked.
+                if self.usb_open {
+                    let selected_linked = self.worker_already_linked(&self.com_port);
+                    let add_label = if selected_linked {
+                        "Add other COM"
+                    } else {
+                        "Add board"
+                    };
+                    if soft_button(ui, add_label, 120.0).clicked() {
+                        if selected_linked {
+                            self.select_next_unlinked_usb();
+                        }
+                        if !self.com_port.is_empty() && !self.worker_already_linked(&self.com_port)
+                        {
+                            self.connect_or_add_usb();
+                        } else {
+                            self.worker_scan_busy = true;
+                            self.push_log(
+                                LogKind::Usb,
+                                "Find CYD workers (looking for more boards)…".into(),
+                            );
+                            let _ = self.cmd_tx.send(NetCmd::ScanWorkers);
+                        }
                     }
                 }
             });
@@ -2875,6 +2935,16 @@ impl CompanionApp {
                 .font(mono_ui_font(11.0)),
             );
         });
+        if self.connected_workers.len() <= 1 {
+            ui.add_space(4.0);
+            ui.label(
+                RichText::new(
+                    "Tip: plug each CYD into its own USB cable, Refresh, then Add board / Find CYD workers. SoftAP Wi‑Fi is one PC↔board link at a time — use USB for a multi-board farm.",
+                )
+                .color(C_MUTED)
+                .size(11.0),
+            );
+        }
 
         if !self.connected_workers.is_empty() {
             ui.add_space(8.0);
@@ -2970,7 +3040,8 @@ impl CompanionApp {
             ui.add_space(8.0);
             ui.label(RichText::new("Wi‑Fi CYD boards").color(C_MUTED).size(12.0));
             for w in wifi_found {
-                let already = self.worker_already_linked(&w.endpoint);
+                let already = self.worker_already_linked(&w.endpoint)
+                    || self.worker_mac_already_linked(&w.mac);
                 ui.horizontal(|ui| {
                     ui.label(
                         RichText::new({
@@ -3516,7 +3587,14 @@ impl App for CompanionApp {
                     let n = p.len();
                     self.ports = p;
                     if self.com_port.is_empty() {
-                        if let Some(first) = self.ports.first() {
+                        // Prefer USB-UART over motherboard PCI COM (PCI often hangs).
+                        if let Some(usb) = self
+                            .ports
+                            .iter()
+                            .find(|p| is_usb_serial_port(&p.name) && !p.label.contains("PCI"))
+                        {
+                            self.com_port = usb.name.clone();
+                        } else if let Some(first) = self.ports.first() {
                             self.com_port = first.name.clone();
                         }
                     } else if !self.ports.iter().any(|x| x.name == self.com_port) {
@@ -3540,9 +3618,10 @@ impl App for CompanionApp {
                 NetMsg::Action(Ok(s)) => {
                     self.last_ok = s.clone();
                     let low = s.to_lowercase();
-                    if low.contains("usb open") {
+                    if low.contains("usb open") || low.contains("worker linked") {
                         self.usb_open = true;
-                        if self.post_flash_verify.is_some() {
+                        self.select_next_unlinked_usb();
+                        if self.post_flash_verify.is_some() && low.contains("usb open") {
                             self.absorb_flash_progress_line(
                                 "USB linked after flash — reading board config…",
                             );
@@ -3816,7 +3895,9 @@ impl App for CompanionApp {
                     let mut auto_usb: Vec<String> = Vec::new();
                     let mut auto_wifi: Vec<String> = Vec::new();
                     for w in found {
-                        if !self.worker_already_linked(&w.endpoint) {
+                        if !self.worker_already_linked(&w.endpoint)
+                            && !self.worker_mac_already_linked(&w.mac)
+                        {
                             match w.kind {
                                 WorkerKind::Usb | WorkerKind::Bluetooth => {
                                     auto_usb.push(w.endpoint.clone());
@@ -3826,6 +3907,21 @@ impl App for CompanionApp {
                             }
                         }
                         self.merge_discovered(w);
+                    }
+                    // Wi‑Fi beacons are owned by the UI UDP listener — fold recent
+                    // SoftAP/STA finds into auto-link (scan thread no longer rebinds :19284).
+                    for w in self.discovered_workers.clone() {
+                        if w.kind != WorkerKind::Wifi {
+                            continue;
+                        }
+                        if self.worker_already_linked(&w.endpoint)
+                            || self.worker_mac_already_linked(&w.mac)
+                        {
+                            continue;
+                        }
+                        if !auto_wifi.iter().any(|e| e == &w.endpoint) {
+                            auto_wifi.push(w.endpoint.clone());
+                        }
                     }
                     // Always surface already-linked boards in the found list too.
                     for live in self.connected_workers.clone() {
@@ -3837,7 +3933,7 @@ impl App for CompanionApp {
                         };
                         self.merge_discovered(DiscoveredWorker {
                             id: {
-                                let mid = mac_worker_id(&live.mac);
+                                let mid = transport_mac_id(kind, &live.mac);
                                 if mid.is_empty() {
                                     format!(
                                         "{}:{}",
@@ -3864,7 +3960,18 @@ impl App for CompanionApp {
                         );
                         let _ = self.cmd_tx.send(NetCmd::ConnectWorker(endpoint));
                     }
+                    // Prefer USB for multi-board farms — only auto-link Wi‑Fi when that
+                    // MAC is not already on USB (SoftAP is one-at-a-time to the PC).
                     for endpoint in auto_wifi {
+                        if let Some(w) = self
+                            .discovered_workers
+                            .iter()
+                            .find(|d| d.endpoint == endpoint)
+                        {
+                            if self.worker_mac_already_linked(&w.mac) {
+                                continue;
+                            }
+                        }
                         self.push_log(
                             LogKind::Usb,
                             format!("Auto-linking Wi‑Fi CYD {endpoint}"),
@@ -3879,6 +3986,7 @@ impl App for CompanionApp {
                             self.connected_workers.len()
                         ),
                     );
+                    self.select_next_unlinked_usb();
                 }
                 NetMsg::WorkersLive(live) => {
                     self.connected_workers = live;
@@ -5734,41 +5842,11 @@ fn mine_worker(cmd_rx: Receiver<NetCmd>, msg_tx: Sender<NetMsg>) {
                                     );
                                 }
                             });
-                        // Collect Wi‑Fi board beacons briefly, then TCP-ping each.
-                        let mut wifi_disc = BoardWifiDiscovery::start();
-                        let deadline = Instant::now() + Duration::from_millis(1_800);
-                        let mut wifi_eps = Vec::new();
-                        while Instant::now() < deadline {
-                            for w in wifi_disc.poll_boards() {
-                                if !skip.iter().any(|s| s == &w.endpoint)
-                                    && !wifi_eps.iter().any(|e| e == &w.endpoint)
-                                {
-                                    wifi_eps.push(w.endpoint.clone());
-                                    found.push(w);
-                                }
-                            }
-                            thread::sleep(Duration::from_millis(80));
-                        }
-                        for ep in wifi_eps {
-                            if skip.iter().any(|s| s == &ep) {
-                                continue;
-                            }
-                            log_msg(
-                                &msg_tx_scan,
-                                LogKind::Usb,
-                                format!("Probing Wi‑Fi {ep}…"),
-                            );
-                            if let Some(w) = probe_wifi_endpoint(&ep) {
-                                // Replace beacon stub with live probe result.
-                                found.retain(|x| x.endpoint != ep);
-                                found.push(w);
-                            }
-                        }
                         log_msg(
                             &msg_tx_scan,
                             LogKind::Usb,
                             format!(
-                                "Probe finished · {} CYD worker(s) answering",
+                                "USB probe finished · {} CYD worker(s) answering (Wi‑Fi from live beacons)",
                                 found.len()
                             ),
                         );
@@ -5865,20 +5943,19 @@ fn mine_worker(cmd_rx: Receiver<NetCmd>, msg_tx: Sender<NetMsg>) {
                     match open_wifi_board(&endpoint) {
                         Ok((mut board, saw)) => {
                             configure_board(&mut board, &msg_tx);
+                            // Prefer keeping USB when the same MAC is already linked —
+                            // SoftAP Wi‑Fi must not eject a working serial board.
                             if mac_is_stable(&board.mac) {
-                                if let Some(idx) = boards.iter().position(|b| {
+                                if let Some(existing) = boards.iter().find(|b| {
                                     mac_is_stable(&b.mac)
                                         && normalize_mac(&b.mac) == normalize_mac(&board.mac)
                                 }) {
-                                    let old = boards.remove(idx);
-                                    log_msg(
-                                        &msg_tx,
-                                        LogKind::Usb,
-                                        format!(
-                                            "Replaced {} with {} (same MAC {})",
-                                            old.name, endpoint, board.mac
-                                        ),
-                                    );
+                                    let _ = msg_tx.send(NetMsg::Action(Ok(format!(
+                                        "Skip Wi‑Fi {endpoint} — already linked as {} (same MAC {})",
+                                        existing.name, board.mac
+                                    ))));
+                                    publish_live(&msg_tx, &boards);
+                                    continue;
                                 }
                             }
                             arm_mining_if_needed(&mut board, &msg_tx, mining);
@@ -6322,20 +6399,33 @@ fn mine_worker(cmd_rx: Receiver<NetCmd>, msg_tx: Sender<NetMsg>) {
                     reopen,
                     cancel,
                 } => {
-                    mining = false;
-                    if let Some(mut s) = stratum.take() {
-                        s.disconnect();
-                    }
-                    for b in boards.iter_mut() {
+                    // Only release the flash target COM — keep other linked boards.
+                    if let Some(idx) = boards
+                        .iter()
+                        .position(|b| port_names_match(&b.name, &port))
+                    {
+                        let mut b = boards.remove(idx);
                         let _ = usb_cmd(&mut b.port, &mut b.rx, "cmp stop");
                     }
-                    // Drop serial handles so Windows releases the COM port for espflash.
-                    boards.clear();
+                    if boards.is_empty() {
+                        mining = false;
+                        if let Some(mut s) = stratum.take() {
+                            s.disconnect();
+                        }
+                    } else {
+                        // Pause pool jobs on remaining boards while flash runs.
+                        for b in boards.iter_mut() {
+                            let _ = usb_cmd(&mut b.port, &mut b.rx, "cmp stop");
+                        }
+                    }
                     publish_live(&msg_tx, &boards);
                     log_msg(
                         &msg_tx,
                         LogKind::Usb,
-                        "USB released — waiting for COM port…",
+                        format!(
+                            "Released {port} for flash · {} board(s) still linked",
+                            boards.len()
+                        ),
                     );
                     thread::sleep(Duration::from_millis(1800));
 

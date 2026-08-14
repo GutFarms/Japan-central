@@ -47,6 +47,29 @@ void WifiLink::ensureWifi(const AppConfig& cfg) {
     WiFi.mode(WIFI_AP);
   }
 
+  // Unique SoftAP subnet from MAC so multiple boards aren't all 192.168.4.1.
+  // 10.<b4>.<b5>.1 /24 — PC joins one Njordr-XXXX AP at a time, but beacons
+  // and TCP endpoints stay distinct when STA is used on a shared LAN.
+  uint8_t b4 = 1, b5 = 1;
+  {
+    String hex;
+    for (size_t i = 0; i < mac_.length(); i++) {
+      char c = mac_[i];
+      if ((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F')) hex += c;
+    }
+    hex.toLowerCase();
+    if (hex.length() >= 12) {
+      b4 = (uint8_t)strtoul(hex.substring(8, 10).c_str(), nullptr, 16);
+      b5 = (uint8_t)strtoul(hex.substring(10, 12).c_str(), nullptr, 16);
+      if (b4 == 0) b4 = 1;
+      if (b5 == 0) b5 = 1;
+    }
+  }
+  IPAddress apIp(10, b4, b5, 1);
+  IPAddress apGw(10, b4, b5, 1);
+  IPAddress apMask(255, 255, 255, 0);
+  WiFi.softAPConfig(apIp, apGw, apMask);
+
   // Channel 1 SoftAP — Companion can join or hear UDP on the LAN when STA is up.
   bool ok = WiFi.softAP(apSsid_.c_str(), CYD_SOFTAP_PASS, 1, 0, 4);
   (void)ok;
@@ -67,11 +90,11 @@ void WifiLink::beacon() {
   IPAddress advertise = (WiFi.status() == WL_CONNECTED) ? sta : ap;
   char msg[220];
 #if CYD_D0_BUILD
-  static constexpr const char* kFwTag = "0.8.87-sha256-d0";
-  static constexpr const char* kFwShort = "0.8.87-d0";
+  static constexpr const char* kFwTag = "0.8.88-sha256-d0";
+  static constexpr const char* kFwShort = "0.8.88-d0";
 #else
-  static constexpr const char* kFwTag = "0.8.87-sha256";
-  static constexpr const char* kFwShort = "0.8.87";
+  static constexpr const char* kFwTag = "0.8.88-sha256";
+  static constexpr const char* kFwShort = "0.8.88";
 #endif
   snprintf(msg, sizeof(msg),
            "%s|v=%s|mac=%s|fw=%s|tcp=%u|ip=%u.%u.%u.%u|ap=%s|mode=%s",
