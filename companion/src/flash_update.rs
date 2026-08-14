@@ -786,11 +786,13 @@ const ERASE_TIMEOUT: Duration = Duration::from_secs(120);
 const RESET_TIMEOUT: Duration = Duration::from_secs(15);
 const ESPTOOL_TIMEOUT: Duration = Duration::from_secs(180);
 /// Hard wall-clock budget for the whole Update board flash sequence.
-const FLASH_BUDGET: Duration = Duration::from_secs(240);
+/// Blank-board path includes BOOT countdowns + several no-stub retries.
+const FLASH_BUDGET: Duration = Duration::from_secs(360);
 /// No useful output at all → stuck before connect.
 const IDLE_TIMEOUT: Duration = Duration::from_secs(35);
 /// Chip MAC/connect seen but no write/erase progress → stub/baud can be slow on CYD/CH340.
-const IDLE_AFTER_CONNECT: Duration = Duration::from_secs(75);
+/// no-stub writes should start sooner; keep this under ~1 minute so we can rotate strategies.
+const IDLE_AFTER_CONNECT: Duration = Duration::from_secs(55);
 /// During active write/erase (% / `\r` ticks), allow longer silence between ticks.
 const IDLE_DURING_WRITE: Duration = Duration::from_secs(75);
 /// After stdout/stderr EOF, wait for the tool to exit (hard-reset / flush) before kill.
@@ -919,43 +921,73 @@ fn run_espflash_write(
     port: &str,
     baud: &str,
     before: &str,
+    no_stub: bool,
     image: &Path,
     progress: &dyn Fn(String),
     budget: Duration,
     cancel: Option<&AtomicBool>,
 ) -> Result<(), String> {
     let timeout = clamp_timeout(WRITE_TIMEOUT, budget);
+    let stub = if no_stub { "no-stub" } else { "stub" };
     progress(format!(
-        "espflash write-bin → {port} @ {baud} before={before} ({}) [timeout {}s]",
+        "espflash write-bin → {port} @ {baud} before={before} {stub} ({}) [timeout {}s]",
         espflash.display(),
         timeout.as_secs()
     ));
     let addr = "0x0";
     let img = image.to_string_lossy();
+    // Build argv with optional --no-stub (ROM loader — blank/CH340 boards often stall
+    // uploading the RAM stub after printing MAC).
+    let mut args: Vec<&str> = vec![
+        "write-bin",
+        "-p",
+        port,
+        "-B",
+        baud,
+        "-c",
+        "esp32",
+        "--non-interactive",
+        "--before",
+        before,
+        "--after",
+        "hard-reset",
+    ];
+    if no_stub {
+        args.push("--no-stub");
+    }
+    args.push(addr);
+    args.push(img.as_ref());
     run_espflash_argv(
         espflash,
-        &[
-            "write-bin",
-            "-p",
-            port,
-            "-B",
-            baud,
-            "-c",
-            "esp32",
-            "--non-interactive",
-            "--before",
-            before,
-            "--after",
-            "hard-reset",
-            addr,
-            img.as_ref(),
-        ],
+        &args,
         progress,
         "espflash-write",
         timeout,
         cancel,
         FlashToolKind::Write,
     )
+}
+
+/// Give the user time to hold BOOT → tap RESET → release BOOT before no-reset sync.
+fn wait_for_manual_boot(
+    progress: &dyn Fn(String),
+    cancel: Option<&AtomicBool>,
+    secs: u32,
+    why: &str,
+) -> Result<(), String> {
+    progress(format!(
+        "Hold BOOT, tap RESET, release BOOT — {why} ({secs}s)…"
+    ));
+    for left in (1..=secs).rev() {
+        if flash_cancelled(cancel) {
+            return Err("flash cancelled".into());
+        }
+        if left == secs || left % 2 == 0 || left <= 3 {
+            progress(format!("BOOT window · {left}s left — keep BOOT held through RESET…"));
+        }
+        std::thread::sleep(Duration::from_secs(1));
+    }
+    Ok(())
 }
 
 fn run_espflash_reset(
@@ -1005,12 +1037,14 @@ fn append_flash_log(line: &str) {
 
 /// Flash merged image @ 0x0 (DIO / 4MB / 40MHz layout inside the merge).
 ///
-/// Strategy (aligned with esptool / ESP Terminator web flashers):
-/// 1) Direct write attempts (115200 / no-reset early — avoid erase on MAC-stall)
-/// 2) Recovery erase ONLY when failures are not connect-stalls
-/// 3) After erase: rewrite with no-reset first (blank ROM often hangs on default-reset)
-/// 4) Auto-install Python esptool into Tools/ and write_flash (no extra wipe if already blank)
-/// 5) On failure: hard-reset attempt + SAFETY tip if the chip may be blank
+/// Strategy (blank-board friendly, aligned with esptool / ESP Terminator):
+/// 1) Direct writes — prefer `--no-stub` (ROM loader) first; blank/CH340 often
+///    stall after MAC while uploading the RAM stub
+/// 2) `before=no-reset` with a real BOOT countdown (not a 700ms hint)
+/// 3) Recovery erase ONLY when failures are not connect-stalls
+/// 4) After erase: rewrite no-stub + BOOT/no-reset first
+/// 5) Python esptool `--no-stub` write (no wipe after stall / already blank)
+/// 6) On failure: hard-reset + SAFETY tip if the chip may be blank
 pub fn flash_merged_bin(
     port: &str,
     image: &Path,
@@ -1065,7 +1099,8 @@ Available: {hint}. Unplug/replug the CYD, pick the COM again, then Update board.
         std::fs::metadata(image).map(|m| m.len()).unwrap_or(0),
     ));
     progress(
-        "Tip: if connect fails, hold BOOT, tap RESET, release BOOT, then retry (uses before=no-reset)."
+        "Blank / stubborn boards: first tries use ROM loader (--no-stub). \
+If prompted, hold BOOT, tap RESET, release BOOT."
             .into(),
     );
     append_flash_log(&format!(
@@ -1104,31 +1139,48 @@ Available: {hint}. Unplug/replug the CYD, pick the COM again, then Update board.
     let mut esp_err = String::new();
     let mut chip_may_be_blank = false;
     let mut connect_stall_only = true;
+    let mut saw_chip_connect = false;
 
-    // Prefer reliable 115200. Put no-reset early — after a prior erase/blank chip,
-    // default-reset often connects (prints MAC) then stalls until we kill it.
-    let attempts: &[(&str, &str)] = &[
-        ("115200", "default-reset"),
-        ("115200", "no-reset"),
-        ("460800", "default-reset"),
-        ("115200", "no-reset"),
+    // baud, before, no_stub — blank boards often need no-stub before stub works.
+    let attempts: &[(&str, &str, bool)] = &[
+        ("115200", "default-reset", true),
+        ("115200", "default-reset", false),
+        ("115200", "no-reset", true),
+        ("115200", "no-reset", false),
+        ("460800", "default-reset", true),
     ];
 
-    for &(baud, before) in attempts {
+    for &(baud, before, no_stub) in attempts {
         ensure_budget(progress)?;
         if before == "no-reset" {
-            progress(
-                "Hold BOOT, tap RESET, release BOOT — writing with before=no-reset…".into(),
-            );
-            std::thread::sleep(Duration::from_millis(700));
+            // If a prior attempt already saw MAC, the chip may still be in download
+            // mode briefly — quick retry first, then a real BOOT window.
+            if saw_chip_connect {
+                progress(
+                    "Chip was seen earlier — quick no-reset retry (still in download mode?)…"
+                        .into(),
+                );
+                std::thread::sleep(Duration::from_millis(500));
+            } else {
+                wait_for_manual_boot(
+                    progress,
+                    cancel,
+                    8,
+                    "writing with before=no-reset",
+                )?;
+            }
         } else {
-            progress(format!("Writing firmware @ {baud} (before={before})…"));
+            let stub = if no_stub { "no-stub" } else { "stub" };
+            progress(format!(
+                "Writing firmware @ {baud} (before={before}, {stub})…"
+            ));
         }
         match run_espflash_write(
             &espflash,
             &port_arg,
             baud,
             before,
+            no_stub,
             image,
             progress,
             budget_left(),
@@ -1140,21 +1192,59 @@ Available: {hint}. Unplug/replug the CYD, pick the COM again, then Update board.
                 return Ok(());
             }
             Err(e) => {
-                esp_err = format!("write {baud}/{before}: {e}");
+                let stub = if no_stub { "no-stub" } else { "stub" };
+                esp_err = format!("write {baud}/{before}/{stub}: {e}");
                 progress(format!("espflash write failed: {esp_err}"));
                 let low = e.to_ascii_lowercase();
                 if low.contains("cancelled") {
                     return Err(e);
                 }
                 let stall = low.contains("idle") && low.contains("chip connect");
+                if stall {
+                    saw_chip_connect = true;
+                }
                 if !stall {
                     connect_stall_only = false;
                 }
-                if stall && before == "default-reset" {
+                if stall && before == "default-reset" && !no_stub {
                     progress(
-                        "Chip seen then stalled — next try uses BOOT/no-reset (no erase yet)…"
+                        "Chip seen then stalled on stub — next tries use --no-stub / BOOT…"
                             .into(),
                     );
+                }
+            }
+        }
+    }
+
+    // Extra blank-board path: after MAC-stalls only, one more no-stub + long BOOT.
+    if connect_stall_only && budget_left() > Duration::from_secs(50) {
+        ensure_budget(progress)?;
+        progress(
+            "Still stalled after connect — blank-board recovery: BOOT + no-stub write…"
+                .into(),
+        );
+        wait_for_manual_boot(progress, cancel, 10, "blank-board recovery")?;
+        match run_espflash_write(
+            &espflash,
+            &port_arg,
+            "115200",
+            "no-reset",
+            true,
+            image,
+            progress,
+            budget_left(),
+            cancel,
+        ) {
+            Ok(()) => {
+                let _ = run_espflash_reset(&espflash, &port_arg, progress, budget_left(), cancel);
+                append_flash_log("success blank-recovery write");
+                return Ok(());
+            }
+            Err(e) => {
+                esp_err = format!("blank-recovery no-stub: {e}");
+                progress(format!("espflash blank recovery failed: {esp_err}"));
+                if e.to_ascii_lowercase().contains("cancelled") {
+                    return Err(e);
                 }
             }
         }
@@ -1175,17 +1265,17 @@ Available: {hint}. Unplug/replug the CYD, pick the COM again, then Update board.
                 chip_may_be_blank = true;
                 append_flash_log("erase ok — chip wiped; rewrite required");
                 progress(
-                    "Erase OK — SAFETY: flash is wiped until rewrite finishes. Rewriting with BOOT/no-reset first…"
+                    "Erase OK — SAFETY: flash is wiped until rewrite finishes. Rewriting with no-stub + BOOT first…"
                         .into(),
                 );
-                // After erase+hard-reset the ROM is empty — default-reset often hangs
-                // after MAC. Lead with no-reset (manual BOOT) and longer settle.
-                let rewrite_attempts: &[(&str, &str)] = &[
-                    ("115200", "no-reset"),
-                    ("115200", "no-reset"),
-                    ("115200", "default-reset"),
+                // After erase the ROM is empty — stub upload often hangs after MAC.
+                let rewrite_attempts: &[(&str, &str, bool)] = &[
+                    ("115200", "no-reset", true),
+                    ("115200", "no-reset", true),
+                    ("115200", "default-reset", true),
+                    ("115200", "no-reset", false),
                 ];
-                for (i, &(baud, before)) in rewrite_attempts.iter().enumerate() {
+                for (i, &(baud, before, no_stub)) in rewrite_attempts.iter().enumerate() {
                     progress(format!(
                         "Erase done — waiting for COM to settle (rewrite {}/{})…",
                         i + 1,
@@ -1196,14 +1286,16 @@ Available: {hint}. Unplug/replug the CYD, pick the COM again, then Update board.
                         break;
                     }
                     if before == "no-reset" {
-                        progress(
-                            "Hold BOOT, tap RESET, release BOOT — rewrite after erase…"
-                                .into(),
-                        );
-                        std::thread::sleep(Duration::from_millis(500));
+                        wait_for_manual_boot(
+                            progress,
+                            cancel,
+                            8,
+                            "rewrite after erase",
+                        )?;
                     } else {
+                        let stub = if no_stub { "no-stub" } else { "stub" };
                         progress(format!(
-                            "Rewrite after erase @ {baud} (before={before})…"
+                            "Rewrite after erase @ {baud} (before={before}, {stub})…"
                         ));
                     }
                     match run_espflash_write(
@@ -1211,6 +1303,7 @@ Available: {hint}. Unplug/replug the CYD, pick the COM again, then Update board.
                         &port_arg,
                         baud,
                         before,
+                        no_stub,
                         image,
                         progress,
                         budget_left(),
@@ -1228,7 +1321,8 @@ Available: {hint}. Unplug/replug the CYD, pick the COM again, then Update board.
                             return Ok(());
                         }
                         Err(e) => {
-                            esp_err = format!("rewrite after erase {baud}/{before}: {e}");
+                            let stub = if no_stub { "no-stub" } else { "stub" };
+                            esp_err = format!("rewrite after erase {baud}/{before}/{stub}: {e}");
                             progress(format!("espflash rewrite failed: {esp_err}"));
                             if e.to_ascii_lowercase().contains("cancelled") {
                                 best_effort_reset(&espflash, &port_arg, progress, cancel);
@@ -1254,9 +1348,10 @@ Available: {hint}. Unplug/replug the CYD, pick the COM again, then Update board.
         }
     } else if connect_stall_only {
         progress(
-            "Skipping recovery erase (chip connected but write stalled) — trying Python esptool write without wipe…"
+            "Skipping recovery erase (chip connected but write stalled) — trying Python esptool --no-stub without wipe…"
                 .into(),
         );
+        chip_may_be_blank = true; // treat as possibly blank for SAFETY tip
     }
 
     // Python esptool fallback — auto-install into Tools/ if missing.
@@ -1275,8 +1370,13 @@ Available: {hint}. Unplug/replug the CYD, pick the COM again, then Update board.
                     port_arg.clone(),
                     "--baud".into(),
                     "115200".into(),
-                    "write_flash".into(),
                 ]);
+                // Prefer no_reset when we already saw the chip / may be blank.
+                if connect_stall_only || chip_may_be_blank || saw_chip_connect {
+                    args.extend(["--before".into(), "no_reset".into()]);
+                }
+                args.push("--no-stub".into());
+                args.push("write_flash".into());
                 // Don't wipe again if we already erased (or if we skipped erase on purpose).
                 if !chip_may_be_blank && !connect_stall_only {
                     args.push("--erase-all".into());
@@ -1295,15 +1395,16 @@ Available: {hint}. Unplug/replug the CYD, pick the COM again, then Update board.
                 ]);
                 let py_timeout = clamp_timeout(ESPTOOL_TIMEOUT, budget_left());
                 progress(format!(
-                    "esptool write_flash @ 115200 [timeout {}s]…",
+                    "esptool write_flash --no-stub @ 115200 [timeout {}s]…",
                     py_timeout.as_secs()
                 ));
-                if connect_stall_only || chip_may_be_blank {
-                    progress(
-                        "Hold BOOT, tap RESET, release BOOT while esptool connects…"
-                            .into(),
+                if connect_stall_only || chip_may_be_blank || saw_chip_connect {
+                    let _ = wait_for_manual_boot(
+                        progress,
+                        cancel,
+                        10,
+                        "esptool connect",
                     );
-                    std::thread::sleep(Duration::from_millis(800));
                 }
                 let mut cmd = Command::new(&py);
                 if let Some(pp) = pythonpath {
