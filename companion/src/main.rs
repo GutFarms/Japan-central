@@ -437,6 +437,12 @@ struct StatusJson {
     sha_mode: String,
     #[serde(default)]
     mac: String,
+    #[serde(default)]
+    mesh_root: bool,
+    #[serde(default)]
+    mesh_bridging: bool,
+    #[serde(default)]
+    mesh_peers: u8,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -3271,7 +3277,7 @@ impl CompanionApp {
             ui.add_space(4.0);
             ui.label(
                 RichText::new(
-                    "Tip: power extra CYDs nearby — they auto-mesh (ESP-NOW) to a USB-linked root for connectivity only (not more H/s per board). Or plug more USB cables → Link all USB.",
+                    "Tip: USB root keeps hashing (throttled) while bridging mesh peers. Extra CYDs only need power nearby — any data USB works for the root (USB‑C data cable typical; USB‑A hubs OK if COM appears). Charge-only cables will not link.",
                 )
                 .color(C_MUTED)
                 .size(11.0),
@@ -3290,11 +3296,18 @@ impl CompanionApp {
                                 w.mac.clone()
                             };
                             format!(
-                                "● {} · {} · {} · {}",
+                                "● {} · {} · {} · {}{}",
                                 mac,
                                 w.endpoint,
                                 if w.fw.is_empty() { "fw?" } else { &w.fw },
-                                format_hashrate(w.hashrate_hs)
+                                format_hashrate(w.hashrate_hs),
+                                if w.mesh_bridging {
+                                    format!(" · mesh-root×{}", w.mesh_peers)
+                                } else if w.endpoint.starts_with("mesh:") {
+                                    " · mesh".to_string()
+                                } else {
+                                    String::new()
+                                }
                             )
                         })
                         .color(C_LIME)
@@ -5987,6 +6000,9 @@ fn mine_worker(cmd_rx: Receiver<NetCmd>, msg_tx: Sender<NetMsg>) {
         status_fails: u8,
         /// ROM download mode (BOOT held / blank) — no cmp; flash via Update board.
         download_mode: bool,
+        /// Root is bridging ESP-NOW leaves (hash intentionally reduced on this board).
+        mesh_bridging: bool,
+        mesh_peers: u8,
     }
 
     /// Board reached only through a USB/Wi‑Fi root via ESP-NOW (`cmp via`).
@@ -6017,6 +6033,8 @@ fn mine_worker(cmd_rx: Receiver<NetCmd>, msg_tx: Sender<NetMsg>) {
                 hashrate_hs: b.hashrate_hs,
                 hashes: b.hashes,
                 mining: b.mining,
+                mesh_bridging: b.mesh_bridging,
+                mesh_peers: b.mesh_peers,
             })
             .collect();
         for m in mesh {
@@ -6032,6 +6050,8 @@ fn mine_worker(cmd_rx: Receiver<NetCmd>, msg_tx: Sender<NetMsg>) {
                 hashrate_hs: m.hashrate_hs,
                 hashes: m.hashes,
                 mining: m.mining,
+                mesh_bridging: false,
+                mesh_peers: 0,
             });
         }
         out
@@ -6280,6 +6300,8 @@ fn mine_worker(cmd_rx: Receiver<NetCmd>, msg_tx: Sender<NetMsg>) {
                 mining: false,
                 status_fails: 0,
                 download_mode: false,
+                mesh_bridging: false,
+                mesh_peers: 0,
             },
             true,
         ))
@@ -6338,6 +6360,8 @@ fn mine_worker(cmd_rx: Receiver<NetCmd>, msg_tx: Sender<NetMsg>) {
                             mining: false,
                             status_fails: 0,
                             download_mode: true,
+                            mesh_bridging: false,
+                            mesh_peers: 0,
                         },
                         false,
                     ));
@@ -6360,6 +6384,8 @@ fn mine_worker(cmd_rx: Receiver<NetCmd>, msg_tx: Sender<NetMsg>) {
                 mining: false,
                 status_fails: 0,
                 download_mode: false,
+                mesh_bridging: false,
+                mesh_peers: 0,
             },
             true,
         ))
@@ -6407,6 +6433,8 @@ fn mine_worker(cmd_rx: Receiver<NetCmd>, msg_tx: Sender<NetMsg>) {
                 if !st.mac.is_empty() {
                     board.mac = normalize_mac(&st.mac);
                 }
+                board.mesh_bridging = st.mesh_bridging;
+                board.mesh_peers = st.mesh_peers;
                 let _ = msg_tx.send(NetMsg::Status(Ok(st)));
             }
         }
@@ -6990,6 +7018,8 @@ fn mine_worker(cmd_rx: Receiver<NetCmd>, msg_tx: Sender<NetMsg>) {
                                     if !st.mac.is_empty() {
                                         b.mac = normalize_mac(&st.mac);
                                     }
+                                    b.mesh_bridging = st.mesh_bridging;
+                                    b.mesh_peers = st.mesh_peers;
                                     total_hs += b.hashrate_hs;
                                     total_hashes = total_hashes.saturating_add(b.hashes);
                                     any_mining |= b.mining;

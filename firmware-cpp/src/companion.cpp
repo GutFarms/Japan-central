@@ -7,9 +7,9 @@
 extern "C" float cyd_run_bench(uint32_t n, bool tune);
 
 #if CYD_D0_BUILD
-static constexpr const char* kFwTag = "0.8.103-sha256-d0";
+static constexpr const char* kFwTag = "0.8.104-sha256-d0";
 #else
-static constexpr const char* kFwTag = "0.8.103-sha256";
+static constexpr const char* kFwTag = "0.8.104-sha256";
 #endif
 
 void CompanionLink::begin(uint32_t baud) {
@@ -383,20 +383,22 @@ void CompanionLink::replyStatus(const AppConfig& cfg, const MinerSnapshot& snap)
   copyJsonSafe(sha, sizeof(sha), snap.shaMode.length() ? snap.shaMode.c_str() : "-", 8);
   char mac[20];
   copyJsonSafe(mac, sizeof(mac), snap.mac.length() ? snap.mac.c_str() : "", 17);
-  char buf[460];
+  char buf[520];
   snprintf(
       buf, sizeof(buf),
       "{\"hashrate_hs\":%.0f,\"hashrate_khs\":%.3f,\"shares\":%llu,\"hashes\":%llu,"
       "\"mining\":%s,\"accepted\":%u,\"rejected\":%u,\"pool\":\"%s\",\"connected\":%s,"
       "\"link\":\"cmp\",\"difficulty\":0,\"uptime_secs\":%u,\"cpu_mhz\":%u,"
       "\"hash_focus\":true,\"net_ticker\":\"\",\"job\":\"%s\",\"sha_mode\":\"%s\","
-      "\"full_v\":true,\"bench_hs\":%.0f,\"nonce\":\"%s\",\"mac\":\"%s\"}",
+      "\"full_v\":true,\"bench_hs\":%.0f,\"nonce\":\"%s\",\"mac\":\"%s\","
+      "\"mesh_root\":%s,\"mesh_bridging\":%s,\"mesh_peers\":%u}",
       (double)snap.hashrateHs, (double)(snap.hashrateHs / 1000.0f),
       (unsigned long long)snap.shares, (unsigned long long)snap.totalHashes,
       snap.mining ? "true" : "false", (unsigned)snap.accepted, (unsigned)snap.rejected, pool,
       snap.connected ? "true" : "false", (unsigned)(millis() / 1000),
       (unsigned)(snap.cpuMhz ? snap.cpuMhz : cfg.cpuMhz), job, sha, (double)snap.benchHs, nonceHex,
-      mac);
+      mac, snap.meshRoot ? "true" : "false", snap.meshBridging ? "true" : "false",
+      (unsigned)snap.meshPeers);
   out_->print("CMPSTATUS ");
   out_->println(buf);
 }

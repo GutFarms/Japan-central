@@ -59,6 +59,7 @@ In **Settings**:
 - **0.8.22** — fix Windows self-update bat (retry while `.new` remains; do not relaunch a locked old exe)
 - **0.8.23** — fetch updates via GitHub API / commit-pinned raw (branch raw CDN can serve stale VERSION/bins)
 - **0.8.24** — fix Update board: espflash reject `ESPFLASH_SKIP_UPDATE_CHECK=1` (needs true/false); skip Windows Store python stubs
+- **0.8.104** — USB mesh root keeps hashing while bridging (throttled); any data USB serial works for the root
 - **0.8.103** — ESP-NOW connectivity mesh: USB-linked root bridges nearby boards (not a hashrate multiplier)
 - **0.8.102** — Push update for linked boards (auto-reset, no BOOT Ready); blank boards still use Ready
 - **0.8.101** — Multi-USB: merge Windows registry COM list; warn when only 1 USB-UART (COM1 PCI is not a board)

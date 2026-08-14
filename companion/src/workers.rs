@@ -45,6 +45,9 @@ pub struct WorkerLive {
     pub hashrate_hs: f64,
     pub hashes: u64,
     pub mining: bool,
+    /// USB root currently bridging ESP-NOW mesh peers (hash rate intentionally reduced).
+    pub mesh_bridging: bool,
+    pub mesh_peers: u8,
 }
 
 /// One OS serial port with a human-readable label (USB chip / product).

@@ -25,6 +25,9 @@ struct MinerSnapshot {
   String wifiMode;   // off / ap / sta / apsta
   String wifiAp;     // SoftAP SSID
   String wifiIp;     // best client IP for TCP
+  bool meshRoot = false;
+  bool meshBridging = false;
+  uint8_t meshPeers = 0;
 };
 
 struct NetFeed {

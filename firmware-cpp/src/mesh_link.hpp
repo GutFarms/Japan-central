@@ -48,6 +48,9 @@ class MeshLink {
   void noteUsbActivity();
   bool isRoot() const;
   bool hasRootPeer() const;
+  /// Root with at least one leaf peer — keep hashing, but yield for bridge traffic.
+  bool isBridging() const;
+  size_t leafCount() const;
   bool ready() const { return ready_; }
 
   // Leaf: Print used as CompanionLink out_ / share mirror toward root.

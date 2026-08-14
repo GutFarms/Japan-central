@@ -129,6 +129,16 @@ bool MeshLink::hasRootPeer() const {
   return pickRoot(tmp);
 }
 
+size_t MeshLink::leafCount() const {
+  size_t n = 0;
+  for (size_t i = 0; i < MESH_MAX_PEERS; i++) {
+    if (peers_[i].used && !peers_[i].root) n++;
+  }
+  return n;
+}
+
+bool MeshLink::isBridging() const { return isRoot() && leafCount() > 0; }
+
 void MeshLink::macToStr(const uint8_t mac[6], char out[18]) const {
   snprintf(out, 18, "%02x:%02x:%02x:%02x:%02x:%02x", mac[0], mac[1], mac[2], mac[3], mac[4],
            mac[5]);
@@ -305,7 +315,8 @@ void MeshLink::onEspNowRecv(const uint8_t* mac, const uint8_t* data, int len, in
 void MeshLink::replyMeshList(Print& out) const {
   char buf[360];
   size_t o = 0;
-  o += snprintf(buf + o, sizeof(buf) - o, "CMPMESH root=%u peers=", isRoot() ? 1u : 0u);
+  o += snprintf(buf + o, sizeof(buf) - o, "CMPMESH root=%u bridging=%u peers=",
+                isRoot() ? 1u : 0u, isBridging() ? 1u : 0u);
   bool first = true;
   for (size_t i = 0; i < MESH_MAX_PEERS; i++) {
     if (!peers_[i].used) continue;
