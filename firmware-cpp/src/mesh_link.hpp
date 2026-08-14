@@ -99,6 +99,8 @@ class MeshLink {
   uint8_t viaMac_[6]{};
   uint32_t viaStartMs_ = 0;
   uint32_t lastChannelPinMs_ = 0;
+  uint8_t meshChan_ = 1;
+  esp_err_t lastSendErr_ = ESP_OK;
 
   void sendHello();
   void pinChannel();
