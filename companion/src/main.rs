@@ -400,6 +400,8 @@ struct StratumLive {
     last_job: String,
     last_rx: String,
     last_tx: String,
+    /// Authorize / subscribe failure detail for the Live stratum panel.
+    last_error: String,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -1168,12 +1170,27 @@ impl CompanionApp {
     fn pool_state(&self) -> (&'static str, Color32) {
         if self.stratum_live.authorized {
             ("AUTHORIZED", C_LIME)
-        } else if self.stratum_live.phase == "err" {
-            ("ERROR", C_ERR)
-        } else if self.stratum_live.connected
-            || (self.stratum_live.phase != "off" && !self.stratum_live.phase.is_empty())
+        } else if self.stratum_live.phase == "auth-fail"
+            || self.stratum_live.phase == "err"
+            || !self.stratum_live.last_error.is_empty()
         {
-            ("LINKING", C_WARN)
+            ("AUTH FAILED", C_ERR)
+        } else if self.stratum_live.connected
+            || matches!(
+                self.stratum_live.phase.as_str(),
+                "tcp" | "sub" | "auth" | "idle" | "mine"
+            )
+        {
+            let label = match self.stratum_live.phase.as_str() {
+                "tcp" => "TCP…",
+                "sub" => "SUBSCRIBE…",
+                "auth" => "AUTHORIZE…",
+                "idle" | "mine" => "LINKING…",
+                _ => "CONNECTING…",
+            };
+            (label, C_WARN)
+        } else if self.mining {
+            ("POOL DOWN", C_WARN)
         } else {
             ("IDLE", C_MUTED)
         }
@@ -3792,6 +3809,31 @@ impl CompanionApp {
             ui.add_space(8.0);
             stratum_line(ui, "Last TX → pool", &trunc(&s.last_tx, 150));
             stratum_line(ui, "Last RX ← pool", &trunc(&s.last_rx, 150));
+            if !s.last_error.is_empty() {
+                ui.add_space(4.0);
+                ui.label(
+                    RichText::new(format!("Pool error · {}", trunc(&s.last_error, 160)))
+                        .color(C_ERR)
+                        .size(12.0),
+                );
+                ui.label(
+                    RichText::new(
+                        "Fix the worker / Bitcoin address on Mine, then Start mining again.",
+                    )
+                    .color(C_MUTED)
+                    .size(11.0),
+                );
+            } else if self.mining && !s.authorized {
+                ui.add_space(4.0);
+                ui.label(
+                    RichText::new(format!(
+                        "Waiting for pool authorize (phase {})… Accept/Reject stay 0 until AUTHORIZED.",
+                        if s.phase.is_empty() { "…" } else { &s.phase }
+                    ))
+                    .color(C_WARN)
+                    .size(11.0),
+                );
+            }
             ui.add_space(6.0);
             if soft_button(ui, "Copy stratum snapshot", 180.0).clicked() {
                 let snap = format!(
@@ -4165,6 +4207,11 @@ impl App for CompanionApp {
                     if self.bench_busy {
                         self.bench_busy = false;
                     }
+                    let low = e.to_lowercase();
+                    if low.contains("authorize failed") || low.contains("auth failed") {
+                        self.mining = false;
+                        self.session_started = None;
+                    }
                     if self.post_flash_verify.is_some() {
                         self.retry_post_flash_verify(&e);
                     } else {
@@ -4237,6 +4284,20 @@ impl App for CompanionApp {
                             LogKind::Stratum,
                             "Authorized — counting shares after warmup".into(),
                         );
+                    }
+                    if self.stratum_live.phase == "auth-fail"
+                        || !self.stratum_live.last_error.is_empty()
+                    {
+                        if self.mining && !self.stratum_live.authorized {
+                            self.mining = false;
+                            self.session_started = None;
+                        }
+                        if !self.stratum_live.last_error.is_empty() {
+                            self.last_error = format!(
+                                "Pool: {}",
+                                trunc(&self.stratum_live.last_error, 120)
+                            );
+                        }
                     }
                     if self.stratum_live.authorized {
                         self.accepted = self.stratum_live.accepted;
@@ -6151,6 +6212,7 @@ fn push_stratum_live(tx: &Sender<NetMsg>, client: &StratumClient) {
         last_job: client.job_id().to_string(),
         last_rx: client.last_rx.clone(),
         last_tx: client.last_tx.clone(),
+        last_error: client.last_error.clone(),
     }));
 }
 
@@ -7067,6 +7129,94 @@ fn mine_worker(cmd_rx: Receiver<NetCmd>, msg_tx: Sender<NetMsg>) {
                     mine_password = password.clone();
                     reconnect_backoff = Duration::from_secs(2);
                     reconnect_at = None;
+                    // Connect the pool FIRST so authorize is not starved by mesh via /
+                    // USB warmup. Boards keep hashing once jobs arrive.
+                    log_msg(
+                        &msg_tx,
+                        LogKind::Stratum,
+                        format!(
+                            "Connecting pool {endpoint} as {worker} · {} USB + {} mesh",
+                            boards.len(),
+                            mesh.len()
+                        ),
+                    );
+                    let mut client = StratumClient::new(worker, password);
+                    let mut pool_ready = false;
+                    match client.connect(&endpoint) {
+                        Ok(()) => {
+                            // Drain subscribe → authorize quickly (up to ~4s).
+                            let deadline = Instant::now() + Duration::from_secs(4);
+                            let mut handshake_err: Option<String> = None;
+                            while Instant::now() < deadline
+                                && !client.authorized()
+                                && !client.auth_give_up
+                            {
+                                match client.poll() {
+                                    Ok(()) => {}
+                                    Err(e) => {
+                                        handshake_err = Some(e);
+                                        break;
+                                    }
+                                }
+                                thread::sleep(Duration::from_millis(25));
+                            }
+                            for line in client.take_recent() {
+                                log_msg(&msg_tx, LogKind::Stratum, line);
+                            }
+                            push_stratum_live(&msg_tx, &client);
+                            if let Some(e) = handshake_err {
+                                if client.auth_give_up {
+                                    let _ = msg_tx.send(NetMsg::Action(Err(e)));
+                                    mining = false;
+                                    reconnect_at = None;
+                                } else {
+                                    let _ = msg_tx.send(NetMsg::Action(Err(format!(
+                                        "Pool error (will retry): {e}"
+                                    ))));
+                                    mining = true;
+                                    reconnect_at = Some(Instant::now() + reconnect_backoff);
+                                }
+                            } else if client.auth_give_up {
+                                let why = if client.last_error.is_empty() {
+                                    "authorize failed — check BTC address / worker name".into()
+                                } else {
+                                    client.last_error.clone()
+                                };
+                                let _ = msg_tx.send(NetMsg::Action(Err(format!(
+                                    "Pool authorize failed: {why}"
+                                ))));
+                                mining = false;
+                                reconnect_at = None;
+                            } else {
+                                if client.authorized() {
+                                    let _ = msg_tx.send(NetMsg::Action(Ok(format!(
+                                        "Pool AUTHORIZED {endpoint} — arming {} board(s)",
+                                        boards.len()
+                                    ))));
+                                } else {
+                                    let _ = msg_tx.send(NetMsg::Action(Ok(format!(
+                                        "Pool TCP up {endpoint} (waiting authorize) — arming boards"
+                                    ))));
+                                }
+                                stratum = Some(client);
+                                mining = true;
+                                reconnect_backoff = Duration::from_secs(2);
+                                pool_ready = true;
+                            }
+                        }
+                        Err(e) => {
+                            mining = true;
+                            reconnect_at = Some(Instant::now() + reconnect_backoff);
+                            let _ = msg_tx.send(NetMsg::Action(Err(format!(
+                                "Pool connect failed (boards will retry): {e}"
+                            ))));
+                        }
+                    }
+                    if !pool_ready && !mining {
+                        // Authorize failed — don't arm boards on a dead pool session.
+                        continue;
+                    }
+                    // Arm boards after pool handshake so USB chatter cannot block authorize.
                     for b in boards.iter_mut() {
                         let _ = usb_cmd(
                             &mut b.port,
@@ -7097,51 +7247,23 @@ fn mine_worker(cmd_rx: Receiver<NetCmd>, msg_tx: Sender<NetMsg>) {
                             }
                         }
                     }
-                    sync_mesh_peers(&mut boards, &mut mesh, &msg_tx, true);
-                    last_mesh_sync = Instant::now();
-                    for m in mesh.iter_mut() {
-                        match arm_mesh_job(&mut boards, m, &msg_tx) {
-                            Ok(()) => {}
-                            Err(e) => {
-                                log_msg(
-                                    &msg_tx,
-                                    LogKind::Warn,
-                                    format!("Mesh warmup {}: {e}", m.mac),
-                                );
+                    // Mesh sync can block on via timeouts — only after pool is up.
+                    if stratum.as_ref().map(|s| s.authorized()).unwrap_or(false)
+                        || stratum.is_some()
+                    {
+                        sync_mesh_peers(&mut boards, &mut mesh, &msg_tx, true);
+                        last_mesh_sync = Instant::now();
+                        for m in mesh.iter_mut() {
+                            match arm_mesh_job(&mut boards, m, &msg_tx) {
+                                Ok(()) => {}
+                                Err(e) => {
+                                    log_msg(
+                                        &msg_tx,
+                                        LogKind::Warn,
+                                        format!("Mesh warmup {}: {e}", m.mac),
+                                    );
+                                }
                             }
-                        }
-                    }
-                    log_msg(
-                        &msg_tx,
-                        LogKind::Stratum,
-                        format!(
-                            "Connecting pool {endpoint} · {} USB + {} mesh",
-                            boards.len(),
-                            mesh.len()
-                        ),
-                    );
-                    let mut client = StratumClient::new(worker, password);
-                    match client.connect(&endpoint) {
-                        Ok(()) => {
-                            for line in client.take_recent() {
-                                log_msg(&msg_tx, LogKind::Stratum, line);
-                            }
-                            push_stratum_live(&msg_tx, &client);
-                            stratum = Some(client);
-                            mining = true;
-                            reconnect_backoff = Duration::from_secs(2);
-                            let _ = msg_tx.send(NetMsg::Action(Ok(format!(
-                                "Pool connecting {endpoint} — {} board(s) hashing",
-                                boards.len()
-                            ))));
-                        }
-                        Err(e) => {
-                            mining = true;
-                            stratum = None;
-                            reconnect_at = Some(Instant::now() + reconnect_backoff);
-                            let _ = msg_tx.send(NetMsg::Action(Err(format!(
-                                "Pool error (boards still hashing; will retry): {e}"
-                            ))));
                         }
                     }
                 }
@@ -7301,8 +7423,15 @@ fn mine_worker(cmd_rx: Receiver<NetCmd>, msg_tx: Sender<NetMsg>) {
                         }
                     }
                     if last_mesh_sync.elapsed() >= Duration::from_secs(4) {
-                        sync_mesh_peers(&mut boards, &mut mesh, &msg_tx, mining);
-                        last_mesh_sync = Instant::now();
+                        // Don't block the pool handshake on ESP-NOW via timeouts.
+                        let pool_linking = stratum
+                            .as_ref()
+                            .map(|s| s.stream_connected() && !s.authorized())
+                            .unwrap_or(false);
+                        if !pool_linking {
+                            sync_mesh_peers(&mut boards, &mut mesh, &msg_tx, mining);
+                            last_mesh_sync = Instant::now();
+                        }
                     }
                     let mut drop_mesh: Vec<String> = Vec::new();
                     for m in mesh.iter_mut() {
@@ -7653,6 +7782,50 @@ fn mine_worker(cmd_rx: Receiver<NetCmd>, msg_tx: Sender<NetMsg>) {
             }
         }
 
+        // Prefer pool I/O before USB drain while authorizing — mesh/USB can starve the handshake.
+        let pool_needs_handshake = stratum
+            .as_ref()
+            .map(|s| s.stream_connected() && !s.authorized() && !s.auth_give_up)
+            .unwrap_or(false);
+        if pool_needs_handshake {
+            let mut fatal: Option<(String, bool)> = None;
+            if let Some(client) = stratum.as_mut() {
+                for _ in 0..8 {
+                    if client.authorized() || client.auth_give_up {
+                        break;
+                    }
+                    if let Err(e) = client.poll() {
+                        for line in client.take_recent() {
+                            log_msg(&msg_tx, LogKind::Stratum, line);
+                        }
+                        push_stratum_live(&msg_tx, client);
+                        fatal = Some((e, client.auth_give_up));
+                        break;
+                    }
+                }
+                if fatal.is_none() {
+                    for line in client.take_recent() {
+                        log_msg(&msg_tx, LogKind::Stratum, line);
+                    }
+                    push_stratum_live(&msg_tx, client);
+                }
+            }
+            if let Some((e, give_up)) = fatal {
+                if let Some(mut s) = stratum.take() {
+                    s.disconnect();
+                }
+                let _ = msg_tx.send(NetMsg::Action(Err(e)));
+                if give_up {
+                    mining = false;
+                    reconnect_at = None;
+                } else if mining && !mine_endpoint.is_empty() {
+                    reconnect_at = Some(Instant::now() + reconnect_backoff);
+                    reconnect_backoff =
+                        (reconnect_backoff * 2).min(Duration::from_secs(60));
+                }
+            }
+        }
+
         // Pull board shares BEFORE polling the pool so submits leave ASAP
         // (cuts measured share→accept latency).
         if !boards.is_empty() {
@@ -7668,130 +7841,143 @@ fn mine_worker(cmd_rx: Receiver<NetCmd>, msg_tx: Sender<NetMsg>) {
             }
         }
 
-        if let Some(client) = stratum.as_mut() {
-            let was_authorized = client.authorized();
-            // Drain pool socket aggressively — short read timeout, multiple passes.
+        if stratum.is_some() {
+            let was_authorized = stratum.as_ref().map(|c| c.authorized()).unwrap_or(false);
             let mut poll_err: Option<String> = None;
-            for _ in 0..4 {
-                match client.poll() {
-                    Ok(()) => {}
-                    Err(e) => {
-                        poll_err = Some(e);
-                        break;
+            if let Some(client) = stratum.as_mut() {
+                for _ in 0..4 {
+                    match client.poll() {
+                        Ok(()) => {}
+                        Err(e) => {
+                            poll_err = Some(e);
+                            break;
+                        }
                     }
                 }
             }
-            match poll_err {
-                None => {
-                    if client.authorized() && !was_authorized {
-                        push_stratum_live(&msg_tx, client);
-                        let _ = msg_tx.send(NetMsg::MineStats {
-                            accepted: 0,
-                            rejected: 0,
-                            phase: client.phase.clone(),
-                        });
-                        for b in boards.iter_mut() {
-                            let _ = usb_cmd(
-                                &mut b.port,
-                                &mut b.rx,
-                                "cmp stats accepted=0&rejected=0",
-                            );
-                        }
-                    }
+            if let Some(e) = poll_err {
+                let give_up = stratum
+                    .as_ref()
+                    .map(|s| s.auth_give_up || s.phase == "auth-fail")
+                    .unwrap_or(false);
+                if let Some(client) = stratum.as_mut() {
                     for line in client.take_recent() {
                         log_msg(&msg_tx, LogKind::Stratum, line);
                     }
-                    for ev in client.take_share_events() {
-                        let _ = msg_tx.send(NetMsg::Share(ev));
-                    }
-                    if let Some(job) = client.take_job() {
-                        let mut pushed = 0usize;
-                        for b in boards.iter_mut() {
-                            let mut legacy = b.legacy_job;
-                            match usb_push_job(
-                                &mut b.port,
-                                &mut b.rx,
-                                &job,
-                                &mut legacy,
-                                &msg_tx,
-                            ) {
-                                Ok(_) => {
-                                    b.legacy_job = legacy;
-                                    pushed += 1;
-                                }
-                                Err(e) => {
-                                    b.legacy_job = legacy;
-                                    let _ = msg_tx.send(NetMsg::Action(Err(format!(
-                                        "{} job push: {e}",
-                                        b.name
-                                    ))));
-                                }
-                            }
-                        }
-                        for m in mesh.iter_mut() {
-                            match push_mesh_job(&mut boards, m, &job, &msg_tx) {
-                                Ok(()) => pushed += 1,
-                                Err(e) => {
-                                    let _ = msg_tx.send(NetMsg::Action(Err(format!(
-                                        "mesh {} job push: {e}",
-                                        m.mac
-                                    ))));
-                                }
-                            }
-                        }
-                        if pushed > 0 {
-                            recent_jobs.push_back(job.clone());
-                            while recent_jobs.len() > 32 {
-                                recent_jobs.pop_front();
-                            }
-                            let _ = msg_tx.send(NetMsg::Action(Ok(format!(
-                                "USB ← job {} → {pushed} board(s)/mesh",
-                                job.job_id
-                            ))));
-                        } else {
-                            // Don't drop the only copy — retry next loop tick.
-                            client.restore_job(job);
-                        }
-                    }
-                    if last_stats_push.elapsed() > Duration::from_secs(2) {
-                        let (a, r) = if client.authorized() {
-                            (client.accepted, client.rejected)
-                        } else {
-                            (0, 0)
-                        };
-                        let cmd = format!("cmp stats accepted={a}&rejected={r}");
-                        for b in boards.iter_mut() {
-                            // Skip LCD stats push while status is soft-failing — frees USB.
-                            if b.status_fails > 0 {
-                                continue;
-                            }
-                            let _ = usb_cmd(&mut b.port, &mut b.rx, &cmd);
-                        }
-                        last_stats_push = Instant::now();
-                    }
+                    push_stratum_live(&msg_tx, client);
                 }
-                Some(e) => {
-                    log_msg(&msg_tx, LogKind::Err, format!("Pool: {e}"));
-                    if let Some(mut s) = stratum.take() {
-                        s.disconnect();
-                    }
-                    if mining && !mine_endpoint.is_empty() {
-                        reconnect_at = Some(Instant::now() + reconnect_backoff);
-                        log_msg(
-                            &msg_tx,
-                            LogKind::Warn,
-                            format!(
-                                "Pool reconnect in {}s…",
-                                reconnect_backoff.as_secs().max(1)
-                            ),
+                log_msg(&msg_tx, LogKind::Err, format!("Pool: {e}"));
+                if let Some(mut s) = stratum.take() {
+                    s.disconnect();
+                }
+                if give_up {
+                    mining = false;
+                    reconnect_at = None;
+                    let _ = msg_tx.send(NetMsg::Action(Err(e)));
+                    let _ = msg_tx.send(NetMsg::MineStats {
+                        accepted: 0,
+                        rejected: 0,
+                        phase: "auth-fail".into(),
+                    });
+                } else if mining && !mine_endpoint.is_empty() {
+                    reconnect_at = Some(Instant::now() + reconnect_backoff);
+                    log_msg(
+                        &msg_tx,
+                        LogKind::Warn,
+                        format!(
+                            "Pool reconnect in {}s…",
+                            reconnect_backoff.as_secs().max(1)
+                        ),
+                    );
+                    reconnect_backoff =
+                        (reconnect_backoff * 2).min(Duration::from_secs(60));
+                }
+                thread::sleep(Duration::from_millis(100));
+            } else if let Some(client) = stratum.as_mut() {
+                if client.authorized() && !was_authorized {
+                    push_stratum_live(&msg_tx, client);
+                    let _ = msg_tx.send(NetMsg::MineStats {
+                        accepted: 0,
+                        rejected: 0,
+                        phase: client.phase.clone(),
+                    });
+                    for b in boards.iter_mut() {
+                        let _ = usb_cmd(
+                            &mut b.port,
+                            &mut b.rx,
+                            "cmp stats accepted=0&rejected=0",
                         );
-                        reconnect_backoff =
-                            (reconnect_backoff * 2).min(Duration::from_secs(60));
                     }
-                    thread::sleep(Duration::from_millis(100));
                 }
-            }
-            if let Some(client) = stratum.as_mut() {
+                for line in client.take_recent() {
+                    log_msg(&msg_tx, LogKind::Stratum, line);
+                }
+                for ev in client.take_share_events() {
+                    let _ = msg_tx.send(NetMsg::Share(ev));
+                }
+                if let Some(job) = client.take_job() {
+                    let mut pushed = 0usize;
+                    for b in boards.iter_mut() {
+                        let mut legacy = b.legacy_job;
+                        match usb_push_job(
+                            &mut b.port,
+                            &mut b.rx,
+                            &job,
+                            &mut legacy,
+                            &msg_tx,
+                        ) {
+                            Ok(_) => {
+                                b.legacy_job = legacy;
+                                pushed += 1;
+                            }
+                            Err(e) => {
+                                b.legacy_job = legacy;
+                                let _ = msg_tx.send(NetMsg::Action(Err(format!(
+                                    "{} job push: {e}",
+                                    b.name
+                                ))));
+                            }
+                        }
+                    }
+                    for m in mesh.iter_mut() {
+                        match push_mesh_job(&mut boards, m, &job, &msg_tx) {
+                            Ok(()) => pushed += 1,
+                            Err(e) => {
+                                let _ = msg_tx.send(NetMsg::Action(Err(format!(
+                                    "mesh {} job push: {e}",
+                                    m.mac
+                                ))));
+                            }
+                        }
+                    }
+                    if pushed > 0 {
+                        recent_jobs.push_back(job.clone());
+                        while recent_jobs.len() > 32 {
+                            recent_jobs.pop_front();
+                        }
+                        let _ = msg_tx.send(NetMsg::Action(Ok(format!(
+                            "USB ← job {} → {pushed} board(s)/mesh",
+                            job.job_id
+                        ))));
+                    } else {
+                        client.restore_job(job);
+                    }
+                }
+                if last_stats_push.elapsed() > Duration::from_secs(2) {
+                    let (a, r) = if client.authorized() {
+                        (client.accepted, client.rejected)
+                    } else {
+                        (0, 0)
+                    };
+                    let cmd = format!("cmp stats accepted={a}&rejected={r}");
+                    for b in boards.iter_mut() {
+                        if b.status_fails > 0 {
+                            continue;
+                        }
+                        let _ = usb_cmd(&mut b.port, &mut b.rx, &cmd);
+                    }
+                    last_stats_push = Instant::now();
+                }
                 if last_stratum_ui.elapsed() > Duration::from_millis(150) {
                     push_stratum_live(&msg_tx, client);
                     let _ = msg_tx.send(NetMsg::MineStats {

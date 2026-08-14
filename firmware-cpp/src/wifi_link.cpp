@@ -109,11 +109,11 @@ void WifiLink::beacon() {
   IPAddress advertise = (WiFi.status() == WL_CONNECTED) ? sta : ap;
   char msg[220];
 #if CYD_D0_BUILD
-  static constexpr const char* kFwTag = "0.8.110-sha256-d0";
-  static constexpr const char* kFwShort = "0.8.110-d0";
+  static constexpr const char* kFwTag = "0.8.111-sha256-d0";
+  static constexpr const char* kFwShort = "0.8.111-d0";
 #else
-  static constexpr const char* kFwTag = "0.8.110-sha256";
-  static constexpr const char* kFwShort = "0.8.110";
+  static constexpr const char* kFwTag = "0.8.111-sha256";
+  static constexpr const char* kFwShort = "0.8.111";
 #endif
   snprintf(msg, sizeof(msg),
            "%s|v=%s|mac=%s|fw=%s|tcp=%u|ip=%u.%u.%u.%u|ap=%s|mode=%s",

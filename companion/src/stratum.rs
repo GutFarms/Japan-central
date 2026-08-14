@@ -74,6 +74,10 @@ pub struct StratumClient {
     pub lines_tx: u64,
     pub last_rx: String,
     pub last_tx: String,
+    /// Last fatal pool error (authorize / subscribe) for the UI.
+    pub last_error: String,
+    /// True when authorize failed — do not auto-reconnect with the same worker.
+    pub auth_give_up: bool,
     /// Recent stratum lines for the UI (newest last).
     pub recent: Vec<String>,
     share_events: Vec<ShareOutcome>,
@@ -122,6 +126,8 @@ impl StratumClient {
             lines_tx: 0,
             last_rx: String::new(),
             last_tx: String::new(),
+            last_error: String::new(),
+            auth_give_up: false,
             recent: Vec::new(),
             share_events: Vec::new(),
         }
@@ -160,6 +166,8 @@ impl StratumClient {
         // Keep recent_submit_keys across reconnect so duplicate board shares are dropped.
         self.accepted = 0;
         self.rejected = 0;
+        self.last_error.clear();
+        self.auth_give_up = false;
         self.phase = "tcp".into();
         self.push_recent(format!("← TCP connected {}", self.endpoint));
         self.send_subscribe()
@@ -179,7 +187,10 @@ impl StratumClient {
         self.job_wait_since = None;
         self.accepted = 0;
         self.rejected = 0;
-        self.phase = "off".into();
+        // Keep last_error / auth_give_up so the UI can show why we stopped.
+        if self.phase != "auth-fail" {
+            self.phase = "off".into();
+        }
         self.push_recent("← disconnected".into());
     }
 
@@ -542,9 +553,13 @@ impl StratumClient {
                 if ok {
                     self.on_authorized();
                 } else {
+                    let why = rpc_error_detail(&v).unwrap_or_else(|| "authorize rejected".into());
                     self.authorized = false;
-                    self.phase = "err".into();
-                    return Err("authorize failed".into());
+                    self.auth_give_up = true;
+                    self.phase = "auth-fail".into();
+                    self.last_error = why.clone();
+                    self.push_recent(format!("← authorize failed: {why}"));
+                    return Err(format!("authorize failed: {why}"));
                 }
                 return Ok(());
             }
@@ -574,6 +589,14 @@ impl StratumClient {
         }
 
         if has_error {
+            if id == self.authorize_id && !self.authorized {
+                let why = rpc_error_detail(&v).unwrap_or_else(|| "authorize error".into());
+                self.auth_give_up = true;
+                self.phase = "auth-fail".into();
+                self.last_error = why.clone();
+                self.push_recent(format!("← authorize failed: {why}"));
+                return Err(format!("authorize failed: {why}"));
+            }
             if let Some(started) = self.pending_shares.remove(&id) {
                 let latency_ms = Some(started.elapsed().as_millis() as u64);
                 let (job_id, nonce) = self
@@ -598,6 +621,8 @@ impl StratumClient {
 
     fn on_authorized(&mut self) {
         self.authorized = true;
+        self.auth_give_up = false;
+        self.last_error.clear();
         self.accepted = 0;
         self.rejected = 0;
         self.pending_shares.clear();
@@ -799,6 +824,44 @@ fn json_rpc_id(v: &Value) -> u64 {
         Some(Value::String(s)) => s.parse().unwrap_or(0),
         _ => 0,
     }
+}
+
+/// Pull a human-readable message from stratum `error` (array or string).
+fn rpc_error_detail(v: &Value) -> Option<String> {
+    let err = v.get("error")?;
+    if err.is_null() {
+        return None;
+    }
+    if let Some(s) = err.as_str() {
+        let t = s.trim();
+        return if t.is_empty() { None } else { Some(t.into()) };
+    }
+    if let Some(arr) = err.as_array() {
+        let parts: Vec<String> = arr
+            .iter()
+            .filter_map(|x| {
+                if let Some(s) = x.as_str() {
+                    let t = s.trim();
+                    if t.is_empty() {
+                        None
+                    } else {
+                        Some(t.to_string())
+                    }
+                } else if let Some(n) = x.as_i64() {
+                    Some(n.to_string())
+                } else if x.is_null() {
+                    None
+                } else {
+                    Some(x.to_string())
+                }
+            })
+            .collect();
+        if parts.is_empty() {
+            return None;
+        }
+        return Some(parts.join(" · "));
+    }
+    Some(err.to_string())
 }
 
 fn result_as_bool(result: Option<&Value>) -> Option<bool> {
