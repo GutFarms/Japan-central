@@ -7,9 +7,9 @@
 extern "C" float cyd_run_bench(uint32_t n, bool tune);
 
 #if CYD_D0_BUILD
-static constexpr const char* kFwTag = "0.8.130-sha256-d0";
+static constexpr const char* kFwTag = "0.8.131-sha256-d0";
 #else
-static constexpr const char* kFwTag = "0.8.130-sha256";
+static constexpr const char* kFwTag = "0.8.131-sha256";
 #endif
 
 void CompanionLink::begin(uint32_t baud) {
@@ -331,11 +331,14 @@ void CompanionLink::handleLine(const String& line, AppConfig& cfg, const MinerSn
   
   if (verb == "wifi") {
     if (args.length() == 0 || args.equalsIgnoreCase("status")) {
-      char buf[160];
+      char buf[220];
       snprintf(buf, sizeof(buf),
-               "CMPACK wifi en=%u ssid=%s",
+               "CMPACK wifi en=%u ssid=%s mode=%s ip=%s ap=%s",
                cfg.wifiEnabled ? 1u : 0u,
-               cfg.wifiSsid.length() ? cfg.wifiSsid.c_str() : "-");
+               cfg.wifiSsid.length() ? cfg.wifiSsid.c_str() : "-",
+               snap.wifiMode.length() ? snap.wifiMode.c_str() : "-",
+               snap.wifiIp.length() ? snap.wifiIp.c_str() : "-",
+               snap.wifiAp.length() ? snap.wifiAp.c_str() : "-");
       out_->println(buf);
       out_->flush();
       return;
@@ -349,7 +352,8 @@ void CompanionLink::handleLine(const String& line, AppConfig& cfg, const MinerSn
       return;
     }
     parseWifiBody(args, cfg);
-    out_->println("CMPACK wifi");
+    // Persist + apply SoftAP/STA; credentials land in NVS via setWifiApply.
+    out_->println("CMPACK wifi saved");
     out_->flush();
     if (onWifi_) onWifi_();
     return;
