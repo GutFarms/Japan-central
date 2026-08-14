@@ -90,6 +90,10 @@ class CompanionLink {
   bool haveHeader_ = false;
   bool haveTarget_ = false;
 
+  /// After `cmp ota size=N` — next bytes are raw app image for Update.write.
+  size_t otaRemain_ = 0;
+  bool otaActive_ = false;
+
   Print* out_ = &Serial;
   Print* shareMirror_ = nullptr;
   WifiFn onWifi_;
@@ -97,6 +101,7 @@ class CompanionLink {
   char* activeLineBuf_ = lineBuf_;
   size_t* activeLineLen_ = &lineLen_;
 
+  bool pollOtaBinary(Stream& in, Print& out);
   void handleLine(const String& line, AppConfig& cfg, const MinerSnapshot& snap, ApplyFn onApply,
                   NetFeed* net, JobFn onJob, StopFn onStop, StatsFn onStats);
   void replyStatus(const AppConfig& cfg, const MinerSnapshot& snap);

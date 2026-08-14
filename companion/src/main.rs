@@ -30,7 +30,8 @@ use app_update::{
 };
 use flash_update::{
     ensure_firmware_image, fetch_latest_firmware, find_firmware_image, firmware_is_custom,
-    flash_merged_bin, load_firmware_bin, update_needed, FirmwareImage, FlashControl,
+    flash_merged_bin, load_firmware_bin, push_firmware_ota, resolve_ota_app_image, update_needed,
+    FirmwareImage, FlashControl,
 };
 use live_bar::{
     default_header_coins, format_change, format_usd, COIN_CATALOG, LiveFeed,
@@ -632,6 +633,8 @@ enum NetCmd {
         hold: Arc<AtomicBool>,
         /// Board was answering cmp — try auto-reset push without BOOT Ready first.
         live_push: bool,
+        /// Stream app.bin over TCP `cmp ota` (Wi‑Fi-linked board).
+        wifi_ota: bool,
     },
     /// Push live ticker text to the ESP LCD.
     PushNet {
@@ -2125,11 +2128,13 @@ impl CompanionApp {
         }
     }
 
-    /// USB COM / linked worker choices for Update board.
+    /// USB COM / Wi‑Fi linked worker choices for Update board.
     fn flash_target_choices(&self) -> Vec<(String, String)> {
         let mut out: Vec<(String, String)> = Vec::new();
         for w in &self.connected_workers {
-            if !self.port_is_flashable_name(&w.endpoint) {
+            let usb = self.port_is_flashable_name(&w.endpoint);
+            let wifi = Self::is_wifi_ota_endpoint(&w.endpoint);
+            if !usb && !wifi {
                 continue;
             }
             let mac = if w.mac.is_empty() {
@@ -2144,12 +2149,40 @@ impl CompanionApp {
             };
             let tag = if Self::fw_looks_download_mode(&w.fw) {
                 "download-mode"
+            } else if wifi {
+                "Wi‑Fi"
             } else {
-                "linked"
+                "USB"
             };
             out.push((
                 w.endpoint.clone(),
                 format!("{} · {mac} · {fw} · {tag}", w.endpoint),
+            ));
+        }
+        // Recent Wi‑Fi discoveries (not linked yet) — still offer wireless push.
+        for w in &self.discovered_workers {
+            if w.kind != WorkerKind::Wifi {
+                continue;
+            }
+            if out.iter().any(|(e, _)| port_names_match(e, &w.endpoint)) {
+                continue;
+            }
+            if !Self::is_wifi_ota_endpoint(&w.endpoint) {
+                continue;
+            }
+            let mac = if w.mac.is_empty() {
+                "mac?".to_string()
+            } else {
+                w.mac.clone()
+            };
+            let fw = if w.fw.is_empty() {
+                "fw?".to_string()
+            } else {
+                w.fw.clone()
+            };
+            out.push((
+                w.endpoint.clone(),
+                format!("{} · {mac} · {fw} · Wi‑Fi (scan)", w.endpoint),
             ));
         }
         for p in flashable_ports(&self.ports) {
@@ -2161,17 +2194,36 @@ impl CompanionApp {
         out
     }
 
-    /// USB COM for Update board / flash — respect the user’s selected worker first.
-    fn resolve_flash_usb_port(&self) -> Result<String, String> {
-        // 1) Explicit selection (Mine / Update picker) when it’s a real USB-UART.
-        if self.port_is_flashable_name(&self.com_port) {
+    /// `host:19284` Wi‑Fi TCP endpoint suitable for `cmp ota` push.
+    fn is_wifi_ota_endpoint(name: &str) -> bool {
+        let n = name.trim();
+        if n.is_empty() || is_usb_serial_port(n) {
+            return false;
+        }
+        let upper = n.to_ascii_uppercase();
+        if upper.starts_with("COM") || upper.starts_with("/DEV/") {
+            return false;
+        }
+        // host:port
+        n.contains(':')
+    }
+
+    /// USB COM or Wi‑Fi endpoint for Update board — respect the user’s selected worker first.
+    fn resolve_flash_target(&self) -> Result<String, String> {
+        // 1) Explicit selection (Mine / Update picker).
+        if self.port_is_flashable_name(&self.com_port) || Self::is_wifi_ota_endpoint(&self.com_port)
+        {
             return Ok(self.com_port.clone());
         }
-        // 2) Linked USB boards (prefer live companion over download-mode).
+        // 2) Linked Wi‑Fi boards (wireless push).
         for w in &self.connected_workers {
-            if self.port_is_flashable_name(&w.endpoint)
-                && !Self::fw_looks_download_mode(&w.fw)
-            {
+            if Self::is_wifi_ota_endpoint(&w.endpoint) && !Self::fw_looks_download_mode(&w.fw) {
+                return Ok(w.endpoint.clone());
+            }
+        }
+        // 3) Linked USB boards (prefer live companion over download-mode).
+        for w in &self.connected_workers {
+            if self.port_is_flashable_name(&w.endpoint) && !Self::fw_looks_download_mode(&w.fw) {
                 return Ok(w.endpoint.clone());
             }
         }
@@ -2180,12 +2232,38 @@ impl CompanionApp {
                 return Ok(w.endpoint.clone());
             }
         }
-        // 3) Best scored CYD from the port list.
+        // 4) Scanned Wi‑Fi boards.
+        for w in &self.discovered_workers {
+            if w.kind == WorkerKind::Wifi
+                && Self::is_wifi_ota_endpoint(&w.endpoint)
+                && !Self::fw_looks_download_mode(&w.fw)
+            {
+                return Ok(w.endpoint.clone());
+            }
+        }
+        // 5) Best scored CYD from the port list.
         if let Some(p) = prefer_cyd_port(&self.ports) {
             return Ok(p.name.clone());
         }
         if let Some(p) = flashable_ports(&self.ports).into_iter().next() {
             return Ok(p.name.clone());
+        }
+        Err(
+            "Select which board to update (USB COM / Wi‑Fi worker). COM1 / PCI motherboard ports are not flashable."
+                .into(),
+        )
+    }
+
+    /// USB COM for Update board / flash — respect the user’s selected worker first.
+    fn resolve_flash_usb_port(&self) -> Result<String, String> {
+        let target = self.resolve_flash_target()?;
+        if Self::is_wifi_ota_endpoint(&target) {
+            return Err(
+                "Selected board is Wi‑Fi — use Push update (Wi‑Fi), not USB Flash (BOOT).".into(),
+            );
+        }
+        if self.port_is_flashable_name(&target) {
+            return Ok(target);
         }
         Err(
             "Select which board to update (USB COM / linked worker). COM1 / PCI motherboard ports are not flashable."
@@ -2203,13 +2281,13 @@ impl CompanionApp {
         {
             self.firmware = find_firmware_image().ok().or_else(|| self.firmware.clone());
         }
-        match self.resolve_flash_usb_port() {
+        match self.resolve_flash_target() {
             Ok(port) => {
                 if !port_names_match(&port, &self.com_port) {
                     self.push_log(
                         LogKind::Info,
                         format!(
-                            "Update board target → {port} (was {} — not a CYD USB port)",
+                            "Update board target → {port} (was {} — not a flashable target)",
                             if self.com_port.is_empty() {
                                 "empty".into()
                             } else {
@@ -2409,6 +2487,9 @@ impl CompanionApp {
     /// True when the target COM likely has companion firmware answering cmp —
     /// including older builds with empty/odd fw tags. Used to prefer Push update.
     fn board_supports_live_push(&self, port: &str) -> bool {
+        if Self::is_wifi_ota_endpoint(port) {
+            return self.board_supports_wifi_ota(port);
+        }
         if self.board_is_download_mode(port) {
             return false;
         }
@@ -2434,9 +2515,34 @@ impl CompanionApp {
         })
     }
 
+    /// Wi‑Fi board answering cmp — can receive `cmp ota` app push.
+    fn board_supports_wifi_ota(&self, endpoint: &str) -> bool {
+        if !Self::is_wifi_ota_endpoint(endpoint) {
+            return false;
+        }
+        if self.connected_workers.iter().any(|c| {
+            port_names_match(&c.endpoint, endpoint) && !Self::fw_looks_download_mode(&c.fw)
+        }) {
+            return true;
+        }
+        self.discovered_workers.iter().any(|w| {
+            w.kind == WorkerKind::Wifi
+                && port_names_match(&w.endpoint, endpoint)
+                && !Self::fw_looks_download_mode(&w.fw)
+        })
+    }
+
     fn begin_board_update(&mut self, prefer_live_push: bool) {
+        self.begin_board_update_ex(prefer_live_push, false);
+    }
+
+    fn begin_board_update_wifi(&mut self) {
+        self.begin_board_update_ex(false, true);
+    }
+
+    fn begin_board_update_ex(&mut self, prefer_live_push: bool, wifi_ota: bool) {
         self.update_confirm = false;
-        let port = match self.resolve_flash_usb_port() {
+        let port = match self.resolve_flash_target() {
             Ok(p) => p,
             Err(e) => {
                 self.last_error = e;
@@ -2444,8 +2550,21 @@ impl CompanionApp {
             }
         };
         self.com_port = port.clone();
+        let wifi_target = Self::is_wifi_ota_endpoint(&port);
+        if wifi_ota && !wifi_target {
+            self.last_error =
+                "Push update (Wi‑Fi) needs a Wi‑Fi board (host:19284). Link/scan one on Mine, or pick it above."
+                    .into();
+            return;
+        }
+        if !wifi_ota && wifi_target {
+            self.last_error =
+                "This target is Wi‑Fi — use Push update (Wi‑Fi). USB Flash (BOOT) needs a COM port."
+                    .into();
+            return;
+        }
         // Only refuse Push when we *know* this COM is ROM download-mode.
-        if prefer_live_push && self.board_is_download_mode(&port) {
+        if prefer_live_push && !wifi_ota && self.board_is_download_mode(&port) {
             self.last_error =
                 "This COM is in download mode (BOOT held / blank) — use Flash (BOOT), then Ready."
                     .into();
@@ -2453,15 +2572,26 @@ impl CompanionApp {
         }
         // Honor the user's Push choice even if detection is uncertain (old fw / not linked).
         // flash_update falls back to BOOT Ready if auto-reset fails.
-        let live_push = prefer_live_push;
+        let live_push = prefer_live_push && !wifi_ota;
         if self.mining {
             self.stop_mine();
         }
-        let image = self
-            .firmware
-            .as_ref()
-            .map(|fw| fw.path.to_string_lossy().into_owned())
-            .unwrap_or_default();
+        let image = if wifi_ota {
+            resolve_ota_app_image(self.firmware.as_ref().map(|f| f.path.as_path()))
+                .ok()
+                .map(|fw| fw.path.to_string_lossy().into_owned())
+                .or_else(|| {
+                    self.firmware
+                        .as_ref()
+                        .map(|fw| fw.path.to_string_lossy().into_owned())
+                })
+                .unwrap_or_default()
+        } else {
+            self.firmware
+                .as_ref()
+                .map(|fw| fw.path.to_string_lossy().into_owned())
+                .unwrap_or_default()
+        };
         self.update_busy = true;
         self.update_busy_since = Some(Instant::now());
         self.flash_cooldown_until = None;
@@ -2474,14 +2604,18 @@ impl CompanionApp {
         self.flash_need_boot = Some(need_boot.clone());
         self.flash_boot_ready = Some(boot_ready.clone());
         self.flash_progress = 0.02;
-        self.flash_phase = if live_push {
+        self.flash_phase = if wifi_ota {
+            "Wi‑Fi push".into()
+        } else if live_push {
             "Pushing update".into()
         } else {
             "Starting flash".into()
         };
         self.pending_post_flash_reconnect = None;
         self.post_flash_verify = None;
-        self.update_status = if live_push {
+        self.update_status = if wifi_ota {
+            format!("Pushing firmware over Wi‑Fi to {port}…")
+        } else if live_push {
             format!("Pushing firmware update to {port} (auto-reset)…")
         } else {
             format!("Flashing board via {port}…")
@@ -2490,7 +2624,9 @@ impl CompanionApp {
         self.last_error.clear();
         self.push_log(
             LogKind::Usb,
-            if live_push {
+            if wifi_ota {
+                format!("Push update (Wi‑Fi) → {port}")
+            } else if live_push {
                 format!("Push update → {port} (no BOOT; auto-reset)")
             } else if image.is_empty() {
                 format!("Flash (BOOT) → fetch firmware + flash on {port}")
@@ -2498,7 +2634,7 @@ impl CompanionApp {
                 format!("Flash (BOOT) → {image} on {port}")
             },
         );
-        // Release USB in the worker before flash (port must be free).
+        // Release USB/TCP in the worker before flash so the update path owns the board.
         self.usb_open = false;
         self.mining = false;
         let _ = self.cmd_tx.send(NetCmd::UpdateFirmware {
@@ -2511,6 +2647,7 @@ impl CompanionApp {
             boot_ready,
             hold,
             live_push,
+            wifi_ota,
         });
     }
 
@@ -2600,6 +2737,13 @@ impl CompanionApp {
             ("Releasing USB", 0.04)
         } else if lower.contains("flash budget") || lower.contains("starting") {
             ("Starting flash", 0.02)
+        } else if lower.contains("wifi ota") || lower.contains("wi‑fi ota") || lower.contains("wi-fi ota")
+        {
+            ("Wi‑Fi OTA", 0.12)
+        } else if lower.contains("board ready") {
+            ("Board ready for OTA", 0.15)
+        } else if lower.contains("upload complete") || lower.contains("pushed over wi") {
+            ("Wi‑Fi push complete", 0.88)
         } else if lower.contains("download") && lower.contains("firmware") {
             ("Downloading firmware", 0.05)
         } else if lower.contains("espflash") && lower.contains("found") {
@@ -2628,18 +2772,28 @@ impl CompanionApp {
             attempts_left: 2,
             deadline: Instant::now() + Duration::from_secs(75),
         });
-        self.update_status = format!("Flash OK — booting board, then verifying on {port}…");
+        let via = if Self::is_wifi_ota_endpoint(&port) {
+            "Wi‑Fi"
+        } else {
+            "USB"
+        };
+        self.update_status = format!("Update OK — booting board, then verifying on {port} ({via})…");
         self.flash_phase = "Reconnecting".into();
         self.flash_progress = self.flash_progress.max(0.88);
-        // Single quiet reopen after boot settle — no CloseUsb churn.
-        self.schedule_post_flash_reconnect(port, Duration::from_secs(4));
+        // Wi‑Fi OTA: board reboots longer before TCP comes back.
+        let delay = if Self::is_wifi_ota_endpoint(&port) {
+            Duration::from_secs(8)
+        } else {
+            Duration::from_secs(4)
+        };
+        self.schedule_post_flash_reconnect(port, delay);
     }
 
     fn finish_post_flash_ok(&mut self, board_fw: &str) {
         let msg = if board_fw.is_empty() {
-            "Flash verified — board responded over USB.".to_string()
+            "Update verified — board responded.".to_string()
         } else {
-            format!("Flash verified · board fw {board_fw}")
+            format!("Update verified · board fw {board_fw}")
         };
         self.last_ok = msg.clone();
         self.last_error.clear();
@@ -2651,9 +2805,20 @@ impl CompanionApp {
     }
 
     fn fail_post_flash_verify(&mut self, reason: String) {
-        let tip = format!(
-            "{reason} Hold BOOT, tap RESET, keep BOOT held, click Ready, then Update board again."
-        );
+        let tip = if self
+            .post_flash_verify
+            .as_ref()
+            .map(|v| Self::is_wifi_ota_endpoint(&v.port))
+            .unwrap_or_else(|| Self::is_wifi_ota_endpoint(&self.com_port))
+        {
+            format!(
+                "{reason} Wait for the board to rejoin Wi‑Fi, then Find workers / Connect and retry Push update (Wi‑Fi)."
+            )
+        } else {
+            format!(
+                "{reason} Hold BOOT, tap RESET, keep BOOT held, click Ready, then Update board again."
+            )
+        };
         self.update_status = tip.clone();
         self.last_error = tip.clone();
         self.push_log(LogKind::Err, tip);
@@ -3188,7 +3353,7 @@ impl CompanionApp {
         soft_panel(ui, "Board firmware", |ui| {
             ui.label(
                 RichText::new(
-                    "Fetch the latest board image, then Update board — choose Push update (linked) or Flash with BOOT (blank).",
+                    "Fetch the latest board image, then Update board — Push update (USB), Push update (Wi‑Fi), or Flash with BOOT (blank).",
                 )
                 .color(C_MUTED)
                 .size(13.0),
@@ -3416,7 +3581,7 @@ impl CompanionApp {
             );
             ui.add_space(8.0);
             ui.label(
-                RichText::new("Tip: Update board → Push update (linked) or Flash (BOOT). Hold BOOT + Ready only for the Flash path.")
+                RichText::new("Tip: Update board → Push (USB) / Push (Wi‑Fi) / Flash (BOOT). Hold BOOT + Ready only for the Flash path.")
                     .color(C_DIM)
                     .size(12.0),
             );
@@ -6108,28 +6273,30 @@ impl App for CompanionApp {
                 if self.usb_open {
                     // Already linked — do not bounce COM; wait for config/status.
                     self.update_status = if verifying {
-                        format!("Verifying firmware on {port} (USB already open)…")
+                        format!("Verifying firmware on {port} (already open)…")
                     } else {
-                        format!("USB already open on {port}")
+                        format!("Already open on {port}")
                     };
                     self.push_log(LogKind::Usb, self.update_status.clone());
                 } else {
                     self.update_status = if verifying {
                         format!("Verifying firmware on {port}…")
                     } else {
-                        format!("Opening {port} after flash…")
+                        format!("Opening {port} after update…")
                     };
                     self.push_log(
                         LogKind::Usb,
                         if verifying {
-                            format!("Post-flash verify: open {port} (no disconnect)")
+                            format!("Post-update verify: open {port} (no disconnect)")
                         } else {
-                            format!("Post-flash: open {port}")
+                            format!("Post-update: open {port}")
                         },
                     );
-                    let _ = self.cmd_tx.send(NetCmd::OpenUsb {
-                        name: port,
-                    });
+                    if Self::is_wifi_ota_endpoint(&port) {
+                        let _ = self.cmd_tx.send(NetCmd::ConnectWifi(port));
+                    } else {
+                        let _ = self.cmd_tx.send(NetCmd::OpenUsb { name: port });
+                    }
                 }
             } else {
                 ctx.request_repaint_after(Duration::from_millis(50));
@@ -6272,7 +6439,7 @@ impl App for CompanionApp {
                             ui.add_space(8.0);
                             ui.label(
                                 RichText::new(
-                                    "Update board lets you choose Push update (linked, auto-reset) or Flash with BOOT (blank / full rewrite).",
+                                    "Update board lets you choose Push update (USB), Push update (Wi‑Fi), or Flash with BOOT (blank / full rewrite).",
                                 )
                                 .color(C_MUTED)
                                 .size(13.0),
@@ -6350,11 +6517,14 @@ impl App for CompanionApp {
         }
 
         if self.update_confirm {
-            let download_only = self.board_is_download_mode(&self.com_port);
+            let wifi_target = Self::is_wifi_ota_endpoint(&self.com_port);
+            let download_only = !wifi_target && self.board_is_download_mode(&self.com_port);
             let can_push = self.board_supports_live_push(&self.com_port);
+            let can_wifi = self.board_supports_wifi_ota(&self.com_port) || wifi_target;
             // Always offer Push unless we *know* ROM download-mode — old companion
             // firmware often isn't linked with a perfect fw tag yet.
-            let show_push = !download_only;
+            let show_push = !download_only && !wifi_target;
+            let show_wifi = wifi_target || can_wifi;
             egui::Window::new("Update board")
                 .collapsible(false)
                 .resizable(false)
@@ -6388,7 +6558,7 @@ impl App for CompanionApp {
                     {
                         let choices = self.flash_target_choices();
                         ui.label(
-                            RichText::new("Which worker / COM to update")
+                            RichText::new("Which worker / COM / Wi‑Fi to update")
                                 .color(C_MUTED)
                                 .size(12.0),
                         );
@@ -6408,7 +6578,7 @@ impl App for CompanionApp {
                                 if choices.is_empty() {
                                     ui.label(
                                         RichText::new(
-                                            "No USB targets — Link a board on Mine, then retry.",
+                                            "No targets — Link a USB or Wi‑Fi board on Mine, then retry.",
                                         )
                                         .color(C_WARN)
                                         .size(12.0),
@@ -6442,19 +6612,40 @@ impl App for CompanionApp {
                     ui.add_space(6.0);
                     ui.label(
                         RichText::new(format!(
-                            "Board fw · {}  ·  Port · {}  ·  @ 0x0",
+                            "Board fw · {}  ·  Target · {}  ·  {}",
                             if self.fw_label.is_empty() {
                                 "—"
                             } else {
                                 &self.fw_label
                             },
-                            self.com_port
+                            self.com_port,
+                            if wifi_target {
+                                "Wi‑Fi OTA"
+                            } else {
+                                "@ 0x0 USB"
+                            }
                         ))
                         .color(C_MUTED)
                         .font(mono_ui_font(11.0)),
                     );
                     ui.add_space(10.0);
-                    if download_only {
+                    if wifi_target {
+                        ui.label(
+                            RichText::new(
+                                "Wi‑Fi board selected — Push update (Wi‑Fi) streams the app image over TCP (no BOOT, no USB).",
+                            )
+                            .color(C_TEXT)
+                            .size(13.0),
+                        );
+                        ui.add_space(6.0);
+                        ui.label(
+                            RichText::new(
+                                "Board must already run companion firmware with Wi‑Fi. Blank chips still need USB Flash (BOOT).",
+                            )
+                            .color(C_MUTED)
+                            .size(12.0),
+                        );
+                    } else if download_only {
                         ui.label(
                             RichText::new(
                                 "This COM is in download mode (BOOT held / blank chip). Use Flash with BOOT held, then Ready when asked.",
@@ -6473,7 +6664,7 @@ impl App for CompanionApp {
                         ui.add_space(6.0);
                         ui.label(
                             RichText::new(
-                                "· Push update — auto-reset, no BOOT (usual for live boards)\n· Flash (BOOT) — full rewrite; hold BOOT → tap RESET → Ready when asked",
+                                "· Push update — USB auto-reset, no BOOT (usual for live boards)\n· Push update (Wi‑Fi) — if a Wi‑Fi worker is linked/scanned\n· Flash (BOOT) — full rewrite; hold BOOT → tap RESET → Ready when asked",
                             )
                             .color(C_MUTED)
                             .size(12.0),
@@ -6481,7 +6672,7 @@ impl App for CompanionApp {
                     } else {
                         ui.label(
                             RichText::new(
-                                "Board not linked yet — Connect first if you can. You can still try Push update (works when companion firmware is running), or Flash (BOOT) for blank chips.",
+                                "Board not linked yet — Connect first if you can. You can still try Push update (USB or Wi‑Fi when companion firmware is running), or Flash (BOOT) for blank chips.",
                             )
                             .color(C_MUTED)
                             .size(13.0),
@@ -6497,27 +6688,39 @@ impl App for CompanionApp {
                             .unwrap_or_default(),
                     ) == Some(false);
                     ui.horizontal(|ui| {
+                        if show_wifi {
+                            let wifi_label = if up_to_date {
+                                "Push Wi‑Fi anyway"
+                            } else {
+                                "Push update (Wi‑Fi)"
+                            };
+                            if cta_button(ui, wifi_label, true, 170.0).clicked() {
+                                self.begin_board_update_wifi();
+                            }
+                        }
                         if show_push {
                             let push_label = if up_to_date {
                                 "Push anyway"
                             } else {
                                 "Push update"
                             };
-                            if cta_button(ui, push_label, true, 140.0).clicked() {
+                            if soft_button(ui, push_label, 130.0).clicked() {
                                 self.begin_board_update(true);
                             }
                         }
-                        let flash_label = if up_to_date {
-                            "Flash anyway"
-                        } else {
-                            "Flash (BOOT)"
-                        };
-                        if show_push {
-                            if soft_button(ui, flash_label, 130.0).clicked() {
+                        if !wifi_target {
+                            let flash_label = if up_to_date {
+                                "Flash anyway"
+                            } else {
+                                "Flash (BOOT)"
+                            };
+                            if show_push || show_wifi {
+                                if soft_button(ui, flash_label, 130.0).clicked() {
+                                    self.begin_board_update(false);
+                                }
+                            } else if cta_button(ui, flash_label, true, 140.0).clicked() {
                                 self.begin_board_update(false);
                             }
-                        } else if cta_button(ui, flash_label, true, 140.0).clicked() {
-                            self.begin_board_update(false);
                         }
                         if soft_button(ui, "Cancel", 100.0).clicked() {
                             self.update_confirm = false;
@@ -9855,9 +10058,10 @@ Power a 2nd board nearby with wall/power-bank only (no PC cable)."
                     boot_ready,
                     hold,
                     live_push,
+                    wifi_ota,
                 } => {
                     flash_hold = Some((port.clone(), hold.clone()));
-                    // Only release the flash target COM — keep other linked boards.
+                    // Only release the flash target — keep other linked boards.
                     if let Some(idx) = boards
                         .iter()
                         .position(|b| port_names_match(&b.name, &port))
@@ -9882,16 +10086,28 @@ Power a 2nd board nearby with wall/power-bank only (no PC cable)."
                     // Drop mesh peers that used the released COM as gateway.
                     mesh.retain(|m| !(port_names_match(&m.gateway, &port) || m.gateway == port));
                     publish_live(&msg_tx, &boards, &mesh);
+                    let mode_label = if wifi_ota {
+                        "Wi‑Fi OTA"
+                    } else if live_push {
+                        "push update"
+                    } else {
+                        "flash"
+                    };
                     log_msg(
                         &msg_tx,
                         LogKind::Usb,
                         format!(
-                            "Released {port} for {} · {} board(s) still linked",
-                            if live_push { "push update" } else { "flash" },
+                            "Released {port} for {mode_label} · {} board(s) still linked",
                             boards.len()
                         ),
                     );
-                    thread::sleep(Duration::from_millis(if live_push { 900 } else { 1800 }));
+                    thread::sleep(Duration::from_millis(if wifi_ota {
+                        400
+                    } else if live_push {
+                        900
+                    } else {
+                        1800
+                    }));
 
                     // Run flash off the mine-worker so Cancel / port list keep working.
                     let progress_tx = msg_tx.clone();
@@ -9904,6 +10120,31 @@ Power a 2nd board nearby with wall/power-bank only (no PC cable)."
                         let result = (|| {
                             if cancel.load(Ordering::SeqCst) {
                                 return Err("flash cancelled".into());
+                            }
+                            if wifi_ota {
+                                let img = {
+                                    let local = std::path::PathBuf::from(&image);
+                                    let preferred = if !image.is_empty() && local.is_file() {
+                                        Some(local.as_path())
+                                    } else {
+                                        None
+                                    };
+                                    resolve_ota_app_image(preferred).or_else(|_| {
+                                        ensure_firmware_image(&progress).and_then(|merged| {
+                                            resolve_ota_app_image(Some(merged.path.as_path()))
+                                        })
+                                    })?
+                                };
+                                let _ = done_tx.send(NetMsg::FirmwareFetched(Ok(img.clone())));
+                                push_firmware_ota(&port, &img.path, &progress, &cancel)?;
+                                return Ok(format!(
+                                    "Firmware {} pushed over Wi‑Fi to {port}",
+                                    if img.version.is_empty() {
+                                        "image".into()
+                                    } else {
+                                        img.version
+                                    }
+                                ));
                             }
                             let img = {
                                 let local = std::path::PathBuf::from(&image);

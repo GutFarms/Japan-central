@@ -1,7 +1,8 @@
 //! Push bundled (or nearby) firmware to the ESP32-2432S028 over USB serial.
 //! Prefers bundled / auto-downloaded `espflash`; optional Python `esptool` fallback.
 
-use std::io::{BufReader, Read};
+use std::io::{BufReader, Read, Write};
+use std::net::TcpStream;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -10,6 +11,9 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 pub const MERGED_BIN_NAME: &str = "esp32-2432s028-sha256-miner-merged.bin";
+/// App-only image for Wi‑Fi OTA (`cmp ota`) — not the merged @ 0x0 USB flash image.
+pub const APP_BIN_NAME: &str = "esp32-2432s028-sha256-miner.bin";
+pub const APP_BIN_D0_NAME: &str = "esp32-2432s028-sha256-miner-d0.bin";
 
 /// Shared cancel + Terminator-style BOOT Ready handshake with the UI.
 #[derive(Clone)]
@@ -138,6 +142,270 @@ pub fn find_firmware_image() -> Result<FirmwareImage, String> {
     Err(format!(
         "Firmware image not found ({MERGED_BIN_NAME}). Use CYD Miner Setup / Portable kit so Firmware\\ sits next to the app."
     ))
+}
+
+fn collect_bin_candidates(file_name: &str) -> Vec<PathBuf> {
+    let mut candidates: Vec<PathBuf> = Vec::new();
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(dir) = exe.parent() {
+            candidates.push(dir.join("Firmware").join(file_name));
+            candidates.push(dir.join(file_name));
+            let mut walk = dir.to_path_buf();
+            for _ in 0..6 {
+                candidates.push(walk.join("flash").join("downloads").join(file_name));
+                candidates.push(walk.join("flash").join(file_name));
+                candidates.push(
+                    walk.join("dist")
+                        .join("cyd-miner-kit")
+                        .join("Firmware")
+                        .join(file_name),
+                );
+                if !walk.pop() {
+                    break;
+                }
+            }
+        }
+    }
+    if let Ok(cwd) = std::env::current_dir() {
+        candidates.push(cwd.join("Firmware").join(file_name));
+        candidates.push(cwd.join("flash").join("downloads").join(file_name));
+        candidates.push(cwd.join("flash").join(file_name));
+        candidates.push(cwd.join(file_name));
+    }
+    candidates
+}
+
+/// Resolve the app-only `.bin` used for wireless OTA (ESP Update / `cmp ota`).
+pub fn find_app_firmware_image() -> Result<FirmwareImage, String> {
+    for name in [APP_BIN_NAME, APP_BIN_D0_NAME] {
+        for path in collect_bin_candidates(name) {
+            if path.is_file() {
+                let bytes = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
+                if bytes > 64_000 {
+                    let mut hdr = [0u8; 1];
+                    if let Ok(mut f) = std::fs::File::open(&path) {
+                        let _ = f.read(&mut hdr);
+                    }
+                    if hdr[0] != 0xE9 {
+                        continue;
+                    }
+                    let version = read_nearby_fw_version(&path);
+                    return Ok(FirmwareImage {
+                        path,
+                        bytes,
+                        version,
+                    });
+                }
+            }
+        }
+    }
+    Err(format!(
+        "App firmware not found ({APP_BIN_NAME}). Wi‑Fi push needs the app-only image next to the merged kit bin."
+    ))
+}
+
+/// Prefer an app-only image for OTA. If `preferred` is already app-sized with ESP magic, use it;
+/// if it is a merged @ 0x0 image, look for the sibling app bin in the same folder / kit paths.
+pub fn resolve_ota_app_image(preferred: Option<&Path>) -> Result<FirmwareImage, String> {
+    if let Some(path) = preferred {
+        if path.is_file() {
+            let name = path
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("")
+                .to_ascii_lowercase();
+            let bytes = std::fs::metadata(path).map(|m| m.len()).unwrap_or(0);
+            let mut hdr = [0u8; 1];
+            if let Ok(mut f) = std::fs::File::open(path) {
+                let _ = f.read(&mut hdr);
+            }
+            // Merged kits are named *-merged.bin and are larger than the app.
+            let looks_merged = name.contains("merged") || bytes > 1_100_000;
+            if !looks_merged && hdr[0] == 0xE9 && bytes > 64_000 {
+                let version = read_nearby_fw_version(path);
+                return Ok(FirmwareImage {
+                    path: path.to_path_buf(),
+                    bytes,
+                    version,
+                });
+            }
+            if let Some(dir) = path.parent() {
+                for sib in [APP_BIN_NAME, APP_BIN_D0_NAME] {
+                    let p = dir.join(sib);
+                    if p.is_file() {
+                        let b = std::fs::metadata(&p).map(|m| m.len()).unwrap_or(0);
+                        if b > 64_000 {
+                            let version = read_nearby_fw_version(&p);
+                            return Ok(FirmwareImage {
+                                path: p,
+                                bytes: b,
+                                version,
+                            });
+                        }
+                    }
+                }
+            }
+        }
+    }
+    find_app_firmware_image()
+}
+
+fn ota_wait_line(
+    stream: &mut TcpStream,
+    rx: &mut String,
+    deadline: Instant,
+    pred: &dyn Fn(&str) -> bool,
+) -> Result<String, String> {
+    let mut tmp = [0u8; 2048];
+    while Instant::now() < deadline {
+        match stream.read(&mut tmp) {
+            Ok(0) => {}
+            Ok(n) => {
+                rx.push_str(&String::from_utf8_lossy(&tmp[..n]));
+                if rx.len() > 32768 {
+                    *rx = rx[rx.len() - 8192..].to_string();
+                }
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {}
+            Err(e) if e.kind() == std::io::ErrorKind::TimedOut => {}
+            Err(e) => return Err(format!("Wi‑Fi OTA read: {e}")),
+        }
+        for line in rx.lines() {
+            let t = line.trim();
+            if pred(t) {
+                let out = t.to_string();
+                // Drop consumed prefix up to this line.
+                if let Some(pos) = rx.find(t) {
+                    let end = pos + t.len();
+                    *rx = rx[end..].trim_start_matches(['\r', '\n']).to_string();
+                }
+                return Ok(out);
+            }
+            if t.starts_with("CMPERR") {
+                return Err(t.to_string());
+            }
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    Err("Wi‑Fi OTA timed out waiting for board ACK".into())
+}
+
+/// Push app firmware over TCP `cmp ota size=N` (wireless Update board path).
+pub fn push_firmware_ota(
+    endpoint: &str,
+    image: &Path,
+    progress: &dyn Fn(String),
+    cancel: &AtomicBool,
+) -> Result<(), String> {
+    let img = resolve_ota_app_image(Some(image))?;
+    let bytes = std::fs::read(&img.path).map_err(|e| format!("read {}: {e}", img.path.display()))?;
+    if bytes.len() < 64_000 || bytes[0] != 0xE9 {
+        return Err(format!(
+            "{} is not an ESP app image (need 0xE9 magic, >64 KB)",
+            img.path.display()
+        ));
+    }
+    if cancel.load(Ordering::SeqCst) {
+        return Err("Wi‑Fi OTA cancelled".into());
+    }
+    progress(format!(
+        "Wi‑Fi OTA → {endpoint} · {} · {} KB",
+        img.path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("app.bin"),
+        bytes.len() / 1024
+    ));
+
+    let mut stream = TcpStream::connect(endpoint)
+        .map_err(|e| format!("connect {endpoint}: {e}"))?;
+    stream
+        .set_read_timeout(Some(Duration::from_millis(500)))
+        .ok();
+    stream
+        .set_write_timeout(Some(Duration::from_secs(30)))
+        .ok();
+    stream.set_nodelay(true).ok();
+
+    let mut rx = String::new();
+    let _ = stream.write_all(b"\r\ncmp stop\r\n");
+    let _ = stream.flush();
+    std::thread::sleep(Duration::from_millis(200));
+    // Drain any stop ACK noise.
+    let _ = ota_wait_line(
+        &mut stream,
+        &mut rx,
+        Instant::now() + Duration::from_millis(800),
+        &|t| t.starts_with("CMPACK"),
+    );
+
+    if cancel.load(Ordering::SeqCst) {
+        return Err("Wi‑Fi OTA cancelled".into());
+    }
+
+    let cmd = format!("cmp ota size={}\r\n", bytes.len());
+    stream
+        .write_all(cmd.as_bytes())
+        .map_err(|e| format!("ota cmd: {e}"))?;
+    stream.flush().map_err(|e| format!("ota flush: {e}"))?;
+
+    let ready = ota_wait_line(
+        &mut stream,
+        &mut rx,
+        Instant::now() + Duration::from_secs(8),
+        &|t| t.starts_with("CMPACK ota ready") || t.eq_ignore_ascii_case("CMPACK ota ready"),
+    )?;
+    progress(format!("Board ready · {ready}"));
+
+    const CHUNK: usize = 4096;
+    let total = bytes.len();
+    let mut sent = 0usize;
+    let mut last_pct = 0u32;
+    while sent < total {
+        if cancel.load(Ordering::SeqCst) {
+            return Err("Wi‑Fi OTA cancelled".into());
+        }
+        let end = (sent + CHUNK).min(total);
+        stream
+            .write_all(&bytes[sent..end])
+            .map_err(|e| format!("ota write @{sent}: {e}"))?;
+        sent = end;
+        let pct = ((sent as u64 * 100) / total as u64) as u32;
+        if pct >= last_pct + 5 || sent == total {
+            last_pct = pct;
+            progress(format!("Wi‑Fi OTA upload {pct}% ({sent}/{total})"));
+        }
+    }
+    stream.flush().map_err(|e| format!("ota final flush: {e}"))?;
+
+    // Board replies CMPACK ota ok then reboots (connection often drops).
+    match ota_wait_line(
+        &mut stream,
+        &mut rx,
+        Instant::now() + Duration::from_secs(45),
+        &|t| t.starts_with("CMPACK ota ok") || t.starts_with("CMPACK ota"),
+    ) {
+        Ok(line) => progress(format!("Board · {line}")),
+        Err(e) => {
+            // Full payload delivered — drop on reboot is OK.
+            if sent == total {
+                progress(format!(
+                    "Upload complete ({sent} B) — board rebooting (no final ACK: {e})"
+                ));
+            } else {
+                return Err(e);
+            }
+        }
+    }
+    progress(format!(
+        "Wi‑Fi OTA pushed {} to {endpoint}",
+        if img.version.is_empty() {
+            "app image".into()
+        } else {
+            img.version
+        }
+    ));
+    Ok(())
 }
 
 pub fn normalize_fw_version(raw: &str) -> String {
