@@ -2494,7 +2494,7 @@ impl CompanionApp {
                 RichText::new(
                     "· Bench boards (D0) → lock Full HW  ·  Clock 240 MHz  ·  More CYDs for more rate
 · Algorithm stays Bitcoin SHA-256d only
-· SAFETY: if erase succeeds but rewrite fails, keep USB plugged and Update again (board may be blank).",
+· SAFETY: blank boards — Update uses --no-stub first; when prompted, hold BOOT, tap RESET, release BOOT. If erase/rewrite fails, keep USB plugged and Update again.",
                 )
                 .color(C_MUTED)
                 .font(mono_ui_font(11.0)),
