@@ -8,7 +8,8 @@
 static constexpr uint16_t CYD_WIFI_TCP_PORT = 19284;
 static constexpr uint16_t CYD_WIFI_UDP_PORT = 19284;
 static constexpr const char* CYD_WIFI_MAGIC = "CYDBOARD";
-static constexpr const char* CYD_SOFTAP_PASS = "njordrseas";
+// Initial SoftAP is open (no password) so first-time Setup is one tap in Windows Wi‑Fi.
+static constexpr const char* CYD_SOFTAP_PASS = nullptr;
 
 class WifiLink {
  public:

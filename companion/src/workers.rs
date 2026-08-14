@@ -939,7 +939,7 @@ pub fn open_wifi_tcp(endpoint: &str) -> Result<TcpStream, String> {
     };
     let stream = TcpStream::connect_timeout(&addr, timeout).map_err(|e| {
         let softap_hint = if host.starts_with("10.") {
-            " — SoftAP IP: join Njordr-XXXX / njordrseas in Windows Wi‑Fi, or Link the board over USB instead"
+            " — SoftAP IP: join open Njordr-XXXX in Windows Wi‑Fi (no password), or Link over USB instead"
         } else {
             " — board offline / wrong network / firewall"
         };
@@ -1030,9 +1030,9 @@ fn parse_board_beacon(raw: &str, addr: SocketAddr) -> Option<DiscoveredWorker> {
     let detail = match mode.as_str() {
         "ap" if !ap.is_empty() => {
             if fw.is_empty() {
-                format!("setup SoftAP {ap} · pass njordrseas")
+                format!("setup SoftAP {ap} · open (no password)")
             } else {
-                format!("fw {fw} · setup SoftAP {ap} · pass njordrseas")
+                format!("fw {fw} · setup SoftAP {ap} · open (no password)")
             }
         }
         _ => match (fw.is_empty(), ap.is_empty()) {
