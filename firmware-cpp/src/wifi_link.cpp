@@ -56,6 +56,96 @@ void WifiLink::configureSoftApDns(const IPAddress& apIp) {
   (void)esp_netif_dhcps_start(netif);
 }
 
+IPAddress WifiLink::softApIpForMode(bool wantSta) const {
+  if (!wantSta) {
+    // Initial setup SoftAP — fixed Board Setup address.
+    return IPAddress(CYD_SOFTAP_IP0, CYD_SOFTAP_IP1, CYD_SOFTAP_IP2, CYD_SOFTAP_IP3);
+  }
+  // After home Wi‑Fi is saved, SoftAP moves off 192.168.1.88 so STA can use
+  // that address (or DHCP) on the home LAN without SoftAP/LAN clash.
+  uint8_t b4 = 1, b5 = 1;
+  String hex;
+  for (size_t i = 0; i < mac_.length(); i++) {
+    char c = mac_[i];
+    if ((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F')) hex += c;
+  }
+  hex.toLowerCase();
+  if (hex.length() >= 12) {
+    b4 = (uint8_t)strtoul(hex.substring(8, 10).c_str(), nullptr, 16);
+    b5 = (uint8_t)strtoul(hex.substring(10, 12).c_str(), nullptr, 16);
+    if (b4 == 0) b4 = 1;
+    if (b5 == 0) b5 = 1;
+  }
+  return IPAddress(10, b4, b5, 1);
+}
+
+void WifiLink::beginStaDhcp(const AppConfig& cfg) {
+  // Clear any prior static config so the STA lease comes from the router.
+  WiFi.config(IPAddress((uint32_t)0), IPAddress((uint32_t)0), IPAddress((uint32_t)0));
+  WiFi.begin(cfg.wifiSsid.c_str(), cfg.wifiPass.c_str());
+  lastStaSsid_ = cfg.wifiSsid;
+  lastStaPass_ = cfg.wifiPass;
+  staPrefer88Pending_ = true;
+  staStaticTried_ = false;
+  staStaticTryAt_ = 0;
+}
+
+void WifiLink::beginStaPrefer88(const IPAddress& gateway, const IPAddress& mask) {
+  IPAddress want(CYD_STA_PREF_IP0, CYD_STA_PREF_IP1, CYD_STA_PREF_IP2, CYD_STA_PREF_IP3);
+  if (!WiFi.config(want, gateway, mask, gateway)) {
+    // Static rejected — stay on whatever DHCP already gave us.
+    staPrefer88Pending_ = false;
+    staStaticTried_ = false;
+    return;
+  }
+  WiFi.reconnect();
+  staStaticTried_ = true;
+  staStaticTryAt_ = millis();
+  staPrefer88Pending_ = false;
+}
+
+void WifiLink::tickStaAddressPolicy() {
+  if (!staWanted_) return;
+
+  if (staPrefer88Pending_) {
+    if (WiFi.status() != WL_CONNECTED) return;
+    IPAddress gw = WiFi.gatewayIP();
+    IPAddress mask = WiFi.subnetMask();
+    IPAddress local = WiFi.localIP();
+    IPAddress want(CYD_STA_PREF_IP0, CYD_STA_PREF_IP1, CYD_STA_PREF_IP2, CYD_STA_PREF_IP3);
+    // Only prefer .88 when home LAN is 192.168.1.0/24.
+    const bool home88Net = gw[0] == 192 && gw[1] == 168 && gw[2] == 1 && mask[0] == 255 &&
+                           mask[1] == 255 && mask[2] == 255 && mask[3] == 0;
+    if (!home88Net) {
+      // Different subnet — keep DHCP lease.
+      staPrefer88Pending_ = false;
+      return;
+    }
+    if (local == want) {
+      staPrefer88Pending_ = false;
+      return;
+    }
+    beginStaPrefer88(gw, mask);
+    return;
+  }
+
+  if (!staStaticTried_) return;
+  if (millis() - staStaticTryAt_ < 8000) {
+    if (WiFi.status() == WL_CONNECTED &&
+        WiFi.localIP() ==
+            IPAddress(CYD_STA_PREF_IP0, CYD_STA_PREF_IP1, CYD_STA_PREF_IP2, CYD_STA_PREF_IP3)) {
+      staStaticTried_ = false;
+    }
+    return;
+  }
+  // 192.168.1.88 not available — fall back to DHCP.
+  staStaticTried_ = false;
+  WiFi.config(IPAddress((uint32_t)0), IPAddress((uint32_t)0), IPAddress((uint32_t)0));
+  if (lastStaSsid_.length()) {
+    WiFi.begin(lastStaSsid_.c_str(), lastStaPass_.c_str());
+  }
+}
+
 void WifiLink::ensureWifi(const AppConfig& cfg) {
   if (!cfg.wifiEnabled) {
     if (client_ && client_.connected()) client_.stop();
@@ -66,6 +156,9 @@ void WifiLink::ensureWifi(const AppConfig& cfg) {
     softApUp_ = false;
     lastStaSsid_ = "";
     lastStaPass_ = "";
+    staPrefer88Pending_ = false;
+    staStaticTried_ = false;
+    lastApIp_ = IPAddress(0, 0, 0, 0);
     return;
   }
 
@@ -79,27 +172,28 @@ void WifiLink::ensureWifi(const AppConfig& cfg) {
     WiFi.mode(WIFI_AP_STA);
     // Only call begin when SSID/pass change — avoid SoftAP flaps on every applyConfig.
     if (staCredsChanged) {
-      WiFi.begin(cfg.wifiSsid.c_str(), cfg.wifiPass.c_str());
-      lastStaSsid_ = cfg.wifiSsid;
-      lastStaPass_ = cfg.wifiPass;
+      beginStaDhcp(cfg);
     }
   } else {
     WiFi.mode(WIFI_AP);
     lastStaSsid_ = "";
     lastStaPass_ = "";
+    staPrefer88Pending_ = false;
+    staStaticTried_ = false;
   }
 
-  // Fixed SoftAP address 192.168.1.88 — phone Board Setup is always http://192.168.1.88/
-  IPAddress apIp(CYD_SOFTAP_IP0, CYD_SOFTAP_IP1, CYD_SOFTAP_IP2, CYD_SOFTAP_IP3);
-  IPAddress apGw(CYD_SOFTAP_IP0, CYD_SOFTAP_IP1, CYD_SOFTAP_IP2, CYD_SOFTAP_IP3);
+  IPAddress apIp = softApIpForMode(wantSta);
+  IPAddress apGw = apIp;
   IPAddress apMask(255, 255, 255, 0);
+  const bool apIpChanged = apIp != lastApIp_;
   WiFi.softAPConfig(apIp, apGw, apMask);
 
   // Channel 1 SoftAP — Companion can join or hear UDP on the LAN when STA is up.
-  // Re-create SoftAP only when bringing Wi‑Fi up or subnet/SSID may have changed.
-  if (!softApUp_ || modeChanged || staCredsChanged) {
+  // Re-create SoftAP when bringing Wi‑Fi up, mode/creds change, or SoftAP IP policy flips.
+  if (!softApUp_ || modeChanged || staCredsChanged || apIpChanged) {
     bool ok = WiFi.softAP(apSsid_.c_str(), CYD_SOFTAP_PASS, 1, 0, 4);
     softApUp_ = ok;
+    lastApIp_ = apIp;
     (void)ok;
     delay(40);
     // SoftAP recreate can leave the radio off ch1 — re-pin for ESP-NOW mesh.
@@ -222,7 +316,8 @@ String WifiLink::portalPageHtml(bool saved, const char* flash) const {
     page += flash;
     page += F("</div>");
   } else if (saved) {
-    page += F("<div class=ok>Saved — board is joining home Wi‑Fi. "
+    page += F("<div class=ok>Saved — board is joining home Wi‑Fi (prefers 192.168.1.88, "
+              "otherwise DHCP). SoftAP moves off .88 so the LAN can use it. "
               "Reconnect this phone to your home network.</div>");
   }
 
@@ -352,11 +447,11 @@ void WifiLink::beacon() {
   IPAddress advertise = (WiFi.status() == WL_CONNECTED) ? sta : ap;
   char msg[220];
 #if CYD_D0_BUILD
-  static constexpr const char* kFwTag = "0.8.141-sha256-d0";
-  static constexpr const char* kFwShort = "0.8.141-d0";
+  static constexpr const char* kFwTag = "0.8.142-sha256-d0";
+  static constexpr const char* kFwShort = "0.8.142-d0";
 #else
-  static constexpr const char* kFwTag = "0.8.141-sha256";
-  static constexpr const char* kFwShort = "0.8.141";
+  static constexpr const char* kFwTag = "0.8.142-sha256";
+  static constexpr const char* kFwShort = "0.8.142";
 #endif
   snprintf(msg, sizeof(msg),
            "%s|v=%s|mac=%s|fw=%s|tcp=%u|ip=%u.%u.%u.%u|ap=%s|mode=%s",
@@ -409,6 +504,7 @@ void WifiLink::poll(CompanionLink& cmp, AppConfig& cfg, const MinerSnapshot& sna
 
   // Captive portal first so Sign-in probes stay snappy when a phone joins SoftAP.
   pollPortal(cfg, snap);
+  tickStaAddressPolicy();
 
   acceptClient();
   if (client_ && client_.connected()) {
