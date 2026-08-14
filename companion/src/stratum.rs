@@ -78,6 +78,10 @@ pub struct StratumClient {
     pub last_error: String,
     /// True when authorize failed — do not auto-reconnect with the same worker.
     pub auth_give_up: bool,
+    /// Consecutive hard transport failures before we drop the socket.
+    transport_fails: u8,
+    /// Pool asked us to reconnect (`client.reconnect`).
+    pub want_reconnect: bool,
     /// Recent stratum lines for the UI (newest last).
     pub recent: Vec<String>,
     share_events: Vec<ShareOutcome>,
@@ -128,6 +132,8 @@ impl StratumClient {
             last_tx: String::new(),
             last_error: String::new(),
             auth_give_up: false,
+            transport_fails: 0,
+            want_reconnect: false,
             recent: Vec::new(),
             share_events: Vec::new(),
         }
@@ -144,7 +150,7 @@ impl StratumClient {
         let stream = TcpStream::connect_timeout(&addr, Duration::from_secs(8))
             .map_err(|e| format!("stratum connect: {e}"))?;
         stream
-            .set_read_timeout(Some(Duration::from_millis(5)))
+            .set_read_timeout(Some(Duration::from_millis(20)))
             .ok();
         stream
             .set_write_timeout(Some(Duration::from_secs(3)))
@@ -168,6 +174,8 @@ impl StratumClient {
         self.rejected = 0;
         self.last_error.clear();
         self.auth_give_up = false;
+        self.transport_fails = 0;
+        self.want_reconnect = false;
         self.phase = "tcp".into();
         self.push_recent(format!("← TCP connected {}", self.endpoint));
         self.send_subscribe()
@@ -187,6 +195,8 @@ impl StratumClient {
         self.job_wait_since = None;
         self.accepted = 0;
         self.rejected = 0;
+        self.transport_fails = 0;
+        self.want_reconnect = false;
         // Keep last_error / auth_give_up so the UI can show why we stopped.
         if self.phase != "auth-fail" {
             self.phase = "off".into();
@@ -237,21 +247,42 @@ impl StratumClient {
                 let mut line = String::new();
                 match reader.read_line(&mut line) {
                     Ok(0) => {
+                        // Real EOF — but require a couple of hits while authorized so a
+                        // brief Windows/stack glitch does not bounce SUBSCRIBE↔AUTHORIZED.
+                        self.transport_fails = self.transport_fails.saturating_add(1);
+                        if self.authorized && self.transport_fails < 3 {
+                            self.push_recent(format!(
+                                "← stratum read EOF soft-fail #{}",
+                                self.transport_fails
+                            ));
+                            break;
+                        }
                         self.disconnect();
                         return Err("stratum closed".into());
                     }
                     Ok(_) => {
+                        self.transport_fails = 0;
                         let t = line.trim().to_string();
                         if !t.is_empty() {
                             lines.push(t);
                         }
                     }
-                    Err(e) if e.kind() == std::io::ErrorKind::WouldBlock
-                        || e.kind() == std::io::ErrorKind::TimedOut =>
+                    Err(e)
+                        if e.kind() == std::io::ErrorKind::WouldBlock
+                            || e.kind() == std::io::ErrorKind::TimedOut
+                            || e.kind() == std::io::ErrorKind::Interrupted =>
                     {
                         break;
                     }
                     Err(e) => {
+                        self.transport_fails = self.transport_fails.saturating_add(1);
+                        if self.authorized && self.transport_fails < 5 {
+                            self.push_recent(format!(
+                                "← stratum read soft-fail #{}: {e}",
+                                self.transport_fails
+                            ));
+                            break;
+                        }
                         self.disconnect();
                         return Err(format!("stratum read: {e}"));
                     }
@@ -267,7 +298,24 @@ impl StratumClient {
                 line.clone()
             };
             self.push_recent(format!("← {preview}"));
-            self.handle_line(&line)?;
+            // Never tear down the session over one bad/noisy line — only fatal
+            // subscribe/authorize failures should drop the socket.
+            if let Err(e) = self.handle_line(&line) {
+                let fatal = self.auth_give_up
+                    || e.contains("authorize failed")
+                    || e.contains("subscribe failed")
+                    || e.contains("subscribe rejected")
+                    || e.contains("subscribe extranonce");
+                if fatal {
+                    return Err(e);
+                }
+                self.push_recent(format!("← ignored line error: {e}"));
+            }
+        }
+        if self.want_reconnect {
+            self.want_reconnect = false;
+            self.disconnect();
+            return Err("pool requested reconnect".into());
         }
         self.release_held_job_if_ready();
         Ok(())
@@ -503,6 +551,11 @@ impl StratumClient {
                         }
                     }
                 }
+                return Ok(());
+            }
+            if method == "client.reconnect" {
+                self.push_recent("← client.reconnect (will re-auth)".into());
+                self.want_reconnect = true;
                 return Ok(());
             }
             return Ok(());

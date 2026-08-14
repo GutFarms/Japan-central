@@ -638,6 +638,8 @@ struct CompanionApp {
     logs: VecDeque<LogEntry>,
     log_auto_scroll: bool,
     stratum_live: StratumLive,
+    /// Keep showing AUTHORIZED / RECONNECTING for a few seconds across soft pool drops.
+    pool_auth_hold_until: Option<Instant>,
     term_input: String,
     term_history: VecDeque<String>,
     term_out: VecDeque<String>,
@@ -846,6 +848,7 @@ impl CompanionApp {
             logs: VecDeque::new(),
             log_auto_scroll: true,
             stratum_live: StratumLive::default(),
+            pool_auth_hold_until: None,
             term_input: "cmp ping".into(),
             term_history: VecDeque::new(),
             term_out: VecDeque::new(),
@@ -1175,17 +1178,27 @@ impl CompanionApp {
             || !self.stratum_live.last_error.is_empty()
         {
             ("AUTH FAILED", C_ERR)
+        } else if self
+            .pool_auth_hold_until
+            .map(|t| Instant::now() < t)
+            .unwrap_or(false)
+            && self.mining
+        {
+            // Soft reconnect — do not flash SUBSCRIBE over a live session.
+            match self.stratum_live.phase.as_str() {
+                "sub" | "auth" | "tcp" => ("RECONNECTING…", C_WARN),
+                _ => ("AUTHORIZED", C_LIME),
+            }
         } else if self.stratum_live.connected
             || matches!(
                 self.stratum_live.phase.as_str(),
-                "tcp" | "sub" | "auth" | "idle" | "mine"
+                "tcp" | "sub" | "auth"
             )
         {
             let label = match self.stratum_live.phase.as_str() {
                 "tcp" => "TCP…",
                 "sub" => "SUBSCRIBE…",
                 "auth" => "AUTHORIZE…",
-                "idle" | "mine" => "LINKING…",
                 _ => "CONNECTING…",
             };
             (label, C_WARN)
@@ -4315,19 +4328,24 @@ impl App for CompanionApp {
                 NetMsg::Stratum(live) => {
                     let was_authed = self.stratum_live.authorized;
                     self.stratum_live = live;
-                    if self.stratum_live.authorized && !was_authed {
-                        // Fresh authorize: HUD stays at 0 until real post-grace outcomes arrive.
-                        // Do not wipe session counters here — Share msgs can race ahead of this.
-                        self.accepted = 0;
-                        self.rejected = 0;
-                        self.push_log(
-                            LogKind::Stratum,
-                            "Authorized — counting shares after warmup".into(),
-                        );
+                    if self.stratum_live.authorized {
+                        self.pool_auth_hold_until =
+                            Some(Instant::now() + Duration::from_secs(15));
+                        if !was_authed {
+                            // Fresh authorize: HUD stays at 0 until real post-grace outcomes arrive.
+                            // Do not wipe session counters here — Share msgs can race ahead of this.
+                            self.accepted = 0;
+                            self.rejected = 0;
+                            self.push_log(
+                                LogKind::Stratum,
+                                "Authorized — counting shares after warmup".into(),
+                            );
+                        }
                     }
                     if self.stratum_live.phase == "auth-fail"
                         || !self.stratum_live.last_error.is_empty()
                     {
+                        self.pool_auth_hold_until = None;
                         if self.mining && !self.stratum_live.authorized {
                             self.mining = false;
                             self.session_started = None;
@@ -4342,6 +4360,12 @@ impl App for CompanionApp {
                     if self.stratum_live.authorized {
                         self.accepted = self.stratum_live.accepted;
                         self.rejected = self.stratum_live.rejected;
+                    } else if self
+                        .pool_auth_hold_until
+                        .map(|t| Instant::now() < t)
+                        .unwrap_or(false)
+                    {
+                        // Keep last Accept/Reject visible during soft reconnect.
                     } else {
                         self.accepted = 0;
                         self.rejected = 0;
@@ -6811,10 +6835,37 @@ fn mine_worker(cmd_rx: Receiver<NetCmd>, msg_tx: Sender<NetMsg>) {
         board.mining = true;
     }
 
+    /// Keep the pool socket drained during long USB / mesh work so we do not
+    /// bounce AUTHORIZED → SUBSCRIBE from a starved TCP session.
+    fn pump_stratum_keepalive(
+        stratum: &mut Option<StratumClient>,
+        msg_tx: &Sender<NetMsg>,
+    ) -> Option<String> {
+        let client = stratum.as_mut()?;
+        let mut err = None;
+        for _ in 0..3 {
+            match client.poll() {
+                Ok(()) => {}
+                Err(e) => {
+                    err = Some(e);
+                    break;
+                }
+            }
+        }
+        for line in client.take_recent() {
+            log_msg(msg_tx, LogKind::Stratum, line);
+        }
+        if err.is_none() {
+            push_stratum_live(msg_tx, client);
+        }
+        err
+    }
+
     let mut boards: Vec<UsbBoard> = Vec::new();
     let mut mesh: Vec<MeshBoard> = Vec::new();
     let mut stratum: Option<StratumClient> = None;
     let mut last_mesh_sync = Instant::now() - Duration::from_secs(30);
+    let mut last_mesh_via_status = Instant::now() - Duration::from_secs(30);
     let mut recent_jobs: VecDeque<WorkJob> = VecDeque::new();
     // Board shares held while the pool socket is down (submit on reconnect).
     let mut held_board_shares: VecDeque<(String, String, String, String)> = VecDeque::new();
@@ -7390,6 +7441,25 @@ fn mine_worker(cmd_rx: Receiver<NetCmd>, msg_tx: Sender<NetMsg>) {
                         let _ = msg_tx.send(NetMsg::Status(Ok(StatusJson::default())));
                         continue;
                     }
+                    // Drain pool first — USB/mesh work below can take seconds.
+                    if let Some(e) = pump_stratum_keepalive(&mut stratum, &msg_tx) {
+                        let give_up = stratum
+                            .as_ref()
+                            .map(|s| s.auth_give_up || s.phase == "auth-fail")
+                            .unwrap_or(false);
+                        if let Some(mut s) = stratum.take() {
+                            s.disconnect();
+                        }
+                        log_msg(&msg_tx, LogKind::Err, format!("Pool: {e}"));
+                        if give_up {
+                            mining = false;
+                            reconnect_at = None;
+                        } else if mining && !mine_endpoint.is_empty() {
+                            reconnect_at = Some(Instant::now() + reconnect_backoff);
+                            reconnect_backoff =
+                                (reconnect_backoff * 2).min(Duration::from_secs(60));
+                        }
+                    }
                     let mut total_hs = 0.0;
                     let mut total_hashes = 0u64;
                     let mut any_mining = false;
@@ -7475,6 +7545,7 @@ fn mine_worker(cmd_rx: Receiver<NetCmd>, msg_tx: Sender<NetMsg>) {
                                 }
                             }
                         }
+                        let _ = pump_stratum_keepalive(&mut stratum, &msg_tx);
                     }
                     if last_mesh_sync.elapsed()
                         >= if boards.len() <= 1 && mesh.is_empty() {
@@ -7490,34 +7561,55 @@ fn mine_worker(cmd_rx: Receiver<NetCmd>, msg_tx: Sender<NetMsg>) {
                             .map(|s| s.stream_connected() && !s.authorized())
                             .unwrap_or(false);
                         if !pool_linking {
+                            let _ = pump_stratum_keepalive(&mut stratum, &msg_tx);
                             sync_mesh_peers(&mut boards, &mut mesh, &msg_tx, mining);
                             last_mesh_sync = Instant::now();
+                            let _ = pump_stratum_keepalive(&mut stratum, &msg_tx);
                         }
                     }
+                    // Via status can take ~3s per leaf — do it less often while mining
+                    // so the pool socket is not starved into reconnect loops.
+                    let via_due = last_mesh_via_status.elapsed()
+                        >= if mining {
+                            Duration::from_secs(8)
+                        } else {
+                            Duration::from_secs(4)
+                        };
                     let mut drop_mesh: Vec<String> = Vec::new();
-                    for m in mesh.iter_mut() {
-                        match mesh_via_cmd(&mut boards, &m.gateway, &m.mac, "status") {
-                            Ok(line) => match parse_cmp_status(&line) {
-                                Ok(st) => {
-                                    m.status_fails = 0;
-                                    if st.hashrate_hs > 0.0 {
-                                        m.hashrate_hs = st.hashrate_hs;
-                                    } else if !(mining || m.mining) {
-                                        m.hashrate_hs = 0.0;
+                    if via_due {
+                        last_mesh_via_status = Instant::now();
+                        for m in mesh.iter_mut() {
+                            let _ = pump_stratum_keepalive(&mut stratum, &msg_tx);
+                            match mesh_via_cmd(&mut boards, &m.gateway, &m.mac, "status") {
+                                Ok(line) => match parse_cmp_status(&line) {
+                                    Ok(st) => {
+                                        m.status_fails = 0;
+                                        if st.hashrate_hs > 0.0 {
+                                            m.hashrate_hs = st.hashrate_hs;
+                                        } else if !(mining || m.mining) {
+                                            m.hashrate_hs = 0.0;
+                                        }
+                                        if mining {
+                                            m.hashes = m.hashes.max(st.hashes);
+                                        } else if st.hashes > 0 || !m.mining {
+                                            m.hashes = st.hashes;
+                                        }
+                                        m.mining = st.mining || (mining && m.hashrate_hs > 0.0);
+                                        total_hs += m.hashrate_hs;
+                                        total_hashes = total_hashes.saturating_add(m.hashes);
+                                        any_mining |= m.mining;
+                                        last_status = Some(st);
                                     }
-                                    if mining {
-                                        m.hashes = m.hashes.max(st.hashes);
-                                    } else if st.hashes > 0 || !m.mining {
-                                        m.hashes = st.hashes;
+                                    Err(_) => {
+                                        m.status_fails = m.status_fails.saturating_add(1);
+                                        total_hs += m.hashrate_hs;
+                                        total_hashes = total_hashes.saturating_add(m.hashes);
+                                        any_mining |= m.mining || mining;
+                                        if m.status_fails >= 8 {
+                                            drop_mesh.push(m.name.clone());
+                                        }
                                     }
-                                    m.mining = st.mining || (mining && m.hashrate_hs > 0.0);
-                                    // Keep mesh identity MAC from peer list — never overwrite
-                                    // from via status (a misrouted reply could clone the root MAC).
-                                    total_hs += m.hashrate_hs;
-                                    total_hashes = total_hashes.saturating_add(m.hashes);
-                                    any_mining |= m.mining;
-                                    last_status = Some(st);
-                                }
+                                },
                                 Err(_) => {
                                     m.status_fails = m.status_fails.saturating_add(1);
                                     total_hs += m.hashrate_hs;
@@ -7527,16 +7619,13 @@ fn mine_worker(cmd_rx: Receiver<NetCmd>, msg_tx: Sender<NetMsg>) {
                                         drop_mesh.push(m.name.clone());
                                     }
                                 }
-                            },
-                            Err(_) => {
-                                m.status_fails = m.status_fails.saturating_add(1);
-                                total_hs += m.hashrate_hs;
-                                total_hashes = total_hashes.saturating_add(m.hashes);
-                                any_mining |= m.mining || mining;
-                                if m.status_fails >= 8 {
-                                    drop_mesh.push(m.name.clone());
-                                }
                             }
+                        }
+                    } else {
+                        for m in &mesh {
+                            total_hs += m.hashrate_hs;
+                            total_hashes = total_hashes.saturating_add(m.hashes);
+                            any_mining |= m.mining || mining;
                         }
                     }
                     for name in drop_mesh {
