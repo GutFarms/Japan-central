@@ -5667,8 +5667,10 @@ fn mine_worker(cmd_rx: Receiver<NetCmd>, msg_tx: Sender<NetMsg>) {
 
     let mut boards: Vec<UsbBoard> = Vec::new();
     let mut stratum: Option<StratumClient> = None;
-    let mut mining = false;
     let mut recent_jobs: VecDeque<WorkJob> = VecDeque::new();
+    // Board shares held while the pool socket is down (submit on reconnect).
+    let mut held_board_shares: VecDeque<(String, String, String, String)> = VecDeque::new();
+    let mut mining = false;
     let mut last_stats_push = Instant::now() - Duration::from_secs(10);
     let mut last_stratum_ui = Instant::now() - Duration::from_secs(10);
     let mut last_fleet_status = StatusJson::default();
@@ -6077,6 +6079,7 @@ fn mine_worker(cmd_rx: Receiver<NetCmd>, msg_tx: Sender<NetMsg>) {
                             &mut b.rx,
                             stratum.as_mut(),
                             &recent_jobs,
+                            &mut held_board_shares,
                             &msg_tx,
                         );
                         match usb_cmd(&mut b.port, &mut b.rx, "cmp status") {
@@ -6249,7 +6252,9 @@ fn mine_worker(cmd_rx: Receiver<NetCmd>, msg_tx: Sender<NetMsg>) {
                         }
                     }
                     if was_mining {
-                        // Resume with a warmup job so calibrated path stays hot.
+                        // Resume the last real pool job — warmup shares are ignored by
+                        // harvest and starve accepts until the next mining.notify.
+                        let resume = recent_jobs.back().cloned();
                         for b in boards.iter_mut() {
                             let mut legacy = b.legacy_job;
                             let _ = usb_cmd(
@@ -6257,14 +6262,36 @@ fn mine_worker(cmd_rx: Receiver<NetCmd>, msg_tx: Sender<NetMsg>) {
                                 &mut b.rx,
                                 "cmp stats accepted=0&rejected=0",
                             );
-                            let _ = usb_push_job(
+                            let job = resume.as_ref().cloned().unwrap_or_else(warmup_job);
+                            match usb_push_job(
                                 &mut b.port,
                                 &mut b.rx,
-                                &warmup_job(),
+                                &job,
                                 &mut legacy,
                                 &msg_tx,
-                            );
-                            b.legacy_job = legacy;
+                            ) {
+                                Ok(_) => {
+                                    b.legacy_job = legacy;
+                                    if resume.is_some() {
+                                        log_msg(
+                                            &msg_tx,
+                                            LogKind::Usb,
+                                            format!(
+                                                "{} resumed pool job {} after Bench",
+                                                b.name, job.job_id
+                                            ),
+                                        );
+                                    }
+                                }
+                                Err(e) => {
+                                    b.legacy_job = legacy;
+                                    log_msg(
+                                        &msg_tx,
+                                        LogKind::Warn,
+                                        format!("{} resume after Bench failed: {e}", b.name),
+                                    );
+                                }
+                            }
                         }
                     }
                     publish_live(&msg_tx, &boards);
@@ -6394,6 +6421,7 @@ fn mine_worker(cmd_rx: Receiver<NetCmd>, msg_tx: Sender<NetMsg>) {
                     &mut b.rx,
                     stratum.as_mut(),
                     &recent_jobs,
+                    &mut held_board_shares,
                     &msg_tx,
                 );
             }
@@ -6583,6 +6611,7 @@ fn harvest_shares(
     buf: &mut String,
     stratum: Option<&mut StratumClient>,
     recent_jobs: &VecDeque<WorkJob>,
+    held: &mut VecDeque<(String, String, String, String)>,
     msg_tx: &Sender<NetMsg>,
 ) {
     port.drain(buf);
@@ -6614,64 +6643,118 @@ fn harvest_shares(
         }
     }
     *buf = keep;
+
     if let Some(s) = stratum {
+        let mut pending: Vec<(String, String, String, String)> =
+            std::mem::take(held).into_iter().collect();
+        pending.extend(shares);
+        for (job, en2, ntime, nonce) in pending {
+            match try_submit_board_share(s, recent_jobs, &job, &en2, &ntime, &nonce, msg_tx) {
+                ShareSubmitResult::Ok | ShareSubmitResult::Dropped => {}
+                ShareSubmitResult::Hold => {
+                    held.push_back((job, en2, ntime, nonce));
+                    while held.len() > 64 {
+                        held.pop_front();
+                    }
+                }
+            }
+        }
+    } else {
+        let before = held.len();
         for (job, en2, ntime, nonce) in shares {
             if job == "warmup" || job.is_empty() {
-                log_msg(
-                    msg_tx,
-                    LogKind::Info,
-                    format!("Ignoring local/warmup share nonce={nonce}"),
-                );
                 continue;
             }
-            if let Some(wj) = recent_jobs
-                .iter()
-                .rev()
-                .find(|j| j.job_id == job && j.extranonce2_hex == en2)
-            {
-                if let Err(e) = StratumClient::verify_share_against_job(wj, &nonce) {
-                    log_msg(
-                        msg_tx,
-                        LogKind::Warn,
-                        format!("Dropping bad board share nonce={nonce} job={job}: {e}"),
-                    );
-                    continue;
-                }
-            } else {
-                log_msg(
-                    msg_tx,
-                    LogKind::Warn,
-                    format!(
-                        "Dropping stale board share job={job} en2={en2} (not in recent job cache)"
-                    ),
-                );
-                continue;
+            held.push_back((job, en2, ntime, nonce));
+            while held.len() > 64 {
+                held.pop_front();
             }
-            match s.submit_share(&job, &en2, &ntime, &nonce) {
-                Ok(()) => {
-                    let _ = msg_tx.send(NetMsg::Action(Ok(format!(
-                        "Share submitted {nonce} job={job}"
-                    ))));
-                }
-                Err(e) if e.contains("duplicate share") => {
-                    log_msg(
-                        msg_tx,
-                        LogKind::Warn,
-                        format!("Duplicate share skipped {nonce} job={job}"),
-                    );
-                }
-                Err(e) if e.contains("not authorized") => {
-                    // Board may still be hashing warmup / held work during pool handshake.
-                    log_msg(
-                        msg_tx,
-                        LogKind::Info,
-                        format!("Holding share {nonce} until authorize"),
-                    );
-                }
-                Err(e) => {
-                    let _ = msg_tx.send(NetMsg::Action(Err(format!("Share submit: {e}"))));
-                }
-            }
+        }
+        if held.len() > before {
+            log_msg(
+                msg_tx,
+                LogKind::Info,
+                format!(
+                    "Holding {} board share(s) until pool reconnects",
+                    held.len()
+                ),
+            );
+        }
+    }
+}
+
+enum ShareSubmitResult {
+    Ok,
+    Dropped,
+    Hold,
+}
+
+fn try_submit_board_share(
+    s: &mut StratumClient,
+    recent_jobs: &VecDeque<WorkJob>,
+    job: &str,
+    en2: &str,
+    ntime: &str,
+    nonce: &str,
+    msg_tx: &Sender<NetMsg>,
+) -> ShareSubmitResult {
+    if job == "warmup" || job.is_empty() {
+        log_msg(
+            msg_tx,
+            LogKind::Info,
+            format!("Ignoring local/warmup share nonce={nonce}"),
+        );
+        return ShareSubmitResult::Dropped;
+    }
+    if let Some(wj) = recent_jobs
+        .iter()
+        .rev()
+        .find(|j| j.job_id == job && j.extranonce2_hex == en2)
+    {
+        if let Err(e) = StratumClient::verify_share_against_job(wj, nonce) {
+            log_msg(
+                msg_tx,
+                LogKind::Warn,
+                format!("Dropping bad board share nonce={nonce} job={job}: {e}"),
+            );
+            return ShareSubmitResult::Dropped;
+        }
+    } else {
+        log_msg(
+            msg_tx,
+            LogKind::Warn,
+            format!(
+                "Dropping stale board share job={job} en2={en2} (not in recent job cache)"
+            ),
+        );
+        return ShareSubmitResult::Dropped;
+    }
+    match s.submit_share(job, en2, ntime, nonce) {
+        Ok(()) => {
+            let _ = msg_tx.send(NetMsg::Action(Ok(format!(
+                "Share submitted {nonce} job={job}"
+            ))));
+            ShareSubmitResult::Ok
+        }
+        Err(e) if e.contains("duplicate share") => {
+            log_msg(
+                msg_tx,
+                LogKind::Warn,
+                format!("Duplicate share skipped {nonce} job={job}"),
+            );
+            ShareSubmitResult::Dropped
+        }
+        Err(e) if e.contains("not authorized") => {
+            log_msg(
+                msg_tx,
+                LogKind::Info,
+                format!("Holding share {nonce} until authorize"),
+            );
+            ShareSubmitResult::Hold
+        }
+        Err(e) => {
+            let _ = msg_tx.send(NetMsg::Action(Err(format!("Share submit: {e}"))));
+            ShareSubmitResult::Dropped
         }
     }
 }

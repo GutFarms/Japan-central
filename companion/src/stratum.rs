@@ -63,6 +63,8 @@ pub struct StratumClient {
     post_auth_job: bool,
     /// True after the first `mining.set_difficulty` (avoid shipping diff=1 work to the board).
     have_difficulty: bool,
+    /// Notify/authorize arrived but we are waiting for set_difficulty (or timeout).
+    job_wait_since: Option<Instant>,
     pub accepted: u32,
     pub rejected: u32,
     pub phase: String,
@@ -110,6 +112,7 @@ impl StratumClient {
             reject_grace_until: None,
             post_auth_job: false,
             have_difficulty: false,
+            job_wait_since: None,
             accepted: 0,
             rejected: 0,
             phase: "off".into(),
@@ -153,6 +156,7 @@ impl StratumClient {
         self.post_auth_job = false;
         self.have_difficulty = false;
         self.difficulty = 1.0;
+        self.job_wait_since = None;
         // Keep recent_submit_keys across reconnect so duplicate board shares are dropped.
         self.accepted = 0;
         self.rejected = 0;
@@ -172,6 +176,7 @@ impl StratumClient {
         self.reject_grace_until = None;
         self.post_auth_job = false;
         self.have_difficulty = false;
+        self.job_wait_since = None;
         self.accepted = 0;
         self.rejected = 0;
         self.phase = "off".into();
@@ -253,6 +258,7 @@ impl StratumClient {
             self.push_recent(format!("← {preview}"));
             self.handle_line(&line)?;
         }
+        self.release_held_job_if_ready();
         Ok(())
     }
 
@@ -401,7 +407,9 @@ impl StratumClient {
                     self.push_recent(format!("← mining.set_difficulty {next}"));
                     // Critical: rebuild/re-push work with the new target. Leaving the board
                     // on the previous (often diff=1) target causes mass Low-difficulty rejects.
-                    if changed && self.authorized && !self.job_id.is_empty() {
+                    if self.authorized && !self.job_id.is_empty() && (changed || self.job_wait_since.is_some())
+                    {
+                        self.job_wait_since = None;
                         self.emit_job_from_fields();
                     }
                 }
@@ -434,12 +442,17 @@ impl StratumClient {
                             ));
                             return Ok(());
                         }
+                        // Hold until set_difficulty so CYD boards never grind diff=1
+                        // (~0.3 shares/h @ 400 kH/s) while waiting for pool vardiff.
                         if !self.have_difficulty {
+                            self.job_wait_since = Some(Instant::now());
                             self.push_recent(format!(
-                                "← mining.notify job={} (using default diff={} until set_difficulty)",
-                                self.job_id, self.difficulty
+                                "← mining.notify job={} (held until set_difficulty)",
+                                self.job_id
                             ));
+                            return Ok(());
                         }
+                        self.job_wait_since = None;
                         self.emit_job_from_fields();
                     }
                 }
@@ -588,8 +601,41 @@ impl StratumClient {
         self.reject_grace_until = Some(Instant::now() + Duration::from_secs(5));
         self.phase = "idle".into();
         self.push_recent("← authorized (share counters reset; reject grace 5s)".into());
-        // If notify already arrived during subscribe, release work now.
+        // If notify already arrived during subscribe, release work once difficulty is known.
         if !self.job_id.is_empty() {
+            if self.have_difficulty {
+                self.job_wait_since = None;
+                self.emit_job_from_fields();
+            } else {
+                self.job_wait_since = Some(Instant::now());
+                self.push_recent(
+                    "← authorized · waiting for set_difficulty before first job".into(),
+                );
+            }
+        }
+    }
+
+    /// Emit held notify after set_difficulty, or after a short timeout if the pool
+    /// never sends difficulty (fall back to current default).
+    fn release_held_job_if_ready(&mut self) {
+        let Some(since) = self.job_wait_since else {
+            return;
+        };
+        if !self.authorized || self.job_id.is_empty() {
+            return;
+        }
+        if self.have_difficulty {
+            self.job_wait_since = None;
+            self.emit_job_from_fields();
+            return;
+        }
+        // Pools that omit set_difficulty: don't stall forever on warmup only.
+        if since.elapsed() >= Duration::from_secs(3) {
+            self.job_wait_since = None;
+            self.push_recent(format!(
+                "← no set_difficulty after 3s — emitting job at diff={}",
+                self.difficulty
+            ));
             self.emit_job_from_fields();
         }
     }

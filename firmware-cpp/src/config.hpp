@@ -9,8 +9,9 @@ struct AppConfig {
   bool wifiEnabled = true;
   String wifiSsid;
   String wifiPass;
-  /// Preferred SHA path after Bench auto-tune: -1=auto, 0=HW, 1=HW+, 2=HW/SW.
-  int8_t shaPath = -1;
+  /// Preferred SHA path after Bench: -1=legacy auto, 0=Full HW, 1=HW+, 2=HW/SW.
+  /// Default Full HW — always correct; Bench can lock a faster path into NVS.
+  int8_t shaPath = 0;
 
   uint8_t normalizeCpu(uint8_t mhz) const {
     if (mhz == 0 || mhz >= 200) return 240;

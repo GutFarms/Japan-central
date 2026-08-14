@@ -470,7 +470,9 @@ void calibrate(const uint32_t hdr_be[20], const uint32_t mid_be[8]) {
   g_hybrid_ok = hybrid_ok;
 
   // Honoured preferred path from a prior Bench (NVS), if still valid.
-  if (g_preferred == (int8_t)Mode::FullHw) {
+  if (g_preferred == (int8_t)Mode::FullHw || g_preferred < 0) {
+    // Full HW (or legacy auto): always correct — do not micro-pick Mid/HW-SW here.
+    // Those paths need a full Bench correctness+timing session before lock-in.
     g_mode = Mode::FullHw;
     g_calibrated = true;
     return;
@@ -486,47 +488,8 @@ void calibrate(const uint32_t hdr_be[20], const uint32_t mid_be[8]) {
     return;
   }
 
-  auto time_path = [&](Mode m) -> uint32_t {
-    // D0 builds use a longer micro-window for a stabler pick.
-    const uint32_t N = CYD_D0_BUILD ? 6144u : 2048u;
-    uint32_t t0 = micros();
-    for (uint32_t i = 0; i < N; i++) {
-      const uint32_t nonce_be = bswap32(i);
-      switch (m) {
-        case Mode::MidHw:
-          sha256d_mid_hw(mid_be, w16, ntime, nbits, nonce_be);
-          break;
-        case Mode::HwSwSecond:
-          (void)sha256d_hw_sw(block1, mid_be, mid_ok, w16, ntime, nbits, nonce_be, nullptr);
-          break;
-        default:
-          sha256d_full_hw(block1, w16, ntime, nbits, nonce_be);
-          break;
-      }
-    }
-    uint32_t dt = micros() - t0;
-    return dt ? dt : 1;
-  };
-
-  uint32_t best_dt = time_path(Mode::FullHw);
-  Mode best = Mode::FullHw;
-
-  if (hybrid_ok) {
-    uint32_t dt = time_path(Mode::HwSwSecond);
-    if (dt < best_dt) {
-      best_dt = dt;
-      best = Mode::HwSwSecond;
-    }
-  }
-  if (mid_ok) {
-    uint32_t dt = time_path(Mode::MidHw);
-    if (dt < best_dt) {
-      best_dt = dt;
-      best = Mode::MidHw;
-    }
-  }
-
-  g_mode = best;
+  // Unknown / invalid preferred → Full HW.
+  g_mode = Mode::FullHw;
   g_calibrated = true;
 }
 
