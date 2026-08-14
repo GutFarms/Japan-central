@@ -365,6 +365,8 @@ fn format_hashrate_parts(hs: f64) -> (String, &'static str) {
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Tab {
     Mine,
+    /// SoftAP / USB → push home Wi‑Fi credentials to the board.
+    Setup,
     Settings,
     /// Hidden from nav (0.8.31+); kept so older persisted state still loads.
     #[allow(dead_code)]
@@ -782,6 +784,8 @@ struct CompanionApp {
     wifi_setup_pass: String,
     wifi_setup_target: String,
     wifi_setup_phase: WifiSetupPhase,
+    /// SoftAP endpoint we already auto-routed to Setup for (cleared when SoftAP gone).
+    softap_setup_routed_ep: String,
     /// Shared snapshot + personal pairing creds for the phone monitor HTTP API (:19285).
     monitor: MonitorHub,
     monitor_addr: String,
@@ -981,6 +985,7 @@ impl CompanionApp {
             wifi_setup_pass: String::new(),
             wifi_setup_target: String::new(),
             wifi_setup_phase: WifiSetupPhase::Idle,
+            softap_setup_routed_ep: String::new(),
             monitor,
             monitor_addr: format!("0.0.0.0:{MONITOR_PORT}"),
             monitor_install_id,
@@ -4142,15 +4147,22 @@ impl CompanionApp {
                         ui.label(RichText::new("linked").color(C_LIME).size(11.0));
                     } else {
                         let softap = wifi_is_softap_setup(&w);
-                        let btn = if softap { "Connect SoftAP" } else { "Connect" };
+                        let btn = if softap { "Set up Wi‑Fi" } else { "Connect" };
                         if soft_button(ui, btn, 120.0)
                             .on_hover_text(if softap {
-                                "PC must be on Njordr-XXXX / njordrseas. Prefer USB Link when plugged in."
+                                "Open Setup to push home Wi‑Fi (PC must be on Njordr-XXXX / njordrseas)."
                             } else {
                                 "TCP cmp to board on your LAN / SoftAP."
                             })
                             .clicked()
                         {
+                            if softap {
+                                // SoftAP is for provisioning — route to Setup, don't mine-link.
+                                self.route_to_board_wifi_setup(
+                                    Some(w.endpoint.clone()),
+                                    true,
+                                );
+                            } else {
                             // Prefer USB for the same MAC when available.
                             let prefer_usb = self
                                 .discovered_workers
@@ -4174,6 +4186,7 @@ impl CompanionApp {
                                 self.queue_connect_usb(usb_ep, "Wi‑Fi row → USB");
                             } else {
                                 self.queue_connect_wifi(w.endpoint.clone(), "Find workers");
+                            }
                             }
                         }
                     }
@@ -4203,6 +4216,162 @@ impl CompanionApp {
         }
 
         ui.add_space(12.0);
+        self.ui_wifi_setup_mine_callout(ui);
+    }
+
+    fn fresh_softap_board(&self) -> Option<&DiscoveredWorker> {
+        self.discovered_workers.iter().find(|w| {
+            w.kind == WorkerKind::Wifi
+                && wifi_is_softap_setup(w)
+                && wifi_beacon_fresh(w, 20_000)
+        })
+    }
+
+    /// Switch to Setup and preselect a SoftAP/USB target for home Wi‑Fi push.
+    fn route_to_board_wifi_setup(&mut self, endpoint: Option<String>, announce: bool) {
+        if matches!(
+            self.wifi_setup_phase,
+            WifiSetupPhase::Pushing | WifiSetupPhase::WaitingSta { .. }
+        ) {
+            // Don't yank the user mid-push.
+            self.tab = Tab::Setup;
+            return;
+        }
+        if let Some(ep) = endpoint {
+            self.wifi_setup_target = ep.clone();
+            self.softap_setup_routed_ep = ep;
+        }
+        self.tab = Tab::Setup;
+        if announce {
+            self.last_ok =
+                "Board SoftAP connected — enter home Wi‑Fi SSID/password, then Push & save."
+                    .into();
+            self.push_log(
+                LogKind::Info,
+                "Routed to Setup — push home Wi‑Fi to the board (SoftAP pass njordrseas)."
+                    .into(),
+            );
+        }
+    }
+
+    /// When the PC is on Njordr SoftAP, SoftAP beacons arrive — open Setup once.
+    fn maybe_route_softap_wifi_setup(&mut self) {
+        let Some(ep) = self.fresh_softap_board().map(|w| w.endpoint.clone()) else {
+            if !self.softap_setup_routed_ep.is_empty() {
+                self.softap_setup_routed_ep.clear();
+            }
+            return;
+        };
+        if self.softap_setup_routed_ep == ep {
+            return;
+        }
+        self.route_to_board_wifi_setup(Some(ep), true);
+    }
+
+    fn ui_wifi_setup_mine_callout(&mut self, ui: &mut egui::Ui) {
+        soft_panel(ui, "Board Wi‑Fi", |ui| {
+            if let Some(w) = self.fresh_softap_board().cloned() {
+                ui.label(
+                    RichText::new(format!(
+                        "SoftAP {} — PC is on the board network. Open Setup to push home Wi‑Fi \
+(pass njordrseas).",
+                        w.endpoint
+                    ))
+                    .color(C_WARN)
+                    .size(12.0),
+                );
+                ui.add_space(6.0);
+                if soft_button(ui, "Open Setup", 120.0).clicked() {
+                    self.route_to_board_wifi_setup(Some(w.endpoint), true);
+                }
+            } else {
+                ui.label(
+                    RichText::new(
+                        "Join SoftAP Njordr-XXXX / njordrseas, or Link USB — then open Setup to \
+save home Wi‑Fi to the board.",
+                    )
+                    .color(C_DIM)
+                    .size(12.0),
+                );
+                ui.add_space(6.0);
+                if soft_button(ui, "Open Setup", 120.0).clicked() {
+                    self.tab = Tab::Setup;
+                }
+            }
+        });
+    }
+
+    fn ui_setup(&mut self, ui: &mut egui::Ui) {
+        ui.label(
+            RichText::new("Njörðr")
+                .color(C_LIME)
+                .font(display_font(28.0)),
+        );
+        ui.label(
+            RichText::new("Board → home Wi‑Fi")
+                .color(C_TEXT)
+                .font(display_font(20.0)),
+        );
+        ui.add_space(6.0);
+        ui.label(
+            RichText::new(
+                "Connect the board to your router so it can mine on the LAN / mesh.",
+            )
+            .color(C_MUTED)
+            .size(13.0),
+        );
+        ui.add_space(14.0);
+
+        soft_panel(ui, "How to connect", |ui| {
+            let softap = self.fresh_softap_board();
+            let step1 = if softap.is_some() {
+                "1. PC is on board SoftAP (Njordr-XXXX / njordrseas) — ready."
+            } else {
+                "1. Join SoftAP Njordr-XXXX / password njordrseas in Windows Wi‑Fi \
+(or Link the board over USB)."
+            };
+            ui.label(
+                RichText::new(step1)
+                    .color(if softap.is_some() { C_LIME } else { C_TEXT })
+                    .size(12.0),
+            );
+            ui.add_space(4.0);
+            ui.label(
+                RichText::new("2. Enter your home router SSID and password below.")
+                    .color(C_TEXT)
+                    .size(12.0),
+            );
+            ui.add_space(4.0);
+            ui.label(
+                RichText::new(
+                    "3. Push & save — board stores credentials in NVS and joins home Wi‑Fi.",
+                )
+                .color(C_TEXT)
+                .size(12.0),
+            );
+            ui.add_space(4.0);
+            ui.label(
+                RichText::new(
+                    "4. Switch this PC back to home Wi‑Fi, then Find CYD workers on Mine.",
+                )
+                .color(C_TEXT)
+                .size(12.0),
+            );
+            if let Some(w) = softap {
+                ui.add_space(8.0);
+                ui.label(
+                    RichText::new(format!(
+                        "SoftAP board · {} · {}",
+                        w.endpoint,
+                        if w.mac.is_empty() { "mac?" } else { &w.mac }
+                    ))
+                    .color(C_LIME)
+                    .font(mono_ui_font(11.0)),
+                );
+            }
+        });
+
+        ui.add_space(14.0);
         self.ui_wifi_setup_panel(ui);
     }
 
@@ -4232,20 +4401,25 @@ impl CompanionApp {
             let label = format!("{} · {}", w.endpoint, w.detail);
             out.push((w.endpoint.clone(), label));
         }
-        // SoftAP beacons stay visible while a USB board is linked — prefer linked
-        // USB/TCP workers so Push saves over the live cmp link (not a SoftAP one-shot).
+        // SoftAP beacons stay visible while a USB board is linked. Prefer linked
+        // USB/TCP for Push — unless we just routed here from SoftAP join.
+        let prefer_softap = !self.softap_setup_routed_ep.is_empty();
         out.sort_by(|a, b| {
-            let rank = |label: &str| -> u8 {
+            let rank = |ep: &str, label: &str| -> u8 {
                 let l = label.to_ascii_lowercase();
-                if l.contains("· linked") || l.ends_with(" linked") {
+                if prefer_softap && ep == self.softap_setup_routed_ep {
                     0
-                } else if l.contains("setup softap") {
-                    2
-                } else {
+                } else if l.contains("· linked") || l.ends_with(" linked") {
                     1
+                } else if l.contains("setup softap") {
+                    3
+                } else {
+                    2
                 }
             };
-            rank(&a.1).cmp(&rank(&b.1)).then(a.0.cmp(&b.0))
+            rank(&a.0, &a.1)
+                .cmp(&rank(&b.0, &b.1))
+                .then(a.0.cmp(&b.0))
         });
         out
     }
@@ -4418,11 +4592,11 @@ impl CompanionApp {
     }
 
     fn ui_wifi_setup_panel(&mut self, ui: &mut egui::Ui) {
-        soft_panel(ui, "Board Wi‑Fi setup", |ui| {
+        soft_panel(ui, "Home Wi‑Fi credentials", |ui| {
             ui.label(
                 RichText::new(
-                    "Prefer a linked USB board below, enter home Wi‑Fi, then Push & save — credentials \
-write to board NVS over cmp. SoftAP Njordr-XXXX / njordrseas still works if you join that network first.",
+                    "Select the SoftAP or linked USB board, enter home Wi‑Fi, then Push & save — \
+credentials write to board NVS over cmp. SoftAP password is njordrseas.",
                 )
                 .color(C_DIM)
                 .size(12.0),
@@ -5048,6 +5222,10 @@ write to board NVS over cmp. SoftAP Njordr-XXXX / njordrseas still works if you 
                     self.tab = Tab::Mine;
                 }
                 ui.add_space(6.0);
+                if nav_button(ui, "Setup", self.tab == Tab::Setup).clicked() {
+                    self.tab = Tab::Setup;
+                }
+                ui.add_space(6.0);
                 if nav_button(ui, "Settings", self.tab == Tab::Settings).clicked() {
                     self.tab = Tab::Settings;
                 }
@@ -5108,6 +5286,9 @@ write to board NVS over cmp. SoftAP Njordr-XXXX / njordrseas still works if you 
             ui.horizontal_wrapped(|ui| {
                 if nav_button(ui, "Mine", self.tab == Tab::Mine).clicked() {
                     self.tab = Tab::Mine;
+                }
+                if nav_button(ui, "Setup", self.tab == Tab::Setup).clicked() {
+                    self.tab = Tab::Setup;
                 }
                 if nav_button(ui, "Settings", self.tab == Tab::Settings).clicked() {
                     self.tab = Tab::Settings;
@@ -5838,6 +6019,7 @@ impl App for CompanionApp {
         for board in self.board_wifi.poll_boards() {
             self.merge_discovered(board);
         }
+        self.maybe_route_softap_wifi_setup();
         self.tick_wifi_setup_wait();
         if matches!(self.wifi_setup_phase, WifiSetupPhase::WaitingSta { .. }) {
             ctx.request_repaint_after(Duration::from_millis(400));
@@ -6524,6 +6706,7 @@ impl App for CompanionApp {
                         ui.set_min_width(ui.available_width());
                         match self.tab {
                             Tab::Mine | Tab::Debug => self.ui_mine(ui),
+                            Tab::Setup => self.ui_setup(ui),
                             Tab::Settings => self.ui_settings(ui),
                         }
                         ui.add_space(28.0);
