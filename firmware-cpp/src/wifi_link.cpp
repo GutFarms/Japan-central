@@ -106,6 +106,9 @@ void WifiLink::beginStaPrefer88(const IPAddress& gateway, const IPAddress& mask)
 void WifiLink::tickStaAddressPolicy() {
   if (!staWanted_) return;
 
+  // Keep SoftAP/ESP-NOW on the same channel as home STA once associated.
+  realignSoftApToStaChannel();
+
   if (staPrefer88Pending_) {
     if (WiFi.status() != WL_CONNECTED) return;
     IPAddress gw = WiFi.gatewayIP();
@@ -143,6 +146,24 @@ void WifiLink::tickStaAddressPolicy() {
   if (lastStaSsid_.length()) {
     WiFi.begin(lastStaSsid_.c_str(), lastStaPass_.c_str());
   }
+}
+
+void WifiLink::realignSoftApToStaChannel() {
+  if (!softApUp_ || !staWanted_) return;
+  if (WiFi.status() != WL_CONNECTED) {
+    lastStaChannel_ = 0;
+    return;
+  }
+  int staCh = WiFi.channel();
+  if (staCh < 1 || staCh > 14) return;
+  if ((uint8_t)staCh == lastStaChannel_) return;
+  lastStaChannel_ = (uint8_t)staCh;
+  // Recreate SoftAP on STA channel so ESP-NOW peers share one radio channel.
+  IPAddress apIp = softApIpForMode(true);
+  WiFi.softAPConfig(apIp, apIp, IPAddress(255, 255, 255, 0));
+  WiFi.softAP(apSsid_.c_str(), CYD_SOFTAP_PASS, staCh, 0, 4);
+  lastApIp_ = apIp;
+  configureSoftApDns(WiFi.softAPIP());
 }
 
 void WifiLink::ensureWifi(const AppConfig& cfg) {
@@ -187,16 +208,25 @@ void WifiLink::ensureWifi(const AppConfig& cfg) {
   const bool apIpChanged = apIp != lastApIp_;
   WiFi.softAPConfig(apIp, apGw, apMask);
 
-  // Channel 1 SoftAP — Companion can join or hear UDP on the LAN when STA is up.
-  // Re-create SoftAP when bringing Wi‑Fi up, mode/creds change, or SoftAP IP policy flips.
+  // SoftAP: SoftAP-only stays on ch1; with STA, follow home AP channel so ESP-NOW works.
+  // (Forcing ch1 while STA is on another channel → CMPERR via send failed.)
   if (!softApUp_ || modeChanged || staCredsChanged || apIpChanged) {
-    bool ok = WiFi.softAP(apSsid_.c_str(), CYD_SOFTAP_PASS, 1, 0, 4);
+    int ch = 1;
+    if (staWanted_ && WiFi.status() == WL_CONNECTED) {
+      int staCh = WiFi.channel();
+      if (staCh >= 1 && staCh <= 14) ch = staCh;
+    } else if (staWanted_) {
+      // STA associating — channel 0 lets the driver align SoftAP once linked.
+      ch = 0;
+    }
+    bool ok = WiFi.softAP(apSsid_.c_str(), CYD_SOFTAP_PASS, ch, 0, 4);
     softApUp_ = ok;
     lastApIp_ = apIp;
     (void)ok;
     delay(40);
-    // SoftAP recreate can leave the radio off ch1 — re-pin for ESP-NOW mesh.
-    esp_wifi_set_channel(1, WIFI_SECOND_CHAN_NONE);
+    if (!staWanted_) {
+      esp_wifi_set_channel(1, WIFI_SECOND_CHAN_NONE);
+    }
     // Advertise SoftAP IP as DNS so captive probes hit our DNSServer → phone Sign-in UI.
     configureSoftApDns(WiFi.softAPIP());
     server_.begin();
@@ -446,11 +476,11 @@ void WifiLink::beacon() {
   IPAddress advertise = (WiFi.status() == WL_CONNECTED) ? sta : ap;
   char msg[220];
 #if CYD_D0_BUILD
-  static constexpr const char* kFwTag = "0.8.147-sha256-d0";
-  static constexpr const char* kFwShort = "0.8.147-d0";
+  static constexpr const char* kFwTag = "0.8.148-sha256-d0";
+  static constexpr const char* kFwShort = "0.8.148-d0";
 #else
-  static constexpr const char* kFwTag = "0.8.147-sha256";
-  static constexpr const char* kFwShort = "0.8.147";
+  static constexpr const char* kFwTag = "0.8.148-sha256";
+  static constexpr const char* kFwShort = "0.8.148";
 #endif
   snprintf(msg, sizeof(msg),
            "%s|v=%s|mac=%s|fw=%s|tcp=%u|ip=%u.%u.%u.%u|ap=%s|mode=%s",

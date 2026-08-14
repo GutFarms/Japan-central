@@ -82,9 +82,17 @@ void MeshPrint::flushLine() {
 }
 
 void MeshLink::pinChannel() {
-  // STA roam / SoftAP refresh can steal the radio off ch1 and break ESP-NOW.
-  esp_wifi_set_channel(1, WIFI_SECOND_CHAN_NONE);
   lastChannelPinMs_ = millis();
+  // When STA is associated, the radio MUST stay on the home AP channel.
+  // Forcing ch1 (old SoftAP pin) made esp_now_send fail → CMPERR via send failed.
+  if (WiFi.status() == WL_CONNECTED) {
+    uint8_t ch = (uint8_t)WiFi.channel();
+    if (ch >= 1 && ch <= 14) meshChan_ = ch;
+    return;
+  }
+  // SoftAP-only / APSTA before STA link — keep SoftAP + ESP-NOW on ch1.
+  esp_wifi_set_channel(1, WIFI_SECOND_CHAN_NONE);
+  meshChan_ = 1;
 }
 
 void MeshLink::begin(const uint8_t selfMac[6]) {
@@ -93,7 +101,6 @@ void MeshLink::begin(const uint8_t selfMac[6]) {
   if (WiFi.getMode() == WIFI_OFF) {
     WiFi.mode(WIFI_AP);
   }
-  // SoftAP is channel 1 — keep ESP-NOW on the same channel.
   pinChannel();
 
   if (esp_now_init() != ESP_OK) {
@@ -109,13 +116,15 @@ void MeshLink::begin(const uint8_t selfMac[6]) {
   esp_now_peer_info_t peer{};
   memset(&peer, 0, sizeof(peer));
   memcpy(peer.peer_addr, kBcast, 6);
-  peer.channel = 1;
+  // channel 0 = follow current Wi‑Fi channel (STA or SoftAP).
+  peer.channel = 0;
   peer.encrypt = false;
   if (!esp_now_is_peer_exist(kBcast)) {
     esp_now_add_peer(&peer);
   }
   ready_ = true;
   lastHelloMs_ = 0;
+  lastSendErr_ = ESP_OK;
 }
 
 bool MeshLink::popRx(RxItem& out) {
@@ -260,11 +269,21 @@ bool MeshLink::pickRoot(uint8_t out[6]) const {
 }
 
 void MeshLink::ensurePeer(const uint8_t mac[6]) {
-  if (macBcast(mac) || esp_now_is_peer_exist(mac)) return;
+  if (macBcast(mac)) return;
+  // channel 0 = use whatever channel the radio is on right now (STA or SoftAP).
+  if (esp_now_is_peer_exist(mac)) {
+    esp_now_peer_info_t peer{};
+    if (esp_now_get_peer(mac, &peer) == ESP_OK && peer.channel != 0) {
+      peer.channel = 0;
+      peer.encrypt = false;
+      esp_now_mod_peer(&peer);
+    }
+    return;
+  }
   esp_now_peer_info_t peer{};
   memset(&peer, 0, sizeof(peer));
   memcpy(peer.peer_addr, mac, 6);
-  peer.channel = 1;
+  peer.channel = 0;
   peer.encrypt = false;
   esp_now_add_peer(&peer);
 }
@@ -278,7 +297,6 @@ bool MeshLink::sendLineTo(const uint8_t dstIn[6], const char* line) {
     if (isRoot()) return false;
     if (!pickRoot(dst)) return false;
   }
-  ensurePeer(dst);
 
   size_t n = strlen(line);
   if (n > MESH_LINE_CAP - 1) n = MESH_LINE_CAP - 1;
@@ -295,7 +313,26 @@ bool MeshLink::sendLineTo(const uint8_t dstIn[6], const char* line) {
   h->len = (uint8_t)n;
   memcpy(pkt + sizeof(MeshPkt), line, n);
 
-  return esp_now_send(dst, pkt, sizeof(MeshPkt) + n) == ESP_OK;
+  // Retry: first send often fails right after STA channel change / peer add.
+  esp_err_t err = ESP_FAIL;
+  for (int attempt = 0; attempt < 4; attempt++) {
+    if (attempt == 0 || attempt == 2) pinChannel();
+    ensurePeer(dst);
+    err = esp_now_send(dst, pkt, sizeof(MeshPkt) + n);
+    if (err == ESP_OK) {
+      lastSendErr_ = ESP_OK;
+      return true;
+    }
+    // Peer table stale after channel hop — drop and re-add.
+    if (err == ESP_ERR_ESPNOW_NOT_FOUND || err == ESP_ERR_ESPNOW_ARG) {
+      esp_now_del_peer(dst);
+      ensurePeer(dst);
+    }
+    delay(3 + attempt);
+    yield();
+  }
+  lastSendErr_ = err;
+  return false;
 }
 
 void MeshLink::sendHello() {
@@ -468,7 +505,10 @@ bool MeshLink::handleVia(const String& macArg, const String& cmdRest) {
 
   if (!sendLineTo(mac, wire.c_str())) {
     viaPending_ = false;
-    Serial.println("CMPERR via send failed");
+    char err[72];
+    snprintf(err, sizeof(err), "CMPERR via send failed ch=%u esp=0x%x",
+             (unsigned)meshChan_, (unsigned)lastSendErr_);
+    Serial.println(err);
     Serial.flush();
     return true;
   }

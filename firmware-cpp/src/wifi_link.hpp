@@ -70,6 +70,7 @@ class WifiLink {
   /// After home Wi‑Fi save: try 192.168.1.88 once DHCP shows a matching subnet.
   bool staPrefer88Pending_ = false;
   bool staStaticTried_ = false;
+  uint8_t lastStaChannel_ = 0;
 
   void ensureWifi(const AppConfig& cfg);
   void beacon();
@@ -78,6 +79,7 @@ class WifiLink {
   void stopPortal();
   void pollPortal(AppConfig& cfg, const MinerSnapshot& snap);
   void configureSoftApDns(const IPAddress& apIp);
+  void realignSoftApToStaChannel();
   void tickStaAddressPolicy();
   void beginStaDhcp(const AppConfig& cfg);
   void beginStaPrefer88(const IPAddress& gateway, const IPAddress& mask);
