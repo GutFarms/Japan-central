@@ -286,6 +286,56 @@ pub fn open_usb_serial(
     Ok(port)
 }
 
+fn slip_encode(payload: &[u8]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(payload.len() + 8);
+    out.push(0xC0);
+    for &b in payload {
+        match b {
+            0xC0 => {
+                out.push(0xDB);
+                out.push(0xDC);
+            }
+            0xDB => {
+                out.push(0xDB);
+                out.push(0xDD);
+            }
+            _ => out.push(b),
+        }
+    }
+    out.push(0xC0);
+    out
+}
+
+/// True when the UART answers ESP ROM SYNC (BOOT held / blank / download mode).
+/// Safe to call after `cmp ping` failed — does not require running firmware.
+pub fn probe_esp_download_mode(port: &mut dyn SerialPort) -> bool {
+    let _ = port.clear(serialport::ClearBuffer::All);
+    // ESP_SYNC (0x08): direction=0, cmd=8, size=36, checksum=0, data=07 07 12 20 + 32×55
+    let mut data = vec![0x07u8, 0x07, 0x12, 0x20];
+    data.extend(std::iter::repeat(0x55u8).take(32));
+    let mut hdr = vec![0x00u8, 0x08, 36, 0, 0, 0, 0, 0];
+    hdr.extend_from_slice(&data);
+    let frame = slip_encode(&hdr);
+    let mut buf = [0u8; 256];
+    for _ in 0..6 {
+        let _ = port.write_all(&frame);
+        let _ = port.flush();
+        let deadline = Instant::now() + Duration::from_millis(120);
+        while Instant::now() < deadline {
+            match port.read(&mut buf) {
+                Ok(n) if n > 0 => {
+                    // ROM replies with SLIP (0xC0…) — presence is enough to claim download mode.
+                    if buf[..n].contains(&0xC0) {
+                        return true;
+                    }
+                }
+                _ => std::thread::sleep(Duration::from_millis(8)),
+            }
+        }
+    }
+    false
+}
+
 /// Open with a hard deadline — motherboard PCI COM ports can hang forever in `open()`.
 pub fn open_usb_serial_timed(
     name: &str,

@@ -45,8 +45,8 @@ use stratum::{
 use workers::{
     cyd_port_score, is_usb_serial_port, list_serial_ports, mac_is_stable, mac_worker_id,
     normalize_mac, open_usb_serial_timed, open_wifi_tcp, port_choice_is_pci, port_names_match,
-    prefer_cyd_port, scan_usb_workers_with_progress, transport_mac_id, BoardWifiDiscovery,
-    DiscoveredWorker, LanDiscovery, PortChoice, WorkerKind, WorkerLive,
+    prefer_cyd_port, probe_esp_download_mode, scan_usb_workers_with_progress, transport_mac_id,
+    BoardWifiDiscovery, DiscoveredWorker, LanDiscovery, PortChoice, WorkerKind, WorkerLive,
 };
 
 use eframe::egui::{
@@ -2539,7 +2539,8 @@ impl CompanionApp {
                 RichText::new(
                     "· Bench boards (D0) → lock Full HW  ·  Clock 240 MHz  ·  More CYDs for more rate
 · Algorithm stays Bitcoin SHA-256d only
-· SAFETY: blank boards — Update uses --no-stub first; when prompted, hold BOOT, tap RESET, release BOOT. If erase/rewrite fails, keep USB plugged and Update again.",
+· Do NOT raise board voltage — CYD is fixed ~3.3V; overvolting can kill flash/USB/ESP
+· SAFETY: blank / BOOT — hold BOOT, Connect (download mode), then Update board",
                 )
                 .color(C_MUTED)
                 .font(mono_ui_font(11.0)),
@@ -5750,6 +5751,8 @@ fn mine_worker(cmd_rx: Receiver<NetCmd>, msg_tx: Sender<NetMsg>) {
         mining: bool,
         /// Consecutive cmp status soft-fails — used to drop dead USB boards.
         status_fails: u8,
+        /// ROM download mode (BOOT held / blank) — no cmp; flash via Update board.
+        download_mode: bool,
     }
 
     fn live_from(boards: &[UsbBoard]) -> Vec<WorkerLive> {
@@ -5758,7 +5761,11 @@ fn mine_worker(cmd_rx: Receiver<NetCmd>, msg_tx: Sender<NetMsg>) {
             .map(|b| WorkerLive {
                 endpoint: b.name.clone(),
                 mac: b.mac.clone(),
-                fw: b.fw.clone(),
+                fw: if b.download_mode {
+                    "download-mode".into()
+                } else {
+                    b.fw.clone()
+                },
                 connected: true,
                 hashrate_hs: b.hashrate_hs,
                 hashes: b.hashes,
@@ -5817,6 +5824,7 @@ fn mine_worker(cmd_rx: Receiver<NetCmd>, msg_tx: Sender<NetMsg>) {
                 hashes: 0,
                 mining: false,
                 status_fails: 0,
+                download_mode: false,
             },
             true,
         ))
@@ -5858,9 +5866,31 @@ fn mine_worker(cmd_rx: Receiver<NetCmd>, msg_tx: Sender<NetMsg>) {
                 break;
             }
         }
-        // Require a real pong at every baud — never "link" a silent / wrong COM.
+        // Prefer firmware pong; if silent, accept ESP ROM download mode (BOOT held / blank).
         if !saw {
-            return Err(format!("no pong @ {baud} on {name}"));
+            if let BoardIo::Serial(ref mut p) = port {
+                if probe_esp_download_mode(p.as_mut()) {
+                    return Ok((
+                        UsbBoard {
+                            name: name.to_string(),
+                            port,
+                            rx,
+                            legacy_job: false,
+                            fw: "download-mode".into(),
+                            mac: String::new(),
+                            hashrate_hs: 0.0,
+                            hashes: 0,
+                            mining: false,
+                            status_fails: 0,
+                            download_mode: true,
+                        },
+                        false,
+                    ));
+                }
+            }
+            return Err(format!(
+                "no pong @ {baud} on {name} (hold BOOT + tap RESET if flashing a blank board)"
+            ));
         }
         Ok((
             UsbBoard {
@@ -5874,12 +5904,24 @@ fn mine_worker(cmd_rx: Receiver<NetCmd>, msg_tx: Sender<NetMsg>) {
                 hashes: 0,
                 mining: false,
                 status_fails: 0,
+                download_mode: false,
             },
             true,
         ))
     }
 
     fn configure_board(board: &mut UsbBoard, msg_tx: &Sender<NetMsg>) {
+        if board.download_mode {
+            log_msg(
+                msg_tx,
+                LogKind::Usb,
+                format!(
+                    "{} in download mode (BOOT held / blank) — use Update board to flash; mining needs firmware",
+                    board.name
+                ),
+            );
+            return;
+        }
         if let Ok(line) = usb_cmd(&mut board.port, &mut board.rx, "cmp config") {
             if let Ok(cfg) = parse_cmp_config(&line) {
                 board.legacy_job = !fw_supports_split_jobs(&cfg.fw);
@@ -5934,7 +5976,7 @@ fn mine_worker(cmd_rx: Receiver<NetCmd>, msg_tx: Sender<NetMsg>) {
         msg_tx: &Sender<NetMsg>,
         resume_mining: bool,
     ) {
-        if !resume_mining {
+        if board.download_mode || !resume_mining {
             return;
         }
         let mut legacy = board.legacy_job;
@@ -6047,15 +6089,23 @@ fn mine_worker(cmd_rx: Receiver<NetCmd>, msg_tx: Sender<NetMsg>) {
                     log_msg(&msg_tx, LogKind::Usb, format!("Opening {name} (460800→115200)"));
                     match open_board(&name) {
                         Ok((mut board, saw)) => {
+                            let dl = board.download_mode;
                             configure_board(&mut board, &msg_tx);
                             arm_mining_if_needed(&mut board, &msg_tx, mining);
                             boards.push(board);
                             publish_live(&msg_tx, &boards);
-                            let _ = msg_tx.send(NetMsg::Action(Ok(format!(
-                                "USB open {name}{} · {} board(s)",
-                                if saw { " (pong)" } else { "" },
-                                boards.len()
-                            ))));
+                            let _ = msg_tx.send(NetMsg::Action(Ok(if dl {
+                                format!(
+                                    "USB open {name} (download mode / BOOT) · flash with Update board · {} board(s)",
+                                    boards.len()
+                                )
+                            } else {
+                                format!(
+                                    "USB open {name}{} · {} board(s)",
+                                    if saw { " (pong)" } else { "" },
+                                    boards.len()
+                                )
+                            })));
                         }
                         Err(e) => {
                             publish_live(&msg_tx, &boards);
@@ -6074,6 +6124,7 @@ fn mine_worker(cmd_rx: Receiver<NetCmd>, msg_tx: Sender<NetMsg>) {
                     log_msg(&msg_tx, LogKind::Usb, format!("Connecting worker {name}"));
                     match open_board(&name) {
                         Ok((mut board, saw)) => {
+                            let dl = board.download_mode;
                             configure_board(&mut board, &msg_tx);
                             // Same eFuse MAC already linked on another COM — replace that slot.
                             if mac_is_stable(&board.mac) {
@@ -6095,11 +6146,18 @@ fn mine_worker(cmd_rx: Receiver<NetCmd>, msg_tx: Sender<NetMsg>) {
                             arm_mining_if_needed(&mut board, &msg_tx, mining);
                             boards.push(board);
                             publish_live(&msg_tx, &boards);
-                            let _ = msg_tx.send(NetMsg::Action(Ok(format!(
-                                "Worker linked {name}{} · {} total",
-                                if saw { " (pong)" } else { "" },
-                                boards.len()
-                            ))));
+                            let _ = msg_tx.send(NetMsg::Action(Ok(if dl {
+                                format!(
+                                    "Worker linked {name} (download mode / BOOT) · Update board to flash · {} total",
+                                    boards.len()
+                                )
+                            } else {
+                                format!(
+                                    "Worker linked {name}{} · {} total",
+                                    if saw { " (pong)" } else { "" },
+                                    boards.len()
+                                )
+                            })));
                         }
                         Err(e) => {
                             let _ = msg_tx.send(NetMsg::Action(Err(format!(
@@ -6332,6 +6390,10 @@ fn mine_worker(cmd_rx: Receiver<NetCmd>, msg_tx: Sender<NetMsg>) {
                     let mut last_status: Option<StatusJson> = None;
                     let mut drop_names: Vec<String> = Vec::new();
                     for b in boards.iter_mut() {
+                        if b.download_mode {
+                            // ROM bootloader — no cmp; keep linked for Update board only.
+                            continue;
+                        }
                         harvest_shares(
                             &mut b.port,
                             &mut b.rx,
