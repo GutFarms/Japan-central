@@ -34,8 +34,8 @@ static volatile bool g_jobLoaded = false;
 static volatile bool g_mining = false;
 static std::atomic<uint64_t> g_hashCounter{0};
 static volatile uint64_t g_shareCounter = 0;
-// Small ring so dual-lane hits are not overwritten before USB/ESP-NOW emit (NerdMiner queues work).
-static constexpr size_t kShareQ = 4;
+// Ring so dual-lane hits survive USB/ESP-NOW latency and mid-job flushes.
+static constexpr size_t kShareQ = 16;
 struct ShareSlot {
   uint32_t nonce = 0;
   char job[48]{};
@@ -63,6 +63,7 @@ static char g_shaLabel[12] = "SW";
 static char g_macStr[18] = "";
 static bool g_labelsReady = false;
 
+static void flushShareQueue();
 static void applyCpu(uint8_t mhz) {
   mhz = g_cfg.normalizeCpu(mhz);
   if (mhz < 240) mhz = 240;
@@ -193,7 +194,11 @@ static bool applyConfig(AppConfig& updated, bool& reboot) {
 }
 
 static void onJob(const UsbJob& job) {
-  // Drop shares from the previous header — NerdMiner invalidates on new work.
+  // Emit queued hits for the previous header BEFORE invalidating the ring.
+  // serviceCompanion used to poll (apply job → clear Q) then emit — so every
+  // notify wiped in-flight CMPSHAREs and pool hashrate lagged the LCD (e.g. 71
+  // vs 206 kH/s) while boards kept hashing.
+  flushShareQueue();
   portENTER_CRITICAL(&g_mux);
   for (size_t i = 0; i < kShareQ; i++) g_shareQ[i].used = false;
   portEXIT_CRITICAL(&g_mux);
@@ -214,6 +219,7 @@ static void onJob(const UsbJob& job) {
 }
 
 static void onStop() {
+  flushShareQueue();
   portENTER_CRITICAL(&g_mux);
   for (size_t i = 0; i < kShareQ; i++) g_shareQ[i].used = false;
   portEXIT_CRITICAL(&g_mux);
@@ -259,32 +265,7 @@ static void noteShare(uint32_t nonce) {
   portEXIT_CRITICAL(&g_mux);
 }
 
-static void serviceCompanion() {
-  // Snapshot often enough for live H/s without starving USB replies.
-  uint32_t now = millis();
-  const uint32_t snapMs = g_mining ? 320u : 220u;
-  if (now - g_lastSnapMs >= snapMs) {
-    fillSnap();
-    g_lastSnapMs = now;
-  }
-  auto onApply = applyConfig;
-  auto job = onJob;
-  auto stop = onStop;
-  auto stats = onStats;
-  g_cmp.poll(g_cfg, g_snap, onApply, &g_net, job, stop, stats);
-  g_wifi.poll(g_cmp, g_cfg, g_snap, onApply, &g_net, job, stop, stats);
-  g_mesh.poll(g_cmp, g_cfg, g_snap, onApply, &g_net, job, stop, stats);
-  // Connectivity mesh: leaf boards without a SoftAP TCP Companion mirror shares
-  // to the USB-linked root over ESP-NOW (does not multiply hashrate).
-  if (!g_mesh.isRoot() && g_mesh.hasRootPeer() && !g_wifi.tcpConnected()) {
-    g_cmp.setShareMirror(&g_mesh.leafOut());
-  }
-  // Re-balance core-0 when leaf peers appear/disappear on a hashing root.
-  syncMinePriorities();
-  if (g_net.fresh) {
-    g_net.fresh = false;
-    if (!g_mining) g_snap.netTicker = g_net.ticker;
-  }
+static void flushShareQueue() {
   for (;;) {
     PendingShare s;
     bool got = false;
@@ -305,6 +286,38 @@ static void serviceCompanion() {
     if (!got) break;
     g_cmp.emitShare(s);
   }
+}
+
+static void serviceCompanion() {
+  // Snapshot often enough for live H/s without starving USB replies.
+  uint32_t now = millis();
+  const uint32_t snapMs = g_mining ? 320u : 220u;
+  if (now - g_lastSnapMs >= snapMs) {
+    fillSnap();
+    g_lastSnapMs = now;
+  }
+  auto onApply = applyConfig;
+  auto job = onJob;
+  auto stop = onStop;
+  auto stats = onStats;
+  // Drain hits before poll so a cmp ja/job cannot wipe them inside onJob
+  // without a prior emit (onJob also flushes; this covers the common path).
+  flushShareQueue();
+  g_cmp.poll(g_cfg, g_snap, onApply, &g_net, job, stop, stats);
+  g_wifi.poll(g_cmp, g_cfg, g_snap, onApply, &g_net, job, stop, stats);
+  g_mesh.poll(g_cmp, g_cfg, g_snap, onApply, &g_net, job, stop, stats);
+  // Connectivity mesh: leaf boards without a SoftAP TCP Companion mirror shares
+  // to the USB-linked root over ESP-NOW (does not multiply hashrate).
+  if (!g_mesh.isRoot() && g_mesh.hasRootPeer() && !g_wifi.tcpConnected()) {
+    g_cmp.setShareMirror(&g_mesh.leafOut());
+  }
+  // Re-balance core-0 when leaf peers appear/disappear on a hashing root.
+  syncMinePriorities();
+  if (g_net.fresh) {
+    g_net.fresh = false;
+    if (!g_mining) g_snap.netTicker = g_net.ticker;
+  }
+  flushShareQueue();
 }
 
 static void syncMinePriorities() {

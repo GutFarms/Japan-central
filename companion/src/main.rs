@@ -1838,6 +1838,22 @@ impl CompanionApp {
         }
     }
 
+    /// Pool-inferred hashrate from accepted shares (same formula pools use).
+    fn pool_estimated_hs(&self) -> f64 {
+        if !self.stratum_live.authorized {
+            return 0.0;
+        }
+        let Some(started) = self.session_started else {
+            return 0.0;
+        };
+        let diff = self.stratum_live.difficulty;
+        if !(diff > 0.0) || self.session_accepted == 0 {
+            return 0.0;
+        }
+        let secs = started.elapsed().as_secs_f64().max(15.0);
+        self.session_accepted as f64 * diff * 4_294_967_296.0 / secs
+    }
+
     fn luck_label(&self) -> String {
         if !self.stratum_live.authorized {
             return "—".into();
@@ -3748,6 +3764,16 @@ impl CompanionApp {
                     self.status.hashrate_hs
                 };
                 mini_stat(ui, "Fleet", &format_hashrate(rate_hs));
+                let pool_hs = self.pool_estimated_hs();
+                mini_stat(
+                    ui,
+                    "Pool≈",
+                    &if pool_hs > 0.0 {
+                        format_hashrate(pool_hs)
+                    } else {
+                        "—".into()
+                    },
+                );
                 mini_stat(ui, "Total Hash", &format_hash_count(self.status.hashes));
                 let sha = self.sha_path_display();
                 mini_stat(ui, "SHA", &sha);
@@ -8653,6 +8679,20 @@ Power a 2nd board nearby with wall/power-bank only (no PC cable)."
                 }
                 // Fleet: one unique extranonce2 per USB/mesh worker (NerdMiner/multi-worker style).
                 let fleet_n = boards.len().saturating_add(mesh.len()).max(1);
+                // Pull any CMPSHARE already sitting in USB RX before we push a new
+                // header (firmware also flushes its ring in onJob as of 0.8.127).
+                if client.has_pending_job() {
+                    for b in boards.iter_mut() {
+                        harvest_shares(
+                            &mut b.port,
+                            &mut b.rx,
+                            Some(client),
+                            &recent_jobs,
+                            &mut held_board_shares,
+                            &msg_tx,
+                        );
+                    }
+                }
                 let jobs = client.take_job_batch(fleet_n);
                 if !jobs.is_empty() {
                     let mut pushed = 0usize;
