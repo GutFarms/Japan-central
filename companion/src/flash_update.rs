@@ -2,7 +2,7 @@
 //! Prefers bundled / auto-downloaded `espflash`; optional Python `esptool` fallback.
 
 use std::io::{BufReader, Read, Write};
-use std::net::TcpStream;
+use std::net::{TcpStream, ToSocketAddrs};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -317,7 +317,12 @@ pub fn push_firmware_ota(
         bytes.len() / 1024
     ));
 
-    let mut stream = TcpStream::connect(endpoint)
+    let addr = endpoint
+        .to_socket_addrs()
+        .map_err(|e| format!("resolve {endpoint}: {e}"))?
+        .next()
+        .ok_or_else(|| format!("no address for {endpoint}"))?;
+    let mut stream = TcpStream::connect_timeout(&addr, Duration::from_secs(5))
         .map_err(|e| format!("connect {endpoint}: {e}"))?;
     stream
         .set_read_timeout(Some(Duration::from_millis(500)))
@@ -772,6 +777,7 @@ pub const REPO_NAME: &str = "Japan-central";
 /// Branches probed for Companion/firmware updates (newest VERSION wins).
 /// Tip first — apps still on older builds may only hit the legacy CYD branch.
 pub const REPO_REFS: &[&str] = &[
+    "cursor/project-debug-pass-e801",
     "cursor/share-stratum-cohesion-e801",
     "cursor/wifi-ota-push-e801",
     "cursor/esp32-mesh-connectivity-e801",
@@ -779,6 +785,8 @@ pub const REPO_REFS: &[&str] = &[
     "master",
     "main",
 ];
+/// First tip ref — app update early-exit matches this (not a hardcoded legacy name).
+pub const TIP_REF: &str = REPO_REFS[0];
 
 /// URL-encode a git ref for GitHub API `?ref=` / path segments.
 pub fn urlencode_ref(ref_name: &str) -> String {

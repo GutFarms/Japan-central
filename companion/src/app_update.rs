@@ -10,7 +10,9 @@ use std::time::{Duration, Instant};
 
 use sha2::{Digest, Sha256};
 
-use crate::flash_update::{normalize_fw_version, urlencode_ref, COMPANION_UA, REPO_NAME, REPO_OWNER, REPO_REFS};
+use crate::flash_update::{
+    normalize_fw_version, urlencode_ref, COMPANION_UA, REPO_NAME, REPO_OWNER, REPO_REFS, TIP_REF,
+};
 
 #[derive(Clone, Debug)]
 pub struct AppRemoteInfo {
@@ -229,9 +231,9 @@ fn fetch_download_checksums(
                     Some((prev_ver, _)) if is_newer(&ver, &prev_ver) => Some((ver, map)),
                     Some(prev) => Some(prev),
                 };
-                // Tip mesh Contents API is authoritative — stop after first good tip hit.
+                // Tip Contents API is authoritative — stop after first good tip hit.
                 if url.contains("api.github.com")
-                    && url.contains("esp32-mesh-connectivity")
+                    && url.contains(TIP_REF)
                     && best.is_some()
                 {
                     break;
@@ -392,7 +394,7 @@ pub fn check_app_update_ex(
                         Some(prev) if is_newer(&remote, &prev) => Some(remote.clone()),
                         Some(prev) => Some(prev),
                     };
-                    if url.contains("esp32-mesh-connectivity") {
+                    if url.contains(TIP_REF) {
                         tip_hits += 1;
                         if tip_hits >= 2 {
                             break;
