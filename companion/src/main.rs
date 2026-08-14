@@ -4163,30 +4163,30 @@ impl CompanionApp {
                                     true,
                                 );
                             } else {
-                            // Prefer USB for the same MAC when available.
-                            let prefer_usb = self
-                                .discovered_workers
-                                .iter()
-                                .find(|d| {
-                                    d.kind == WorkerKind::Usb
-                                        && mac_is_stable(&d.mac)
-                                        && mac_is_stable(&w.mac)
-                                        && normalize_mac(&d.mac) == normalize_mac(&w.mac)
-                                        && !self.worker_already_linked(&d.endpoint)
-                                })
-                                .map(|d| d.endpoint.clone());
-                            if let Some(usb_ep) = prefer_usb {
-                                self.push_log(
-                                    LogKind::Usb,
-                                    format!(
-                                        "Prefer USB {usb_ep} over Wi‑Fi {} (same MAC {})",
-                                        w.endpoint, w.mac
-                                    ),
-                                );
-                                self.queue_connect_usb(usb_ep, "Wi‑Fi row → USB");
-                            } else {
-                                self.queue_connect_wifi(w.endpoint.clone(), "Find workers");
-                            }
+                                // Prefer USB for the same MAC when available.
+                                let prefer_usb = self
+                                    .discovered_workers
+                                    .iter()
+                                    .find(|d| {
+                                        d.kind == WorkerKind::Usb
+                                            && mac_is_stable(&d.mac)
+                                            && mac_is_stable(&w.mac)
+                                            && normalize_mac(&d.mac) == normalize_mac(&w.mac)
+                                            && !self.worker_already_linked(&d.endpoint)
+                                    })
+                                    .map(|d| d.endpoint.clone());
+                                if let Some(usb_ep) = prefer_usb {
+                                    self.push_log(
+                                        LogKind::Usb,
+                                        format!(
+                                            "Prefer USB {usb_ep} over Wi‑Fi {} (same MAC {})",
+                                            w.endpoint, w.mac
+                                        ),
+                                    );
+                                    self.queue_connect_usb(usb_ep, "Wi‑Fi row → USB");
+                                } else {
+                                    self.queue_connect_wifi(w.endpoint.clone(), "Find workers");
+                                }
                             }
                         }
                     }
