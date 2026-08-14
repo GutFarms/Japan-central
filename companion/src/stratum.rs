@@ -882,6 +882,8 @@ impl StratumClient {
         if since.elapsed() >= Duration::from_secs(3) {
             self.job_wait_since = None;
             self.difficulty = self.suggest_difficulty;
+            // Latch so later mining.notify is not held another 3s each time.
+            self.have_difficulty = true;
             self.push_recent(format!(
                 "← no set_difficulty after 3s — using suggest_difficulty={:.6}",
                 self.difficulty
@@ -1093,7 +1095,8 @@ fn result_as_bool(result: Option<&Value>) -> Option<bool> {
             "false" | "0" | "rejected" => Some(false),
             _ => None,
         },
-        Some(Value::Null) => Some(false),
+        // Null result with no error is treated as missing (caller may accept).
+        Some(Value::Null) => None,
         Some(Value::Number(n)) => Some(n.as_u64().unwrap_or(0) != 0),
         _ => None,
     }
@@ -1355,6 +1358,16 @@ mod tests {
             "timeout must apply suggest_difficulty, got {}",
             c.difficulty()
         );
+        assert!(
+            c.have_difficulty,
+            "timeout must latch have_difficulty so later notify is not re-held"
+        );
         assert!(c.take_job().is_some());
+        // Next notify must emit immediately (not wait another 3s).
+        c.handle_line(&notify("xyz", false)).unwrap();
+        assert!(
+            c.take_job().is_some(),
+            "after suggest latch, notify must emit a job without another hold"
+        );
     }
 }

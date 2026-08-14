@@ -303,19 +303,22 @@ static void serviceCompanion() {
   // Drain hits before poll so a cmp ja/job cannot wipe them inside onJob
   // without a prior emit (onJob also flushes; this covers the common path).
   flushShareQueue();
-  // Mesh leaf share mirror MUST be set before wifi/mesh poll — onJob flush
-  // during poll otherwise emits CMPSHARE with no mirror (Serial only, no root).
-  if (!g_mesh.isRoot() && g_mesh.hasRootPeer() && !g_wifi.tcpConnected()) {
-    g_cmp.setShareMirror(&g_mesh.leafOut());
-  } else if (!g_wifi.tcpConnected()) {
+  // Mesh leaf: always keep ESP-NOW mirror2 so SoftAP/TCP clients cannot steal shares.
+  if (!g_mesh.isRoot() && g_mesh.hasRootPeer()) {
+    g_cmp.setShareMirror2(&g_mesh.leafOut());
+  } else {
+    g_cmp.setShareMirror2(nullptr);
+  }
+  // Primary mirror: Companion TCP when linked; else cleared (USB Serial still emits).
+  if (!g_wifi.tcpConnected()) {
     g_cmp.setShareMirror(nullptr);
   }
   g_cmp.poll(g_cfg, g_snap, onApply, &g_net, job, stop, stats);
   g_wifi.poll(g_cmp, g_cfg, g_snap, onApply, &g_net, job, stop, stats);
   g_mesh.poll(g_cmp, g_cfg, g_snap, onApply, &g_net, job, stop, stats);
-  // Re-assert leaf mirror after wifi poll (TCP path may have temporarily owned it).
-  if (!g_mesh.isRoot() && g_mesh.hasRootPeer() && !g_wifi.tcpConnected()) {
-    g_cmp.setShareMirror(&g_mesh.leafOut());
+  // Re-assert leaf mirror2 after polls (TCP may have briefly owned primary mirror).
+  if (!g_mesh.isRoot() && g_mesh.hasRootPeer()) {
+    g_cmp.setShareMirror2(&g_mesh.leafOut());
   }
   // Re-balance core-0 when leaf peers appear/disappear on a hashing root.
   syncMinePriorities();

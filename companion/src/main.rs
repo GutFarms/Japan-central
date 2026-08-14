@@ -10797,12 +10797,28 @@ Power a 2nd board nearby with wall/power-bank only (no PC cable)."
         }
 
         // Board shares after pool drain — submit ASAP without delaying stratum poll/jobs.
-        if !boards.is_empty() {
+        // SoftAP setup net has no uplink: hold in RX / held queue, do not submit into a dead TCP.
+        let softap_no_uplink = softap_setup_client_ipv4()
+            .map(|ip| ip.starts_with("10.88.88."))
+            .unwrap_or(false);
+        if !boards.is_empty() && !softap_no_uplink {
             for b in boards.iter_mut() {
                 harvest_shares(
                     &mut b.port,
                     &mut b.rx,
                     stratum.as_mut(),
+                    &recent_jobs,
+                    &mut held_board_shares,
+                    &msg_tx,
+                );
+            }
+        } else if !boards.is_empty() && softap_no_uplink {
+            // Drain CMPSHARE into the hold queue without touching the pool socket.
+            for b in boards.iter_mut() {
+                harvest_shares(
+                    &mut b.port,
+                    &mut b.rx,
+                    None,
                     &recent_jobs,
                     &mut held_board_shares,
                     &msg_tx,

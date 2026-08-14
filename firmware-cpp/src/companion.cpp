@@ -10,9 +10,9 @@
 extern "C" float cyd_run_bench(uint32_t n, bool tune);
 
 #if CYD_D0_BUILD
-static constexpr const char* kFwTag = "0.8.146-sha256-d0";
+static constexpr const char* kFwTag = "0.8.147-sha256-d0";
 #else
-static constexpr const char* kFwTag = "0.8.146-sha256";
+static constexpr const char* kFwTag = "0.8.147-sha256";
 #endif
 
 void CompanionLink::begin(uint32_t baud) {
@@ -27,6 +27,8 @@ void CompanionLink::begin(uint32_t baud) {
   otaRemain_ = 0;
   otaActive_ = false;
   out_ = &Serial;
+  shareMirror_ = nullptr;
+  shareMirror2_ = nullptr;
   activeLineBuf_ = lineBuf_;
   activeLineLen_ = &lineLen_;
 }
@@ -148,6 +150,7 @@ void CompanionLink::emitShare(const PendingShare& share) {
   };
   writeShare(Serial);
   if (shareMirror_) writeShare(*shareMirror_);
+  if (shareMirror2_ && shareMirror2_ != shareMirror_) writeShare(*shareMirror2_);
 }
 
 void CompanionLink::handleLine(const String& line, AppConfig& cfg, const MinerSnapshot& snap,

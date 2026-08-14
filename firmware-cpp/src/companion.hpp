@@ -67,6 +67,9 @@ class CompanionLink {
 
   void begin(uint32_t baud = 460800);
   void setShareMirror(Print* mirror) { shareMirror_ = mirror; }
+  /// Second sink (mesh leaf ESP-NOW) — used with TCP mirror so SoftAP clients
+  /// cannot steal shares from the USB root path.
+  void setShareMirror2(Print* mirror) { shareMirror2_ = mirror; }
   void setWifiApply(WifiFn fn) { onWifi_ = std::move(fn); }
 
   bool poll(AppConfig& cfg, const MinerSnapshot& snap, ApplyFn onApply, NetFeed* net, JobFn onJob,
@@ -96,6 +99,7 @@ class CompanionLink {
 
   Print* out_ = &Serial;
   Print* shareMirror_ = nullptr;
+  Print* shareMirror2_ = nullptr;
   WifiFn onWifi_;
 
   char* activeLineBuf_ = lineBuf_;
