@@ -739,6 +739,8 @@ struct CompanionApp {
     port_rescans_done: u8,
     /// Periodic COM re-enum so newly plugged USB adapters appear without Refresh.
     last_port_refresh: Instant,
+    /// Last Ports log fingerprint (count|selected|names) — suppress identical spam.
+    last_ports_log_sig: Option<String>,
     session_started: Option<Instant>,
     session_hash_start: u64,
     share_history: VecDeque<ShareRow>,
@@ -951,6 +953,7 @@ impl CompanionApp {
             boot_at: Instant::now(),
             port_rescans_done: 0,
             last_port_refresh: Instant::now(),
+            last_ports_log_sig: None,
             session_started: None,
             session_hash_start: 0,
             share_history: VecDeque::new(),
@@ -5498,17 +5501,27 @@ impl App for CompanionApp {
                     let n = p.len();
                     self.ports = p;
                     self.apply_best_com_port(false);
-                    self.push_log(
-                        LogKind::Usb,
-                        format!(
-                            "Serial ports: {n} reported · selected {}",
-                            if self.com_port.is_empty() {
-                                "—".into()
-                            } else {
-                                self.com_port.clone()
-                            }
-                        ),
+                    let sel = if self.com_port.is_empty() {
+                        "—"
+                    } else {
+                        self.com_port.as_str()
+                    };
+                    // Mine-worker re-enums COM often — only log when list/selection changes.
+                    let sig = format!(
+                        "{n}|{sel}|{}",
+                        self.ports
+                            .iter()
+                            .map(|x| x.name.as_str())
+                            .collect::<Vec<_>>()
+                            .join(",")
                     );
+                    if self.last_ports_log_sig.as_deref() != Some(sig.as_str()) {
+                        self.last_ports_log_sig = Some(sig);
+                        self.push_log(
+                            LogKind::Usb,
+                            format!("Serial ports: {n} reported · selected {sel}"),
+                        );
+                    }
                     self.maybe_auto_connect_usb();
                 }
                 NetMsg::Action(Ok(s)) => {
@@ -8291,11 +8304,24 @@ Power a 2nd board nearby with wall/power-bank only (no PC cable)."
                     );
                 }
             } else if !list_only {
-                log_msg(
-                    msg_tx,
-                    LogKind::Usb,
-                    format!("{gname}: mesh peers {} · {line}", peers.join(",")),
-                );
+                // Rate-limit identical peer-list lines (CMPMESH polls every few seconds).
+                static LAST_MESH_LOG: std::sync::Mutex<Option<(String, Instant)>> =
+                    std::sync::Mutex::new(None);
+                let summary = format!("{gname}: mesh peers {} · {line}", peers.join(","));
+                let mut due = true;
+                if let Ok(mut g) = LAST_MESH_LOG.lock() {
+                    if let Some((prev, t)) = g.as_ref() {
+                        if prev == &summary && t.elapsed() < Duration::from_secs(20) {
+                            due = false;
+                        }
+                    }
+                    if due {
+                        *g = Some((summary.clone(), Instant::now()));
+                    }
+                }
+                if due {
+                    log_msg(msg_tx, LogKind::Usb, summary);
+                }
             }
             for mac in peers {
                 // Never mesh-proxy a board that already has USB/Wi‑Fi cmp (incl. gateway).
@@ -8338,6 +8364,12 @@ Power a 2nd board nearby with wall/power-bank only (no PC cable)."
         });
         // Always register new peers so the mine loop can give unique-en2 jobs.
         // list_only skips via config/status chrome (those starve stratum).
+        // Peers still in CMPMESH: clear via-status fail counters (hello ≠ unicast).
+        for (_, mac) in &seen {
+            if let Some(m) = mesh.iter_mut().find(|m| m.mac == *mac) {
+                m.status_fails = 0;
+            }
+        }
         for (gname, mac) in seen {
             if mesh.iter().any(|m| m.mac == mac) {
                 continue;
@@ -8442,7 +8474,8 @@ Power a 2nd board nearby with wall/power-bank only (no PC cable)."
         }
         for part in encode_job_parts(job) {
             let rest = part.strip_prefix("cmp ").unwrap_or(part.as_str());
-            let reply = mesh_via_cmd_ex(boards, &mb.gateway, &mb.mac, rest, pump, 1)?;
+            // Two soft tries: ESP-NOW often flakes once after channel hop / peer add.
+            let reply = mesh_via_cmd_ex(boards, &mb.gateway, &mb.mac, rest, pump, 2)?;
             if !(reply.starts_with("CMPACK") || reply.starts_with("CMP ok")) {
                 log_msg(
                     msg_tx,
@@ -8810,6 +8843,7 @@ Power a 2nd board nearby with wall/power-bank only (no PC cable)."
     let mut stratum: Option<StratumClient> = None;
     let mut last_mesh_sync = Instant::now() - Duration::from_secs(30);
     let mut last_mesh_via_status = Instant::now() - Duration::from_secs(30);
+    let mut last_ports_enum = Instant::now() - Duration::from_secs(30);
     let mut recent_jobs: VecDeque<WorkJob> = VecDeque::new();
     // Board shares held while the pool socket is down (submit on reconnect).
     let mut held_board_shares: VecDeque<(String, String, String, String)> = VecDeque::new();
@@ -9915,7 +9949,6 @@ Power a 2nd board nearby with wall/power-bank only (no PC cable)."
                         } else {
                             Duration::from_secs(4)
                         };
-                    let mut drop_mesh: Vec<String> = Vec::new();
                     if via_due
                         && !mining
                         && !pool_has_presidency(&stratum, reconnect_at)
@@ -9959,22 +9992,38 @@ Power a 2nd board nearby with wall/power-bank only (no PC cable)."
                                         last_status = Some(st);
                                     }
                                     Err(_) => {
+                                        // Via unicast can fail while ESP-NOW hellos still work.
+                                        // Do not drop — sync_mesh_peers removes peers that leave CMPMESH.
                                         m.status_fails = m.status_fails.saturating_add(1);
                                         total_hs += m.hashrate_hs;
                                         total_hashes = total_hashes.saturating_add(m.hashes);
                                         any_mining |= m.mining || mining;
-                                        if m.status_fails >= 8 {
-                                            drop_mesh.push(m.name.clone());
+                                        if m.status_fails == 1 || m.status_fails % 8 == 0 {
+                                            log_msg(
+                                                &msg_tx,
+                                                LogKind::Warn,
+                                                format!(
+                                                    "Mesh {} via status parse failed (kept; still in CMPMESH?)",
+                                                    m.mac
+                                                ),
+                                            );
                                         }
                                     }
                                 },
-                                Err(_) => {
+                                Err(e) => {
                                     m.status_fails = m.status_fails.saturating_add(1);
                                     total_hs += m.hashrate_hs;
                                     total_hashes = total_hashes.saturating_add(m.hashes);
                                     any_mining |= m.mining || mining;
-                                    if m.status_fails >= 8 {
-                                        drop_mesh.push(m.name.clone());
+                                    if m.status_fails == 1 || m.status_fails % 8 == 0 {
+                                        log_msg(
+                                            &msg_tx,
+                                            LogKind::Warn,
+                                            format!(
+                                                "Mesh {} via status: {e} (kept while listed in CMPMESH)",
+                                                m.mac
+                                            ),
+                                        );
                                     }
                                 }
                             }
@@ -9985,14 +10034,6 @@ Power a 2nd board nearby with wall/power-bank only (no PC cable)."
                             total_hashes = total_hashes.saturating_add(m.hashes);
                             any_mining |= m.mining || mining;
                         }
-                    }
-                    for name in drop_mesh {
-                        mesh.retain(|m| m.name != name);
-                        log_msg(
-                            &msg_tx,
-                            LogKind::Warn,
-                            format!("Dropped mesh peer {name} after status failures"),
-                        );
                     }
                     for name in drop_names {
                         if let Some(idx) = boards.iter().position(|b| b.name == name) {
@@ -10010,7 +10051,9 @@ Power a 2nd board nearby with wall/power-bank only (no PC cable)."
                         }
                     }
                     // Keep COM combo in sync when boards die from status fails.
-                    if !boards.is_empty() {
+                    // Do not re-enum every status tick — that flooded the UI log ~1 Hz.
+                    if !boards.is_empty() && last_ports_enum.elapsed() >= Duration::from_secs(5) {
+                        last_ports_enum = Instant::now();
                         let _ = msg_tx.send(NetMsg::Ports(list_serial_ports()));
                     }
                     if boards.is_empty() {
