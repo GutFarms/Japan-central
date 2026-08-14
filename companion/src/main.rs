@@ -1,4 +1,4 @@
-//! Njörðr seas CYD miner — USB / Wi‑Fi / Bluetooth worker control.
+//! Njörðr seas CYD miner — USB / Wi‑Fi worker control.
 //! PC owns stratum; boards hash work received over USB-C or Wi‑Fi TCP.
 
 #![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
@@ -602,9 +602,9 @@ enum NetCmd {
     RebootBoard,
     /// Pull one user-configured API feed in the worker thread.
     PullApiFeed(ApiFeed),
-    /// Probe USB / Bluetooth / Wi‑Fi for CYD companion firmwares.
+    /// Probe USB / Wi‑Fi for CYD companion firmwares.
     ScanWorkers,
-    /// Open an additional CYD USB/BT worker without dropping existing ones.
+    /// Open an additional CYD USB worker without dropping existing ones.
     ConnectWorker(String),
     /// Open a Wi‑Fi CYD worker (`host:port` TCP cmp).
     ConnectWifi(String),
@@ -2171,7 +2171,7 @@ impl CompanionApp {
         }
         // Recent Find-workers / scan hit that answered CMP ok.
         self.discovered_workers.iter().any(|w| {
-            matches!(w.kind, WorkerKind::Usb | WorkerKind::Bluetooth)
+            matches!(w.kind, WorkerKind::Usb)
                 && port_names_match(&w.endpoint, port)
                 && !w.fw.is_empty()
                 && !Self::fw_looks_download_mode(&w.fw)
@@ -3631,7 +3631,7 @@ impl CompanionApp {
         let usb_found: Vec<_> = self
             .discovered_workers
             .iter()
-            .filter(|w| w.kind == WorkerKind::Usb || w.kind == WorkerKind::Bluetooth)
+            .filter(|w| w.kind == WorkerKind::Usb)
             .cloned()
             .collect();
         let wifi_found: Vec<_> = self
@@ -3650,7 +3650,7 @@ impl CompanionApp {
         if !usb_found.is_empty() {
             ui.add_space(8.0);
             ui.label(
-                RichText::new("USB / Bluetooth CYD boards")
+                RichText::new("USB CYD boards")
                     .color(C_MUTED)
                     .size(12.0),
             );
@@ -3660,12 +3660,7 @@ impl CompanionApp {
                     ui.label(
                         RichText::new({
                             let mac = if w.mac.is_empty() { "mac?" } else { &w.mac };
-                            let tag = if w.kind == WorkerKind::Bluetooth {
-                                "BT"
-                            } else {
-                                "USB"
-                            };
-                            format!("{tag} · {mac} · {} · {}", w.endpoint, w.detail)
+                            format!("USB · {mac} · {} · {}", w.endpoint, w.detail)
                         })
                         .color(C_TEXT)
                         .font(mono_ui_font(11.0)),
@@ -4693,7 +4688,7 @@ impl App for CompanionApp {
                                 && self.worker_mac_already_linked(&w.mac));
                         if !skip {
                             match w.kind {
-                                WorkerKind::Usb | WorkerKind::Bluetooth => {
+                                WorkerKind::Usb => {
                                     auto_usb.push(w.endpoint.clone());
                                 }
                                 WorkerKind::Wifi => auto_wifi.push(w.endpoint.clone()),
