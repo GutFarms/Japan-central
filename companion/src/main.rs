@@ -4285,17 +4285,20 @@ impl App for CompanionApp {
                             );
                             ui.add_space(8.0);
                             ui.horizontal(|ui| {
+                                let wiz_com_label = if self.com_port.is_empty() {
+                                    "Select port".to_string()
+                                } else {
+                                    self.ports
+                                        .iter()
+                                        .find(|p| p.name == self.com_port)
+                                        .map(|p| p.label.clone())
+                                        .unwrap_or_else(|| self.com_port.clone())
+                                };
                                 egui::ComboBox::from_id_source("wiz_com")
                                     .width(320.0)
-                                    .selected_text(if self.com_port.is_empty() {
-                                        "Select port".to_string()
-                                    } else {
-                                        self.ports
-                                            .iter()
-                                            .find(|p| p.name == self.com_port)
-                                            .map(|p| p.label.clone())
-                                            .unwrap_or_else(|| self.com_port.clone())
-                                    })
+                                    .selected_text(
+                                        RichText::new(wiz_com_label).color(C_TEXT).size(13.0),
+                                    )
                                     .show_ui(ui, |ui| {
                                         for p in self.ports.clone() {
                                             ui.selectable_value(
