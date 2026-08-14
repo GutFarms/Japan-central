@@ -388,18 +388,10 @@ impl StratumClient {
             return Err("pool requested reconnect".into());
         }
         self.release_held_job_if_ready();
-        // NerdMiner-style: re-suggest difficulty when the TX path has been idle so
-        // solo pools keep the connection / vardiff awake at ESP hashrates.
-        if self.authorized
-            && self.last_tx_at.elapsed() >= Duration::from_secs(50)
-            && self.pending_shares.is_empty()
-        {
-            let diff = if self.have_difficulty {
-                self.difficulty
-            } else {
-                self.suggest_difficulty
-            };
-            let _ = self.send_suggest_difficulty(diff);
+        // Always re-suggest the ESP share difficulty. Echoing the pool's current
+        // (often high) difficulty kept vardiff hard → ~1 accept/h @ 200 kH/s.
+        if self.authorized && self.last_tx_at.elapsed() >= Duration::from_secs(35) {
+            let _ = self.send_suggest_difficulty(self.suggest_difficulty);
         }
         Ok(())
     }
@@ -551,8 +543,7 @@ impl StratumClient {
         if let Some(method) = v.get("method").and_then(|m| m.as_str()) {
             let params = v.get("params").cloned().unwrap_or(Value::Null);
             if method == "mining.set_difficulty" {
-                if let Some(d) = params.as_array().and_then(|a| a.first()).and_then(|x| x.as_f64())
-                {
+                if let Some(d) = parse_difficulty_param(&params) {
                     // Public-pool style solo pools use fractional difficulty (e.g. 0.001).
                     let next = if d > 0.0 { d } else { 1e-12 };
                     let changed = !self.have_difficulty || (next - self.difficulty).abs() > 1e-15;
@@ -566,6 +557,10 @@ impl StratumClient {
                         self.job_wait_since = None;
                         self.emit_job_from_fields();
                     }
+                } else {
+                    self.push_recent(format!(
+                        "← mining.set_difficulty ignored (unparsed params): {params}"
+                    ));
                 }
                 return Ok(());
             }
@@ -868,7 +863,7 @@ impl StratumClient {
     }
 
     /// Emit held notify after set_difficulty, or after a short timeout if the pool
-    /// never sends difficulty (fall back to current default).
+    /// never sends difficulty (fall back to ESP suggest_difficulty — NOT diff=1).
     fn release_held_job_if_ready(&mut self) {
         let Some(since) = self.job_wait_since else {
             return;
@@ -881,11 +876,14 @@ impl StratumClient {
             self.emit_job_from_fields();
             return;
         }
-        // Pools that omit set_difficulty: don't stall forever on warmup only.
+        // Pools that omit set_difficulty: apply NerdMiner-class suggest locally.
+        // Emitting at the connect default (1.0) yielded ~0.2 shares/h @ 200 kH/s
+        // while the LCD still showed full hashrate — companion vs pool looked broken.
         if since.elapsed() >= Duration::from_secs(3) {
             self.job_wait_since = None;
+            self.difficulty = self.suggest_difficulty;
             self.push_recent(format!(
-                "← no set_difficulty after 3s — emitting job at diff={}",
+                "← no set_difficulty after 3s — using suggest_difficulty={:.6}",
                 self.difficulty
             ));
             self.emit_job_from_fields();
@@ -1101,6 +1099,19 @@ fn result_as_bool(result: Option<&Value>) -> Option<bool> {
     }
 }
 
+/// Parse mining.set_difficulty params (array/number/string — pool dialects vary).
+fn parse_difficulty_param(params: &Value) -> Option<f64> {
+    let raw = match params {
+        Value::Array(a) => a.first()?,
+        other => other,
+    };
+    match raw {
+        Value::Number(n) => n.as_f64(),
+        Value::String(s) => s.trim().parse().ok(),
+        _ => None,
+    }
+}
+
 fn parse_endpoint(raw: &str) -> Result<(String, u16), String> {
     let mut s = raw.trim().to_string();
     for pref in ["stratum+ssl://", "stratum+tcp://", "stratum://", "tcp://"] {
@@ -1312,5 +1323,38 @@ mod tests {
         let ev = c.take_share_events();
         assert_eq!(ev.len(), 1);
         assert!(ev[0].accepted);
+    }
+
+    #[test]
+    fn set_difficulty_parses_string_param() {
+        let mut c = primed_client();
+        c.handle_line(r#"{"id":null,"method":"mining.set_difficulty","params":["0.001"]}"#)
+            .unwrap();
+        assert!((c.difficulty() - 0.001).abs() < 1e-12);
+    }
+
+    #[test]
+    fn missing_set_difficulty_uses_suggest_not_one() {
+        let mut c = StratumClient::new("worker".into(), "x".into());
+        c.authorized = true;
+        c.subscribed = true;
+        c.have_difficulty = false;
+        c.difficulty = 1.0; // connect default — must NOT be used for ESP work
+        c.suggest_difficulty = 0.001;
+        c.extranonce1 = vec![0x00, 0x01];
+        c.extranonce2_size = 4;
+        c.job_id = "abc".into();
+        c.version_hex = "20000000".into();
+        c.prevhash_hex = "00".repeat(32);
+        c.nbits_hex = "1a05a1f2".into();
+        c.ntime_hex = "60000000".into();
+        c.job_wait_since = Some(Instant::now() - Duration::from_secs(4));
+        c.release_held_job_if_ready();
+        assert!(
+            (c.difficulty() - 0.001).abs() < 1e-12,
+            "timeout must apply suggest_difficulty, got {}",
+            c.difficulty()
+        );
+        assert!(c.take_job().is_some());
     }
 }
