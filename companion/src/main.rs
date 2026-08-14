@@ -1955,14 +1955,46 @@ impl CompanionApp {
         });
     }
 
-    /// True when the target COM is a live companion board (cmp answering) — can
-    /// push update via auto-reset without holding BOOT.
-    fn board_supports_live_push(&self, port: &str) -> bool {
+    /// ROM/bootloader download mode (BOOT held / blank chip) — not companion firmware.
+    fn fw_looks_download_mode(fw: &str) -> bool {
+        let l = fw.trim().to_ascii_lowercase();
+        l == "download-mode"
+            || l.contains("download")
+            || l.contains("bootloader")
+            || l == "rom"
+    }
+
+    fn board_is_download_mode(&self, port: &str) -> bool {
         self.connected_workers.iter().any(|c| {
-            port_names_match(&c.endpoint, port)
-                && !c.fw.is_empty()
-                && !c.fw.eq_ignore_ascii_case("download-mode")
-                && !c.fw.to_ascii_lowercase().contains("download")
+            port_names_match(&c.endpoint, port) && Self::fw_looks_download_mode(&c.fw)
+        })
+    }
+
+    /// True when the target COM likely has companion firmware answering cmp —
+    /// including older builds with empty/odd fw tags. Used to prefer Push update.
+    fn board_supports_live_push(&self, port: &str) -> bool {
+        if self.board_is_download_mode(port) {
+            return false;
+        }
+        // Linked worker on this COM (old firmware may leave fw blank — still pushable).
+        if self.connected_workers.iter().any(|c| {
+            port_names_match(&c.endpoint, port) && !Self::fw_looks_download_mode(&c.fw)
+        }) {
+            return true;
+        }
+        // Primary USB session on this COM — cmp already succeeded to open.
+        if self.usb_open
+            && port_names_match(&self.com_port, port)
+            && !Self::fw_looks_download_mode(&self.fw_label)
+        {
+            return true;
+        }
+        // Recent Find-workers / scan hit that answered CMP ok.
+        self.discovered_workers.iter().any(|w| {
+            matches!(w.kind, WorkerKind::Usb | WorkerKind::Bluetooth)
+                && port_names_match(&w.endpoint, port)
+                && !w.fw.is_empty()
+                && !Self::fw_looks_download_mode(&w.fw)
         })
     }
 
@@ -1976,14 +2008,16 @@ impl CompanionApp {
             }
         };
         self.com_port = port.clone();
-        // Push only when the user chose it *and* a live companion board is on this COM.
-        let live_push = prefer_live_push && self.board_supports_live_push(&port);
-        if prefer_live_push && !live_push {
+        // Only refuse Push when we *know* this COM is ROM download-mode.
+        if prefer_live_push && self.board_is_download_mode(&port) {
             self.last_error =
-                "Push update needs a linked companion board on this COM — use Flash (BOOT) for blank boards."
+                "This COM is in download mode (BOOT held / blank) — use Flash (BOOT), then Ready."
                     .into();
             return;
         }
+        // Honor the user's Push choice even if detection is uncertain (old fw / not linked).
+        // flash_update falls back to BOOT Ready if auto-reset fails.
+        let live_push = prefer_live_push;
         if self.mining {
             self.stop_mine();
         }
@@ -4711,7 +4745,11 @@ impl App for CompanionApp {
         }
 
         if self.update_confirm {
+            let download_only = self.board_is_download_mode(&self.com_port);
             let can_push = self.board_supports_live_push(&self.com_port);
+            // Always offer Push unless we *know* ROM download-mode — old companion
+            // firmware often isn't linked with a perfect fw tag yet.
+            let show_push = !download_only;
             egui::Window::new("Update board")
                 .collapsible(false)
                 .resizable(false)
@@ -4756,10 +4794,18 @@ impl App for CompanionApp {
                         .font(mono_ui_font(11.0)),
                     );
                     ui.add_space(10.0);
-                    if can_push {
+                    if download_only {
                         ui.label(
                             RichText::new(
-                                "Choose how to write firmware to this linked board:",
+                                "This COM is in download mode (BOOT held / blank chip). Use Flash with BOOT held, then Ready when asked.",
+                            )
+                            .color(C_MUTED)
+                            .size(13.0),
+                        );
+                    } else if can_push {
+                        ui.label(
+                            RichText::new(
+                                "Companion firmware detected on this COM (including older builds).",
                             )
                             .color(C_TEXT)
                             .size(13.0),
@@ -4767,7 +4813,7 @@ impl App for CompanionApp {
                         ui.add_space(6.0);
                         ui.label(
                             RichText::new(
-                                "· Push update — auto-reset, no BOOT (usual for live companion boards)\n· Flash (BOOT) — full rewrite; hold BOOT → tap RESET → Ready when asked",
+                                "· Push update — auto-reset, no BOOT (usual for live boards)\n· Flash (BOOT) — full rewrite; hold BOOT → tap RESET → Ready when asked",
                             )
                             .color(C_MUTED)
                             .size(12.0),
@@ -4775,7 +4821,7 @@ impl App for CompanionApp {
                     } else {
                         ui.label(
                             RichText::new(
-                                "This COM looks blank / download-mode — use Flash with BOOT held, then Ready when asked.",
+                                "Board not linked yet — Connect first if you can. You can still try Push update (works when companion firmware is running), or Flash (BOOT) for blank chips.",
                             )
                             .color(C_MUTED)
                             .size(13.0),
@@ -4791,7 +4837,7 @@ impl App for CompanionApp {
                             .unwrap_or_default(),
                     ) == Some(false);
                     ui.horizontal(|ui| {
-                        if can_push {
+                        if show_push {
                             let push_label = if up_to_date {
                                 "Push anyway"
                             } else {
@@ -4800,23 +4846,18 @@ impl App for CompanionApp {
                             if cta_button(ui, push_label, true, 140.0).clicked() {
                                 self.begin_board_update(true);
                             }
-                            let flash_label = if up_to_date {
-                                "Flash anyway"
-                            } else {
-                                "Flash (BOOT)"
-                            };
+                        }
+                        let flash_label = if up_to_date {
+                            "Flash anyway"
+                        } else {
+                            "Flash (BOOT)"
+                        };
+                        if show_push {
                             if soft_button(ui, flash_label, 130.0).clicked() {
                                 self.begin_board_update(false);
                             }
-                        } else {
-                            let flash_label = if up_to_date {
-                                "Flash anyway"
-                            } else {
-                                "Flash (BOOT)"
-                            };
-                            if cta_button(ui, flash_label, true, 140.0).clicked() {
-                                self.begin_board_update(false);
-                            }
+                        } else if cta_button(ui, flash_label, true, 140.0).clicked() {
+                            self.begin_board_update(false);
                         }
                         if soft_button(ui, "Cancel", 100.0).clicked() {
                             self.update_confirm = false;
