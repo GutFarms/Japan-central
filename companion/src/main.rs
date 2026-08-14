@@ -207,6 +207,17 @@ fn mono_ui_font(size: f32) -> FontId {
     FontId::new(size, FontFamily::Name("JetBrains Mono UI".into()))
 }
 
+fn blue_widget(fill: Color32, stroke: Color32, fg: Color32) -> egui::style::WidgetVisuals {
+    egui::style::WidgetVisuals {
+        bg_fill: fill,
+        weak_bg_fill: fill,
+        bg_stroke: Stroke::new(1.0_f32, stroke),
+        rounding: Rounding::same(16.0),
+        fg_stroke: Stroke::new(1.0_f32, fg),
+        expansion: 0.0,
+    }
+}
+
 fn apply_theme(ctx: &egui::Context) {
     let mut style = (*ctx.style()).clone();
     style.visuals.dark_mode = true;
@@ -214,17 +225,18 @@ fn apply_theme(ctx: &egui::Context) {
     style.visuals.window_fill = C_PANEL;
     style.visuals.extreme_bg_color = Color32::from_rgb(3, 14, 28);
     style.visuals.override_text_color = Some(C_TEXT);
-    style.visuals.widgets.inactive.bg_fill = C_BUBBLE;
-    style.visuals.widgets.hovered.bg_fill = Color32::from_rgb(24, 64, 98);
-    style.visuals.widgets.active.bg_fill = C_LIME;
-    style.visuals.widgets.inactive.fg_stroke = Stroke::new(1.0_f32, C_TEXT);
-    style.visuals.widgets.hovered.fg_stroke = Stroke::new(1.0_f32, C_TEXT);
-    style.visuals.widgets.active.fg_stroke =
-        Stroke::new(1.0_f32, Color32::from_rgb(4, 18, 36));
+    // ComboBox / menus use inactive + open; leave weak_bg_fill unset and egui
+    // can paint a light/white tab — force sea-blue to match SoftBtn.
+    let open_fill = Color32::from_rgb(24, 64, 98);
+    style.visuals.widgets.noninteractive =
+        blue_widget(C_PANEL_SOFT, C_STROKE, C_MUTED);
+    style.visuals.widgets.inactive = blue_widget(C_BUBBLE, C_STROKE, C_TEXT);
+    style.visuals.widgets.hovered = blue_widget(open_fill, C_STROKE, C_TEXT);
+    style.visuals.widgets.active =
+        blue_widget(C_LIME, C_STROKE, Color32::from_rgb(4, 18, 36));
+    style.visuals.widgets.open = blue_widget(open_fill, C_STROKE, C_TEXT);
     style.visuals.selection.bg_fill = Color32::from_rgba_unmultiplied(126, 220, 255, 72);
-    style.visuals.widgets.inactive.rounding = Rounding::same(16.0);
-    style.visuals.widgets.hovered.rounding = Rounding::same(16.0);
-    style.visuals.widgets.active.rounding = Rounding::same(16.0);
+    style.visuals.window_stroke = Stroke::new(1.0_f32, C_STROKE);
     style.spacing.item_spacing = Vec2::new(14.0, 11.0);
     style.spacing.button_padding = Vec2::new(18.0, 11.0);
     style.text_styles.insert(
@@ -2832,17 +2844,18 @@ impl CompanionApp {
                     .font(mono_ui_font(12.0)),
             );
             ui.horizontal(|ui| {
+                let com_label = if self.com_port.is_empty() {
+                    "Select port".to_string()
+                } else {
+                    self.ports
+                        .iter()
+                        .find(|p| p.name == self.com_port)
+                        .map(|p| p.label.clone())
+                        .unwrap_or_else(|| self.com_port.clone())
+                };
                 egui::ComboBox::from_id_source("com")
                     .width(320.0)
-                    .selected_text(if self.com_port.is_empty() {
-                        "Select port".to_string()
-                    } else {
-                        self.ports
-                            .iter()
-                            .find(|p| p.name == self.com_port)
-                            .map(|p| p.label.clone())
-                            .unwrap_or_else(|| self.com_port.clone())
-                    })
+                    .selected_text(RichText::new(com_label).color(C_TEXT).size(13.0))
                     .show_ui(ui, |ui| {
                         if self.ports.is_empty() {
                             ui.label(
