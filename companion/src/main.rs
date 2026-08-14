@@ -464,6 +464,42 @@ struct ConfigJson {
     mode: String,
     #[serde(default)]
     mac: String,
+    #[serde(default)]
+    wifi_en: Option<bool>,
+    #[serde(default)]
+    wifi_ssid: String,
+    #[serde(default)]
+    wifi_mode: String,
+    #[serde(default)]
+    wifi_ip: String,
+    #[serde(default)]
+    wifi_ap: String,
+    #[serde(default)]
+    wifi_tcp: u16,
+}
+
+#[derive(Debug, Clone)]
+enum WifiSetupPhase {
+    Idle,
+    Pushing,
+    /// Waiting for board to join home Wi‑Fi (beacon/mode flip).
+    WaitingSta {
+        since: Instant,
+        endpoint: String,
+        mac: String,
+        home_ssid: String,
+    },
+    Done {
+        ip: String,
+        ssid: String,
+    },
+    Failed(String),
+}
+
+impl Default for WifiSetupPhase {
+    fn default() -> Self {
+        Self::Idle
+    }
 }
 
 #[derive(Clone)]
@@ -608,6 +644,17 @@ enum NetCmd {
     ConnectWorker(String),
     /// Open a Wi‑Fi CYD worker (`host:port` TCP cmp).
     ConnectWifi(String),
+    /// Push home Wi‑Fi credentials to a linked board (NVS SoftAP→STA).
+    SetBoardWifi {
+        endpoint: String,
+        ssid: String,
+        pass: String,
+        enable: bool,
+    },
+    /// Clear STA credentials (board returns to SoftAP-only setup).
+    ClearBoardWifi {
+        endpoint: String,
+    },
     /// Drop one connected USB worker by COM port name.
     DisconnectWorker(String),
 }
@@ -728,6 +775,11 @@ struct CompanionApp {
     worker_scan_busy: bool,
     lan: LanDiscovery,
     board_wifi: BoardWifiDiscovery,
+    /// SoftAP → home Wi‑Fi provisioning UI.
+    wifi_setup_ssid: String,
+    wifi_setup_pass: String,
+    wifi_setup_target: String,
+    wifi_setup_phase: WifiSetupPhase,
     /// Shared snapshot + personal pairing creds for the phone monitor HTTP API (:19285).
     monitor: MonitorHub,
     monitor_addr: String,
@@ -922,6 +974,10 @@ impl CompanionApp {
             worker_scan_busy: false,
             lan: LanDiscovery::start(),
             board_wifi: BoardWifiDiscovery::start(),
+            wifi_setup_ssid: String::new(),
+            wifi_setup_pass: String::new(),
+            wifi_setup_target: String::new(),
+            wifi_setup_phase: WifiSetupPhase::Idle,
             monitor,
             monitor_addr: format!("0.0.0.0:{MONITOR_PORT}"),
             monitor_install_id,
@@ -3729,6 +3785,307 @@ impl CompanionApp {
                     .size(11.0),
             );
         }
+
+        ui.add_space(12.0);
+        self.ui_wifi_setup_panel(ui);
+    }
+
+    fn wifi_setup_target_choices(&self) -> Vec<(String, String)> {
+        let mut out: Vec<(String, String)> = Vec::new();
+        for w in &self.connected_workers {
+            if w.endpoint.starts_with("mesh:") {
+                continue;
+            }
+            let label = if w.mac.is_empty() {
+                format!("{} · linked", w.endpoint)
+            } else {
+                format!("{} · {} · linked", w.endpoint, w.mac)
+            };
+            out.push((w.endpoint.clone(), label));
+        }
+        for w in &self.discovered_workers {
+            if w.kind != WorkerKind::Wifi && w.kind != WorkerKind::Usb {
+                continue;
+            }
+            if out.iter().any(|(e, _)| e == &w.endpoint) {
+                continue;
+            }
+            if self.worker_already_linked(&w.endpoint) || self.worker_mac_already_linked(&w.mac) {
+                continue;
+            }
+            let label = format!("{} · {}", w.endpoint, w.detail);
+            out.push((w.endpoint.clone(), label));
+        }
+        // SoftAP setup targets first so Push picks the broadcasting board.
+        out.sort_by(|a, b| {
+            let a_ap = a.1.to_ascii_lowercase().contains("setup softap");
+            let b_ap = b.1.to_ascii_lowercase().contains("setup softap");
+            b_ap.cmp(&a_ap).then(a.0.cmp(&b.0))
+        });
+        out
+    }
+
+    fn begin_wifi_setup_push(&mut self) {
+        let ssid = self.wifi_setup_ssid.trim().to_string();
+        if ssid.is_empty() {
+            self.last_error = "Enter the home Wi‑Fi SSID.".into();
+            return;
+        }
+        let mut endpoint = self.wifi_setup_target.trim().to_string();
+        if endpoint.is_empty() {
+            if let Some((e, _)) = self.wifi_setup_target_choices().into_iter().next() {
+                endpoint = e;
+                self.wifi_setup_target = endpoint.clone();
+            }
+        }
+        if endpoint.is_empty() {
+            self.last_error =
+                "Link a USB board or join SoftAP Njordr-XXXX / njordrseas, then Find workers."
+                    .into();
+            return;
+        }
+        self.wifi_setup_phase = WifiSetupPhase::Pushing;
+        self.last_ok = format!("Pushing Wi‑Fi “{ssid}” to {endpoint}…");
+        self.last_error.clear();
+        self.push_log(
+            LogKind::Usb,
+            format!("Wi‑Fi setup → save SSID “{ssid}” on {endpoint} (password not logged)"),
+        );
+        let _ = self.cmd_tx.send(NetCmd::SetBoardWifi {
+            endpoint,
+            ssid,
+            pass: self.wifi_setup_pass.clone(),
+            enable: true,
+        });
+    }
+
+    fn on_wifi_setup_pushed(&mut self, endpoint: String, ok: Result<String, String>) {
+        match ok {
+            Ok(msg) => {
+                let mac = self
+                    .connected_workers
+                    .iter()
+                    .find(|w| w.endpoint == endpoint)
+                    .map(|w| w.mac.clone())
+                    .or_else(|| {
+                        self.discovered_workers
+                            .iter()
+                            .find(|w| w.endpoint == endpoint)
+                            .map(|w| w.mac.clone())
+                    })
+                    .unwrap_or_default();
+                let home_ssid = self.wifi_setup_ssid.trim().to_string();
+                self.wifi_setup_phase = WifiSetupPhase::WaitingSta {
+                    since: Instant::now(),
+                    endpoint,
+                    mac,
+                    home_ssid: home_ssid.clone(),
+                };
+                self.last_ok = format!(
+                    "{msg} — waiting for board on “{home_ssid}” (switch PC back to home Wi‑Fi)"
+                );
+                self.push_log(LogKind::Usb, self.last_ok.clone());
+            }
+            Err(e) => {
+                self.wifi_setup_phase = WifiSetupPhase::Failed(e.clone());
+                self.last_error = e;
+            }
+        }
+    }
+
+    fn on_wifi_setup_cleared(&mut self, endpoint: String, ok: Result<String, String>) {
+        match ok {
+            Ok(msg) => {
+                self.wifi_setup_phase = WifiSetupPhase::Idle;
+                self.last_ok = format!("{msg} — board SoftAP Njordr-XXXX / njordrseas");
+                self.last_error.clear();
+                self.push_log(LogKind::Usb, format!("Wi‑Fi cleared on {endpoint}: {msg}"));
+            }
+            Err(e) => {
+                self.wifi_setup_phase = WifiSetupPhase::Failed(e.clone());
+                self.last_error = e;
+            }
+        }
+    }
+
+    fn tick_wifi_setup_wait(&mut self) {
+        let (since, endpoint, mac, home_ssid) = match &self.wifi_setup_phase {
+            WifiSetupPhase::WaitingSta {
+                since,
+                endpoint,
+                mac,
+                home_ssid,
+            } => (
+                *since,
+                endpoint.clone(),
+                mac.clone(),
+                home_ssid.clone(),
+            ),
+            _ => return,
+        };
+        if since.elapsed() > Duration::from_secs(90) {
+            self.wifi_setup_phase = WifiSetupPhase::Failed(
+                "Timed out waiting for home Wi‑Fi. Re-join SoftAP or check SSID/password.".into(),
+            );
+            return;
+        }
+        let softap_host = endpoint.split(':').next().unwrap_or("").to_string();
+        // Success: beacon shows STA/apsta and a different IP than the SoftAP push endpoint.
+        for w in &self.discovered_workers {
+            let mac_match = mac_is_stable(&mac)
+                && mac_is_stable(&w.mac)
+                && normalize_mac(&mac) == normalize_mac(&w.mac);
+            if !mac_match && w.endpoint != endpoint {
+                continue;
+            }
+            let detail = w.detail.to_ascii_lowercase();
+            if detail.contains("setup softap") {
+                continue;
+            }
+            let on_lan = detail.contains("apsta")
+                || detail.contains("wi-fi sta")
+                || detail.contains("wi‑fi sta")
+                || (detail.contains("sta") && !detail.contains("softap"));
+            let ip = w.host.clone();
+            if on_lan && !ip.is_empty() && ip != softap_host {
+                self.wifi_setup_phase = WifiSetupPhase::Done {
+                    ip: ip.clone(),
+                    ssid: home_ssid.clone(),
+                };
+                self.last_ok = format!("Board on “{home_ssid}” at {ip}");
+                self.push_log(LogKind::Usb, self.last_ok.clone());
+                return;
+            }
+        }
+        for w in &self.connected_workers {
+            let mac_match = mac_is_stable(&mac)
+                && mac_is_stable(&w.mac)
+                && normalize_mac(&mac) == normalize_mac(&w.mac);
+            if !mac_match && w.endpoint != endpoint {
+                continue;
+            }
+            if w.endpoint.contains(':') && !w.endpoint.to_ascii_uppercase().starts_with("COM") {
+                let ip = w.endpoint.split(':').next().unwrap_or("").to_string();
+                if !ip.is_empty() && ip != softap_host {
+                    self.wifi_setup_phase = WifiSetupPhase::Done {
+                        ip: ip.clone(),
+                        ssid: home_ssid.clone(),
+                    };
+                    self.last_ok = format!("Board on “{home_ssid}” at {ip}");
+                    self.push_log(LogKind::Usb, self.last_ok.clone());
+                    return;
+                }
+            }
+        }
+    }
+
+    fn ui_wifi_setup_panel(&mut self, ui: &mut egui::Ui) {
+        soft_panel(ui, "Board Wi‑Fi setup", |ui| {
+            ui.label(
+                RichText::new(
+                    "Boards broadcast SoftAP Njordr-XXXX (password njordrseas). Join that network \
+(or use USB), Find workers, enter your home Wi‑Fi, then Push — credentials save on the board.",
+                )
+                .color(C_DIM)
+                .size(12.0),
+            );
+            ui.add_space(8.0);
+            let choices = self.wifi_setup_target_choices();
+            ui.horizontal(|ui| {
+                ui.label(RichText::new("Board").color(C_MUTED).size(12.0));
+                let combo_w = (ui.available_width() - 80.0).clamp(160.0, 420.0);
+                egui::ComboBox::from_id_source("wifi_setup_target")
+                    .width(combo_w)
+                    .selected_text(if self.wifi_setup_target.is_empty() {
+                        if choices.is_empty() {
+                            "— join SoftAP or link USB —".into()
+                        } else {
+                            choices[0].1.clone()
+                        }
+                    } else {
+                        choices
+                            .iter()
+                            .find(|(e, _)| e == &self.wifi_setup_target)
+                            .map(|(_, l)| l.clone())
+                            .unwrap_or_else(|| self.wifi_setup_target.clone())
+                    })
+                    .show_ui(ui, |ui| {
+                        for (ep, label) in &choices {
+                            ui.selectable_value(&mut self.wifi_setup_target, ep.clone(), label);
+                        }
+                    });
+            });
+            ui.add_space(4.0);
+            ui.horizontal(|ui| {
+                ui.label(RichText::new("Home SSID").color(C_MUTED).size(12.0));
+                ui.add(
+                    egui::TextEdit::singleline(&mut self.wifi_setup_ssid)
+                        .desired_width(220.0)
+                        .hint_text("Your router Wi‑Fi name"),
+                );
+            });
+            ui.horizontal(|ui| {
+                ui.label(RichText::new("Password").color(C_MUTED).size(12.0));
+                ui.add(
+                    egui::TextEdit::singleline(&mut self.wifi_setup_pass)
+                        .desired_width(220.0)
+                        .password(true)
+                        .hint_text("Wi‑Fi password"),
+                );
+            });
+            ui.add_space(6.0);
+            ui.horizontal_wrapped(|ui| {
+                let busy = matches!(
+                    self.wifi_setup_phase,
+                    WifiSetupPhase::Pushing | WifiSetupPhase::WaitingSta { .. }
+                );
+                if soft_button(ui, if busy { "Working…" } else { "Push & save" }, 120.0).clicked()
+                    && !busy
+                {
+                    self.begin_wifi_setup_push();
+                }
+                if soft_button(ui, "Clear STA", 100.0).clicked() && !busy {
+                    let endpoint = if self.wifi_setup_target.is_empty() {
+                        self.wifi_setup_target_choices()
+                            .into_iter()
+                            .next()
+                            .map(|(e, _)| e)
+                            .unwrap_or_default()
+                    } else {
+                        self.wifi_setup_target.clone()
+                    };
+                    if endpoint.is_empty() {
+                        self.last_error = "Select a board first.".into();
+                    } else {
+                        self.wifi_setup_phase = WifiSetupPhase::Pushing;
+                        let _ = self.cmd_tx.send(NetCmd::ClearBoardWifi { endpoint });
+                        self.push_log(LogKind::Usb, "Clearing board STA Wi‑Fi credentials…".into());
+                    }
+                }
+            });
+            ui.add_space(4.0);
+            let status = match &self.wifi_setup_phase {
+                WifiSetupPhase::Idle => "Idle — SoftAP stays on after save for mesh.".to_string(),
+                WifiSetupPhase::Pushing => "Saving to board NVS…".into(),
+                WifiSetupPhase::WaitingSta { home_ssid, .. } => format!(
+                    "Waiting for board on “{home_ssid}”… switch this PC back to home Wi‑Fi, then Find workers."
+                ),
+                WifiSetupPhase::Done { ip, ssid } => {
+                    format!("Saved — board on “{ssid}” at {ip}")
+                }
+                WifiSetupPhase::Failed(e) => format!("Failed — {e}"),
+            };
+            ui.label(
+                RichText::new(status)
+                    .color(match &self.wifi_setup_phase {
+                        WifiSetupPhase::Failed(_) => C_ERR,
+                        WifiSetupPhase::Done { .. } => C_LIME,
+                        WifiSetupPhase::WaitingSta { .. } | WifiSetupPhase::Pushing => C_WARN,
+                        WifiSetupPhase::Idle => C_DIM,
+                    })
+                    .size(12.0),
+            );
+        });
     }
 
     fn ui_telemetry_rail(&mut self, ui: &mut egui::Ui) {
@@ -4343,6 +4700,22 @@ impl App for CompanionApp {
                     self.maybe_auto_connect_usb();
                 }
                 NetMsg::Action(Ok(s)) => {
+                    if matches!(self.wifi_setup_phase, WifiSetupPhase::Pushing) {
+                        if let Some(rest) = s.strip_prefix("BOARD_WIFI_SAVED|") {
+                            let mut parts = rest.splitn(2, '|');
+                            let ep = parts.next().unwrap_or("").to_string();
+                            let msg = parts.next().unwrap_or("saved").to_string();
+                            self.on_wifi_setup_pushed(ep, Ok(msg));
+                            continue;
+                        }
+                        if let Some(rest) = s.strip_prefix("BOARD_WIFI_CLEARED|") {
+                            let mut parts = rest.splitn(2, '|');
+                            let ep = parts.next().unwrap_or("").to_string();
+                            let msg = parts.next().unwrap_or("cleared").to_string();
+                            self.on_wifi_setup_cleared(ep, Ok(msg));
+                            continue;
+                        }
+                    }
                     self.last_ok = s.clone();
                     let low = s.to_lowercase();
                     if low.contains("usb open") || low.contains("worker linked") {
@@ -4397,6 +4770,19 @@ impl App for CompanionApp {
                     self.push_log(kind, s);
                 }
                 NetMsg::Action(Err(e)) => {
+                    if matches!(self.wifi_setup_phase, WifiSetupPhase::Pushing) {
+                        if let Some(rest) = e.strip_prefix("BOARD_WIFI_ERR|") {
+                            let mut parts = rest.splitn(2, '|');
+                            let ep = parts.next().unwrap_or("").to_string();
+                            let msg = parts.next().unwrap_or(rest).to_string();
+                            self.on_wifi_setup_pushed(ep, Err(msg));
+                            continue;
+                        }
+                        if e.to_lowercase().contains("wi-fi") || e.to_lowercase().contains("wifi") {
+                            self.on_wifi_setup_pushed(String::new(), Err(e.clone()));
+                            continue;
+                        }
+                    }
                     self.usb_connect_pending = false;
                     if self.bench_busy {
                         self.bench_busy = false;
@@ -4925,6 +5311,10 @@ impl App for CompanionApp {
         }
         for board in self.board_wifi.poll_boards() {
             self.merge_discovered(board);
+        }
+        self.tick_wifi_setup_wait();
+        if matches!(self.wifi_setup_phase, WifiSetupPhase::WaitingSta { .. }) {
+            ctx.request_repaint_after(Duration::from_millis(400));
         }
         let board_ads: Vec<(String, String, String)> = self
             .connected_workers
@@ -7077,6 +7467,37 @@ Power a 2nd board nearby with wall/power-bank only (no PC cable)."
         ))
     }
 
+    /// Push/clear STA Wi‑Fi on a linked board, or open a one-shot SoftAP TCP session.
+    fn board_wifi_cmd(
+        boards: &mut [UsbBoard],
+        endpoint: &str,
+        cmd: &str,
+    ) -> Result<String, String> {
+        if let Some(b) = boards
+            .iter_mut()
+            .find(|b| port_names_match(&b.name, endpoint) || b.name == endpoint)
+        {
+            return usb_cmd(&mut b.port, &mut b.rx, cmd);
+        }
+        let ep = endpoint.trim();
+        let looks_tcp = ep.contains(':')
+            && !ep.to_ascii_uppercase().starts_with("COM")
+            && !ep.starts_with("mesh:");
+        if !looks_tcp {
+            return Err(format!(
+                "Board {endpoint} not linked — join SoftAP Njordr-XXXX / njordrseas or Link USB first"
+            ));
+        }
+        let stream = open_wifi_tcp(ep)?;
+        let mut rx = String::new();
+        let mut port = BoardIo::Tcp(stream);
+        match usb_cmd(&mut port, &mut rx, "cmp ping") {
+            Ok(_) => {}
+            Err(e) => return Err(format!("SoftAP {ep} no pong: {e}")),
+        }
+        usb_cmd(&mut port, &mut rx, cmd)
+    }
+
     fn open_board_at(name: &str, baud: u32) -> Result<(UsbBoard, bool), String> {
         // Timed open so a hung motherboard COM cannot stall Add board / auto-link.
         let mut port = BoardIo::Serial(open_usb_serial_timed(
@@ -7657,6 +8078,86 @@ Power a 2nd board nearby with wall/power-bank only (no PC cable)."
                         Err(e) => {
                             let _ = msg_tx.send(NetMsg::Action(Err(format!(
                                 "Wi‑Fi link {endpoint} failed: {e}"
+                            ))));
+                        }
+                    }
+                }
+                NetCmd::SetBoardWifi {
+                    endpoint,
+                    ssid,
+                    pass,
+                    enable,
+                } => {
+                    // Never log `pass` — credentials are written to board NVS only.
+                    let cmd = if enable {
+                        format!(
+                            "cmp wifi ssid={}&pass={}&en=1",
+                            urlenc(&ssid),
+                            urlenc(&pass)
+                        )
+                    } else {
+                        "cmp wifi clear".to_string()
+                    };
+                    log_msg(
+                        &msg_tx,
+                        LogKind::Usb,
+                        format!(
+                            "Board Wi‑Fi {} → {} (SSID “{}”, password not logged)",
+                            if enable { "save" } else { "clear" },
+                            endpoint,
+                            if enable {
+                                ssid.as_str()
+                            } else {
+                                "—"
+                            }
+                        ),
+                    );
+                    match board_wifi_cmd(&mut boards, &endpoint, &cmd) {
+                        Ok(reply) => {
+                            let low = reply.to_ascii_lowercase();
+                            if low.contains("cmperr") {
+                                let _ = msg_tx.send(NetMsg::Action(Err(format!(
+                                    "BOARD_WIFI_ERR|{endpoint}|{reply}"
+                                ))));
+                            } else if enable {
+                                let _ = msg_tx.send(NetMsg::Action(Ok(format!(
+                                    "BOARD_WIFI_SAVED|{endpoint}|{reply}"
+                                ))));
+                            } else {
+                                let _ = msg_tx.send(NetMsg::Action(Ok(format!(
+                                    "BOARD_WIFI_CLEARED|{endpoint}|{reply}"
+                                ))));
+                            }
+                        }
+                        Err(e) => {
+                            let _ = msg_tx.send(NetMsg::Action(Err(format!(
+                                "BOARD_WIFI_ERR|{endpoint}|{e}"
+                            ))));
+                        }
+                    }
+                }
+                NetCmd::ClearBoardWifi { endpoint } => {
+                    log_msg(
+                        &msg_tx,
+                        LogKind::Usb,
+                        format!("Board Wi‑Fi clear → {endpoint}"),
+                    );
+                    match board_wifi_cmd(&mut boards, &endpoint, "cmp wifi clear") {
+                        Ok(reply) => {
+                            let low = reply.to_ascii_lowercase();
+                            if low.contains("cmperr") {
+                                let _ = msg_tx.send(NetMsg::Action(Err(format!(
+                                    "BOARD_WIFI_ERR|{endpoint}|{reply}"
+                                ))));
+                            } else {
+                                let _ = msg_tx.send(NetMsg::Action(Ok(format!(
+                                    "BOARD_WIFI_CLEARED|{endpoint}|{reply}"
+                                ))));
+                            }
+                        }
+                        Err(e) => {
+                            let _ = msg_tx.send(NetMsg::Action(Err(format!(
+                                "BOARD_WIFI_ERR|{endpoint}|{e}"
                             ))));
                         }
                     }

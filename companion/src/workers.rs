@@ -841,11 +841,20 @@ fn parse_board_beacon(raw: &str, addr: SocketAddr) -> Option<DiscoveredWorker> {
             mid
         }
     };
-    let detail = match (fw.is_empty(), ap.is_empty()) {
-        (false, false) => format!("fw {fw} · Wi‑Fi {mode} · AP {ap}"),
-        (false, true) => format!("fw {fw} · Wi‑Fi {mode}"),
-        (true, false) => format!("Wi‑Fi board · AP {ap}"),
-        _ => "Wi‑Fi CYD board".into(),
+    let detail = match mode.as_str() {
+        "ap" if !ap.is_empty() => {
+            if fw.is_empty() {
+                format!("setup SoftAP {ap} · pass njordrseas")
+            } else {
+                format!("fw {fw} · setup SoftAP {ap} · pass njordrseas")
+            }
+        }
+        _ => match (fw.is_empty(), ap.is_empty()) {
+            (false, false) => format!("fw {fw} · Wi‑Fi {mode} · AP {ap}"),
+            (false, true) => format!("fw {fw} · Wi‑Fi {mode}"),
+            (true, false) => format!("Wi‑Fi board · AP {ap}"),
+            _ => "Wi‑Fi CYD board".into(),
+        },
     };
     Some(DiscoveredWorker {
         id,
