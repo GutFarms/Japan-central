@@ -398,13 +398,17 @@ pub const COMPANION_UA: &str = concat!("Njordr-seas-CYD-miner/", env!("CARGO_PKG
 const ESPFLASH_VERSION: &str = "4.5.0";
 pub const REPO_OWNER: &str = "GutFarms";
 pub const REPO_NAME: &str = "Japan-central";
+/// Branches probed for Companion/firmware updates (newest VERSION wins).
+/// Tip first — apps still on older builds may only hit the legacy CYD branch.
 pub const REPO_REFS: &[&str] = &[
+    "cursor/esp32-mesh-connectivity-e801",
     "cursor/esp32-cyd-cpp-firmware-e801",
     "master",
     "main",
 ];
 
-fn urlencode_ref(ref_name: &str) -> String {
+/// URL-encode a git ref for GitHub API `?ref=` / path segments.
+pub fn urlencode_ref(ref_name: &str) -> String {
     ref_name
         .bytes()
         .map(|b| match b {

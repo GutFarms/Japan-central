@@ -8,7 +8,7 @@ use std::process::{Command, Stdio};
 
 use sha2::{Digest, Sha256};
 
-use crate::flash_update::{normalize_fw_version, COMPANION_UA};
+use crate::flash_update::{normalize_fw_version, urlencode_ref, COMPANION_UA, REPO_NAME, REPO_OWNER, REPO_REFS};
 
 #[derive(Clone, Debug)]
 pub struct AppRemoteInfo {
@@ -46,16 +46,22 @@ pub fn is_newer(remote: &str, local: &str) -> bool {
 }
 
 fn version_urls() -> Vec<String> {
-    // Prefer Contents API (always tip). Branch-name raw.githubusercontent and
-    // jsDelivr both cache aggressively and can lag tip by one+ releases.
-    vec![
-        "https://api.github.com/repos/GutFarms/Japan-central/contents/flash/downloads/VERSION.txt?ref=cursor%2Fesp32-cyd-cpp-firmware-e801"
-            .into(),
-        "https://raw.githubusercontent.com/GutFarms/Japan-central/cursor/esp32-cyd-cpp-firmware-e801/flash/downloads/VERSION.txt"
-            .into(),
-        "https://cdn.jsdelivr.net/gh/GutFarms/Japan-central@cursor/esp32-cyd-cpp-firmware-e801/flash/downloads/VERSION.txt"
-            .into(),
-    ]
+    // Prefer Contents API (always tip). Probe every REPO_REFS tip so a lagging
+    // legacy branch (e.g. stuck at 0.8.102) cannot hide a newer release.
+    let mut out = Vec::new();
+    for r in REPO_REFS {
+        let enc = urlencode_ref(r);
+        out.push(format!(
+            "https://api.github.com/repos/{REPO_OWNER}/{REPO_NAME}/contents/flash/downloads/VERSION.txt?ref={enc}"
+        ));
+        out.push(format!(
+            "https://raw.githubusercontent.com/{REPO_OWNER}/{REPO_NAME}/{r}/flash/downloads/VERSION.txt"
+        ));
+        out.push(format!(
+            "https://cdn.jsdelivr.net/gh/{REPO_OWNER}/{REPO_NAME}@{r}/flash/downloads/VERSION.txt"
+        ));
+    }
+    out
 }
 
 fn app_zip_urls() -> Vec<String> {
@@ -111,14 +117,20 @@ fn dedupe_urls(urls: Vec<String>) -> Vec<String> {
 
 fn sha256sums_urls() -> Vec<String> {
     // Contents API first so verify hashes match tip packages, not a cached branch raw.
-    vec![
-        "https://api.github.com/repos/GutFarms/Japan-central/contents/flash/downloads/SHA256SUMS.txt?ref=cursor%2Fesp32-cyd-cpp-firmware-e801"
-            .into(),
-        "https://raw.githubusercontent.com/GutFarms/Japan-central/cursor/esp32-cyd-cpp-firmware-e801/flash/downloads/SHA256SUMS.txt"
-            .into(),
-        "https://cdn.jsdelivr.net/gh/GutFarms/Japan-central@cursor/esp32-cyd-cpp-firmware-e801/flash/downloads/SHA256SUMS.txt"
-            .into(),
-    ]
+    let mut out = Vec::new();
+    for r in REPO_REFS {
+        let enc = urlencode_ref(r);
+        out.push(format!(
+            "https://api.github.com/repos/{REPO_OWNER}/{REPO_NAME}/contents/flash/downloads/SHA256SUMS.txt?ref={enc}"
+        ));
+        out.push(format!(
+            "https://raw.githubusercontent.com/{REPO_OWNER}/{REPO_NAME}/{r}/flash/downloads/SHA256SUMS.txt"
+        ));
+        out.push(format!(
+            "https://cdn.jsdelivr.net/gh/{REPO_OWNER}/{REPO_NAME}@{r}/flash/downloads/SHA256SUMS.txt"
+        ));
+    }
+    out
 }
 
 /// Best-effort version from a SHA256SUMS header comment (`# … 0.8.78 — …`).
@@ -756,8 +768,8 @@ mod tests {
     #[test]
     fn prefer_fresh_puts_branch_jsdelivr_last() {
         let urls = prefer_fresh_download_urls(vec![
-            "https://cdn.jsdelivr.net/gh/GutFarms/Japan-central@cursor/esp32-cyd-cpp-firmware-e801/flash/downloads/VERSION.txt".into(),
-            "https://raw.githubusercontent.com/GutFarms/Japan-central/cursor/esp32-cyd-cpp-firmware-e801/flash/downloads/VERSION.txt".into(),
+            "https://cdn.jsdelivr.net/gh/GutFarms/Japan-central@cursor/esp32-mesh-connectivity-e801/flash/downloads/VERSION.txt".into(),
+            "https://raw.githubusercontent.com/GutFarms/Japan-central/cursor/esp32-mesh-connectivity-e801/flash/downloads/VERSION.txt".into(),
             "https://cdn.jsdelivr.net/gh/GutFarms/Japan-central@deadbeef/flash/downloads/VERSION.txt".into(),
         ]);
         assert!(urls[0].contains("raw.githubusercontent.com"));
