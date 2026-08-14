@@ -789,10 +789,10 @@ const ESPTOOL_TIMEOUT: Duration = Duration::from_secs(180);
 const FLASH_BUDGET: Duration = Duration::from_secs(240);
 /// No useful output at all → stuck before connect.
 const IDLE_TIMEOUT: Duration = Duration::from_secs(35);
-/// Chip MAC/connect seen but no write/erase progress → stuck on prompt/sync.
-const IDLE_AFTER_CONNECT: Duration = Duration::from_secs(40);
+/// Chip MAC/connect seen but no write/erase progress → stub/baud can be slow on CYD/CH340.
+const IDLE_AFTER_CONNECT: Duration = Duration::from_secs(75);
 /// During active write/erase (% / `\r` ticks), allow longer silence between ticks.
-const IDLE_DURING_WRITE: Duration = Duration::from_secs(60);
+const IDLE_DURING_WRITE: Duration = Duration::from_secs(75);
 /// After stdout/stderr EOF, wait for the tool to exit (hard-reset / flush) before kill.
 /// Matches esptool-js / ESP Terminator: never yank the serial mid-operation.
 const EXIT_GRACE: Duration = Duration::from_secs(45);
@@ -831,7 +831,14 @@ fn run_espflash_argv(
             return Err("flash cancelled".into());
         }
         let mut cmd = Command::new(espflash);
+        // Avoid config/env monitor settings spamming:
+        // "Monitor options were provided, but `--monitor/-M` flag isn't set…"
         cmd.env_remove("ESPFLASH_SKIP_UPDATE_CHECK");
+        cmd.env_remove("ESPFLASH_MONITOR");
+        cmd.env_remove("ESPFLASH_BAUD");
+        for key in ["ESPFLASH_CONFIG", "ESPFLASH_PORT", "ESPFLASH_BEFORE", "ESPFLASH_AFTER"] {
+            cmd.env_remove(key);
+        }
         if set_env_true {
             cmd.env("ESPFLASH_SKIP_UPDATE_CHECK", "true");
         }
@@ -999,10 +1006,10 @@ fn append_flash_log(line: &str) {
 /// Flash merged image @ 0x0 (DIO / 4MB / 40MHz layout inside the merge).
 ///
 /// Strategy (aligned with esptool / ESP Terminator web flashers):
-/// 1) Direct write attempts (fast path)
-/// 2) On connect-stall → jump to recovery sooner (don't burn the budget)
-/// 3) Erase once, then **multiple rewrite retries** (never re-erase if wipe succeeded)
-/// 4) One-shot esptool `write_flash --erase-all` fallback
+/// 1) Direct write attempts (115200 / no-reset early — avoid erase on MAC-stall)
+/// 2) Recovery erase ONLY when failures are not connect-stalls
+/// 3) After erase: rewrite with no-reset first (blank ROM often hangs on default-reset)
+/// 4) Auto-install Python esptool into Tools/ and write_flash (no extra wipe if already blank)
 /// 5) On failure: hard-reset attempt + SAFETY tip if the chip may be blank
 pub fn flash_merged_bin(
     port: &str,
@@ -1096,17 +1103,27 @@ Available: {hint}. Unplug/replug the CYD, pick the COM again, then Update board.
     let espflash = ensure_espflash(progress)?;
     let mut esp_err = String::new();
     let mut chip_may_be_blank = false;
+    let mut connect_stall_only = true;
 
-    // Few short attempts — prefer reliable 115200 first (ESP Terminator / esptool-js default path).
+    // Prefer reliable 115200. Put no-reset early — after a prior erase/blank chip,
+    // default-reset often connects (prints MAC) then stalls until we kill it.
     let attempts: &[(&str, &str)] = &[
         ("115200", "default-reset"),
+        ("115200", "no-reset"),
         ("460800", "default-reset"),
         ("115200", "no-reset"),
     ];
 
     for &(baud, before) in attempts {
         ensure_budget(progress)?;
-        progress(format!("Writing firmware @ {baud} (before={before})…"));
+        if before == "no-reset" {
+            progress(
+                "Hold BOOT, tap RESET, release BOOT — writing with before=no-reset…".into(),
+            );
+            std::thread::sleep(Duration::from_millis(700));
+        } else {
+            progress(format!("Writing firmware @ {baud} (before={before})…"));
+        }
         match run_espflash_write(
             &espflash,
             &port_arg,
@@ -1129,21 +1146,24 @@ Available: {hint}. Unplug/replug the CYD, pick the COM again, then Update board.
                 if low.contains("cancelled") {
                     return Err(e);
                 }
-                // Like web flashers: once the chip is seen but the tool stalls, skip to recovery
-                // instead of burning the remaining baud attempts.
-                if low.contains("idle") && low.contains("chip connect") {
+                let stall = low.contains("idle") && low.contains("chip connect");
+                if !stall {
+                    connect_stall_only = false;
+                }
+                if stall && before == "default-reset" {
                     progress(
-                        "Chip seen then stalled — skipping remaining direct writes; starting safe recovery…"
+                        "Chip seen then stalled — next try uses BOOT/no-reset (no erase yet)…"
                             .into(),
                     );
-                    break;
                 }
             }
         }
     }
 
-    // Recovery: erase once, then rewrite several times (never re-erase after a successful wipe).
-    if budget_left() > Duration::from_secs(30) {
+    // Recovery erase ONLY when writes failed for reasons other than connect-stall.
+    // Erasing after a MAC-stall blanks the board and rewrite often stalls the same way.
+    let allow_erase = !connect_stall_only && budget_left() > Duration::from_secs(45);
+    if allow_erase {
         ensure_budget(progress)?;
         progress(
             "Direct write failed — recovery erase @ 115200 (then rewrite; chip may be blank until rewrite succeeds)…"
@@ -1155,11 +1175,13 @@ Available: {hint}. Unplug/replug the CYD, pick the COM again, then Update board.
                 chip_may_be_blank = true;
                 append_flash_log("erase ok — chip wiped; rewrite required");
                 progress(
-                    "Erase OK — SAFETY: flash is wiped until rewrite finishes. Rewriting…"
+                    "Erase OK — SAFETY: flash is wiped until rewrite finishes. Rewriting with BOOT/no-reset first…"
                         .into(),
                 );
+                // After erase+hard-reset the ROM is empty — default-reset often hangs
+                // after MAC. Lead with no-reset (manual BOOT) and longer settle.
                 let rewrite_attempts: &[(&str, &str)] = &[
-                    ("115200", "default-reset"),
+                    ("115200", "no-reset"),
                     ("115200", "no-reset"),
                     ("115200", "default-reset"),
                 ];
@@ -1169,13 +1191,21 @@ Available: {hint}. Unplug/replug the CYD, pick the COM again, then Update board.
                         i + 1,
                         rewrite_attempts.len()
                     ));
-                    std::thread::sleep(Duration::from_millis(900 + i as u64 * 400));
+                    std::thread::sleep(Duration::from_millis(1_400 + i as u64 * 600));
                     if ensure_budget(progress).is_err() {
                         break;
                     }
-                    progress(format!(
-                        "Rewrite after erase @ {baud} (before={before})…"
-                    ));
+                    if before == "no-reset" {
+                        progress(
+                            "Hold BOOT, tap RESET, release BOOT — rewrite after erase…"
+                                .into(),
+                        );
+                        std::thread::sleep(Duration::from_millis(500));
+                    } else {
+                        progress(format!(
+                            "Rewrite after erase @ {baud} (before={before})…"
+                        ));
+                    }
                     match run_espflash_write(
                         &espflash,
                         &port_arg,
@@ -1222,77 +1252,114 @@ Available: {hint}. Unplug/replug the CYD, pick the COM again, then Update board.
                 }
             }
         }
+    } else if connect_stall_only {
+        progress(
+            "Skipping recovery erase (chip connected but write stalled) — trying Python esptool write without wipe…"
+                .into(),
+        );
     }
 
-    // Optional Python fallback — one timed attempt (esptool write_flash --erase-all).
+    // Python esptool fallback — auto-install into Tools/ if missing.
     let mut py_err = String::new();
-    let py_bins: Vec<PathBuf> = ["py", "python", "python3"]
-        .iter()
-        .filter_map(|n| which_on_path(n))
-        .filter(|p| !is_windows_store_python_stub(p))
-        .collect();
-    if !py_bins.is_empty() && budget_left() > Duration::from_secs(25) {
-        progress("espflash recovery incomplete — trying Python esptool (erase-all + write)…".into());
-        if let Some(py) = py_bins.first() {
-            let py_launcher = py
-                .file_name()
-                .and_then(|s| s.to_str())
-                .map(|s| s.eq_ignore_ascii_case("py") || s.eq_ignore_ascii_case("py.exe"))
-                .unwrap_or(false);
-
-            let mut args: Vec<String> = Vec::new();
-            if py_launcher {
-                args.extend(["-3".into(), "-m".into(), "esptool".into()]);
-            } else {
-                args.extend(["-m".into(), "esptool".into()]);
-            }
-            args.extend([
-                "--chip".into(),
-                "esp32".into(),
-                "--port".into(),
-                port_arg.clone(),
-                "--baud".into(),
-                "115200".into(),
-                "write_flash".into(),
-                "--erase-all".into(),
-                "-z".into(),
-                "--flash_mode".into(),
-                "dio".into(),
-                "--flash_freq".into(),
-                "40m".into(),
-                "--flash_size".into(),
-                "4MB".into(),
-                "0x0".into(),
-                image.display().to_string(),
-            ]);
-            // esptool --erase-all wipes again; treat as blank until this succeeds.
-            chip_may_be_blank = true;
-            let py_timeout = clamp_timeout(ESPTOOL_TIMEOUT, budget_left());
-            progress(format!(
-                "esptool write_flash --erase-all via {} @ 115200 [timeout {}s]…",
-                py.display(),
-                py_timeout.as_secs()
-            ));
-            let mut cmd = Command::new(py);
-            cmd.args(&args);
-            match run_streaming_timeout(
-                &mut cmd,
-                progress,
-                "esptool",
-                py_timeout,
-                cancel,
-                FlashToolKind::Write,
-            ) {
-                Ok(()) => {
-                    append_flash_log("success esptool");
-                    return Ok(());
+    if budget_left() > Duration::from_secs(25) {
+        match ensure_python_esptool(progress) {
+            Ok((py, mut args, pythonpath)) => {
+                progress(format!(
+                    "espflash incomplete — trying Python esptool via {}…",
+                    py.display()
+                ));
+                args.extend([
+                    "--chip".into(),
+                    "esp32".into(),
+                    "--port".into(),
+                    port_arg.clone(),
+                    "--baud".into(),
+                    "115200".into(),
+                    "write_flash".into(),
+                ]);
+                // Don't wipe again if we already erased (or if we skipped erase on purpose).
+                if !chip_may_be_blank && !connect_stall_only {
+                    args.push("--erase-all".into());
+                    chip_may_be_blank = true;
                 }
-                Err(e) => {
-                    if !(e.contains("9009") || e.to_ascii_lowercase().contains("microsoft store")) {
-                        py_err = e.clone();
-                        progress(format!("esptool failed: {e}"));
+                args.extend([
+                    "-z".into(),
+                    "--flash_mode".into(),
+                    "dio".into(),
+                    "--flash_freq".into(),
+                    "40m".into(),
+                    "--flash_size".into(),
+                    "4MB".into(),
+                    "0x0".into(),
+                    image.display().to_string(),
+                ]);
+                let py_timeout = clamp_timeout(ESPTOOL_TIMEOUT, budget_left());
+                progress(format!(
+                    "esptool write_flash @ 115200 [timeout {}s]…",
+                    py_timeout.as_secs()
+                ));
+                if connect_stall_only || chip_may_be_blank {
+                    progress(
+                        "Hold BOOT, tap RESET, release BOOT while esptool connects…"
+                            .into(),
+                    );
+                    std::thread::sleep(Duration::from_millis(800));
+                }
+                let mut cmd = Command::new(&py);
+                if let Some(pp) = pythonpath {
+                    #[cfg(windows)]
+                    {
+                        let prev = std::env::var_os("PYTHONPATH").unwrap_or_default();
+                        let joined = if prev.is_empty() {
+                            pp.clone()
+                        } else {
+                            let mut s = pp;
+                            s.push(";");
+                            s.push(prev);
+                            s
+                        };
+                        cmd.env("PYTHONPATH", joined);
+                    }
+                    #[cfg(not(windows))]
+                    {
+                        let prev = std::env::var_os("PYTHONPATH").unwrap_or_default();
+                        let joined = if prev.is_empty() {
+                            pp.clone()
+                        } else {
+                            let mut s = pp;
+                            s.push(":");
+                            s.push(prev);
+                            s
+                        };
+                        cmd.env("PYTHONPATH", joined);
                     }
                 }
+                cmd.args(&args);
+                match run_streaming_timeout(
+                    &mut cmd,
+                    progress,
+                    "esptool",
+                    py_timeout,
+                    cancel,
+                    FlashToolKind::Write,
+                ) {
+                    Ok(()) => {
+                        append_flash_log("success esptool");
+                        return Ok(());
+                    }
+                    Err(e) => {
+                        if !(e.contains("9009")
+                            || e.to_ascii_lowercase().contains("microsoft store"))
+                        {
+                            py_err = e.clone();
+                            progress(format!("esptool failed: {e}"));
+                        }
+                    }
+                }
+            }
+            Err(e) => {
+                py_err = e;
+                progress(format!("esptool unavailable: {py_err}"));
             }
         }
     }
@@ -1303,6 +1370,122 @@ Available: {hint}. Unplug/replug the CYD, pick the COM again, then Update board.
     let tip = safety_fail_tip(started.elapsed(), &esp_err, &py_err, chip_may_be_blank);
     append_flash_log(&tip);
     Err(tip)
+}
+
+/// Locate Python + esptool; if `python -m esptool` is missing, pip-install into Tools/.
+fn ensure_python_esptool(
+    progress: &dyn Fn(String),
+) -> Result<(PathBuf, Vec<String>, Option<std::ffi::OsString>), String> {
+    let py_bins: Vec<PathBuf> = ["py", "python", "python3"]
+        .iter()
+        .filter_map(|n| which_on_path(n))
+        .filter(|p| !is_windows_store_python_stub(p))
+        .collect();
+    if py_bins.is_empty() {
+        return Err(
+            "No Python found. Install Python 3, or use Flash-Firmware.bat / esptool-js."
+                .into(),
+        );
+    }
+    let py = py_bins[0].clone();
+    let py_launcher = py
+        .file_name()
+        .and_then(|s| s.to_str())
+        .map(|s| s.eq_ignore_ascii_case("py") || s.eq_ignore_ascii_case("py.exe"))
+        .unwrap_or(false);
+
+    let mut base_args: Vec<String> = Vec::new();
+    if py_launcher {
+        base_args.extend(["-3".into(), "-m".into(), "esptool".into()]);
+    } else {
+        base_args.extend(["-m".into(), "esptool".into()]);
+    }
+
+    // Probe system esptool.
+    {
+        let mut probe = Command::new(&py);
+        hide_console_window(&mut probe);
+        let mut args = base_args.clone();
+        args.push("version".into());
+        probe.args(&args).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null());
+        if let Ok(status) = probe.status() {
+            if status.success() {
+                progress(format!("Found system esptool via {}", py.display()));
+                return Ok((py, base_args, None));
+            }
+        }
+    }
+
+    // Install into Tools/esptool-pkgs (no admin / no global pip).
+    let tools = std::env::current_exe()
+        .ok()
+        .and_then(|p| p.parent().map(|d| d.join("Tools")))
+        .unwrap_or_else(|| PathBuf::from("Tools"));
+    let pkg = tools.join("esptool-pkgs");
+    let _ = std::fs::create_dir_all(&pkg);
+    progress(format!(
+        "Installing esptool into {} (one-time)…",
+        pkg.display()
+    ));
+    let mut pip = Command::new(&py);
+    hide_console_window(&mut pip);
+    let mut pip_args: Vec<String> = Vec::new();
+    if py_launcher {
+        pip_args.extend(["-3".into(), "-m".into(), "pip".into()]);
+    } else {
+        pip_args.extend(["-m".into(), "pip".into()]);
+    }
+    pip_args.extend([
+        "install".into(),
+        "--upgrade".into(),
+        "--disable-pip-version-check".into(),
+        "--target".into(),
+        pkg.display().to_string(),
+        "esptool".into(),
+    ]);
+    pip.args(&pip_args)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    match pip.output() {
+        Ok(out) if out.status.success() => {
+            progress("esptool installed for Companion fallback".into());
+        }
+        Ok(out) => {
+            let err = String::from_utf8_lossy(&out.stderr);
+            return Err(format!(
+                "pip install esptool failed: {}",
+                trunc(&err, 180)
+            ));
+        }
+        Err(e) => return Err(format!("pip launch failed: {e}")),
+    }
+
+    // Verify import via PYTHONPATH.
+    {
+        let mut probe = Command::new(&py);
+        hide_console_window(&mut probe);
+        probe.env("PYTHONPATH", &pkg);
+        let mut args = base_args.clone();
+        args.push("version".into());
+        probe.args(&args).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null());
+        match probe.status() {
+            Ok(status) if status.success() => Ok((py, base_args, Some(pkg.into_os_string()))),
+            _ => Err(
+                "esptool installed but still not importable — try: py -3 -m pip install esptool"
+                    .into(),
+            ),
+        }
+    }
+}
+
+fn trunc(s: &str, max: usize) -> String {
+    let t = s.trim();
+    if t.len() <= max {
+        t.to_string()
+    } else {
+        format!("{}…", &t[..max])
+    }
 }
 
 fn best_effort_reset(

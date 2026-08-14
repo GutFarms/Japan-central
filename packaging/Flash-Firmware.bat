@@ -54,12 +54,13 @@ if exist "%ESPFLASH%" (
   "%ESPFLASH%" --skip-update-check erase-flash -p %PORT% -B 115200 -c esp32 --non-interactive --after hard-reset <nul
   echo.
   echo SAFETY: erase finished — rewriting now. Keep USB connected.
-  timeout /t 2 /nobreak >nul
-  "%ESPFLASH%" --skip-update-check write-bin -p %PORT% -B 115200 -c esp32 --non-interactive --before default-reset --after hard-reset 0x0 "%FW%" <nul
-  if %ERRORLEVEL%==0 goto DONE
-  echo Rewrite failed — retrying with no-reset (hold BOOT if needed)...
+  echo Hold BOOT, tap RESET, release BOOT, then press a key.
   pause >nul
+  timeout /t 2 /nobreak >nul
   "%ESPFLASH%" --skip-update-check write-bin -p %PORT% -B 115200 -c esp32 --non-interactive --before no-reset --after hard-reset 0x0 "%FW%" <nul
+  if %ERRORLEVEL%==0 goto DONE
+  echo Rewrite with no-reset failed — trying default-reset...
+  "%ESPFLASH%" --skip-update-check write-bin -p %PORT% -B 115200 -c esp32 --non-interactive --before default-reset --after hard-reset 0x0 "%FW%" <nul
   if %ERRORLEVEL%==0 goto DONE
   echo espflash failed — will try Python esptool if available.
 )
@@ -68,10 +69,16 @@ where py >nul 2>nul
 if %ERRORLEVEL%==0 (
   echo.
   echo Trying: py -3 -m esptool ...
-  py -3 -m esptool --chip esp32 --port %PORT% --baud 115200 write_flash --erase-all -z --flash_mode dio --flash_freq 40m --flash_size 4MB 0x0 "%FW%"
+  py -3 -m esptool version >nul 2>nul
+  if errorlevel 1 (
+    echo esptool module missing — installing with pip...
+    py -3 -m pip install --upgrade --disable-pip-version-check esptool
+  )
+  echo Hold BOOT, tap RESET, release BOOT if connect stalls.
+  py -3 -m esptool --chip esp32 --port %PORT% --baud 115200 write_flash -z --flash_mode dio --flash_freq 40m --flash_size 4MB 0x0 "%FW%"
   if %ERRORLEVEL%==0 goto DONE
   echo.
-  echo esptool missing or failed. Install with:
+  echo esptool failed. Install with:
   echo   py -3 -m pip install esptool
   echo then run this script again.
   goto MANUAL

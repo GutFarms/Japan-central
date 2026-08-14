@@ -59,6 +59,7 @@ In **Settings**:
 - **0.8.22** — fix Windows self-update bat (retry while `.new` remains; do not relaunch a locked old exe)
 - **0.8.23** — fetch updates via GitHub API / commit-pinned raw (branch raw CDN can serve stale VERSION/bins)
 - **0.8.24** — fix Update board: espflash reject `ESPFLASH_SKIP_UPDATE_CHECK=1` (needs true/false); skip Windows Store python stubs
+- **0.8.89** — Flash safety: skip erase on MAC-stall, longer post-connect idle, BOOT/no-reset first after wipe, auto-pip-install esptool into Tools/
 - **0.8.88** — Multi-board: always show Add board, Find workers USB-only (no second UDP bind), prefer USB over Wi‑Fi same-MAC, unique SoftAP subnet per board, flash releases only target COM
 - **0.8.87** — Restore share rate: default Full HW (no fragile auto path), hold jobs until pool difficulty, re-push pool job after Bench, queue shares across pool blips
 - **0.8.86** — Remove connect auto-bench (USB/Wi‑Fi link only; use Bench boards manually)
