@@ -2,6 +2,7 @@
 
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
+use socket2::{SockRef, TcpKeepalive};
 use std::collections::{HashMap, VecDeque};
 use std::io::{BufRead, BufReader, Write};
 use std::net::{TcpStream, ToSocketAddrs};
@@ -153,9 +154,27 @@ impl StratumClient {
             .set_read_timeout(Some(Duration::from_millis(20)))
             .ok();
         stream
-            .set_write_timeout(Some(Duration::from_secs(3)))
+            .set_write_timeout(Some(Duration::from_millis(1500)))
             .ok();
         stream.set_nodelay(true).ok();
+        // OS TCP keepalive keeps NAT/firewall mappings warm during USB/mesh stalls.
+        {
+            let sock = SockRef::from(&stream);
+            let mut ka = TcpKeepalive::new().with_time(Duration::from_secs(10));
+            #[cfg(any(
+                target_os = "linux",
+                target_os = "macos",
+                target_os = "ios",
+                target_os = "freebsd",
+                target_os = "netbsd",
+                target_os = "windows",
+            ))]
+            {
+                ka = ka.with_interval(Duration::from_secs(3));
+            }
+            let _ = sock.set_tcp_keepalive(&ka);
+            let _ = sock.set_keepalive(true);
+        }
         let reader = BufReader::new(stream.try_clone().map_err(|e| e.to_string())?);
         self.stream = Some(stream);
         self.reader = Some(reader);
@@ -250,7 +269,7 @@ impl StratumClient {
                         // Real EOF — but require a couple of hits while authorized so a
                         // brief Windows/stack glitch does not bounce SUBSCRIBE↔AUTHORIZED.
                         self.transport_fails = self.transport_fails.saturating_add(1);
-                        if self.authorized && self.transport_fails < 3 {
+                        if self.authorized && self.transport_fails < 5 {
                             self.push_recent(format!(
                                 "← stratum read EOF soft-fail #{}",
                                 self.transport_fails
@@ -276,7 +295,7 @@ impl StratumClient {
                     }
                     Err(e) => {
                         self.transport_fails = self.transport_fails.saturating_add(1);
-                        if self.authorized && self.transport_fails < 5 {
+                        if self.authorized && self.transport_fails < 8 {
                             self.push_recent(format!(
                                 "← stratum read soft-fail #{}: {e}",
                                 self.transport_fails

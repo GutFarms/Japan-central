@@ -6434,6 +6434,17 @@ fn mine_worker(cmd_rx: Receiver<NetCmd>, msg_tx: Sender<NetMsg>) {
         mac: &str,
         cmp_rest: &str,
     ) -> Result<String, String> {
+        let mut noop = || {};
+        mesh_via_cmd_ex(boards, gateway, mac, cmp_rest, &mut noop)
+    }
+
+    fn mesh_via_cmd_ex(
+        boards: &mut [UsbBoard],
+        gateway: &str,
+        mac: &str,
+        cmp_rest: &str,
+        pump: &mut dyn FnMut(),
+    ) -> Result<String, String> {
         let gw = boards
             .iter_mut()
             .find(|b| port_names_match(&b.name, gateway) || b.name == gateway)
@@ -6443,7 +6454,7 @@ fn mine_worker(cmd_rx: Receiver<NetCmd>, msg_tx: Sender<NetMsg>) {
             .filter(|c| c.is_ascii_hexdigit())
             .collect();
         let cmd = format!("cmp via {hex} {cmp_rest}");
-        usb_cmd(&mut gw.port, &mut gw.rx, &cmd)
+        usb_cmd_ex(&mut gw.port, &mut gw.rx, &cmd, pump)
     }
 
     fn sync_mesh_peers(
@@ -6814,6 +6825,7 @@ fn mine_worker(cmd_rx: Receiver<NetCmd>, msg_tx: Sender<NetMsg>) {
         board: &mut UsbBoard,
         msg_tx: &Sender<NetMsg>,
         resume_mining: bool,
+        resume_job: Option<&WorkJob>,
     ) {
         if board.download_mode || !resume_mining {
             return;
@@ -6824,10 +6836,18 @@ fn mine_worker(cmd_rx: Receiver<NetCmd>, msg_tx: Sender<NetMsg>) {
             &mut board.rx,
             "cmp stats accepted=0&rejected=0",
         );
+        let warmup;
+        let job = match resume_job {
+            Some(j) => j,
+            None => {
+                warmup = warmup_job();
+                &warmup
+            }
+        };
         let _ = usb_push_job(
             &mut board.port,
             &mut board.rx,
-            &warmup_job(),
+            job,
             &mut legacy,
             msg_tx,
         );
@@ -6843,7 +6863,7 @@ fn mine_worker(cmd_rx: Receiver<NetCmd>, msg_tx: Sender<NetMsg>) {
     ) -> Option<String> {
         let client = stratum.as_mut()?;
         let mut err = None;
-        for _ in 0..3 {
+        for _ in 0..8 {
             match client.poll() {
                 Ok(()) => {}
                 Err(e) => {
@@ -6877,7 +6897,7 @@ fn mine_worker(cmd_rx: Receiver<NetCmd>, msg_tx: Sender<NetMsg>) {
     let mut mine_worker_name = String::new();
     let mut mine_password = String::new();
     let mut reconnect_at: Option<Instant> = None;
-    let mut reconnect_backoff = Duration::from_secs(2);
+    let mut reconnect_backoff = Duration::from_secs(1);
 
     loop {
         let cmd = if mining || !boards.is_empty() {
@@ -6979,7 +6999,12 @@ fn mine_worker(cmd_rx: Receiver<NetCmd>, msg_tx: Sender<NetMsg>) {
                                     );
                                 }
                             }
-                            arm_mining_if_needed(&mut board, &msg_tx, mining);
+                            arm_mining_if_needed(
+                                &mut board,
+                                &msg_tx,
+                                mining,
+                                recent_jobs.back(),
+                            );
                             boards.push(board);
                             sync_mesh_peers(&mut boards, &mut mesh, &msg_tx, mining);
                             last_mesh_sync = Instant::now();
@@ -7013,23 +7038,9 @@ fn mine_worker(cmd_rx: Receiver<NetCmd>, msg_tx: Sender<NetMsg>) {
                         publish_live(&msg_tx, &boards, &mesh);
                         continue;
                     }
-                    // Pause jobs on already-linked boards while we open another COM —
-                    // shared USB hubs often brown out / reset both CYDs mid-mine.
+                    // Keep already-linked boards hashing. Stopping them for hub
+                    // brownout avoidance zeros fleet H/s on every multi-COM link.
                     let resume_mine = mining;
-                    if !boards.is_empty() {
-                        log_msg(
-                            &msg_tx,
-                            LogKind::Usb,
-                            format!(
-                                "Pausing {} board(s) while linking {name}…",
-                                boards.len()
-                            ),
-                        );
-                        for b in boards.iter_mut() {
-                            let _ = usb_cmd(&mut b.port, &mut b.rx, "cmp stop");
-                        }
-                        thread::sleep(Duration::from_millis(400));
-                    }
                     log_msg(&msg_tx, LogKind::Usb, format!("Connecting worker {name}"));
                     match open_board(&name) {
                         Ok((mut board, saw)) => {
@@ -7070,13 +7081,13 @@ fn mine_worker(cmd_rx: Receiver<NetCmd>, msg_tx: Sender<NetMsg>) {
                                     }
                                 }
                             }
-                            arm_mining_if_needed(&mut board, &msg_tx, resume_mine);
+                            arm_mining_if_needed(
+                                &mut board,
+                                &msg_tx,
+                                resume_mine,
+                                recent_jobs.back(),
+                            );
                             boards.push(board);
-                            if resume_mine {
-                                for b in boards.iter_mut() {
-                                    arm_mining_if_needed(b, &msg_tx, true);
-                                }
-                            }
                             sync_mesh_peers(&mut boards, &mut mesh, &msg_tx, resume_mine || mining);
                             last_mesh_sync = Instant::now();
                             publish_live(&msg_tx, &boards, &mesh);
@@ -7096,11 +7107,6 @@ fn mine_worker(cmd_rx: Receiver<NetCmd>, msg_tx: Sender<NetMsg>) {
                             })));
                         }
                         Err(e) => {
-                            if resume_mine {
-                                for b in boards.iter_mut() {
-                                    arm_mining_if_needed(b, &msg_tx, true);
-                                }
-                            }
                             publish_live(&msg_tx, &boards, &mesh);
                             let _ = msg_tx.send(NetMsg::Action(Err(format!(
                                 "Link {name} failed: {e}"
@@ -7139,7 +7145,12 @@ fn mine_worker(cmd_rx: Receiver<NetCmd>, msg_tx: Sender<NetMsg>) {
                                     continue;
                                 }
                             }
-                            arm_mining_if_needed(&mut board, &msg_tx, mining);
+                            arm_mining_if_needed(
+                                &mut board,
+                                &msg_tx,
+                                mining,
+                                recent_jobs.back(),
+                            );
                             boards.push(board);
                             sync_mesh_peers(&mut boards, &mut mesh, &msg_tx, mining);
                             last_mesh_sync = Instant::now();
@@ -7232,7 +7243,7 @@ fn mine_worker(cmd_rx: Receiver<NetCmd>, msg_tx: Sender<NetMsg>) {
                     mine_endpoint = endpoint.clone();
                     mine_worker_name = worker.clone();
                     mine_password = password.clone();
-                    reconnect_backoff = Duration::from_secs(2);
+                    reconnect_backoff = Duration::from_secs(1);
                     reconnect_at = None;
                     // Connect the pool FIRST so authorize is not starved by mesh via /
                     // USB warmup. Boards keep hashing once jobs arrive.
@@ -7305,7 +7316,7 @@ fn mine_worker(cmd_rx: Receiver<NetCmd>, msg_tx: Sender<NetMsg>) {
                                 }
                                 stratum = Some(client);
                                 mining = true;
-                                reconnect_backoff = Duration::from_secs(2);
+                                reconnect_backoff = Duration::from_secs(1);
                                 pool_ready = true;
                             }
                         }
@@ -7323,19 +7334,33 @@ fn mine_worker(cmd_rx: Receiver<NetCmd>, msg_tx: Sender<NetMsg>) {
                     }
                     // Arm boards after pool handshake so USB chatter cannot block authorize.
                     for b in boards.iter_mut() {
-                        let _ = usb_cmd(
-                            &mut b.port,
-                            &mut b.rx,
-                            "cmp stats accepted=0&rejected=0",
-                        );
+                        let stats_cmd = "cmp stats accepted=0&rejected=0";
+                        {
+                            let mut pump = || {
+                                let _ = pump_stratum_keepalive(&mut stratum, &msg_tx);
+                            };
+                            let _ = usb_cmd_ex(
+                                &mut b.port,
+                                &mut b.rx,
+                                stats_cmd,
+                                &mut pump,
+                            );
+                        }
                         let mut legacy = b.legacy_job;
-                        match usb_push_job(
-                            &mut b.port,
-                            &mut b.rx,
-                            &warmup_job(),
-                            &mut legacy,
-                            &msg_tx,
-                        ) {
+                        let push_res = {
+                            let mut pump = || {
+                                let _ = pump_stratum_keepalive(&mut stratum, &msg_tx);
+                            };
+                            usb_push_job_ex(
+                                &mut b.port,
+                                &mut b.rx,
+                                &warmup_job(),
+                                &mut legacy,
+                                &msg_tx,
+                                &mut pump,
+                            )
+                        };
+                        match push_res {
                             Ok(_) => {
                                 b.legacy_job = legacy;
                                 let _ = msg_tx.send(NetMsg::Action(Ok(format!(
@@ -7478,7 +7503,18 @@ fn mine_worker(cmd_rx: Receiver<NetCmd>, msg_tx: Sender<NetMsg>) {
                             &mut held_board_shares,
                             &msg_tx,
                         );
-                        match usb_cmd(&mut b.port, &mut b.rx, "cmp status") {
+                        let status_reply = {
+                            let mut pump = || {
+                                let _ = pump_stratum_keepalive(&mut stratum, &msg_tx);
+                            };
+                            usb_cmd_ex(
+                                &mut b.port,
+                                &mut b.rx,
+                                "cmp status",
+                                &mut pump,
+                            )
+                        };
+                        match status_reply {
                             Ok(line) => match parse_cmp_status(&line) {
                                 Ok(st) => {
                                     b.status_fails = 0;
@@ -7571,7 +7607,7 @@ fn mine_worker(cmd_rx: Receiver<NetCmd>, msg_tx: Sender<NetMsg>) {
                     // so the pool socket is not starved into reconnect loops.
                     let via_due = last_mesh_via_status.elapsed()
                         >= if mining {
-                            Duration::from_secs(8)
+                            Duration::from_secs(12)
                         } else {
                             Duration::from_secs(4)
                         };
@@ -7579,8 +7615,19 @@ fn mine_worker(cmd_rx: Receiver<NetCmd>, msg_tx: Sender<NetMsg>) {
                     if via_due {
                         last_mesh_via_status = Instant::now();
                         for m in mesh.iter_mut() {
-                            let _ = pump_stratum_keepalive(&mut stratum, &msg_tx);
-                            match mesh_via_cmd(&mut boards, &m.gateway, &m.mac, "status") {
+                            let status_line = {
+                                let mut pump = || {
+                                    let _ = pump_stratum_keepalive(&mut stratum, &msg_tx);
+                                };
+                                mesh_via_cmd_ex(
+                                    &mut boards,
+                                    &m.gateway,
+                                    &m.mac,
+                                    "status",
+                                    &mut pump,
+                                )
+                            };
+                            match status_line {
                                 Ok(line) => match parse_cmp_status(&line) {
                                     Ok(st) => {
                                         m.status_fails = 0;
@@ -8069,13 +8116,20 @@ fn mine_worker(cmd_rx: Receiver<NetCmd>, msg_tx: Sender<NetMsg>) {
                     let mut pushed = 0usize;
                     for b in boards.iter_mut() {
                         let mut legacy = b.legacy_job;
-                        match usb_push_job(
-                            &mut b.port,
-                            &mut b.rx,
-                            &job,
-                            &mut legacy,
-                            &msg_tx,
-                        ) {
+                        let push_res = {
+                            let mut pump = || {
+                                let _ = client.poll();
+                            };
+                            usb_push_job_ex(
+                                &mut b.port,
+                                &mut b.rx,
+                                &job,
+                                &mut legacy,
+                                &msg_tx,
+                                &mut pump,
+                            )
+                        };
+                        match push_res {
                             Ok(_) => {
                                 b.legacy_job = legacy;
                                 pushed += 1;
@@ -8166,10 +8220,41 @@ fn mine_worker(cmd_rx: Receiver<NetCmd>, msg_tx: Sender<NetMsg>) {
                         }
                         push_stratum_live(&msg_tx, &client);
                         stratum = Some(client);
-                        reconnect_backoff = Duration::from_secs(2);
+                        reconnect_backoff = Duration::from_secs(1);
                         let _ = msg_tx.send(NetMsg::Action(Ok(format!(
                             "Pool reconnected {mine_endpoint}"
                         ))));
+                        // Keep boards on last work — re-push if we have a recent job
+                        // so H/s doesn't sit on a stale/warmup header across the gap.
+                        if let Some(job) = recent_jobs.back().cloned() {
+                            for b in boards.iter_mut() {
+                                let mut legacy = b.legacy_job;
+                                let push_res = {
+                                    let mut pump = || {
+                                        if let Some(c) = stratum.as_mut() {
+                                            let _ = c.poll();
+                                        }
+                                    };
+                                    usb_push_job_ex(
+                                        &mut b.port,
+                                        &mut b.rx,
+                                        &job,
+                                        &mut legacy,
+                                        &msg_tx,
+                                        &mut pump,
+                                    )
+                                };
+                                if push_res.is_ok() {
+                                    b.legacy_job = legacy;
+                                    b.mining = true;
+                                }
+                            }
+                            for m in mesh.iter_mut() {
+                                if push_mesh_job(&mut boards, m, &job, &msg_tx).is_ok() {
+                                    m.mining = true;
+                                }
+                            }
+                        }
                     }
                     Err(e) => {
                         reconnect_at = Some(Instant::now() + reconnect_backoff);
@@ -8375,6 +8460,17 @@ fn cmp_reply_line(buf: &str) -> Option<String> {
 }
 
 fn usb_cmd(port: &mut BoardIo, buf: &mut String, cmd: &str) -> Result<String, String> {
+    let mut noop = || {};
+    usb_cmd_ex(port, buf, cmd, &mut noop)
+}
+
+/// USB command with optional stratum pump so long waits do not starve the pool.
+fn usb_cmd_ex(
+    port: &mut BoardIo,
+    buf: &mut String,
+    cmd: &str,
+    pump: &mut dyn FnMut(),
+) -> Result<String, String> {
     let mut last_err = String::new();
     // Bigger writes + single flush cut job-push latency a lot vs per-chunk sleeps.
     let (wait_ms, retries, chunk, gap_ms) = if cmd.contains("bench") {
@@ -8382,19 +8478,19 @@ fn usb_cmd(port: &mut BoardIo, buf: &mut String, cmd: &str) -> Result<String, St
         (180_000u64, 1usize, 128usize, 1u64)
     } else if cmd.contains(" via ") {
         // ESP-NOW mesh relay — allow root wait + leaf reply.
-        (4_500u64, 2usize, 256usize, 0u64)
+        (3_200u64, 2usize, 256usize, 0u64)
     } else if cmd.contains("status") {
         // Board may be mid mineB batch; firmware yields on RX, but allow headroom.
-        (2_800u64, 3usize, 256usize, 0u64)
+        (1_800u64, 3usize, 256usize, 0u64)
     } else if cmd.contains("stats") {
         // Never stall the mine loop waiting on LCD stats ACKs.
         (450u64, 1usize, 256usize, 0u64)
     } else if cmd.contains(" jh") || cmd.contains(" jt") || cmd.contains(" ja") {
-        (3_000u64, 3usize, 256usize, 0u64)
+        (2_400u64, 3usize, 256usize, 0u64)
     } else if cmd.contains(" job ") {
-        (4_000u64, 2usize, 128usize, 1u64)
+        (3_200u64, 2usize, 128usize, 1u64)
     } else {
-        (2_500u64, 3usize, 256usize, 0u64)
+        (2_000u64, 3usize, 256usize, 0u64)
     };
     for _ in 0..retries {
         port.drain(buf);
@@ -8415,7 +8511,12 @@ fn usb_cmd(port: &mut BoardIo, buf: &mut String, cmd: &str) -> Result<String, St
         }
         let _ = port.flush();
         let deadline = Instant::now() + Duration::from_millis(wait_ms);
+        let mut last_pump = Instant::now() - Duration::from_millis(200);
         while Instant::now() < deadline {
+            if last_pump.elapsed() >= Duration::from_millis(100) {
+                pump();
+                last_pump = Instant::now();
+            }
             port.drain(buf);
             if let Some(reply) = cmp_reply_line(buf) {
                 if let Some(pos) = buf.find(&reply) {
@@ -8466,10 +8567,22 @@ fn usb_push_job(
     legacy_job: &mut bool,
     msg_tx: &Sender<NetMsg>,
 ) -> Result<(), String> {
+    let mut noop = || {};
+    usb_push_job_ex(port, buf, job, legacy_job, msg_tx, &mut noop)
+}
+
+fn usb_push_job_ex(
+    port: &mut BoardIo,
+    buf: &mut String,
+    job: &stratum::WorkJob,
+    legacy_job: &mut bool,
+    msg_tx: &Sender<NetMsg>,
+    pump: &mut dyn FnMut(),
+) -> Result<(), String> {
     if !*legacy_job {
         let mut split_ok = true;
         for part in encode_job_parts(job) {
-            match usb_cmd(port, buf, &part) {
+            match usb_cmd_ex(port, buf, &part, pump) {
                 Ok(reply) if reply.starts_with("CMPACK") || reply.starts_with("CMP ok") => {}
                 Ok(reply) if reply.contains("unknown") || reply.starts_with("CMPERR") => {
                     split_ok = false;
@@ -8508,7 +8621,7 @@ fn usb_push_job(
 
     // Legacy one-shot — works on older boards; long line is less reliable.
     let cmd = encode_job_cmd(job);
-    let reply = usb_cmd(port, buf, &cmd)?;
+    let reply = usb_cmd_ex(port, buf, &cmd, pump)?;
     if reply.starts_with("CMPACK") || reply.starts_with("CMP ok") {
         Ok(())
     } else {

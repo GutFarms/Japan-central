@@ -124,11 +124,11 @@ bool MeshLink::hasRootPeer() const {
 }
 
 size_t MeshLink::leafCount() const {
-  // Any other board in range counts — a peer that recently had USB can briefly
-  // advertise as root and must still appear for Companion bridging.
+  // Only true leaves (non-root peers). Another USB root nearby must not look
+  // like a bridged leaf — that falsely throttles HW hashrate and parks SW assist.
   size_t n = 0;
   for (size_t i = 0; i < MESH_MAX_PEERS; i++) {
-    if (peers_[i].used) n++;
+    if (peers_[i].used && !peers_[i].root) n++;
   }
   return n;
 }
