@@ -88,7 +88,11 @@ where python >nul 2>nul
 if %ERRORLEVEL%==0 (
   echo.
   echo Trying: python -m esptool ...
-  python -m esptool --chip esp32 --port %PORT% --baud 115200 write_flash --erase-all -z --flash_mode dio --flash_freq 40m --flash_size 4MB 0x0 "%FW%"
+  python -m esptool version >nul 2>nul
+  if errorlevel 1 (
+    python -m pip install --upgrade --disable-pip-version-check esptool
+  )
+  python -m esptool --chip esp32 --port %PORT% --baud 115200 write_flash -z --flash_mode dio --flash_freq 40m --flash_size 4MB 0x0 "%FW%"
   if %ERRORLEVEL%==0 goto DONE
 )
 
