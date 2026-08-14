@@ -45,8 +45,9 @@ use stratum::{
 use workers::{
     cyd_port_score, is_usb_serial_port, list_serial_ports, mac_is_stable, mac_worker_id,
     normalize_mac, open_usb_serial_timed, open_wifi_tcp, port_choice_is_pci, port_names_match,
-    prefer_cyd_port, probe_esp_download_mode, scan_usb_workers_with_progress, transport_mac_id,
-    BoardWifiDiscovery, DiscoveredWorker, LanDiscovery, PortChoice, WorkerKind, WorkerLive,
+    prefer_cyd_port, prefer_cyd_port_excluding, probe_esp_download_mode,
+    scan_usb_workers_with_progress, transport_mac_id, BoardWifiDiscovery, DiscoveredWorker,
+    LanDiscovery, PortChoice, WorkerKind, WorkerLive,
 };
 
 use eframe::egui::{
@@ -1390,21 +1391,82 @@ impl CompanionApp {
 
     /// Prefer the next USB COM that is not already linked (for Add board).
     /// Never pick motherboard PCI — that made the UI “lose” the ESP after Connect.
-    fn select_next_unlinked_usb(&mut self) {
-        if let Some(p) = self
+    fn select_next_unlinked_usb(&mut self) -> bool {
+        let linked: Vec<String> = self
+            .connected_workers
+            .iter()
+            .map(|c| c.endpoint.clone())
+            .collect();
+        if let Some(p) = prefer_cyd_port_excluding(&self.ports, &linked) {
+            if !port_names_match(&p.name, &self.com_port) {
+                self.com_port = p.name.clone();
+                self.push_log(
+                    LogKind::Usb,
+                    format!("COM selection → {} (next unlinked USB for Add board)", p.name),
+                );
+            } else {
+                self.com_port = p.name.clone();
+            }
+            true
+        } else {
+            false
+        }
+    }
+
+    fn linked_endpoints(&self) -> Vec<String> {
+        self.connected_workers
+            .iter()
+            .map(|c| c.endpoint.clone())
+            .collect()
+    }
+
+    /// Queue ConnectWorker for every unlinked USB-UART that looks like a CYD.
+    fn link_all_unlinked_usb(&mut self) {
+        if self.update_busy {
+            self.last_error = "Wait for Update board / flash to finish.".into();
+            return;
+        }
+        let linked = self.linked_endpoints();
+        let candidates: Vec<String> = self
             .ports
             .iter()
             .filter(|p| !port_choice_is_pci(p) && cyd_port_score(p) >= 0)
-            .filter(|p| !self.worker_already_linked(&p.name))
-            .max_by_key(|p| cyd_port_score(p))
-        {
-            self.com_port = p.name.clone();
+            .filter(|p| !linked.iter().any(|e| port_names_match(e, &p.name)))
+            .map(|p| p.name.clone())
+            .collect();
+        if candidates.is_empty() {
+            self.last_ok = "No other USB COM to link — Refresh, or Find CYD workers.".into();
+            self.push_log(LogKind::Usb, self.last_ok.clone());
+            // Still scan — probe may find a board the score skipped.
+            self.worker_scan_busy = true;
+            let _ = self.cmd_tx.send(NetCmd::ScanWorkers);
+            return;
+        }
+        for name in &candidates {
+            self.push_log(LogKind::Usb, format!("Linking USB worker {name}…"));
+            let _ = self.cmd_tx.send(NetCmd::ConnectWorker(name.clone()));
+        }
+        self.usb_connect_pending = true;
+        self.last_ok = format!("Linking {} USB COM(s)…", candidates.len());
+        // Point combo at the first candidate we just queued.
+        if let Some(first) = candidates.first() {
+            self.com_port = first.clone();
         }
     }
 
     fn apply_best_com_port(&mut self, force: bool) {
-        let best = prefer_cyd_port(&self.ports);
-        let selected = self.ports.iter().find(|p| p.name == self.com_port);
+        let linked = self.linked_endpoints();
+        // When boards are already linked, prefer an *unlinked* USB so Add board
+        // does not keep snapping back to the first CYD after Refresh.
+        let best = if !linked.is_empty() {
+            prefer_cyd_port_excluding(&self.ports, &linked).or_else(|| prefer_cyd_port(&self.ports))
+        } else {
+            prefer_cyd_port(&self.ports)
+        };
+        let selected = self
+            .ports
+            .iter()
+            .find(|p| port_names_match(&p.name, &self.com_port));
         // Persisted PCI / gone selection with no usable CYD — clear so UI shows Select port.
         if best.is_none() {
             if self.com_port.is_empty() {
@@ -1421,6 +1483,24 @@ impl CompanionApp {
         let best = best.unwrap();
         if force || self.com_port.is_empty() {
             self.com_port = best.name.clone();
+            return;
+        }
+        // Never "upgrade" onto a COM that is already linked while another USB is free.
+        if !linked.is_empty()
+            && linked.iter().any(|e| port_names_match(e, &best.name))
+            && prefer_cyd_port_excluding(&self.ports, &linked).is_some()
+        {
+            // Keep current if it is a free USB; else snap to next unlinked.
+            let selected_free = selected
+                .map(|p| {
+                    !port_choice_is_pci(p)
+                        && cyd_port_score(p) >= 0
+                        && !linked.iter().any(|e| port_names_match(e, &p.name))
+                })
+                .unwrap_or(false);
+            if !selected_free {
+                let _ = self.select_next_unlinked_usb();
+            }
             return;
         }
         let selected_score = selected.map(cyd_port_score).unwrap_or(-999);
@@ -2309,27 +2389,21 @@ impl CompanionApp {
                 if cta_button(ui, "Add board", true, w).clicked() {
                     if self.update_busy {
                         self.last_error = "Wait for Update board / flash to finish.".into();
-                    } else if self.worker_already_linked(&self.com_port) {
-                        self.select_next_unlinked_usb();
-                        if !self.com_port.is_empty() && !self.worker_already_linked(&self.com_port) {
-                            self.connect_or_add_usb();
-                        } else {
-                            self.worker_scan_busy = true;
-                            self.push_log(
-                                LogKind::Usb,
-                                "Find CYD workers (looking for more boards)…".into(),
-                            );
-                            let _ = self.cmd_tx.send(NetCmd::ScanWorkers);
-                        }
-                    } else if !self.com_port.is_empty() {
-                        self.connect_or_add_usb();
                     } else {
-                        self.worker_scan_busy = true;
-                        self.push_log(
-                            LogKind::Usb,
-                            "Find CYD workers (looking for more boards)…".into(),
-                        );
-                        let _ = self.cmd_tx.send(NetCmd::ScanWorkers);
+                        // Refresh COM list first so a newly plugged CYD is visible.
+                        self.refresh_com_ports(false, false);
+                        if self.worker_already_linked(&self.com_port)
+                            || self.com_port.is_empty()
+                        {
+                            if self.select_next_unlinked_usb() {
+                                self.connect_or_add_usb();
+                            } else {
+                                // No free COM in the list — try linking any USB + scan.
+                                self.link_all_unlinked_usb();
+                            }
+                        } else {
+                            self.connect_or_add_usb();
+                        }
                     }
                 }
             }
@@ -2961,15 +3035,21 @@ impl CompanionApp {
             // Wrap so Refresh stays clickable in the half-width Mine column
             // (fixed 320px combo + buttons used to clip past the column edge).
             ui.horizontal_wrapped(|ui| {
-                let reserve = if self.usb_open { 230.0 } else { 110.0 };
+                let reserve = if self.usb_open { 340.0 } else { 110.0 };
                 let combo_w = (ui.available_width() - reserve).clamp(140.0, 320.0);
                 let com_label = if self.com_port.is_empty() {
                     "Select port".to_string()
                 } else {
                     self.ports
                         .iter()
-                        .find(|p| p.name == self.com_port)
-                        .map(|p| p.label.clone())
+                        .find(|p| port_names_match(&p.name, &self.com_port))
+                        .map(|p| {
+                            if self.worker_already_linked(&p.name) {
+                                format!("{} · linked", p.label)
+                            } else {
+                                p.label.clone()
+                            }
+                        })
                         .unwrap_or_else(|| self.com_port.clone())
                 };
                 egui::ComboBox::from_id_source("com")
@@ -2984,7 +3064,12 @@ impl CompanionApp {
                             );
                         }
                         for p in self.ports.clone() {
-                            ui.selectable_value(&mut self.com_port, p.name.clone(), &p.label);
+                            let label = if self.worker_already_linked(&p.name) {
+                                format!("{} · linked", p.label)
+                            } else {
+                                p.label.clone()
+                            };
+                            ui.selectable_value(&mut self.com_port, p.name.clone(), label);
                         }
                     });
                 if soft_button(ui, "Refresh", 98.0).clicked() {
@@ -3000,20 +3085,22 @@ impl CompanionApp {
                         "Add board"
                     };
                     if soft_button(ui, add_label, 120.0).clicked() {
-                        if selected_linked {
-                            self.select_next_unlinked_usb();
-                        }
-                        if !self.com_port.is_empty() && !self.worker_already_linked(&self.com_port)
-                        {
+                        self.refresh_com_ports(false, false);
+                        if selected_linked || self.worker_already_linked(&self.com_port) {
+                            if self.select_next_unlinked_usb() {
+                                self.connect_or_add_usb();
+                            } else {
+                                self.link_all_unlinked_usb();
+                            }
+                        } else if !self.com_port.is_empty() {
                             self.connect_or_add_usb();
                         } else {
-                            self.worker_scan_busy = true;
-                            self.push_log(
-                                LogKind::Usb,
-                                "Find CYD workers (looking for more boards)…".into(),
-                            );
-                            let _ = self.cmd_tx.send(NetCmd::ScanWorkers);
+                            self.link_all_unlinked_usb();
                         }
+                    }
+                    if soft_button(ui, "Link all USB", 110.0).clicked() {
+                        self.refresh_com_ports(false, false);
+                        self.link_all_unlinked_usb();
                     }
                 }
             });
@@ -3131,7 +3218,7 @@ impl CompanionApp {
             ui.add_space(4.0);
             ui.label(
                 RichText::new(
-                    "Tip: plug each CYD into its own USB cable, Refresh, then Add board / Find CYD workers. SoftAP Wi‑Fi is one PC↔board link at a time — use USB for a multi-board farm.",
+                    "Tip: plug the 2nd CYD on its own USB cable → Refresh → Add other COM (or Link all USB). SoftAP Wi‑Fi is one PC↔board link — use USB for multi-board.",
                 )
                 .color(C_MUTED)
                 .size(11.0),
@@ -4172,6 +4259,7 @@ impl App for CompanionApp {
                     self.select_next_unlinked_usb();
                 }
                 NetMsg::WorkersLive(live) => {
+                    let prev_n = self.connected_workers.len();
                     self.connected_workers = live;
                     let was_open = self.usb_open;
                     self.usb_open = !self.connected_workers.is_empty();
@@ -4185,30 +4273,42 @@ impl App for CompanionApp {
                         }
                         self.clear_hash_display();
                     } else {
+                        // After a new board links, point the combo at the next free USB.
+                        if self.connected_workers.len() > prev_n {
+                            let _ = self.select_next_unlinked_usb();
+                        }
                         // Keep user's COM pick for Add board even when that COM is not
                         // linked yet. Only snap selection when empty or the COM vanished.
                         let selected_still_listed = self
                             .ports
                             .iter()
                             .any(|p| port_names_match(&p.name, &self.com_port));
-                        let selected_live = self
+                        let selected_live_idx = self
                             .connected_workers
                             .iter()
-                            .find(|c| port_names_match(&c.endpoint, &self.com_port));
+                            .position(|c| port_names_match(&c.endpoint, &self.com_port));
                         if self.com_port.is_empty()
-                            || (!selected_still_listed && selected_live.is_none())
+                            || (!selected_still_listed && selected_live_idx.is_none())
                         {
                             if let Some(b) = self.connected_workers.first() {
                                 self.com_port = b.endpoint.clone();
                             }
                         }
-                        let live = selected_live.or_else(|| self.connected_workers.first());
-                        if let Some(b) = live {
-                            if !b.fw.is_empty() {
-                                self.fw_label = b.fw.clone();
+                        let live_idx = selected_live_idx.or_else(|| {
+                            if self.connected_workers.is_empty() {
+                                None
+                            } else {
+                                Some(0)
                             }
-                            if !b.mac.is_empty() {
-                                self.board_mac = b.mac.clone();
+                        });
+                        if let Some(i) = live_idx {
+                            if let Some(b) = self.connected_workers.get(i) {
+                                if !b.fw.is_empty() {
+                                    self.fw_label = b.fw.clone();
+                                }
+                                if !b.mac.is_empty() {
+                                    self.board_mac = b.mac.clone();
+                                }
                             }
                         }
                     }
@@ -6187,30 +6287,69 @@ fn mine_worker(cmd_rx: Receiver<NetCmd>, msg_tx: Sender<NetMsg>) {
                         publish_live(&msg_tx, &boards);
                         continue;
                     }
+                    // Pause jobs on already-linked boards while we open another COM —
+                    // shared USB hubs often brown out / reset both CYDs mid-mine.
+                    let resume_mine = mining;
+                    if !boards.is_empty() {
+                        log_msg(
+                            &msg_tx,
+                            LogKind::Usb,
+                            format!(
+                                "Pausing {} board(s) while linking {name}…",
+                                boards.len()
+                            ),
+                        );
+                        for b in boards.iter_mut() {
+                            let _ = usb_cmd(&mut b.port, &mut b.rx, "cmp stop");
+                        }
+                        thread::sleep(Duration::from_millis(400));
+                    }
                     log_msg(&msg_tx, LogKind::Usb, format!("Connecting worker {name}"));
                     match open_board(&name) {
                         Ok((mut board, saw)) => {
                             let dl = board.download_mode;
                             configure_board(&mut board, &msg_tx);
-                            // Same eFuse MAC already linked on another COM — replace that slot.
+                            // Same eFuse MAC on another COM: replace only if that COM
+                            // vanished (re-enumeration). Never eject a live 2nd farm board.
                             if mac_is_stable(&board.mac) {
                                 if let Some(idx) = boards.iter().position(|b| {
                                     mac_is_stable(&b.mac)
                                         && normalize_mac(&b.mac) == normalize_mac(&board.mac)
                                 }) {
-                                    let old = boards.remove(idx);
-                                    log_msg(
-                                        &msg_tx,
-                                        LogKind::Usb,
-                                        format!(
-                                            "Replaced {} with {} (same MAC {})",
-                                            old.name, name, board.mac
-                                        ),
-                                    );
+                                    let old_name = boards[idx].name.clone();
+                                    let old_still_listed = serialport::available_ports()
+                                        .unwrap_or_default()
+                                        .iter()
+                                        .any(|p| port_names_match(&p.port_name, &old_name));
+                                    if old_still_listed && !port_names_match(&old_name, &name) {
+                                        log_msg(
+                                            &msg_tx,
+                                            LogKind::Warn,
+                                            format!(
+                                                "Keep {} — same MAC {} as {name} but both COMs present (two boards?)",
+                                                old_name, board.mac
+                                            ),
+                                        );
+                                    } else {
+                                        let old = boards.remove(idx);
+                                        log_msg(
+                                            &msg_tx,
+                                            LogKind::Usb,
+                                            format!(
+                                                "Replaced {} with {} (same MAC {})",
+                                                old.name, name, board.mac
+                                            ),
+                                        );
+                                    }
                                 }
                             }
-                            arm_mining_if_needed(&mut board, &msg_tx, mining);
+                            arm_mining_if_needed(&mut board, &msg_tx, resume_mine);
                             boards.push(board);
+                            if resume_mine {
+                                for b in boards.iter_mut() {
+                                    arm_mining_if_needed(b, &msg_tx, true);
+                                }
+                            }
                             publish_live(&msg_tx, &boards);
                             let _ = msg_tx.send(NetMsg::Action(Ok(if dl {
                                 format!(
@@ -6226,6 +6365,12 @@ fn mine_worker(cmd_rx: Receiver<NetCmd>, msg_tx: Sender<NetMsg>) {
                             })));
                         }
                         Err(e) => {
+                            if resume_mine {
+                                for b in boards.iter_mut() {
+                                    arm_mining_if_needed(b, &msg_tx, true);
+                                }
+                            }
+                            publish_live(&msg_tx, &boards);
                             let _ = msg_tx.send(NetMsg::Action(Err(format!(
                                 "Link {name} failed: {e}"
                             ))));

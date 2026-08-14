@@ -95,9 +95,18 @@ pub fn cyd_port_score(p: &PortChoice) -> i32 {
 
 /// Best COM for a CYD: real USB-UART, never PCI.
 pub fn prefer_cyd_port(ports: &[PortChoice]) -> Option<&PortChoice> {
+    prefer_cyd_port_excluding(ports, &[])
+}
+
+/// Best CYD USB-UART excluding already-linked endpoints (for Add board / multi-USB).
+pub fn prefer_cyd_port_excluding<'a>(
+    ports: &'a [PortChoice],
+    exclude: &[String],
+) -> Option<&'a PortChoice> {
     ports
         .iter()
         .filter(|p| cyd_port_score(p) >= 0)
+        .filter(|p| !exclude.iter().any(|e| port_names_match(e, &p.name)))
         .max_by_key(|p| cyd_port_score(p))
 }
 
@@ -970,6 +979,26 @@ mod tests {
             "unexpected flash port arg {arg}"
         );
         assert_eq!(flash_port_arg(r"\\.\COM6").to_ascii_uppercase().replace(r"\\.\", ""), "COM6");
+    }
+
+    #[test]
+    fn prefer_excludes_linked_com() {
+        let ports = vec![
+            PortChoice {
+                name: "COM6".into(),
+                label: "COM6 — USB CH340".into(),
+            },
+            PortChoice {
+                name: "COM7".into(),
+                label: "COM7 — USB CH340".into(),
+            },
+        ];
+        let best_all = prefer_cyd_port(&ports).map(|p| p.name.as_str());
+        assert!(best_all == Some("COM6") || best_all == Some("COM7"));
+        let next = prefer_cyd_port_excluding(&ports, &["COM6".into()]);
+        assert_eq!(next.map(|p| p.name.as_str()), Some("COM7"));
+        let none = prefer_cyd_port_excluding(&ports, &["COM6".into(), "COM7".into()]);
+        assert!(none.is_none());
     }
 
     #[test]

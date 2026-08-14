@@ -59,6 +59,7 @@ In **Settings**:
 - **0.8.22** — fix Windows self-update bat (retry while `.new` remains; do not relaunch a locked old exe)
 - **0.8.23** — fetch updates via GitHub API / commit-pinned raw (branch raw CDN can serve stale VERSION/bins)
 - **0.8.24** — fix Update board: espflash reject `ESPFLASH_SKIP_UPDATE_CHECK=1` (needs true/false); skip Windows Store python stubs
+- **0.8.100** — Multi-USB: prefer unlinked COM after Refresh, Link all USB, don’t eject live board on same-MAC, pause mine while linking 2nd
 - **0.8.99** — Faster flash: esptool stub first (Terminator), fail MAC-stall in ~32s, no-stub uses --no-compress
 - **0.8.98** — Blank-board flash fix: no pre-SYNC port steal after Ready; escalate to esptool immediately; keep BOOT until Writing %
 - **0.8.97** — Terminator-style flash: Ready CTA (BOOT held), ROM sync loop, patient idle after MAC
