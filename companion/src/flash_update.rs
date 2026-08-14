@@ -399,6 +399,7 @@ const ESPFLASH_VERSION: &str = "4.5.0";
 pub const REPO_OWNER: &str = "GutFarms";
 pub const REPO_NAME: &str = "Japan-central";
 pub const REPO_REFS: &[&str] = &[
+    "cursor/esp32-mesh-connectivity-e801",
     "cursor/esp32-cyd-cpp-firmware-e801",
     "master",
     "main",
