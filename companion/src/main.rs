@@ -3222,10 +3222,18 @@ impl CompanionApp {
     fn ui_connection_controls(&mut self, ui: &mut egui::Ui) {
         soft_panel(ui, "Board & pool", |ui| {
             ui.label(
-                RichText::new("USB-C")
+                RichText::new("PC USB link")
                     .color(C_LIME)
                     .font(mono_ui_font(12.0)),
             );
+            ui.label(
+                RichText::new(
+                    "One data cable to the PC is enough (USB‑C typical). Extra boards only need power nearby — they join over mesh, not a second PC cable.",
+                )
+                .color(C_MUTED)
+                .size(11.0),
+            );
+            ui.add_space(4.0);
             // Wrap so Refresh stays clickable in the half-width Mine column
             // (fixed 320px combo + buttons used to clip past the column edge).
             ui.horizontal_wrapped(|ui| {
@@ -3325,13 +3333,35 @@ impl CompanionApp {
                     .size(12.0),
                 );
             } else if self.usb_open && count_usb_uart_ports(&self.ports) <= 1 {
-                ui.label(
-                    RichText::new(
-                        "Windows only sees 1 USB board COM (plus PCI junk like COM1). Plug the 2nd CYD with a data USB-C cable into another port, open Device Manager → Ports (COM & LPT), confirm a new COMx appears, then Refresh. Power-only boards join as mesh (should show a different MAC).",
-                    )
-                    .color(C_WARN)
-                    .size(12.0),
-                );
+                let mesh_n = self
+                    .connected_workers
+                    .iter()
+                    .filter(|w| w.endpoint.starts_with("mesh:"))
+                    .count();
+                let root_peers = self
+                    .connected_workers
+                    .iter()
+                    .filter(|w| !w.endpoint.starts_with("mesh:"))
+                    .map(|w| w.mesh_peers as usize)
+                    .max()
+                    .unwrap_or(0);
+                if mesh_n == 0 {
+                    ui.label(
+                        RichText::new(
+                            "Only one PC USB COM (normal). Keep this board as the root. Power a 2nd CYD nearby (wall USB / power bank — no PC cable). It should appear as mesh:… within a few seconds. Same eFuse MAC on both boards cannot mesh — then use a 2nd data cable.",
+                        )
+                        .color(C_WARN)
+                        .size(12.0),
+                    );
+                } else {
+                    ui.label(
+                        RichText::new(format!(
+                            "PC USB root + {mesh_n} mesh board(s) · root reports {root_peers} peer(s)."
+                        ))
+                        .color(C_LIME)
+                        .size(12.0),
+                    );
+                }
             }
             ui.add_space(12.0);
             self.ui_worker_discovery(ui);
@@ -3422,10 +3452,20 @@ impl CompanionApp {
         });
         if self.connected_workers.len() <= 1 {
             ui.add_space(4.0);
+            let has_usb = self
+                .connected_workers
+                .iter()
+                .any(|w| !w.endpoint.starts_with("mesh:"));
+            let has_mesh = self
+                .connected_workers
+                .iter()
+                .any(|w| w.endpoint.starts_with("mesh:"));
             ui.label(
-                RichText::new(
-                    "Tip: USB root keeps hashing (throttled) while bridging mesh peers. Extra CYDs only need power nearby — any data USB works for the root (USB‑C data cable typical; USB‑A hubs OK if COM appears). Charge-only cables will not link.",
-                )
+                RichText::new(if has_usb && !has_mesh {
+                    "Waiting for mesh peers… Power other CYDs near this USB root (wall / power bank — no PC cable). They appear as mesh:… SoftAP stays on. Boards with the same eFuse MAC cannot mesh — plug a 2nd data cable instead."
+                } else {
+                    "USB root keeps hashing (throttled) while bridging mesh peers. Extra CYDs only need power nearby."
+                })
                 .color(C_MUTED)
                 .size(11.0),
             );
@@ -6408,7 +6448,21 @@ fn mine_worker(cmd_rx: Receiver<NetCmd>, msg_tx: Sender<NetMsg>) {
             if !line.starts_with("CMPMESH ") {
                 continue;
             }
-            for mac in parse_mesh_peers(&line) {
+            let peers = parse_mesh_peers(&line);
+            if peers.is_empty() {
+                log_msg(
+                    msg_tx,
+                    LogKind::Usb,
+                    format!("{gname}: mesh listen (no peers yet) · {line}"),
+                );
+            } else {
+                log_msg(
+                    msg_tx,
+                    LogKind::Usb,
+                    format!("{gname}: mesh peers {} · {line}", peers.join(",")),
+                );
+            }
+            for mac in peers {
                 if mac_is_stable(gmac) && normalize_mac(gmac) == mac {
                     continue;
                 }
@@ -7422,7 +7476,14 @@ fn mine_worker(cmd_rx: Receiver<NetCmd>, msg_tx: Sender<NetMsg>) {
                             }
                         }
                     }
-                    if last_mesh_sync.elapsed() >= Duration::from_secs(4) {
+                    if last_mesh_sync.elapsed()
+                        >= if boards.len() <= 1 && mesh.is_empty() {
+                            // Single Type‑C root: poll mesh often so power-only peers appear quickly.
+                            Duration::from_secs(2)
+                        } else {
+                            Duration::from_secs(4)
+                        }
+                    {
                         // Don't block the pool handshake on ESP-NOW via timeouts.
                         let pool_linking = stratum
                             .as_ref()

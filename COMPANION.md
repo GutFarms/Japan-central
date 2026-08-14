@@ -59,6 +59,7 @@ In **Settings**:
 - **0.8.22** — fix Windows self-update bat (retry while `.new` remains; do not relaunch a locked old exe)
 - **0.8.23** — fetch updates via GitHub API / commit-pinned raw (branch raw CDN can serve stale VERSION/bins)
 - **0.8.24** — fix Update board: espflash reject `ESPFLASH_SKIP_UPDATE_CHECK=1` (needs true/false); skip Windows Store python stubs
+- **0.8.112** — One PC USB root is enough; mesh peers list all nearby boards; clearer single Type‑C guidance
 - **0.8.111** — Stratum authorize first; surface AUTH FAILED; no silent reconnect on bad worker
 - **0.8.110** — COM-first multi-board identity + per-board hashrate; Find Workers uses registry COM list
 - **0.8.109** — Hide COM1/PCI from Update/Connect; prefer linked CYD for soft Push

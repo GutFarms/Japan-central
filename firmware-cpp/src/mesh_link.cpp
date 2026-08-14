@@ -124,9 +124,11 @@ bool MeshLink::hasRootPeer() const {
 }
 
 size_t MeshLink::leafCount() const {
+  // Any other board in range counts — a peer that recently had USB can briefly
+  // advertise as root and must still appear for Companion bridging.
   size_t n = 0;
   for (size_t i = 0; i < MESH_MAX_PEERS; i++) {
-    if (peers_[i].used && !peers_[i].root) n++;
+    if (peers_[i].used) n++;
   }
   return n;
 }
@@ -314,8 +316,8 @@ void MeshLink::replyMeshList(Print& out) const {
   bool first = true;
   for (size_t i = 0; i < MESH_MAX_PEERS; i++) {
     if (!peers_[i].used) continue;
-    // Root lists leaves (non-root). Leaf listing is less useful but include all.
-    if (isRoot() && peers_[i].root) continue;
+    // List every peer the root can hear (including briefly dual-root boards).
+    // Companion skips the gateway's own MAC.
     char m[18];
     macToStr(peers_[i].mac, m);
     if (!first) {

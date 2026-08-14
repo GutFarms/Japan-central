@@ -7,9 +7,10 @@
 
 static constexpr size_t MESH_MAX_PEERS = 8;
 static constexpr size_t MESH_LINE_CAP = 220;
-static constexpr uint32_t MESH_PEER_TTL_MS = 12000;
-static constexpr uint32_t MESH_HELLO_MS = 2000;
-static constexpr uint32_t MESH_USB_ROOT_MS = 8000;
+static constexpr uint32_t MESH_PEER_TTL_MS = 20000;
+static constexpr uint32_t MESH_HELLO_MS = 1500;
+// Keep USB-elected root long enough across slow Companion poll / stratum stalls.
+static constexpr uint32_t MESH_USB_ROOT_MS = 30000;
 static constexpr uint32_t MESH_VIA_TIMEOUT_MS = 2800;
 
 struct MeshPeer {
