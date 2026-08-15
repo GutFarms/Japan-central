@@ -3429,7 +3429,7 @@ impl CompanionApp {
             );
             ui.label(
                 RichText::new(
-                    "· Bench boards (D0) → lock Full HW  ·  Clock 240 MHz  ·  More CYDs for more rate
+                    "· Bench boards (D0) → lock fastest SHA path (often HW/SW)  ·  Clock 240 MHz  ·  More CYDs for more rate
 · Algorithm stays Bitcoin SHA-256d only
 · Do NOT raise board voltage — CYD is fixed ~3.3V; overvolting can kill flash/USB/ESP
 · SAFETY: blank / BOOT — hold BOOT, Update board, click Ready while BOOT held",
@@ -5112,7 +5112,7 @@ Phone: join SoftAP — Board Setup opens automatically to set home Wi‑Fi.",
             }
             ui.label(
                 RichText::new(
-                    "SHA path · Full HW = silicon · HW+ = midstate · HW/SW = hybrid",
+                    "SHA path · HW = full silicon · HW+ = midstate · HW/SW = hybrid (often peak on D0)",
                 )
                 .color(C_DIM)
                 .font(mono_ui_font(10.0)),
@@ -6677,7 +6677,7 @@ impl App for CompanionApp {
                             ui.add_space(8.0);
                             ui.label(
                                 RichText::new(
-                                    "Best path on this board (not a different alg): Bench boards → Full HW · 240 MHz · more CYDs for more rate. Algorithm stays SHA-256d.",
+                                    "Best path on this board (not a different alg): Bench / first-job auto-tune locks HW, HW+, or HW/SW · 240 MHz · more CYDs for more rate. Algorithm stays SHA-256d.",
                                 )
                                 .color(C_DIM)
                                 .size(12.0),

@@ -41,6 +41,8 @@ class WifiLink {
             CompanionLink::StopFn onStop, CompanionLink::StatsFn onStats);
 
   bool tcpConnected() { return client_.connected() != 0; }
+  /// SoftAP/TCP cmp bytes waiting — mineB yields only when RX is pending.
+  bool tcpRxPending() { return client_.connected() && client_.available() > 0; }
   IPAddress softApIp() const { return WiFi.softAPIP(); }
   IPAddress staIp() const { return WiFi.localIP(); }
   String softApSsid() const { return apSsid_; }
