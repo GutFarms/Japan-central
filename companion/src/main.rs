@@ -62,6 +62,10 @@ use eframe::{App, NativeOptions};
 use serde::{Deserialize, Serialize};
 use serialport::SerialPort;
 
+/// Set when Update board / Push is clicked — mine-worker aborts blocking USB/`via`
+/// waits so flash can take the COM immediately (avoids stuck "auto-reset…" UI).
+static USB_FLASH_PREEMPT: AtomicBool = AtomicBool::new(false);
+
 fn load_app_icon() -> Option<IconData> {
     // Prefer multi-size logo; taskbar/title-bar use this runtime icon (PE ICO is separate).
     let bytes = include_bytes!("../assets/cyd-logo.png");
@@ -2576,6 +2580,9 @@ impl CompanionApp {
         // Honor the user's Push choice even if detection is uncertain (old fw / not linked).
         // flash_update falls back to BOOT Ready if auto-reset fails.
         let live_push = prefer_live_push && !wifi_ota;
+        // Abort any in-flight mesh via / USB wait BEFORE queuing UpdateFirmware —
+        // otherwise Push sits on "auto-reset…" until via timeouts finish (tens of seconds).
+        USB_FLASH_PREEMPT.store(true, Ordering::SeqCst);
         if self.mining {
             self.stop_mine();
         }
@@ -2619,7 +2626,7 @@ impl CompanionApp {
         self.update_status = if wifi_ota {
             format!("Pushing firmware over Wi‑Fi to {port}…")
         } else if live_push {
-            format!("Pushing firmware update to {port} (auto-reset)…")
+            format!("Releasing {port} for push (auto-reset)…")
         } else {
             format!("Flashing board via {port}…")
         };
@@ -2661,6 +2668,7 @@ impl CompanionApp {
         self.post_flash_verify = None;
         self.flash_progress = 0.0;
         self.flash_phase.clear();
+        USB_FLASH_PREEMPT.store(false, Ordering::SeqCst);
         if let Some(c) = self.flash_cancel.take() {
             c.store(true, Ordering::SeqCst);
         }
@@ -8261,6 +8269,9 @@ fn mine_worker(cmd_rx: Receiver<NetCmd>, msg_tx: Sender<NetMsg>) {
                     let soft = last.contains("via timeout")
                         || last.contains("via send failed")
                         || last.contains("USB timeout");
+                    if last.contains("aborted for board update") {
+                        return Err(last);
+                    }
                     if !soft || attempt + 1 >= attempts {
                         return Err(last);
                     }
@@ -10393,6 +10404,8 @@ Power a 2nd board nearby with wall/power-bank only (no PC cable)."
                             ))
                         })();
                         hold_clear.store(false, Ordering::SeqCst);
+                        // Allow mine-worker USB again after flash thread finishes.
+                        USB_FLASH_PREEMPT.store(false, Ordering::SeqCst);
                         // On failure never ask the UI to reopen — that thrashing COM
                         // is what looks like looping terminals after a failed update.
                         let reopen_port = if reopen && result.is_ok() {
@@ -10433,6 +10446,17 @@ Power a 2nd board nearby with wall/power-bank only (no PC cable)."
                     let _ = msg_tx.send(NetMsg::ApiFeedResult(outcome));
                 }
             }
+        }
+
+        // Update board clicked — skip mesh/jobs until flash owns the COM (preempt
+        // also aborts in-flight usb_cmd_ex via waits).
+        if USB_FLASH_PREEMPT.load(Ordering::SeqCst) {
+            thread::sleep(Duration::from_millis(if flash_any_held(&flash_hold) {
+                40
+            } else {
+                15
+            }));
+            continue;
         }
 
         // Detect unplug even while stratum has presidency (status polls may be deferred).
@@ -11145,6 +11169,9 @@ fn usb_cmd_ex(
         let deadline = Instant::now() + Duration::from_millis(wait_ms);
         let mut last_pump = Instant::now() - Duration::from_millis(200);
         while Instant::now() < deadline {
+            if USB_FLASH_PREEMPT.load(Ordering::SeqCst) {
+                return Err("aborted for board update".into());
+            }
             // Pump often — stratum presidency means the pool is polled during every USB wait.
             if last_pump.elapsed() >= Duration::from_millis(40) {
                 pump();
