@@ -238,10 +238,16 @@ static void onJob(const UsbJob& job) {
   g_windowHashesStart = g_hashCounter.load(std::memory_order_relaxed);
 }
 
+static volatile bool g_needIndepTune = false;
+
 /// Companion-fed jobs are ignored while onboard pool owns mining.
 static void onJobFromCompanion(const UsbJob& job) {
   if (g_pool.active(g_cfg)) return;
   onJob(job);
+  // First Companion-fed job: lock D0 high-rate path once (same as indep).
+  if (g_hwSha && !(g_cfg.pathTuned && g_cfg.shaPath > 0)) {
+    g_needIndepTune = true;
+  }
 }
 
 static void onStop() {
@@ -272,8 +278,6 @@ static void onPoolStats(uint32_t accepted, uint32_t rejected) {
   g_accepted = accepted;
   g_rejected = rejected;
 }
-
-static volatile bool g_needIndepTune = false;
 
 static void onIndepTune() {
   // Defer heavy D0 Bench off the USB/pool poll path (blocks tens of seconds).
@@ -421,23 +425,22 @@ static void mineTaskA(void*) {
       vTaskDelay(pdMS_TO_TICKS(2));
       continue;
     }
-    // USB mesh root still hashes while bridging — mild batch cut + yields leave
-    // headroom for ESP-NOW / cmp via without cratering solo-class H/s.
+    // Keep HW lane hashing during via — only mild yield. Parking core1 for
+    // mesh chrome was the main reason roots fell far below D0 peak.
     const bool bridging = g_mesh.isBridging();
-    if (g_mesh.viaBusy()) {
-      vTaskDelay(pdMS_TO_TICKS(3));
+    if (g_mesh.viaBusy() && (loops & 15u) == 0u) {
+      vTaskDelay(1);
       esp_task_wdt_reset();
-      continue;
     }
     if (g_hwSha) {
-      mineLane(g_minerA, 1, bridging ? 49152 : 65536);
-      const uint32_t mask = bridging ? 63u : 127u;
+      mineLane(g_minerA, 1, bridging ? 57344 : 65536);
+      const uint32_t mask = bridging ? 95u : 127u;
       if ((++loops & mask) == 0u) {
         vTaskDelay(1);
         esp_task_wdt_reset();
       }
     } else {
-      mineLane(g_minerA, 2, bridging ? 8192 : 12288);
+      mineLane(g_minerA, 2, bridging ? 10240 : 12288);
       if ((++loops & 31u) == 0u) {
         vTaskDelay(1);
         esp_task_wdt_reset();
@@ -465,9 +468,9 @@ static void mineTaskB(void*) {
     // Bridging root: keep SW assist alive at a smaller batch so fleet H/s stays
     // high; yield more often so USB + ESP-NOW via still get core-0 time.
     const bool bridging = g_mesh.isBridging();
-    mineLane(g_minerB, 1, bridging ? (g_hwSha ? 4096 : 2048) : (g_hwSha ? 12288 : 4096));
-    // Pending USB or SoftAP TCP bytes: step aside so cmp RX isn't starved.
-    if (Serial.available() > 0 || g_wifi.tcpConnected()) {
+    mineLane(g_minerB, 1, bridging ? (g_hwSha ? 6144 : 3072) : (g_hwSha ? 12288 : 4096));
+    // Pending USB or SoftAP TCP bytes only — idle TCP must not starve SW assist.
+    if (Serial.available() > 0 || g_wifi.tcpRxPending()) {
       vTaskDelay(1);
       esp_task_wdt_reset();
       continue;

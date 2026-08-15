@@ -50,10 +50,13 @@ class MeshLink {
   void noteUsbActivity();
   bool isRoot() const;
   bool hasRootPeer() const;
-  /// Root with at least one leaf peer — keep hashing, but yield for bridge traffic.
+  /// Root with recent via/share-bridge activity — not mere HELLO peers.
+  /// HELLO-only neighbors must not throttle HW hashrate.
   bool isBridging() const;
   /// True while root is blocked in `cmp via` waiting for a leaf CMP* reply.
   bool viaBusy() const { return viaPending_; }
+  /// Mark recent via / leaf-share work so hashing may yield briefly.
+  void noteViaActivity();
   size_t leafCount() const;
   bool ready() const { return ready_; }
 
@@ -83,6 +86,8 @@ class MeshLink {
   uint8_t selfMac_[6]{};
   uint32_t lastUsbMs_ = 0;
   uint32_t lastHelloMs_ = 0;
+  /// Last cmp-via / leaf share bridge activity (hash throttle window).
+  uint32_t lastViaMs_ = 0;
   uint8_t seq_ = 0;
   MeshPeer peers_[MESH_MAX_PEERS]{};
   MeshPrint leafOut_;

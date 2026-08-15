@@ -185,7 +185,15 @@ size_t MeshLink::leafCount() const {
   return n;
 }
 
-bool MeshLink::isBridging() const { return isRoot() && leafCount() > 0; }
+bool MeshLink::isBridging() const {
+  // Only throttle hashing while via is in flight or was recent — not for every
+  // SoftAP/ESP-NOW HELLO that happens to list a neighbor.
+  if (!isRoot() || leafCount() == 0) return false;
+  if (viaPending_) return true;
+  return lastViaMs_ != 0 && (millis() - lastViaMs_) < 8000;
+}
+
+void MeshLink::noteViaActivity() { lastViaMs_ = millis(); }
 
 void MeshLink::macToStr(const uint8_t mac[6], char out[18]) const {
   snprintf(out, 18, "%02x:%02x:%02x:%02x:%02x:%02x", mac[0], mac[1], mac[2], mac[3], mac[4],
@@ -505,6 +513,7 @@ bool MeshLink::handleVia(const String& macArg, const String& cmdRest) {
   }
 
   viaPending_ = true;
+  noteViaActivity();
   memcpy(viaMac_, mac, 6);
   viaStartMs_ = millis();
   pinChannel();

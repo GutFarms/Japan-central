@@ -68,11 +68,13 @@ bool PoolStratum::connectPool(const AppConfig& cfg) {
   endpoint_ = host + ":" + String(port);
   worker_ = cfg.poolWorker;
   password_ = cfg.poolPass.length() ? cfg.poolPass : String("x");
-  client_.setTimeout(8);
+  client_.setTimeout(1);
+  // Prefer a short connect — long blocks starve mineB on core0.
   if (!client_.connect(host.c_str(), port)) {
     snprintf(phase_, sizeof(phase_), "tcp-fail");
     return false;
   }
+  client_.setTimeout(2);
   client_.setNoDelay(true);
   subscribed_ = false;
   authorized_ = false;
@@ -92,7 +94,11 @@ bool PoolStratum::sendLine(const String& json) {
   String line = json;
   line += '\n';
   size_t n = client_.print(line);
-  client_.flush();
+  // Flush only on share submits (caller sets pendingShareId_ first) — keepalive
+  // flush was blocking core0 and cutting SW-assist H/s.
+  if (pendingShareId_ != 0 && json.indexOf("mining.submit") >= 0) {
+    client_.flush();
+  }
   return n == line.length();
 }
 
@@ -178,13 +184,16 @@ void PoolStratum::poll(const AppConfig& cfg) {
     (void)sendSuggestDifficulty();
   }
 
-  while (client_.available() > 0) {
+  // Bound RX so a noisy pool cannot monopolize core0 (mineB lives here too).
+  int lines = 0;
+  while (client_.available() > 0 && lines < 8) {
     char c = (char)client_.read();
     if (c == '\r') continue;
     if (c == '\n') {
       if (lineBuf_.length()) {
         handleLine(lineBuf_);
         lineBuf_ = "";
+        lines++;
       }
       continue;
     }
