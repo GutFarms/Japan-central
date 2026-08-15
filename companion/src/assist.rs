@@ -1,0 +1,720 @@
+//! In-app AI assistant — OpenAI-compatible chat with tools that control/monitor boards.
+//!
+//! Without an API key, a local keyword helper still runs the same tools (status, mine,
+//! scan, connect, …) so Assist remains useful offline.
+
+use serde::{Deserialize, Serialize};
+use serde_json::{json, Value};
+
+pub const DEFAULT_BASE_URL: &str = "https://api.openai.com/v1";
+pub const DEFAULT_MODEL: &str = "gpt-4o-mini";
+const MAX_TOOL_ROUNDS: u8 = 5;
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum AssistRole {
+    System,
+    User,
+    Assistant,
+    Tool,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct AssistToolCall {
+    pub id: String,
+    pub name: String,
+    pub arguments: String,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct AssistMessage {
+    pub role: AssistRole,
+    pub content: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool_call_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tool_calls: Vec<AssistToolCall>,
+}
+
+impl AssistMessage {
+    pub fn system(text: impl Into<String>) -> Self {
+        Self {
+            role: AssistRole::System,
+            content: text.into(),
+            tool_call_id: None,
+            tool_calls: Vec::new(),
+        }
+    }
+    pub fn user(text: impl Into<String>) -> Self {
+        Self {
+            role: AssistRole::User,
+            content: text.into(),
+            tool_call_id: None,
+            tool_calls: Vec::new(),
+        }
+    }
+    pub fn assistant(text: impl Into<String>) -> Self {
+        Self {
+            role: AssistRole::Assistant,
+            content: text.into(),
+            tool_call_id: None,
+            tool_calls: Vec::new(),
+        }
+    }
+    pub fn tool(id: impl Into<String>, text: impl Into<String>) -> Self {
+        Self {
+            role: AssistRole::Tool,
+            content: text.into(),
+            tool_call_id: Some(id.into()),
+            tool_calls: Vec::new(),
+        }
+    }
+}
+
+/// Live snapshot passed into the model / local helper (read-only).
+#[derive(Clone, Debug, Serialize)]
+pub struct AssistSnapshot {
+    pub companion_version: String,
+    pub usb_open: bool,
+    pub mining: bool,
+    pub com_port: String,
+    pub stratum: String,
+    pub worker: String,
+    pub target_mhz: u8,
+    pub fw: String,
+    pub board_mac: String,
+    pub hashrate_khs: f64,
+    pub accepted: u32,
+    pub rejected: u32,
+    pub pool_phase: String,
+    pub stratum_phase: String,
+    pub stratum_connected: bool,
+    pub stratum_authorized: bool,
+    pub ports: Vec<String>,
+    pub linked: Vec<String>,
+    pub discovered: Vec<String>,
+    pub flash_busy: bool,
+    pub last_ok: String,
+    pub last_error: String,
+    pub recent_logs: Vec<String>,
+}
+
+#[derive(Clone, Debug)]
+pub enum AssistAction {
+    GetFleetStatus,
+    ListPorts,
+    ScanWorkers,
+    ConnectBoard { endpoint: Option<String> },
+    DisconnectBoard { endpoint: Option<String> },
+    SetPoolConfig {
+        stratum: Option<String>,
+        worker: Option<String>,
+        password: Option<String>,
+    },
+    StartMining,
+    StopMining,
+    SetClock { mhz: u8 },
+    BenchBoards,
+    ConfigureBoardWifi {
+        endpoint: Option<String>,
+        ssid: String,
+        password: String,
+    },
+    GetEventLog { limit: usize },
+    /// High-risk — UI confirms before running.
+    UpdateBoardFirmware { live_push: bool, wifi: bool },
+    SwitchTab { tab: String },
+}
+
+#[derive(Clone, Debug)]
+pub struct PendingTool {
+    pub id: String,
+    pub action: AssistAction,
+}
+
+pub fn tool_definitions() -> Value {
+    json!([
+        {
+            "type": "function",
+            "function": {
+                "name": "get_fleet_status",
+                "description": "Read current USB/Wi-Fi link, mining, pool, hashrate, accepts/rejects, firmware.",
+                "parameters": { "type": "object", "properties": {} }
+            }
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "list_ports",
+                "description": "Refresh and list USB serial COM ports on this PC.",
+                "parameters": { "type": "object", "properties": {} }
+            }
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "scan_workers",
+                "description": "Scan USB and LAN for CYD miner boards.",
+                "parameters": { "type": "object", "properties": {} }
+            }
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "connect_board",
+                "description": "Link a board over USB COM or Wi-Fi host:19284.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "endpoint": {
+                            "type": "string",
+                            "description": "COM port (e.g. COM5) or Wi-Fi endpoint (e.g. 192.168.4.1:19284). Empty = selected COM."
+                        }
+                    }
+                }
+            }
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "disconnect_board",
+                "description": "Disconnect a linked board (or close primary USB if endpoint omitted).",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "endpoint": { "type": "string" }
+                    }
+                }
+            }
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "set_pool_config",
+                "description": "Update Companion pool URL, worker/BTC address, and/or password (saved in prefs).",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "stratum": { "type": "string" },
+                        "worker": { "type": "string" },
+                        "password": { "type": "string" }
+                    }
+                }
+            }
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "start_mining",
+                "description": "Start PC-side stratum and push work to linked boards.",
+                "parameters": { "type": "object", "properties": {} }
+            }
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "stop_mining",
+                "description": "Stop mining / disconnect from the pool.",
+                "parameters": { "type": "object", "properties": {} }
+            }
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "set_clock",
+                "description": "Set board CPU clock to 80, 160, or 240 MHz.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "mhz": { "type": "integer", "enum": [80, 160, 240] }
+                    },
+                    "required": ["mhz"]
+                }
+            }
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "bench_boards",
+                "description": "Run a short hashrate bench / retune on linked boards.",
+                "parameters": { "type": "object", "properties": {} }
+            }
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "configure_board_wifi",
+                "description": "Push home Wi-Fi SSID/password to a linked board (SoftAP→STA).",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "endpoint": { "type": "string" },
+                        "ssid": { "type": "string" },
+                        "password": { "type": "string" }
+                    },
+                    "required": ["ssid", "password"]
+                }
+            }
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "get_event_log",
+                "description": "Return recent Companion event-log lines.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "limit": { "type": "integer", "minimum": 1, "maximum": 40 }
+                    }
+                }
+            }
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "update_board_firmware",
+                "description": "Flash/push board firmware. Requires user confirmation in the UI.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "live_push": {
+                            "type": "boolean",
+                            "description": "USB auto-reset push without BOOT (default true)."
+                        },
+                        "wifi": {
+                            "type": "boolean",
+                            "description": "Wi-Fi OTA push (default false)."
+                        }
+                    }
+                }
+            }
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "switch_tab",
+                "description": "Switch the Companion UI tab: mine, setup, settings, or assist.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "tab": { "type": "string", "enum": ["mine", "setup", "settings", "assist"] }
+                    },
+                    "required": ["tab"]
+                }
+            }
+        }
+    ])
+}
+
+pub fn system_prompt(snap: &AssistSnapshot) -> String {
+    format!(
+        "You are the built-in assistant for Njörðr Seas' CYD miner Companion v{}. \
+You help the user monitor and control ESP32-2432S028 (CYD) SHA-256 miner boards. \
+Use tools to take real actions — do not pretend you changed something without calling a tool. \
+Be concise. Prefer get_fleet_status before diagnosing. \
+Never invent hashrates or accept counts — read them from tools. \
+Firmware updates need confirmation; warn briefly before calling update_board_firmware. \
+Current snapshot (may be slightly stale):\n{}",
+        snap.companion_version,
+        serde_json::to_string_pretty(snap).unwrap_or_else(|_| "{}".into())
+    )
+}
+
+pub fn parse_action(name: &str, arguments: &str) -> Result<AssistAction, String> {
+    let args: Value = if arguments.trim().is_empty() {
+        json!({})
+    } else {
+        serde_json::from_str(arguments).map_err(|e| format!("bad tool args: {e}"))?
+    };
+    let opt_str = |k: &str| {
+        args.get(k)
+            .and_then(|v| v.as_str())
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+    };
+    match name {
+        "get_fleet_status" => Ok(AssistAction::GetFleetStatus),
+        "list_ports" => Ok(AssistAction::ListPorts),
+        "scan_workers" => Ok(AssistAction::ScanWorkers),
+        "connect_board" => Ok(AssistAction::ConnectBoard {
+            endpoint: opt_str("endpoint"),
+        }),
+        "disconnect_board" => Ok(AssistAction::DisconnectBoard {
+            endpoint: opt_str("endpoint"),
+        }),
+        "set_pool_config" => Ok(AssistAction::SetPoolConfig {
+            stratum: opt_str("stratum"),
+            worker: opt_str("worker"),
+            password: opt_str("password"),
+        }),
+        "start_mining" => Ok(AssistAction::StartMining),
+        "stop_mining" => Ok(AssistAction::StopMining),
+        "set_clock" => {
+            let mhz = args
+                .get("mhz")
+                .and_then(|v| v.as_u64())
+                .ok_or_else(|| "set_clock needs mhz".to_string())? as u8;
+            if !matches!(mhz, 80 | 160 | 240) {
+                return Err("mhz must be 80, 160, or 240".into());
+            }
+            Ok(AssistAction::SetClock { mhz })
+        }
+        "bench_boards" => Ok(AssistAction::BenchBoards),
+        "configure_board_wifi" => Ok(AssistAction::ConfigureBoardWifi {
+            endpoint: opt_str("endpoint"),
+            ssid: opt_str("ssid").ok_or_else(|| "ssid required".to_string())?,
+            password: args
+                .get("password")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string(),
+        }),
+        "get_event_log" => {
+            let limit = args
+                .get("limit")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(12)
+                .clamp(1, 40) as usize;
+            Ok(AssistAction::GetEventLog { limit })
+        }
+        "update_board_firmware" => Ok(AssistAction::UpdateBoardFirmware {
+            live_push: args
+                .get("live_push")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(true),
+            wifi: args.get("wifi").and_then(|v| v.as_bool()).unwrap_or(false),
+        }),
+        "switch_tab" => Ok(AssistAction::SwitchTab {
+            tab: opt_str("tab").unwrap_or_else(|| "assist".into()),
+        }),
+        other => Err(format!("unknown tool: {other}")),
+    }
+}
+
+/// Offline / no-key helper: map plain English to tools + a short reply.
+pub fn local_assist(user: &str, snap: &AssistSnapshot) -> (String, Vec<PendingTool>) {
+    let low = user.to_ascii_lowercase();
+    let mut tools = Vec::new();
+    let mut say = String::new();
+
+    let push = |tools: &mut Vec<PendingTool>, name: &str, action: AssistAction| {
+        tools.push(PendingTool {
+            id: format!("local-{}", tools.len() + 1),
+            action,
+        });
+        let _ = name;
+    };
+
+    if low.contains("status")
+        || low.contains("hashrate")
+        || low.contains("how's")
+        || low.contains("how is")
+        || low.contains("monitor")
+        || low == "fleet"
+    {
+        push(&mut tools, "get_fleet_status", AssistAction::GetFleetStatus);
+        say = "Checking fleet status…".into();
+    } else if low.contains("scan") || low.contains("find board") || low.contains("find worker") {
+        push(&mut tools, "scan_workers", AssistAction::ScanWorkers);
+        say = "Scanning for CYD boards…".into();
+    } else if low.contains("list port") || low.contains("com port") || low.contains("serial") {
+        push(&mut tools, "list_ports", AssistAction::ListPorts);
+        say = "Refreshing serial ports…".into();
+    } else if low.contains("stop mine") || low.contains("stop mining") || low == "stop" {
+        push(&mut tools, "stop_mining", AssistAction::StopMining);
+        say = "Stopping mining…".into();
+    } else if low.contains("start mine") || low.contains("start mining") || low == "mine" {
+        push(&mut tools, "start_mining", AssistAction::StartMining);
+        say = "Starting mining…".into();
+    } else if low.contains("connect") || low.contains("link") {
+        push(
+            &mut tools,
+            "connect_board",
+            AssistAction::ConnectBoard { endpoint: None },
+        );
+        say = "Linking the selected board…".into();
+    } else if low.contains("disconnect") || low.contains("close usb") {
+        push(
+            &mut tools,
+            "disconnect_board",
+            AssistAction::DisconnectBoard { endpoint: None },
+        );
+        say = "Disconnecting…".into();
+    } else if low.contains("bench") || low.contains("retune") {
+        push(&mut tools, "bench_boards", AssistAction::BenchBoards);
+        say = "Running board bench…".into();
+    } else if low.contains("log") || low.contains("event") {
+        push(
+            &mut tools,
+            "get_event_log",
+            AssistAction::GetEventLog { limit: 16 },
+        );
+        say = "Pulling recent event log…".into();
+    } else if low.contains("setup") && low.contains("wifi") {
+        push(
+            &mut tools,
+            "switch_tab",
+            AssistAction::SwitchTab {
+                tab: "setup".into(),
+            },
+        );
+        say = "Opening Setup for Wi‑Fi credentials…".into();
+    } else if low.contains("flash") || low.contains("firmware") || low.contains("update board") {
+        push(
+            &mut tools,
+            "update_board_firmware",
+            AssistAction::UpdateBoardFirmware {
+                live_push: true,
+                wifi: false,
+            },
+        );
+        say = "Firmware update needs your confirmation…".into();
+    } else if low.contains("240") && (low.contains("mhz") || low.contains("clock")) {
+        push(&mut tools, "set_clock", AssistAction::SetClock { mhz: 240 });
+        say = "Setting clock to 240 MHz…".into();
+    } else if low.contains("160") && (low.contains("mhz") || low.contains("clock")) {
+        push(&mut tools, "set_clock", AssistAction::SetClock { mhz: 160 });
+        say = "Setting clock to 160 MHz…".into();
+    } else if low.contains("80") && (low.contains("mhz") || low.contains("clock")) {
+        push(&mut tools, "set_clock", AssistAction::SetClock { mhz: 80 });
+        say = "Setting clock to 80 MHz…".into();
+    } else {
+        say = format!(
+            "Local Assist (no API key). USB={} · mining={} · {:.1} kH/s · A={} R={} · COM={}.\n\n\
+Try: status · start mining · stop mining · scan · connect · list ports · bench · logs · flash.\n\
+Add an OpenAI-compatible API key in Settings → Assist for full natural-language control.",
+            if snap.usb_open { "linked" } else { "idle" },
+            if snap.mining { "on" } else { "off" },
+            snap.hashrate_khs,
+            snap.accepted,
+            snap.rejected,
+            if snap.com_port.is_empty() {
+                "—"
+            } else {
+                snap.com_port.as_str()
+            }
+        );
+    }
+    (say, tools)
+}
+
+fn messages_to_openai(msgs: &[AssistMessage]) -> Value {
+    let mut out = Vec::new();
+    for m in msgs {
+        let mut obj = serde_json::Map::new();
+        obj.insert(
+            "role".into(),
+            json!(match m.role {
+                AssistRole::System => "system",
+                AssistRole::User => "user",
+                AssistRole::Assistant => "assistant",
+                AssistRole::Tool => "tool",
+            }),
+        );
+        if m.role == AssistRole::Tool {
+            if let Some(id) = &m.tool_call_id {
+                obj.insert("tool_call_id".into(), json!(id));
+            }
+            obj.insert("content".into(), json!(m.content));
+        } else if !m.tool_calls.is_empty() {
+            obj.insert(
+                "content".into(),
+                if m.content.is_empty() {
+                    Value::Null
+                } else {
+                    json!(m.content)
+                },
+            );
+            let calls: Vec<Value> = m
+                .tool_calls
+                .iter()
+                .map(|c| {
+                    json!({
+                        "id": c.id,
+                        "type": "function",
+                        "function": { "name": c.name, "arguments": c.arguments }
+                    })
+                })
+                .collect();
+            obj.insert("tool_calls".into(), Value::Array(calls));
+        } else {
+            obj.insert("content".into(), json!(m.content));
+        }
+        out.push(Value::Object(obj));
+    }
+    Value::Array(out)
+}
+
+#[derive(Debug)]
+pub enum LlmRound {
+    /// Model wants tools — append assistant message + execute these.
+    Tools {
+        assistant: AssistMessage,
+        pending: Vec<PendingTool>,
+    },
+    /// Final natural-language reply.
+    Done { assistant: AssistMessage },
+}
+
+pub struct AssistClient {
+    pub api_key: String,
+    pub base_url: String,
+    pub model: String,
+}
+
+impl AssistClient {
+    pub fn from_env_or(key: &str, base: &str, model: &str) -> Self {
+        let api_key = if key.trim().is_empty() {
+            std::env::var("OPENAI_API_KEY")
+                .or_else(|_| std::env::var("CYD_ASSIST_API_KEY"))
+                .unwrap_or_default()
+        } else {
+            key.trim().to_string()
+        };
+        let base_url = if base.trim().is_empty() {
+            DEFAULT_BASE_URL.to_string()
+        } else {
+            base.trim().trim_end_matches('/').to_string()
+        };
+        let model = if model.trim().is_empty() {
+            DEFAULT_MODEL.to_string()
+        } else {
+            model.trim().to_string()
+        };
+        Self {
+            api_key,
+            base_url,
+            model,
+        }
+    }
+
+    pub fn configured(&self) -> bool {
+        !self.api_key.is_empty()
+    }
+
+    pub fn chat_round(&self, messages: &[AssistMessage]) -> Result<LlmRound, String> {
+        if !self.configured() {
+            return Err("No Assist API key — set one in Settings → Assist, or OPENAI_API_KEY."
+                .into());
+        }
+        let url = format!("{}/chat/completions", self.base_url);
+        let body = json!({
+            "model": self.model,
+            "messages": messages_to_openai(messages),
+            "tools": tool_definitions(),
+            "tool_choice": "auto",
+            "temperature": 0.2,
+        });
+        let resp = ureq::post(&url)
+            .set("Authorization", &format!("Bearer {}", self.api_key))
+            .set("Content-Type", "application/json")
+            .timeout(std::time::Duration::from_secs(90))
+            .send_json(body)
+            .map_err(|e| format!("Assist API: {e}"))?;
+        let status = resp.status();
+        let text = resp
+            .into_string()
+            .map_err(|e| format!("Assist API read: {e}"))?;
+        if !(200..300).contains(&status) {
+            return Err(format!("Assist API HTTP {status}: {}", trunc(&text, 400)));
+        }
+        let v: Value =
+            serde_json::from_str(&text).map_err(|e| format!("Assist API JSON: {e}"))?;
+        let choice = v
+            .pointer("/choices/0/message")
+            .ok_or_else(|| "Assist API: missing choices[0].message".to_string())?;
+        let content = choice
+            .get("content")
+            .and_then(|c| c.as_str())
+            .unwrap_or("")
+            .to_string();
+        let mut tool_calls = Vec::new();
+        if let Some(arr) = choice.get("tool_calls").and_then(|t| t.as_array()) {
+            for tc in arr {
+                let id = tc
+                    .get("id")
+                    .and_then(|x| x.as_str())
+                    .unwrap_or("call")
+                    .to_string();
+                let name = tc
+                    .pointer("/function/name")
+                    .and_then(|x| x.as_str())
+                    .unwrap_or("")
+                    .to_string();
+                let arguments = tc
+                    .pointer("/function/arguments")
+                    .and_then(|x| x.as_str())
+                    .unwrap_or("{}")
+                    .to_string();
+                tool_calls.push(AssistToolCall {
+                    id,
+                    name,
+                    arguments,
+                });
+            }
+        }
+        let mut clean_pending = Vec::new();
+        let mut parse_errs = Vec::new();
+        for tc in &tool_calls {
+            match parse_action(&tc.name, &tc.arguments) {
+                Ok(action) => clean_pending.push(PendingTool {
+                    id: tc.id.clone(),
+                    action,
+                }),
+                Err(e) => parse_errs.push(format!("{}: {e}", tc.name)),
+            }
+        }
+        let assistant = AssistMessage {
+            role: AssistRole::Assistant,
+            content: content.clone(),
+            tool_call_id: None,
+            tool_calls: tool_calls.clone(),
+        };
+        if !clean_pending.is_empty() {
+            return Ok(LlmRound::Tools {
+                assistant,
+                pending: clean_pending,
+            });
+        }
+        if !parse_errs.is_empty() {
+            return Ok(LlmRound::Done {
+                assistant: AssistMessage::assistant(format!(
+                    "{content}\n\n(Tool parse error: {})",
+                    parse_errs.join("; ")
+                )),
+            });
+        }
+        Ok(LlmRound::Done {
+            assistant: AssistMessage::assistant(if content.is_empty() {
+                "(no reply)".into()
+            } else {
+                content
+            }),
+        })
+    }
+}
+
+fn trunc(s: &str, n: usize) -> String {
+    if s.len() <= n {
+        s.to_string()
+    } else {
+        format!("{}…", &s[..n])
+    }
+}
+
+pub fn max_tool_rounds() -> u8 {
+    MAX_TOOL_ROUNDS
+}
+
+pub fn suggest_chips() -> &'static [&'static str] {
+    &[
+        "Status",
+        "Start mining",
+        "Stop mining",
+        "Scan boards",
+        "Connect",
+        "List ports",
+        "Bench",
+        "Recent logs",
+    ]
+}

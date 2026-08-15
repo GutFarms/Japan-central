@@ -5,6 +5,7 @@
 
 mod api_feeds;
 mod app_update;
+mod assist;
 mod desktop_icon;
 mod flash_update;
 mod live_bar;
@@ -24,6 +25,11 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use api_feeds::{
     load_feeds, next_feed_id, pull_feed, save_feeds, ApiContentKind, ApiFeed, ApiPullOutcome,
     ApiSource,
+};
+use assist::{
+    local_assist, max_tool_rounds, suggest_chips, system_prompt, AssistAction, AssistClient,
+    AssistMessage, AssistRole, AssistSnapshot, LlmRound, PendingTool, DEFAULT_BASE_URL,
+    DEFAULT_MODEL,
 };
 use app_update::{
     check_app_update_ex, running_version, update_companion_app_ex, AppRemoteInfo,
@@ -396,6 +402,8 @@ enum Tab {
     Mine,
     /// SoftAP / USB → push home Wi‑Fi credentials to the board.
     Setup,
+    /// In-app assistant — monitor boards and run Companion actions.
+    Assist,
     Settings,
     /// Hidden from nav (0.8.31+); kept so older persisted state still loads.
     #[allow(dead_code)]
@@ -583,6 +591,13 @@ struct PersistedMine {
     /// Symbols shown in the top price header (e.g. BTC, LTC, ETH).
     #[serde(default = "default_header_coins")]
     header_coins: Vec<String>,
+    /// OpenAI-compatible API key for Assist (also reads OPENAI_API_KEY).
+    #[serde(default)]
+    assist_api_key: String,
+    #[serde(default)]
+    assist_base_url: String,
+    #[serde(default)]
+    assist_model: String,
 }
 
 fn default_mhz() -> u8 {
@@ -636,6 +651,8 @@ enum NetMsg {
     ApiFeedResult(ApiPullOutcome),
     WorkersFound(Vec<DiscoveredWorker>),
     WorkersLive(Vec<WorkerLive>),
+    /// One LLM round from the Assist background thread.
+    AssistLlm(Result<LlmRound, String>),
 }
 
 enum NetCmd {
@@ -839,6 +856,18 @@ struct CompanionApp {
     monitor_lan_ip_at: Instant,
     /// Coins visible in the top live-price header (order matters).
     header_coins: Vec<String>,
+    /// Assist chat transcript (UI).
+    assist_chat: VecDeque<(AssistRole, String)>,
+    /// LLM conversation (system refreshed each turn).
+    assist_llm: Vec<AssistMessage>,
+    assist_input: String,
+    assist_busy: bool,
+    assist_rounds: u8,
+    assist_api_key: String,
+    assist_base_url: String,
+    assist_model: String,
+    /// Pending firmware update from Assist awaiting Confirm.
+    assist_fw_confirm: Option<(bool, bool)>,
 }
 
 impl CompanionApp {
@@ -862,6 +891,9 @@ impl CompanionApp {
         let mut monitor_token = String::new();
         let mut monitor_public_host = String::new();
         let mut header_coins = default_header_coins();
+        let mut assist_api_key = String::new();
+        let mut assist_base_url = String::new();
+        let mut assist_model = String::new();
         let mut api_feeds: Vec<ApiFeed> = Vec::new();
         if let Some(storage) = storage {
             if let Some(raw) = storage.get_string("mine_prefs") {
@@ -890,6 +922,9 @@ impl CompanionApp {
                     monitor_install_id = p.monitor_install_id;
                     monitor_token = p.monitor_token;
                     monitor_public_host = p.monitor_public_host;
+                    assist_api_key = p.assist_api_key;
+                    assist_base_url = p.assist_base_url;
+                    assist_model = p.assist_model;
                     if !p.header_coins.is_empty() {
                         header_coins = p
                             .header_coins
@@ -1036,6 +1071,18 @@ impl CompanionApp {
             monitor_lan_ip: primary_lan_ipv4().unwrap_or_default(),
             monitor_lan_ip_at: Instant::now(),
             header_coins,
+            assist_chat: VecDeque::from([(
+                AssistRole::Assistant,
+                "Assist can monitor boards and run Companion actions (start/stop mine, scan, connect, Wi‑Fi setup, firmware). Add an API key in Settings for full AI, or use the chips / short commands locally.".into(),
+            )]),
+            assist_llm: Vec::new(),
+            assist_input: String::new(),
+            assist_busy: false,
+            assist_rounds: 0,
+            assist_api_key,
+            assist_base_url,
+            assist_model,
+            assist_fw_confirm: None,
         };
         match start_monitor_api(app.monitor.clone()) {
             Ok(addr) => {
@@ -1440,11 +1487,479 @@ impl CompanionApp {
             monitor_token: self.monitor_token.clone(),
             monitor_public_host: self.monitor_public_host.clone(),
             header_coins: self.header_coins.clone(),
+            assist_api_key: self.assist_api_key.clone(),
+            assist_base_url: self.assist_base_url.clone(),
+            assist_model: self.assist_model.clone(),
         };
         if let Ok(raw) = serde_json::to_string(&p) {
             storage.set_string("mine_prefs", raw);
         }
         storage.set_string("api_feeds", save_feeds(&self.api_feeds));
+    }
+
+    fn assist_snapshot(&self) -> AssistSnapshot {
+        AssistSnapshot {
+            companion_version: env!("CARGO_PKG_VERSION").into(),
+            usb_open: self.usb_open,
+            mining: self.mining,
+            com_port: self.com_port.clone(),
+            stratum: self.edit_stratum.clone(),
+            worker: self.edit_worker.clone(),
+            target_mhz: self.target_mhz,
+            fw: self.fw_label.clone(),
+            board_mac: self.board_mac.clone(),
+            hashrate_khs: if self.status.hashrate_khs > 0.0 {
+                self.status.hashrate_khs
+            } else {
+                self.status.hashrate_hs / 1000.0
+            },
+            accepted: self.accepted,
+            rejected: self.rejected,
+            pool_phase: self.pool_phase.clone(),
+            stratum_phase: self.stratum_live.phase.clone(),
+            stratum_connected: self.stratum_live.connected,
+            stratum_authorized: self.stratum_live.authorized,
+            ports: self.ports.iter().map(|p| p.name.clone()).collect(),
+            linked: self
+                .connected_workers
+                .iter()
+                .map(|w| {
+                    format!(
+                        "{} · {} · {:.1} kH/s · {}",
+                        w.endpoint,
+                        if w.mac.is_empty() { "—" } else { &w.mac },
+                        w.hashrate_hs / 1000.0,
+                        if w.fw.is_empty() { "—" } else { &w.fw }
+                    )
+                })
+                .collect(),
+            discovered: self
+                .discovered_workers
+                .iter()
+                .map(|w| format!("{} · {:?}", w.endpoint, w.kind))
+                .collect(),
+            flash_busy: self.flash_busy(),
+            last_ok: self.last_ok.clone(),
+            last_error: self.last_error.clone(),
+            recent_logs: self
+                .logs
+                .iter()
+                .rev()
+                .take(10)
+                .map(|e| format!("[{}] {}", e.time, e.text))
+                .collect::<Vec<_>>()
+                .into_iter()
+                .rev()
+                .collect(),
+        }
+    }
+
+    fn assist_client(&self) -> AssistClient {
+        AssistClient::from_env_or(
+            &self.assist_api_key,
+            if self.assist_base_url.trim().is_empty() {
+                DEFAULT_BASE_URL
+            } else {
+                self.assist_base_url.trim()
+            },
+            if self.assist_model.trim().is_empty() {
+                DEFAULT_MODEL
+            } else {
+                self.assist_model.trim()
+            },
+        )
+    }
+
+    fn execute_assist_action(&mut self, action: AssistAction) -> String {
+        match action {
+            AssistAction::GetFleetStatus => {
+                serde_json::to_string_pretty(&self.assist_snapshot()).unwrap_or_else(|e| e.to_string())
+            }
+            AssistAction::ListPorts => {
+                let _ = self.cmd_tx.send(NetCmd::ListPorts);
+                let names: Vec<_> = self.ports.iter().map(|p| p.name.as_str()).collect();
+                format!(
+                    "Refreshing ports… current: {}",
+                    if names.is_empty() {
+                        "(none yet)".into()
+                    } else {
+                        names.join(", ")
+                    }
+                )
+            }
+            AssistAction::ScanWorkers => {
+                if self.flash_busy() {
+                    return "Cannot scan while flash/update is busy.".into();
+                }
+                self.worker_scan_busy = true;
+                let _ = self.cmd_tx.send(NetCmd::ScanWorkers);
+                "Scan started — results appear on Mine and in the event log.".into()
+            }
+            AssistAction::ConnectBoard { endpoint } => {
+                if let Some(ep) = endpoint {
+                    self.com_port = ep;
+                }
+                if self.com_port.contains(':') && !is_usb_serial_port(&self.com_port) {
+                    let _ = self
+                        .cmd_tx
+                        .send(NetCmd::ConnectWifi(self.com_port.clone()));
+                    format!("Connecting Wi‑Fi board {}…", self.com_port)
+                } else {
+                    self.connect_or_add_usb();
+                    if !self.last_error.is_empty() {
+                        self.last_error.clone()
+                    } else {
+                        self.last_ok.clone()
+                    }
+                }
+            }
+            AssistAction::DisconnectBoard { endpoint } => {
+                if let Some(ep) = endpoint {
+                    if ep.contains(':') {
+                        let _ = self.cmd_tx.send(NetCmd::DisconnectWorker(ep.clone()));
+                        format!("Disconnecting {ep}…")
+                    } else {
+                        let _ = self.cmd_tx.send(NetCmd::DisconnectWorker(ep.clone()));
+                        format!("Disconnecting {ep}…")
+                    }
+                } else {
+                    let _ = self.cmd_tx.send(NetCmd::CloseUsb);
+                    "Closing primary USB…".into()
+                }
+            }
+            AssistAction::SetPoolConfig {
+                stratum,
+                worker,
+                password,
+            } => {
+                let mut parts = Vec::new();
+                if let Some(s) = stratum {
+                    self.edit_stratum = s;
+                    parts.push(format!("stratum={}", self.edit_stratum));
+                }
+                if let Some(w) = worker {
+                    self.edit_worker = w;
+                    parts.push(format!("worker={}", self.edit_worker));
+                }
+                if let Some(pw) = password {
+                    self.edit_password = pw;
+                    parts.push("password=(set)".into());
+                }
+                if parts.is_empty() {
+                    "No pool fields provided.".into()
+                } else {
+                    format!("Pool config updated: {}", parts.join(", "))
+                }
+            }
+            AssistAction::StartMining => {
+                self.start_mine();
+                if !self.last_error.is_empty() {
+                    self.last_error.clone()
+                } else {
+                    self.last_ok.clone()
+                }
+            }
+            AssistAction::StopMining => {
+                self.stop_mine();
+                self.last_ok.clone()
+            }
+            AssistAction::SetClock { mhz } => {
+                self.target_mhz = mhz;
+                let _ = self.cmd_tx.send(NetCmd::SetClock(mhz));
+                format!("Set clock → {mhz} MHz")
+            }
+            AssistAction::BenchBoards => {
+                self.request_bench();
+                if !self.last_error.is_empty() {
+                    self.last_error.clone()
+                } else {
+                    self.last_ok.clone()
+                }
+            }
+            AssistAction::ConfigureBoardWifi {
+                endpoint,
+                ssid,
+                password,
+            } => {
+                if let Some(ep) = endpoint {
+                    self.wifi_setup_target = ep;
+                } else if self.wifi_setup_target.is_empty() {
+                    if let Some(w) = self.connected_workers.first() {
+                        self.wifi_setup_target = w.endpoint.clone();
+                    } else {
+                        self.wifi_setup_target = self.com_port.clone();
+                    }
+                }
+                self.wifi_setup_ssid = ssid;
+                self.wifi_setup_pass = password;
+                self.begin_wifi_setup_push();
+                if !self.last_error.is_empty() {
+                    self.last_error.clone()
+                } else {
+                    format!(
+                        "Pushing Wi‑Fi “{}” to {}…",
+                        self.wifi_setup_ssid, self.wifi_setup_target
+                    )
+                }
+            }
+            AssistAction::GetEventLog { limit } => {
+                let lines: Vec<_> = self
+                    .logs
+                    .iter()
+                    .rev()
+                    .take(limit)
+                    .map(|e| format!("[{}] {}", e.time, e.text))
+                    .collect::<Vec<_>>()
+                    .into_iter()
+                    .rev()
+                    .collect();
+                if lines.is_empty() {
+                    "(event log empty)".into()
+                } else {
+                    lines.join("\n")
+                }
+            }
+            AssistAction::UpdateBoardFirmware { live_push, wifi } => {
+                self.assist_fw_confirm = Some((live_push, wifi));
+                format!(
+                    "Confirm firmware update in Assist (live_push={live_push}, wifi={wifi})."
+                )
+            }
+            AssistAction::SwitchTab { tab } => {
+                let t = tab.to_ascii_lowercase();
+                self.tab = match t.as_str() {
+                    "mine" => Tab::Mine,
+                    "setup" => Tab::Setup,
+                    "settings" => Tab::Settings,
+                    _ => Tab::Assist,
+                };
+                format!("Switched to {t} tab")
+            }
+        }
+    }
+
+    fn apply_assist_tools(&mut self, pending: Vec<PendingTool>) {
+        for tool in pending {
+            let result = self.execute_assist_action(tool.action);
+            self.assist_chat
+                .push_back((AssistRole::Tool, format!("⚙ {}", trunc(&result, 280))));
+            self.assist_llm
+                .push(AssistMessage::tool(&tool.id, result));
+            if self.assist_chat.len() > 80 {
+                self.assist_chat.pop_front();
+            }
+        }
+    }
+
+    fn spawn_assist_llm(&mut self) {
+        let client = self.assist_client();
+        if !client.configured() {
+            self.assist_busy = false;
+            self.assist_chat.push_back((
+                AssistRole::Assistant,
+                "No API key — use local chips, or set Assist API key in Settings.".into(),
+            ));
+            return;
+        }
+        let snap = self.assist_snapshot();
+        let mut msgs = vec![AssistMessage::system(system_prompt(&snap))];
+        // Keep recent non-system history
+        for m in self.assist_llm.iter().filter(|m| m.role != AssistRole::System) {
+            msgs.push(m.clone());
+        }
+        self.assist_llm = msgs.clone();
+        self.assist_busy = true;
+        let tx = self.msg_tx.clone();
+        thread::spawn(move || {
+            let result = client.chat_round(&msgs);
+            let _ = tx.send(NetMsg::AssistLlm(result));
+        });
+    }
+
+    fn submit_assist(&mut self, text: String) {
+        let text = text.trim().to_string();
+        if text.is_empty() || self.assist_busy {
+            return;
+        }
+        self.assist_chat
+            .push_back((AssistRole::User, text.clone()));
+        if self.assist_chat.len() > 80 {
+            self.assist_chat.pop_front();
+        }
+        self.assist_llm.push(AssistMessage::user(&text));
+        self.assist_rounds = 0;
+
+        let client = self.assist_client();
+        if client.configured() {
+            self.spawn_assist_llm();
+            return;
+        }
+
+        // Local keyword tools (no cloud).
+        let snap = self.assist_snapshot();
+        let (say, pending) = local_assist(&text, &snap);
+        self.assist_chat
+            .push_back((AssistRole::Assistant, say));
+        if !pending.is_empty() {
+            self.apply_assist_tools(pending);
+            // Summarize after local tools
+            let snap2 = self.assist_snapshot();
+            self.assist_chat.push_back((
+                AssistRole::Assistant,
+                format!(
+                    "Done. USB={} · mining={} · {:.1} kH/s · A={} R={}.",
+                    if snap2.usb_open { "linked" } else { "idle" },
+                    if snap2.mining { "on" } else { "off" },
+                    snap2.hashrate_khs,
+                    snap2.accepted,
+                    snap2.rejected
+                ),
+            ));
+        }
+    }
+
+    fn handle_assist_llm(&mut self, result: Result<LlmRound, String>) {
+        match result {
+            Err(e) => {
+                self.assist_busy = false;
+                self.assist_chat
+                    .push_back((AssistRole::Assistant, format!("Assist error: {e}")));
+                self.push_log(LogKind::Warn, format!("Assist: {e}"));
+            }
+            Ok(LlmRound::Done { assistant }) => {
+                self.assist_busy = false;
+                self.assist_rounds = 0;
+                let text = if assistant.content.trim().is_empty() {
+                    "(ok)".into()
+                } else {
+                    assistant.content.clone()
+                };
+                self.assist_chat
+                    .push_back((AssistRole::Assistant, text));
+                self.assist_llm.push(assistant);
+            }
+            Ok(LlmRound::Tools {
+                assistant,
+                pending,
+            }) => {
+                self.assist_llm.push(assistant);
+                self.apply_assist_tools(pending);
+                self.assist_rounds = self.assist_rounds.saturating_add(1);
+                if self.assist_rounds >= max_tool_rounds() {
+                    self.assist_busy = false;
+                    self.assist_chat.push_back((
+                        AssistRole::Assistant,
+                        "Stopped after several tool rounds — ask a follow-up if you need more."
+                            .into(),
+                    ));
+                } else {
+                    self.spawn_assist_llm();
+                }
+            }
+        }
+    }
+
+    fn ui_assist(&mut self, ui: &mut egui::Ui) {
+        soft_panel(ui, "Assist", |ui| {
+            let mode = if self.assist_client().configured() {
+                "AI mode (OpenAI-compatible tools)"
+            } else {
+                "Local mode — chips & short commands (add API key in Settings for full AI)"
+            };
+            ui.label(
+                RichText::new(mode)
+                    .color(C_MUTED)
+                    .size(13.0),
+            );
+            ui.add_space(8.0);
+
+            if let Some((live_push, wifi)) = self.assist_fw_confirm {
+                ui.horizontal_wrapped(|ui| {
+                    ui.label(
+                        RichText::new("Confirm board firmware update?")
+                            .color(C_WARN)
+                            .strong(),
+                    );
+                    if soft_button(ui, "Confirm flash", 120.0).clicked() {
+                        self.assist_fw_confirm = None;
+                        if wifi {
+                            self.begin_board_update_wifi();
+                        } else {
+                            self.begin_board_update(live_push);
+                        }
+                        self.assist_chat.push_back((
+                            AssistRole::Assistant,
+                            "Firmware update started — watch the overlay.".into(),
+                        ));
+                    }
+                    if soft_button(ui, "Cancel", 80.0).clicked() {
+                        self.assist_fw_confirm = None;
+                        self.assist_chat.push_back((
+                            AssistRole::Assistant,
+                            "Firmware update cancelled.".into(),
+                        ));
+                    }
+                });
+                ui.add_space(8.0);
+            }
+
+            ui.horizontal_wrapped(|ui| {
+                for chip in suggest_chips() {
+                    if soft_button(ui, chip, 110.0).clicked() && !self.assist_busy {
+                        self.submit_assist((*chip).to_string());
+                    }
+                }
+            });
+            ui.add_space(10.0);
+
+            ScrollArea::vertical()
+                .id_source("assist_chat_scroll")
+                .max_height(360.0)
+                .auto_shrink([false, false])
+                .stick_to_bottom(true)
+                .show(ui, |ui| {
+                    for (role, text) in &self.assist_chat {
+                        let (who, color) = match role {
+                            AssistRole::User => ("You", C_TEXT),
+                            AssistRole::Assistant => ("Assist", C_LIME),
+                            AssistRole::Tool => ("Tool", C_DIM),
+                            AssistRole::System => ("System", C_MUTED),
+                        };
+                        ui.label(
+                            RichText::new(who)
+                                .color(color)
+                                .font(mono_ui_font(11.0))
+                                .strong(),
+                        );
+                        ui.label(RichText::new(text).color(C_TEXT).size(13.0));
+                        ui.add_space(8.0);
+                    }
+                    if self.assist_busy {
+                        ui.label(
+                            RichText::new("Thinking…")
+                                .color(C_MUTED)
+                                .italics()
+                                .size(13.0),
+                        );
+                    }
+                });
+
+            ui.add_space(8.0);
+            ui.horizontal(|ui| {
+                let edit = TextEdit::singleline(&mut self.assist_input)
+                    .hint_text("Ask Assist to check status, start mining, scan boards…")
+                    .desired_width(ui.available_width() - 100.0);
+                let resp = ui.add(edit);
+                let send = soft_button(ui, if self.assist_busy { "…" } else { "Send" }, 72.0)
+                    .clicked()
+                    || (resp.lost_focus()
+                        && ui.input(|i| i.key_pressed(egui::Key::Enter)));
+                if send && !self.assist_busy {
+                    let msg = std::mem::take(&mut self.assist_input);
+                    self.submit_assist(msg);
+                }
+            });
+        });
     }
 
     fn request_api_pull(&mut self, id: u64) {
@@ -3314,6 +3829,44 @@ impl CompanionApp {
                         .color(if info.newer { C_LIME } else { C_MUTED })
                         .font(mono_ui_font(11.0)),
                 );
+            }
+        });
+
+        ui.add_space(14.0);
+        soft_panel(ui, "Assist (AI)", |ui| {
+            ui.label(
+                RichText::new(
+                    "OpenAI-compatible API for the Assist tab. Leave blank to use local chips/commands, \
+or set OPENAI_API_KEY / CYD_ASSIST_API_KEY in the environment.",
+                )
+                .color(C_MUTED)
+                .size(13.0),
+            );
+            ui.add_space(10.0);
+            ui.label(RichText::new("API key").color(C_DIM).size(12.0));
+            ui.add(
+                TextEdit::singleline(&mut self.assist_api_key)
+                    .password(true)
+                    .hint_text("sk-…")
+                    .desired_width(ui.available_width()),
+            );
+            ui.add_space(6.0);
+            ui.label(RichText::new("Base URL").color(C_DIM).size(12.0));
+            ui.add(
+                TextEdit::singleline(&mut self.assist_base_url)
+                    .hint_text(DEFAULT_BASE_URL)
+                    .desired_width(ui.available_width()),
+            );
+            ui.add_space(6.0);
+            ui.label(RichText::new("Model").color(C_DIM).size(12.0));
+            ui.add(
+                TextEdit::singleline(&mut self.assist_model)
+                    .hint_text(DEFAULT_MODEL)
+                    .desired_width(ui.available_width()),
+            );
+            ui.add_space(8.0);
+            if soft_button(ui, "Open Assist tab", 140.0).clicked() {
+                self.tab = Tab::Assist;
             }
         });
 
@@ -5584,6 +6137,10 @@ Phone: join SoftAP — Board Setup opens automatically to set home Wi‑Fi.",
                     self.tab = Tab::Setup;
                 }
                 ui.add_space(6.0);
+                if nav_button(ui, "Assist", self.tab == Tab::Assist).clicked() {
+                    self.tab = Tab::Assist;
+                }
+                ui.add_space(6.0);
                 if nav_button(ui, "Settings", self.tab == Tab::Settings).clicked() {
                     self.tab = Tab::Settings;
                 }
@@ -5647,6 +6204,9 @@ Phone: join SoftAP — Board Setup opens automatically to set home Wi‑Fi.",
                 }
                 if nav_button(ui, "Setup", self.tab == Tab::Setup).clicked() {
                     self.tab = Tab::Setup;
+                }
+                if nav_button(ui, "Assist", self.tab == Tab::Assist).clicked() {
+                    self.tab = Tab::Assist;
                 }
                 if nav_button(ui, "Settings", self.tab == Tab::Settings).clicked() {
                     self.tab = Tab::Settings;
@@ -6124,6 +6684,9 @@ impl App for CompanionApp {
                 }
                 NetMsg::ApiFeedResult(outcome) => {
                     self.apply_api_pull(outcome);
+                }
+                NetMsg::AssistLlm(result) => {
+                    self.handle_assist_llm(result);
                 }
                 NetMsg::WorkersFound(found) => {
                     self.worker_scan_busy = false;
@@ -7232,6 +7795,7 @@ or Flash (BOOT) with BOOT held + Ready."
                         match self.tab {
                             Tab::Mine | Tab::Debug => self.ui_mine(ui),
                             Tab::Setup => self.ui_setup(ui),
+                            Tab::Assist => self.ui_assist(ui),
                             Tab::Settings => self.ui_settings(ui),
                         }
                         ui.add_space(28.0);
