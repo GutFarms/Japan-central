@@ -11983,13 +11983,14 @@ Power a 2nd board nearby with wall/power-bank only (no PC cable)."
                             boards.len()
                         ),
                     );
-                    // Brief settle only — long sleeps left the overlay frozen at 2%.
+                    // Settle long enough for CH340/Windows to drop the old handle —
+                    // too short and the next espflash open looks like connect/disconnect thrash.
                     thread::sleep(Duration::from_millis(if wifi_ota {
                         250
                     } else if live_push {
-                        350
+                        700
                     } else {
-                        500
+                        900
                     }));
 
                     // Run flash off the mine-worker so Cancel / port list keep working.

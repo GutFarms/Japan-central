@@ -777,6 +777,7 @@ pub const REPO_NAME: &str = "Japan-central";
 /// Branches probed for Companion/firmware updates (newest VERSION wins).
 /// Tip first — apps still on older builds may only hit the legacy CYD branch.
 pub const REPO_REFS: &[&str] = &[
+    "cursor/flash-com-thrash-e801",
     "cursor/ai-assist-e801",
     "cursor/flash-14pct-e801",
     "cursor/indep-handoff-e801",
@@ -1206,12 +1207,13 @@ const ESPTOOL_TIMEOUT: Duration = Duration::from_secs(100);
 /// Push + one BOOT Ready round — fail fast instead of thrashing the COM for minutes.
 const FLASH_BUDGET: Duration = Duration::from_secs(150);
 /// Abort a write round after this many connect/MAC stalls (stops terminal/COM thrash).
-/// Keep ≥ attempt count so a failed stub@fast baud does not skip the reliable no-stub try.
-const MAX_CONNECT_STALLS_PER_ROUND: u8 = 3;
+/// Compact Push is 2 attempts — stop after both stall instead of opening the COM again.
+const MAX_CONNECT_STALLS_PER_ROUND: u8 = 2;
 /// Abort immediately after this many Access Denied / port-busy errors.
 const MAX_PORT_BUSY: u8 = 1;
-/// Quiet gap between tool launches so Windows can release the COM handle.
-const ATTEMPT_GAP: Duration = Duration::from_millis(250);
+/// Quiet gap between tool launches so Windows/CH340 can release the COM handle.
+/// Too short (≤250ms) looks like connect↔disconnect thrash in Device Manager.
+const ATTEMPT_GAP: Duration = Duration::from_millis(1200);
 /// Preferred write baud when the USB-UART (often CH340) tolerates it — ~3–4× faster
 /// than 115200 for a ~1.7 MB merged image.
 const FLASH_FAST_BAUD: &str = "460800";
@@ -1223,6 +1225,8 @@ const IDLE_TIMEOUT: Duration = Duration::from_secs(18);
 /// fast so we escalate to no-stub / BOOT Ready, not sit for minutes.
 const IDLE_AFTER_CONNECT: Duration = Duration::from_secs(14);
 const IDLE_AFTER_CONNECT_PATIENT: Duration = Duration::from_secs(22);
+/// Stub upload after MAC is not real write progress — kill fast and try no-stub.
+const IDLE_STUB_UPLOAD: Duration = Duration::from_secs(10);
 /// During active write/erase (% / `\r` ticks), allow longer silence between ticks.
 const IDLE_DURING_WRITE: Duration = Duration::from_secs(50);
 const IDLE_DURING_WRITE_PATIENT: Duration = Duration::from_secs(90);
@@ -1695,10 +1699,10 @@ fn append_flash_log(line: &str) {
 /// Flash merged firmware @ 0x0 via USB.
 ///
 /// Strategy:
-/// 1) Live push: espflash **no-stub @ 115200** first (CH340-safe silent auto-reset),
-///    then stub @ 460800 for speed; do not burn the stall budget on stub before no-stub.
-/// 2) Blank / BOOT Ready: user-gated Ready, then write attempts
-/// 3) Compact rounds escalate MAC-stalls, but allow every attempt in the matrix
+/// 1) Live push: **one** espflash no-stub @ 115200, then **one** stub @ 460800.
+///    Fewer DTR resets = less Windows connect↔disconnect thrash.
+/// 2) If push already saw MAC then stalled — stop (no BOOT Ready spam).
+/// 3) Blank / never-connected: user-gated Ready, then a short write matrix.
 pub fn flash_merged_bin(
     port: &str,
     image: &Path,
@@ -1814,6 +1818,7 @@ Available: {hint}. Unplug/replug the CYD, pick the COM again, then Update board.
         let low = e.to_ascii_lowercase();
         let stall = (low.contains("idle") && low.contains("chip connect"))
             || (low.contains("idle") && low.contains("mac"))
+            || (low.contains("idle") && low.contains("stub"))
             || low.contains("failed to connect")
             || low.contains("timed out waiting for packet")
             || (low.contains("timeout") && low.contains("connect"));
@@ -1824,7 +1829,7 @@ Available: {hint}. Unplug/replug the CYD, pick the COM again, then Update board.
             || low.contains("serial_not_found")
             || low.contains("not found right now")
             || (low.contains("port") && low.contains("busy"));
-        if stall || low.contains("chip seen") {
+        if stall || low.contains("chip seen") || low.contains("stub upload") {
             *saw_chip_connect = true;
         }
         if stall {
@@ -1869,8 +1874,8 @@ Available: {hint}. Unplug/replug the CYD, pick the COM again, then Update board.
         }
         // Compact = fail-fast (Push / post-stall).
         // CRITICAL: lead with **no-stub @ 115200** — CH340 boards hang uploading the
-        // RAM stub after MAC (UI ~14%). 0.8.161 led with stub@460800 and aborted the
-        // round after 2 stalls *before* no-stub ran, which forced BOOT Ready.
+        // RAM stub after MAC (UI ~14%). Keep Push to **two** launches only so
+        // default-reset does not cycle the COM for minutes.
         // Tuple: (label, before, no_stub, compress, use_esptool, baud)
         let attempts: &[(&str, &str, bool, bool, bool, &str)] = if prefer_default_reset && compact {
             &[
@@ -1889,14 +1894,6 @@ Available: {hint}. Unplug/replug the CYD, pick the COM again, then Update board.
                     false,
                     false,
                     FLASH_FAST_BAUD,
-                ),
-                (
-                    "espflash stub default-reset @115200",
-                    "default-reset",
-                    false,
-                    false,
-                    false,
-                    FLASH_SAFE_BAUD,
                 ),
             ]
         } else if prefer_default_reset {
@@ -2129,8 +2126,19 @@ Available: {hint}. Unplug/replug the CYD, pick the COM again, then Update board.
                 "Update failed — COM port busy (close other Terminal/Arduino/flash tools), then try again. {tip}"
             ));
         }
+        // Already saw chip MAC then stalled — another Ready round only DTR-thrashs the COM.
+        if saw_chip_connect && connect_stall_only {
+            ctrl.need_boot.store(false, Ordering::SeqCst);
+            let tip = safety_fail_tip(started.elapsed(), &esp_err, &py_err, false);
+            append_flash_log(&tip);
+            return Err(format!(
+                "Update failed at chip connect (~14%) — write never started (stopped to avoid COM connect/disconnect thrash). \
+Use a short data USB cable (not charge-only). Close other apps on this COM. \
+If needed: Flash (BOOT) once — Hold BOOT, tap RESET, keep BOOT, click Ready. {tip}"
+            ));
+        }
         progress(
-            "Auto-reset push stalled — one BOOT Ready attempt (then stop; no COM thrash)…"
+            "Auto-reset push never reached the chip — one BOOT Ready attempt…"
                 .into(),
         );
     }
@@ -2706,6 +2714,7 @@ fn run_streaming_timeout(
     let mut last_beat = Instant::now();
     let mut last_status = Instant::now();
     let mut saw_connect = false;
+    let mut saw_stub = false;
     let mut saw_write = matches!(kind, FlashToolKind::Erase);
     let abort = |reason: String,
                  child: &mut Child,
@@ -2757,6 +2766,9 @@ fn run_streaming_timeout(
             } else {
                 IDLE_DURING_WRITE
             }
+        } else if saw_stub {
+            // "Uploading stub" is not flash progress — CH340 often hangs here.
+            IDLE_STUB_UPLOAD
         } else if saw_connect {
             if patient {
                 IDLE_AFTER_CONNECT_PATIENT
@@ -2779,12 +2791,14 @@ fn run_streaming_timeout(
                     idle_limit.as_secs(),
                     if saw_write {
                         "write/erase progress"
+                    } else if saw_stub {
+                        "stub upload"
                     } else if saw_connect {
                         "chip connect/MAC"
                     } else {
                         "start"
                     },
-                    if saw_connect && !saw_write {
+                    if (saw_connect || saw_stub) && !saw_write {
                         ". Hold BOOT, tap RESET, keep BOOT held, then click Ready."
                     } else {
                         ""
@@ -2830,15 +2844,24 @@ fn run_streaming_timeout(
                     || lower.contains("chip erase")
                     || lower.contains("hard resetting")
                     || lower.contains("hard_reset")
-                    || lower.contains("uploading stub")
-                    || lower.contains("running stub")
-                    || lower.contains("stub running")
                     || lower.contains("configuring flash")
                     || lower.contains("flash will be erased")
                     || lower.contains("flash_defl")
                     || lower.contains("wrote ")
                 {
                     saw_write = true;
+                } else if lower.contains("uploading stub")
+                    || lower.contains("running stub")
+                    || lower.contains("stub running")
+                {
+                    // Stub phase ≠ write progress. Keep a short idle so we escalate.
+                    if !saw_stub {
+                        saw_stub = true;
+                        progress(format!(
+                            "{label}: stub upload — need Writing % within {}s…",
+                            IDLE_STUB_UPLOAD.as_secs()
+                        ));
+                    }
                 }
                 // Tiny percent ticks still count as activity — forward to UI progress bar.
                 if line.contains('%') && line.len() < 12 {
@@ -2867,6 +2890,8 @@ fn run_streaming_timeout(
                             deadline.saturating_duration_since(Instant::now()).as_secs(),
                             if saw_write {
                                 " (writing/erasing)"
+                            } else if saw_stub {
+                                " (stub upload)"
                             } else if saw_connect {
                                 " (after MAC/connect)"
                             } else {
