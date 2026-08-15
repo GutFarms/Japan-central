@@ -777,6 +777,7 @@ pub const REPO_NAME: &str = "Japan-central";
 /// Branches probed for Companion/firmware updates (newest VERSION wins).
 /// Tip first — apps still on older builds may only hit the legacy CYD branch.
 pub const REPO_REFS: &[&str] = &[
+    "cursor/flash-nostub-boot-e801",
     "cursor/share-pending-timeout-e801",
     "cursor/flash-com-thrash-e801",
     "cursor/ai-assist-e801",
@@ -1208,8 +1209,8 @@ const ESPTOOL_TIMEOUT: Duration = Duration::from_secs(100);
 /// Push + one BOOT Ready round — fail fast instead of thrashing the COM for minutes.
 const FLASH_BUDGET: Duration = Duration::from_secs(150);
 /// Abort a write round after this many connect/MAC stalls (stops terminal/COM thrash).
-/// Compact Push is 2 attempts — stop after both stall instead of opening the COM again.
-const MAX_CONNECT_STALLS_PER_ROUND: u8 = 2;
+/// Compact Push is a single no-stub attempt — one stall ends the silent round.
+const MAX_CONNECT_STALLS_PER_ROUND: u8 = 1;
 /// Abort immediately after this many Access Denied / port-busy errors.
 const MAX_PORT_BUSY: u8 = 1;
 /// Quiet gap between tool launches so Windows/CH340 can release the COM handle.
@@ -1700,10 +1701,10 @@ fn append_flash_log(line: &str) {
 /// Flash merged firmware @ 0x0 via USB.
 ///
 /// Strategy:
-/// 1) Live push: **one** espflash no-stub @ 115200, then **one** stub @ 460800.
-///    Fewer DTR resets = less Windows connect↔disconnect thrash.
-/// 2) If push already saw MAC then stalled — stop (no BOOT Ready spam).
-/// 3) Blank / never-connected: user-gated Ready, then a short write matrix.
+/// 1) Live push: **one** espflash **no-stub @ 115200** (CH340-safe). Never stub@460800 —
+///    that path connects, prints MAC, then hangs at ~14% ("Using flash stub").
+/// 2) If silent push fails → **one** BOOT Ready round of no-stub only (user holds BOOT).
+/// 3) Stop after that — no erase/baud thrash loops.
 pub fn flash_merged_bin(
     port: &str,
     image: &Path,
@@ -1873,10 +1874,9 @@ Available: {hint}. Unplug/replug the CYD, pick the COM again, then Update board.
         if need_ready {
             wait_for_boot_ready(ctrl, progress, round_label)?;
         }
-        // Compact = fail-fast (Push / post-stall).
-        // CRITICAL: lead with **no-stub @ 115200** — CH340 boards hang uploading the
-        // RAM stub after MAC (UI ~14%). Keep Push to **two** launches only so
-        // default-reset does not cycle the COM for minutes.
+        // Compact = fail-fast (Push / post-stall Ready).
+        // CH340: stub@460800 prints MAC ("Using flash stub") then hangs — never use it
+        // on compact rounds. Only ROM loader @ 115200.
         // Tuple: (label, before, no_stub, compress, use_esptool, baud)
         let attempts: &[(&str, &str, bool, bool, bool, &str)] = if prefer_default_reset && compact {
             &[
@@ -1887,14 +1887,6 @@ Available: {hint}. Unplug/replug the CYD, pick the COM again, then Update board.
                     false,
                     false,
                     FLASH_SAFE_BAUD,
-                ),
-                (
-                    "espflash stub default-reset @460800",
-                    "default-reset",
-                    false,
-                    false,
-                    false,
-                    FLASH_FAST_BAUD,
                 ),
             ]
         } else if prefer_default_reset {
@@ -1908,27 +1900,19 @@ Available: {hint}. Unplug/replug the CYD, pick the COM again, then Update board.
                     FLASH_SAFE_BAUD,
                 ),
                 (
-                    "espflash stub default-reset @460800",
+                    "espflash no-stub default-reset @115200 (retry)",
                     "default-reset",
-                    false,
-                    false,
-                    false,
-                    FLASH_FAST_BAUD,
-                ),
-                (
-                    "esptool stub+compress default_reset @115200",
-                    "default_reset",
-                    false,
                     true,
-                    true,
+                    false,
+                    false,
                     FLASH_SAFE_BAUD,
                 ),
                 (
-                    "espflash stub default-reset @115200",
-                    "default-reset",
+                    "esptool no-stub no_compress default_reset @115200",
+                    "default_reset",
+                    true,
                     false,
-                    false,
-                    false,
+                    true,
                     FLASH_SAFE_BAUD,
                 ),
             ]
@@ -1950,14 +1934,6 @@ Available: {hint}. Unplug/replug the CYD, pick the COM again, then Update board.
                     false,
                     FLASH_SAFE_BAUD,
                 ),
-                (
-                    "espflash stub default-reset @460800",
-                    "default-reset",
-                    false,
-                    false,
-                    false,
-                    FLASH_FAST_BAUD,
-                ),
             ]
         } else {
             &[
@@ -1970,27 +1946,19 @@ Available: {hint}. Unplug/replug the CYD, pick the COM again, then Update board.
                     FLASH_SAFE_BAUD,
                 ),
                 (
-                    "espflash stub default-reset @460800",
-                    "default-reset",
-                    false,
-                    false,
-                    false,
-                    FLASH_FAST_BAUD,
-                ),
-                (
-                    "esptool stub+compress no_reset @115200",
-                    "no_reset",
-                    false,
-                    true,
-                    true,
-                    FLASH_SAFE_BAUD,
-                ),
-                (
                     "espflash no-stub default-reset @115200",
                     "default-reset",
                     true,
                     false,
                     false,
+                    FLASH_SAFE_BAUD,
+                ),
+                (
+                    "esptool no-stub no_compress no_reset @115200",
+                    "no_reset",
+                    true,
+                    false,
+                    true,
                     FLASH_SAFE_BAUD,
                 ),
             ]
@@ -2127,19 +2095,10 @@ Available: {hint}. Unplug/replug the CYD, pick the COM again, then Update board.
                 "Update failed — COM port busy (close other Terminal/Arduino/flash tools), then try again. {tip}"
             ));
         }
-        // Already saw chip MAC then stalled — another Ready round only DTR-thrashs the COM.
-        if saw_chip_connect && connect_stall_only {
-            ctrl.need_boot.store(false, Ordering::SeqCst);
-            let tip = safety_fail_tip(started.elapsed(), &esp_err, &py_err, false);
-            append_flash_log(&tip);
-            return Err(format!(
-                "Update failed at chip connect (~14%) — write never started (stopped to avoid COM connect/disconnect thrash). \
-Use a short data USB cable (not charge-only). Close other apps on this COM. \
-If needed: Flash (BOOT) once — Hold BOOT, tap RESET, keep BOOT, click Ready. {tip}"
-            ));
-        }
+        // Silent auto-reset stalled (often MAC then hang). One user-gated BOOT Ready
+        // with no-stub @ 115200 — do not try stub@460800 again.
         progress(
-            "Auto-reset push never reached the chip — one BOOT Ready attempt…"
+            "Silent push stalled at chip connect — Hold BOOT, tap RESET, keep BOOT held, click Ready…"
                 .into(),
         );
     }
@@ -2180,9 +2139,8 @@ Hold BOOT, tap RESET, keep BOOT held, click Ready. Use a short data USB cable \
         ));
     }
 
-    // Secondary: try fast baud stub, then safe no-stub — without another Ready spam
+    // Secondary: safe no-stub only — never stub@460800 (CH340 MAC hang).
     let fallback: &[(&str, &str, bool)] = &[
-        (FLASH_FAST_BAUD, "default-reset", false),
         (FLASH_SAFE_BAUD, "default-reset", true),
         (FLASH_SAFE_BAUD, "no-reset", true),
     ];
@@ -2854,6 +2812,8 @@ fn run_streaming_timeout(
                 } else if lower.contains("uploading stub")
                     || lower.contains("running stub")
                     || lower.contains("stub running")
+                    || lower.contains("using flash stub")
+                    || lower.contains("flash stub")
                 {
                     // Stub phase ≠ write progress. Keep a short idle so we escalate.
                     if !saw_stub {
