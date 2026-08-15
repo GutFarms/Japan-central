@@ -11,7 +11,7 @@ use std::time::{Duration, Instant};
 use sha2::{Digest, Sha256};
 
 use crate::flash_update::{
-    normalize_fw_version, urlencode_ref, COMPANION_UA, REPO_NAME, REPO_OWNER, REPO_REFS, TIP_REF,
+    normalize_fw_version, urlencode_ref, COMPANION_UA, REPO_NAME, REPO_OWNER, REPO_REFS,
 };
 
 #[derive(Clone, Debug)]
@@ -152,7 +152,8 @@ fn sha256sums_urls() -> Vec<String> {
         ));
     }
     let mut out = dedupe_urls(out);
-    out.truncate(6);
+    // Enough for tip + lagging refs (API+raw) so newest SUMS wins.
+    out.truncate(12);
     out
 }
 
@@ -215,6 +216,7 @@ fn fetch_download_checksums(
 ) -> Result<std::collections::HashMap<String, String>, String> {
     let mut last = String::new();
     let mut best: Option<(String, std::collections::HashMap<String, String>)> = None;
+    let mut ok = 0u32;
     for url in sha256sums_urls() {
         ensure_not_cancelled(cancel)?;
         progress(format!("GET checksums {url}"));
@@ -226,20 +228,18 @@ fn fetch_download_checksums(
                     continue;
                 }
                 let ver = sums_header_version(&txt).unwrap_or_else(|| "0.0.0".into());
+                ok += 1;
                 best = match best.take() {
                     None => Some((ver, map)),
                     Some((prev_ver, _)) if is_newer(&ver, &prev_ver) => Some((ver, map)),
                     Some(prev) => Some(prev),
                 };
-                // Tip Contents API is authoritative — stop after first good tip hit.
-                if url.contains("api.github.com")
-                    && url.contains(TIP_REF)
-                    && best.is_some()
-                {
-                    break;
-                }
             }
             Err(e) => last = e,
+        }
+        // Do not stop at TIP_REF — tip can lag a feature-branch ship.
+        if ok >= 6 {
+            break;
         }
     }
     best.map(|(_, map)| map)
@@ -380,34 +380,35 @@ pub fn check_app_update_ex(
     let mut best_remote: Option<String> = None;
     let mut sources_ok = 0u32;
     progress(format!("Checking for Companion updates (running {local})…"));
-    // Probe tip first; keep newest, but stop once tip API + one raw agree.
-    let mut tip_hits = 0u32;
+    // Newest VERSION across REPO_REFS wins. Do not stop at TIP_REF alone —
+    // tip branches often lag a feature-branch ship (0.8.147 tip hid 0.8.148).
     for url in version_urls() {
         ensure_not_cancelled(cancel)?;
         match http_get_text(&url) {
             Ok(txt) => {
                 if let Some(remote) = parse_version_text(&txt) {
                     sources_ok += 1;
-                    progress(format!("Remote VERSION {remote}"));
+                    // Only log when the best candidate changes (avoids triple spam).
+                    let improved = best_remote
+                        .as_ref()
+                        .map(|prev| is_newer(&remote, prev))
+                        .unwrap_or(true);
+                    if improved {
+                        progress(format!("Remote VERSION {remote}"));
+                    }
                     best_remote = match best_remote.take() {
                         None => Some(remote.clone()),
                         Some(prev) if is_newer(&remote, &prev) => Some(remote.clone()),
                         Some(prev) => Some(prev),
                     };
-                    if url.contains(TIP_REF) {
-                        tip_hits += 1;
-                        if tip_hits >= 2 {
-                            break;
-                        }
-                    }
                 } else {
                     last = "VERSION.txt had no usable version".into();
                 }
             }
             Err(e) => last = e,
         }
-        // Hard cap so Check never walks every mirror for minutes.
-        if sources_ok >= 4 {
+        // Cap: ~2–3 mirrors × several refs is enough to find a newer ship.
+        if sources_ok >= 10 {
             break;
         }
     }
