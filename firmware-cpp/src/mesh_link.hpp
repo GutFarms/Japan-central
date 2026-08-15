@@ -14,7 +14,8 @@ static constexpr uint32_t MESH_HELLO_SEEK_MS = 500;
 // Keep USB-elected root long enough across slow Companion poll / stratum stalls.
 static constexpr uint32_t MESH_USB_ROOT_MS = 30000;
 // Leaf job parts + shares need headroom beyond a single ESP-NOW hop.
-static constexpr uint32_t MESH_VIA_TIMEOUT_MS = 6500;
+// Keep under typical TWDT (~5s) so a hung via cannot brick the USB task.
+static constexpr uint32_t MESH_VIA_TIMEOUT_MS = 4500;
 
 struct MeshPeer {
   uint8_t mac[6]{};
@@ -51,6 +52,8 @@ class MeshLink {
   bool hasRootPeer() const;
   /// Root with at least one leaf peer — keep hashing, but yield for bridge traffic.
   bool isBridging() const;
+  /// True while root is blocked in `cmp via` waiting for a leaf CMP* reply.
+  bool viaBusy() const { return viaPending_; }
   size_t leafCount() const;
   bool ready() const { return ready_; }
 

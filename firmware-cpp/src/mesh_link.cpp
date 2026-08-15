@@ -2,6 +2,7 @@
 
 #include <cstring>
 #include <esp_now.h>
+#include <esp_task_wdt.h>
 #include <esp_wifi.h>
 #include <WiFi.h>
 
@@ -77,7 +78,13 @@ void MeshPrint::flushLine() {
   }
   buf_[len_] = 0;
   // Untargeted = leaf → root (sendLineTo picks root when dst is broadcast).
-  mesh_->sendLineTo(haveTarget_ ? target_ : kBcast, buf_);
+  // Retries matter: CMPACK jh/jt/ja must reach the USB root or Companion hits USB timeout.
+  const uint8_t* dst = haveTarget_ ? target_ : kBcast;
+  for (int attempt = 0; attempt < 3; attempt++) {
+    if (mesh_->sendLineTo(dst, buf_)) break;
+    delay(2 + attempt);
+    yield();
+  }
   len_ = 0;
 }
 
@@ -530,7 +537,11 @@ bool MeshLink::handleVia(const String& macArg, const String& cmdRest) {
     nDef = 0;
   };
 
+  bool resent = false;
   while (millis() - viaStartMs_ < MESH_VIA_TIMEOUT_MS) {
+    // usbTask is stuck here — feed TWDT so a slow leaf cannot reset the board
+    // (Companion then sees bare "USB timeout" with no CMPERR).
+    esp_task_wdt_reset();
     RxItem item{};
     if (popRx(item)) {
       const bool fromTarget = macEq(item.mac, viaMac_) && item.line[0];
@@ -556,6 +567,12 @@ bool MeshLink::handleVia(const String& macArg, const String& cmdRest) {
         Serial.println(item.line);
         Serial.flush();
       }
+    }
+    // One mid-wait resend — ESP-NOW is lossy under heavy hash load.
+    if (!resent && (millis() - viaStartMs_) >= 900) {
+      resent = true;
+      pinChannel();
+      (void)sendLineTo(mac, wire.c_str());
     }
     delay(2);
     yield();

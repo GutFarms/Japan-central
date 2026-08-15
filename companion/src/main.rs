@@ -8474,8 +8474,9 @@ Power a 2nd board nearby with wall/power-bank only (no PC cable)."
         }
         for part in encode_job_parts(job) {
             let rest = part.strip_prefix("cmp ").unwrap_or(part.as_str());
-            // Two soft tries: ESP-NOW often flakes once after channel hop / peer add.
-            let reply = mesh_via_cmd_ex(boards, &mb.gateway, &mb.mac, rest, pump, 2)?;
+            // Soft retries: ESP-NOW is lossy under hash load; USB timeout used to
+            // fire when the root TWDT'd mid-via with no CMPERR on the wire.
+            let reply = mesh_via_cmd_ex(boards, &mb.gateway, &mb.mac, rest, pump, 3)?;
             if !(reply.starts_with("CMPACK") || reply.starts_with("CMP ok")) {
                 log_msg(
                     msg_tx,
@@ -11081,8 +11082,8 @@ fn usb_cmd_ex(
         // One long wait — retrying restarts a board that may still be mid-tune.
         (180_000u64, 1usize, 128usize, 1u64)
     } else if cmd.contains(" via ") {
-        // ESP-NOW mesh relay — root waits up to ~6.5s; mesh_via_cmd_ex soft-retries.
-        (8_500u64, 1usize, 256usize, 0u64)
+        // Firmware via wait ≤4.5s + mid-resend; leave margin for USB drain.
+        (10_000u64, 1usize, 256usize, 0u64)
     } else if cmd.contains("status") {
         // Board may be mid mineB batch; firmware yields on RX, but allow headroom.
         (1_800u64, 3usize, 256usize, 0u64)
