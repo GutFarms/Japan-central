@@ -27,10 +27,10 @@ use api_feeds::{
     ApiSource,
 };
 use assist::{
-    anomaly_system_addon, evaluate_mining_watch, format_watch_report, local_assist,
-    max_tool_rounds, median_f64, suggest_chips, system_prompt, AssistAction, AssistClient,
-    AssistMessage, AssistRole, AssistSnapshot, LlmRound, PendingTool, DEFAULT_BASE_URL,
-    DEFAULT_MODEL,
+    anomaly_system_addon, builtin_anomaly_plan, evaluate_mining_watch, format_watch_report,
+    local_assist, max_tool_rounds, median_f64, suggest_chips, system_prompt, AssistAction,
+    AssistBackend, AssistClient, AssistMessage, AssistRole, AssistSnapshot, LlmRound,
+    PendingTool, DEFAULT_BASE_URL, DEFAULT_MODEL, OLLAMA_BASE_URL, OLLAMA_DEFAULT_MODEL,
 };
 use app_update::{
     check_app_update_ex, running_version, update_companion_app_ex, AppRemoteInfo,
@@ -602,9 +602,12 @@ struct PersistedMine {
     /// Continuous stratum/hashrate watch (Assist auto-applies safe fixes).
     #[serde(default = "default_assist_watch")]
     assist_watch: bool,
-    /// On anomalies, ask the Assist LLM (needs API key).
+    /// On anomalies, run Assist escalate (built-in or optional HTTP LLM).
     #[serde(default = "default_assist_watch")]
     assist_llm_anomaly: bool,
+    /// built_in (default) | ollama | cloud
+    #[serde(default)]
+    assist_backend: String,
 }
 
 fn default_assist_watch() -> bool {
@@ -877,11 +880,13 @@ struct CompanionApp {
     assist_api_key: String,
     assist_base_url: String,
     assist_model: String,
+    /// Built-in Local AI (default), optional Ollama, or Cloud API.
+    assist_backend: AssistBackend,
     /// Pending firmware update from Assist awaiting Confirm.
     assist_fw_confirm: Option<(bool, bool)>,
     /// Continuous mining watch — stratum health + push hashrate.
     assist_watch: bool,
-    /// Escalate anomalies to the LLM when an API key is set.
+    /// Escalate anomalies via built-in AI (or HTTP LLM if Ollama/Cloud).
     assist_llm_anomaly: bool,
     last_assist_watch: Instant,
     last_assist_bench_at: Instant,
@@ -924,6 +929,7 @@ impl CompanionApp {
         let mut assist_api_key = String::new();
         let mut assist_base_url = String::new();
         let mut assist_model = String::new();
+        let mut assist_backend = AssistBackend::BuiltIn;
         let mut assist_watch = true;
         let mut assist_llm_anomaly = true;
         let mut api_feeds: Vec<ApiFeed> = Vec::new();
@@ -957,6 +963,7 @@ impl CompanionApp {
                     assist_api_key = p.assist_api_key;
                     assist_base_url = p.assist_base_url;
                     assist_model = p.assist_model;
+                    assist_backend = AssistBackend::parse(&p.assist_backend);
                     assist_watch = p.assist_watch;
                     assist_llm_anomaly = p.assist_llm_anomaly;
                     if !p.header_coins.is_empty() {
@@ -1107,7 +1114,7 @@ impl CompanionApp {
             header_coins,
             assist_chat: VecDeque::from([(
                 AssistRole::Assistant,
-                "Assist watches stratum continuously (events + baseline). On cliffs/auth drops it auto-fixes, remasures after bench, and can escalate to AI. Toggle Continuous watch / AI on anomalies.".into(),
+                "Built-in Local AI watches stratum + hashrate inside Companion (no cloud). Continuous watch auto-fixes; optional Ollama/Cloud in Settings.".into(),
             )]),
             assist_llm: Vec::new(),
             assist_input: String::new(),
@@ -1116,6 +1123,7 @@ impl CompanionApp {
             assist_api_key,
             assist_base_url,
             assist_model,
+            assist_backend,
             assist_fw_confirm: None,
             assist_watch,
             assist_llm_anomaly,
@@ -1540,6 +1548,7 @@ impl CompanionApp {
             assist_model: self.assist_model.clone(),
             assist_watch: self.assist_watch,
             assist_llm_anomaly: self.assist_llm_anomaly,
+            assist_backend: self.assist_backend.as_str().to_string(),
         };
         if let Ok(raw) = serde_json::to_string(&p) {
             storage.set_string("mine_prefs", raw);
@@ -1652,18 +1661,11 @@ impl CompanionApp {
     }
 
     fn assist_client(&self) -> AssistClient {
-        AssistClient::from_env_or(
+        AssistClient::from_backend(
+            self.assist_backend,
             &self.assist_api_key,
-            if self.assist_base_url.trim().is_empty() {
-                DEFAULT_BASE_URL
-            } else {
-                self.assist_base_url.trim()
-            },
-            if self.assist_model.trim().is_empty() {
-                DEFAULT_MODEL
-            } else {
-                self.assist_model.trim()
-            },
+            &self.assist_base_url,
+            &self.assist_model,
         )
     }
 
@@ -1916,17 +1918,21 @@ impl CompanionApp {
 
     fn spawn_assist_llm(&mut self) {
         let client = self.assist_client();
+        if !client.uses_http() {
+            self.assist_busy = false;
+            return;
+        }
         if !client.configured() {
             self.assist_busy = false;
             self.assist_chat.push_back((
                 AssistRole::Assistant,
-                "No API key — use local chips, or set Assist API key in Settings.".into(),
+                "HTTP Assist not configured — using Built-in Local AI (Settings → Assist)."
+                    .into(),
             ));
             return;
         }
         let snap = self.assist_snapshot();
         let mut msgs = vec![AssistMessage::system(system_prompt(&snap))];
-        // Keep recent non-system history
         for m in self.assist_llm.iter().filter(|m| m.role != AssistRole::System) {
             msgs.push(m.clone());
         }
@@ -1952,20 +1958,19 @@ impl CompanionApp {
         self.assist_llm.push(AssistMessage::user(&text));
         self.assist_rounds = 0;
 
+        // Default: Built-in Local AI (ships in Companion). HTTP only if user chose Ollama/Cloud.
         let client = self.assist_client();
-        if client.configured() {
+        if client.uses_http() && client.configured() {
             self.spawn_assist_llm();
             return;
         }
 
-        // Local keyword tools (no cloud).
         let snap = self.assist_snapshot();
         let (say, pending) = local_assist(&text, &snap);
         self.assist_chat
             .push_back((AssistRole::Assistant, say));
         if !pending.is_empty() {
             self.apply_assist_tools(pending);
-            // Summarize after local tools
             let snap2 = self.assist_snapshot();
             self.assist_chat.push_back((
                 AssistRole::Assistant,
@@ -2133,10 +2138,6 @@ impl CompanionApp {
         if !self.assist_llm_anomaly || self.assist_busy || anomalies.is_empty() {
             return;
         }
-        let client = self.assist_client();
-        if !client.configured() {
-            return;
-        }
         if self.last_assist_llm_anomaly.elapsed() < Duration::from_secs(180) {
             return;
         }
@@ -2146,8 +2147,26 @@ impl CompanionApp {
         }
         self.last_assist_anomaly_sig = sig;
         self.last_assist_llm_anomaly = Instant::now();
+
+        let client = self.assist_client();
+        // Built-in path (default): escalate with on-device optimizer — no network.
+        if !client.uses_http() {
+            let snap = self.assist_snapshot();
+            let (say, pending) = builtin_anomaly_plan(anomalies, &snap);
+            self.assist_chat
+                .push_back((AssistRole::Assistant, say));
+            if !pending.is_empty() {
+                let before = snap.hashrate_khs;
+                self.apply_assist_tools(pending);
+                self.schedule_assist_remeasure("builtin-anomaly", before);
+            }
+            return;
+        }
+        if !client.configured() {
+            return;
+        }
         let snap = self.assist_snapshot();
-        let mut msgs = vec![
+        let msgs = vec![
             AssistMessage::system(system_prompt(&snap)),
             AssistMessage::system(anomaly_system_addon(anomalies)),
             AssistMessage::user(format!(
@@ -2160,7 +2179,7 @@ impl CompanionApp {
         self.assist_rounds = 0;
         self.assist_chat.push_back((
             AssistRole::Assistant,
-            format!("🤖 Escalating anomaly to AI: {}", anomalies.join(", ")),
+            format!("🤖 Escalating anomaly to {}: {}", client.backend.label(), anomalies.join(", ")),
         ));
         let tx = self.msg_tx.clone();
         thread::spawn(move || {
@@ -2262,11 +2281,13 @@ impl CompanionApp {
     }
 
     fn ui_assist(&mut self, ui: &mut egui::Ui) {
-        soft_panel(ui, "Assist — stratum & hashrate watch", |ui| {
-            let mode = if self.assist_client().configured() {
-                "AI mode — primary job: keep stratum healthy and push hashrate"
-            } else {
-                "Local watch — continuous stratum/hashrate playbook (add API key for full AI)"
+        soft_panel(ui, "Assist — built-in Local AI", |ui| {
+            let mode = match self.assist_backend {
+                AssistBackend::BuiltIn => {
+                    "Built-in Local AI — runs inside Companion (offline · stratum + hashrate)"
+                }
+                AssistBackend::Ollama => "Ollama on this PC — optional local LLM",
+                AssistBackend::Cloud => "Cloud API — optional remote LLM",
             };
             ui.label(
                 RichText::new(mode)
@@ -2284,7 +2305,7 @@ impl CompanionApp {
                 }
                 ui.checkbox(
                     &mut self.assist_llm_anomaly,
-                    "AI on anomalies (needs API key)",
+                    "Escalate anomalies (built-in AI)",
                 );
                 if soft_button(ui, "Watch now", 100.0).clicked() && !self.assist_busy {
                     self.submit_assist("Watch stratum".into());
@@ -4255,60 +4276,101 @@ impl CompanionApp {
         });
 
         ui.add_space(14.0);
-        soft_panel(ui, "Assist (AI)", |ui| {
+        soft_panel(ui, "Assist — Local AI", |ui| {
             ui.label(
                 RichText::new(
-                    "OpenAI-compatible API for Assist. Primary job: continuous stratum monitoring \
-and pushing hashrate (clock / mine / bench). Leave blank for local watch chips, \
-or set OPENAI_API_KEY / CYD_ASSIST_API_KEY.",
+                    "AI is built into Companion by default (offline). It watches stratum and pushes \
+hashrate with Continuous watch. Optional: Ollama on this PC, or a cloud API.",
                 )
                 .color(C_MUTED)
                 .size(13.0),
             );
             ui.add_space(10.0);
-            ui.label(RichText::new("API key").color(C_DIM).size(12.0));
-            ui.add(
-                TextEdit::singleline(&mut self.assist_api_key)
-                    .password(true)
-                    .hint_text("sk-…")
-                    .desired_width(ui.available_width()),
-            );
-            ui.add_space(6.0);
-            ui.label(RichText::new("Base URL").color(C_DIM).size(12.0));
-            ui.add(
-                TextEdit::singleline(&mut self.assist_base_url)
-                    .hint_text(DEFAULT_BASE_URL)
-                    .desired_width(ui.available_width()),
-            );
-            ui.add_space(6.0);
-            ui.label(RichText::new("Model").color(C_DIM).size(12.0));
-            ui.add(
-                TextEdit::singleline(&mut self.assist_model)
-                    .hint_text(DEFAULT_MODEL)
-                    .desired_width(ui.available_width()),
-            );
+            ui.horizontal_wrapped(|ui| {
+                for (b, tip) in [
+                    (AssistBackend::BuiltIn, "Built-in (local)"),
+                    (AssistBackend::Ollama, "Ollama (this PC)"),
+                    (AssistBackend::Cloud, "Cloud API"),
+                ] {
+                    let selected = self.assist_backend == b;
+                    if ui
+                        .selectable_label(selected, tip)
+                        .on_hover_text(match b {
+                            AssistBackend::BuiltIn => "No install · works offline",
+                            AssistBackend::Ollama => "Requires Ollama running locally",
+                            AssistBackend::Cloud => "Requires API key",
+                        })
+                        .clicked()
+                    {
+                        self.assist_backend = b;
+                        if b == AssistBackend::Ollama {
+                            if self.assist_base_url.trim().is_empty()
+                                || self.assist_base_url.contains("openai.com")
+                            {
+                                self.assist_base_url = OLLAMA_BASE_URL.into();
+                            }
+                            if self.assist_model.trim().is_empty()
+                                || self.assist_model == DEFAULT_MODEL
+                            {
+                                self.assist_model = OLLAMA_DEFAULT_MODEL.into();
+                            }
+                        }
+                    }
+                }
+            });
             ui.add_space(8.0);
+            if self.assist_backend != AssistBackend::BuiltIn {
+                if self.assist_backend == AssistBackend::Cloud {
+                    ui.label(RichText::new("API key").color(C_DIM).size(12.0));
+                    ui.add(
+                        TextEdit::singleline(&mut self.assist_api_key)
+                            .password(true)
+                            .hint_text("sk-…")
+                            .desired_width(ui.available_width()),
+                    );
+                    ui.add_space(6.0);
+                }
+                ui.label(RichText::new("Base URL").color(C_DIM).size(12.0));
+                ui.add(
+                    TextEdit::singleline(&mut self.assist_base_url)
+                        .hint_text(if self.assist_backend == AssistBackend::Ollama {
+                            OLLAMA_BASE_URL
+                        } else {
+                            DEFAULT_BASE_URL
+                        })
+                        .desired_width(ui.available_width()),
+                );
+                ui.add_space(6.0);
+                ui.label(RichText::new("Model").color(C_DIM).size(12.0));
+                ui.add(
+                    TextEdit::singleline(&mut self.assist_model)
+                        .hint_text(if self.assist_backend == AssistBackend::Ollama {
+                            OLLAMA_DEFAULT_MODEL
+                        } else {
+                            DEFAULT_MODEL
+                        })
+                        .desired_width(ui.available_width()),
+                );
+                ui.add_space(8.0);
+            }
             ui.horizontal_wrapped(|ui| {
                 if soft_button(ui, "Open Assist tab", 140.0).clicked() {
                     self.tab = Tab::Assist;
                 }
-                if soft_button(ui, "Test Assist API", 140.0).clicked() {
+                if self.assist_backend == AssistBackend::BuiltIn {
+                    if soft_button(ui, "Test built-in AI", 140.0).clicked() {
+                        self.tab = Tab::Assist;
+                        self.submit_assist("Help".into());
+                        self.last_ok = "Built-in Local AI is active on the Assist tab.".into();
+                    }
+                } else if soft_button(ui, "Test Assist API", 140.0).clicked() {
                     let client = self.assist_client();
                     if !client.configured() {
-                        self.last_error =
-                            "Set an Assist API key first (or OPENAI_API_KEY).".into();
+                        self.last_error = "Configure Ollama URL/model or Cloud API key first.".into();
                     } else {
                         let tx = self.msg_tx.clone();
-                        self.last_ok = "Testing Assist API…".into();
+                        self.last_ok = format!("Testing {}…", client.backend.label());
                         thread::spawn(move || {
-                            let msgs = vec![
-                                AssistMessage::system(
-                                    "Reply with exactly: ok — Assist API reachable.",
-                                ),
-                                AssistMessage::user("ping"),
-                            ];
-                            // Minimal round without tools — reuse chat_round may try tools;
-                            // send a tiny completions call inline.
                             let url = format!("{}/chat/completions", client.base_url);
                             let body = serde_json::json!({
                                 "model": client.model,
@@ -4328,24 +4390,27 @@ or set OPENAI_API_KEY / CYD_ASSIST_API_KEY.",
                                 Ok(resp) => {
                                     let status = resp.status();
                                     match resp.into_string() {
-                                        Ok(t) if (200..300).contains(&status) => {
-                                            Ok(format!("Assist API OK (HTTP {status}) · {}", trunc(&t, 80)))
-                                        }
-                                        Ok(t) => Err(format!("Assist API HTTP {status}: {}", trunc(&t, 160))),
+                                        Ok(t) if (200..300).contains(&status) => Ok(format!(
+                                            "Assist API OK (HTTP {status}) · {}",
+                                            trunc(&t, 80)
+                                        )),
+                                        Ok(t) => Err(format!(
+                                            "Assist API HTTP {status}: {}",
+                                            trunc(&t, 160)
+                                        )),
                                         Err(e) => Err(format!("Assist API read: {e}")),
                                     }
                                 }
                                 Err(e) => Err(format!("Assist API: {e}")),
                             };
                             let _ = tx.send(NetMsg::Action(result));
-                            let _ = msgs;
                         });
                     }
                 }
             });
             ui.checkbox(
                 &mut self.assist_llm_anomaly,
-                "Escalate mining anomalies to Assist AI (continuous watch)",
+                "Escalate mining anomalies (built-in optimizer, or HTTP LLM if Ollama/Cloud)",
             );
         });
 

@@ -1,14 +1,53 @@
-//! In-app AI assistant — OpenAI-compatible chat with tools that control/monitor boards.
-//!
-//! Without an API key, a local keyword helper still runs the same tools (status, mine,
-//! scan, connect, …) so Assist remains useful offline.
+//! In-app Assist — **built-in Local AI** by default (stratum/hashrate watch + tools).
+//! Optional backends: Ollama on this PC, or an OpenAI-compatible cloud API.
 
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
 pub const DEFAULT_BASE_URL: &str = "https://api.openai.com/v1";
 pub const DEFAULT_MODEL: &str = "gpt-4o-mini";
+pub const OLLAMA_BASE_URL: &str = "http://127.0.0.1:11434/v1";
+pub const OLLAMA_DEFAULT_MODEL: &str = "llama3.2";
 const MAX_TOOL_ROUNDS: u8 = 5;
+
+/// Where Assist runs inference. Default = built into Companion (no network LLM).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum AssistBackend {
+    /// On-device playbook + NLU — ships inside Companion, works offline.
+    #[default]
+    BuiltIn,
+    /// Optional: local Ollama on this PC (`127.0.0.1:11434`).
+    Ollama,
+    /// Optional: OpenAI-compatible cloud / remote endpoint.
+    Cloud,
+}
+
+impl AssistBackend {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::BuiltIn => "built_in",
+            Self::Ollama => "ollama",
+            Self::Cloud => "cloud",
+        }
+    }
+
+    pub fn parse(s: &str) -> Self {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "ollama" | "local_ollama" => Self::Ollama,
+            "cloud" | "openai" | "api" => Self::Cloud,
+            _ => Self::BuiltIn,
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::BuiltIn => "Built-in (local)",
+            Self::Ollama => "Ollama (this PC)",
+            Self::Cloud => "Cloud API",
+        }
+    }
+}
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
@@ -737,7 +776,7 @@ pub fn parse_action(name: &str, arguments: &str) -> Result<AssistAction, String>
     }
 }
 
-/// Offline / no-key helper: map plain English to tools + a short reply.
+/// Built-in Local AI: map plain English to tools + a natural reply (no cloud).
 pub fn local_assist(user: &str, snap: &AssistSnapshot) -> (String, Vec<PendingTool>) {
     let low = user.to_ascii_lowercase();
     let mut tools = Vec::new();
@@ -757,6 +796,7 @@ pub fn local_assist(user: &str, snap: &AssistSnapshot) -> (String, Vec<PendingTo
         || low.contains("how's")
         || low.contains("how is")
         || low == "fleet"
+        || (low.contains("what") && (low.contains("doing") || low.contains("happening")))
     {
         push(&mut tools, AssistAction::WatchStratum);
         if low.contains("max")
@@ -767,7 +807,13 @@ pub fn local_assist(user: &str, snap: &AssistSnapshot) -> (String, Vec<PendingTo
         {
             push(&mut tools, AssistAction::OptimizeHashrate);
         }
-        return ("Watching stratum + hashrate…".into(), tools);
+        return (
+            format!(
+                "Built-in AI · watching stratum + hashrate…\n{}",
+                builtin_brief(snap)
+            ),
+            tools,
+        );
     }
     if low.contains("optim")
         || low.contains("max hash")
@@ -776,47 +822,46 @@ pub fn local_assist(user: &str, snap: &AssistSnapshot) -> (String, Vec<PendingTo
         || low.contains("boost")
         || low.contains("tune")
         || low == "max hashrate"
+        || low.contains("faster")
+        || low.contains("speed up")
     {
         push(&mut tools, AssistAction::OptimizeHashrate);
-        return ("Pushing hashrate with live monitoring…".into(), tools);
+        return (
+            "Built-in AI · pushing hashrate (clock / mine / bench from live signals)…".into(),
+            tools,
+        );
     }
     if low.contains("scan") || low.contains("find board") || low.contains("find worker") {
         push(&mut tools, AssistAction::ScanWorkers);
-        return ("Scanning for CYD boards…".into(), tools);
+        return ("Built-in AI · scanning for CYD boards…".into(), tools);
     }
     if low.contains("list port") || low.contains("com port") || low.contains("serial") {
         push(&mut tools, AssistAction::ListPorts);
-        return ("Refreshing serial ports…".into(), tools);
+        return ("Built-in AI · refreshing serial ports…".into(), tools);
     }
     if low.contains("stop mine") || low.contains("stop mining") || low == "stop" {
         push(&mut tools, AssistAction::StopMining);
-        return ("Stopping mining…".into(), tools);
+        return ("Built-in AI · stopping mining…".into(), tools);
     }
     if low.contains("start mine") || low.contains("start mining") || low == "mine" {
         push(&mut tools, AssistAction::StartMining);
-        return ("Starting mining…".into(), tools);
+        return ("Built-in AI · starting mining…".into(), tools);
     }
     if low.contains("connect") || low.contains("link") {
-        push(
-            &mut tools,
-            AssistAction::ConnectBoard { endpoint: None },
-        );
-        return ("Linking the selected board…".into(), tools);
+        push(&mut tools, AssistAction::ConnectBoard { endpoint: None });
+        return ("Built-in AI · linking the selected board…".into(), tools);
     }
     if low.contains("disconnect") || low.contains("close usb") {
-        push(
-            &mut tools,
-            AssistAction::DisconnectBoard { endpoint: None },
-        );
-        return ("Disconnecting…".into(), tools);
+        push(&mut tools, AssistAction::DisconnectBoard { endpoint: None });
+        return ("Built-in AI · disconnecting…".into(), tools);
     }
     if low.contains("bench") || low.contains("retune") {
         push(&mut tools, AssistAction::BenchBoards);
-        return ("Running board bench…".into(), tools);
+        return ("Built-in AI · running board bench…".into(), tools);
     }
     if low.contains("log") || low.contains("event") {
         push(&mut tools, AssistAction::GetEventLog { limit: 16 });
-        return ("Pulling recent event log…".into(), tools);
+        return ("Built-in AI · pulling recent event log…".into(), tools);
     }
     if low.contains("setup") && low.contains("wifi") {
         push(
@@ -825,7 +870,7 @@ pub fn local_assist(user: &str, snap: &AssistSnapshot) -> (String, Vec<PendingTo
                 tab: "setup".into(),
             },
         );
-        return ("Opening Setup for Wi‑Fi credentials…".into(), tools);
+        return ("Built-in AI · opening Setup for Wi‑Fi…".into(), tools);
     }
     if low.contains("flash") || low.contains("firmware") || low.contains("update board") {
         push(
@@ -835,28 +880,107 @@ pub fn local_assist(user: &str, snap: &AssistSnapshot) -> (String, Vec<PendingTo
                 wifi: false,
             },
         );
-        return ("Firmware update needs your confirmation…".into(), tools);
+        return (
+            "Built-in AI · firmware update needs your confirmation…".into(),
+            tools,
+        );
     }
     if low.contains("240") && (low.contains("mhz") || low.contains("clock")) {
         push(&mut tools, AssistAction::SetClock { mhz: 240 });
-        return ("Setting clock to 240 MHz…".into(), tools);
+        return ("Built-in AI · setting clock to 240 MHz…".into(), tools);
     }
     if low.contains("160") && (low.contains("mhz") || low.contains("clock")) {
         push(&mut tools, AssistAction::SetClock { mhz: 160 });
-        return ("Setting clock to 160 MHz…".into(), tools);
+        return ("Built-in AI · setting clock to 160 MHz…".into(), tools);
     }
     if low.contains("80") && (low.contains("mhz") || low.contains("clock")) {
         push(&mut tools, AssistAction::SetClock { mhz: 80 });
-        return ("Setting clock to 80 MHz…".into(), tools);
+        return ("Built-in AI · setting clock to 80 MHz…".into(), tools);
+    }
+    if low.contains("help") || low.contains("what can") || low == "?" {
+        return (
+            "Built-in Local AI (runs inside Companion — no cloud required).\n\
+I watch stratum + hashrate and can start/stop mining, bench, set 240 MHz, scan/connect boards.\n\
+Try: Watch stratum · Max hashrate · Start mining · Bench.".into(),
+            tools,
+        );
+    }
+    if low.contains("why")
+        && (low.contains("reject") || low.contains("accept") || low.contains("share"))
+    {
+        let report = evaluate_mining_watch(snap);
+        return (
+            format!(
+                "Built-in AI · share health\n{}\n\nTip: CYDs need low share difficulty (ESP/IoT pool, e.g. HM :3337).",
+                format_watch_report(&report)
+            ),
+            tools,
+        );
     }
 
-    // Default: mining watch report (no tools) — continuous-focus help.
     let report = evaluate_mining_watch(snap);
     (
         format!(
-            "{}\n\nChips: Watch stratum · Max hashrate · Start mining · Bench · Clock 240.\n\
-Continuous watch can auto-apply safe fixes when enabled on Assist.",
+            "Built-in Local AI\n{}\n\n{}",
+            builtin_brief(snap),
             format_watch_report(&report)
+        ),
+        tools,
+    )
+}
+
+fn builtin_brief(snap: &AssistSnapshot) -> String {
+    format!(
+        "USB={} · mining={} · {:.0} kH/s (baseline {:.0}) · stratum {}{} · A={} R={} · {} board(s) · {} MHz",
+        if snap.usb_open { "linked" } else { "idle" },
+        if snap.mining { "on" } else { "off" },
+        snap.hashrate_khs,
+        snap.baseline_khs,
+        if snap.stratum_authorized {
+            "AUTHORIZED"
+        } else if snap.stratum_connected {
+            "connected"
+        } else {
+            "down"
+        },
+        if snap.stratum_phase.is_empty() {
+            String::new()
+        } else {
+            format!("/{}", snap.stratum_phase)
+        },
+        snap.session_accepted,
+        snap.session_rejected,
+        snap.linked_boards.max(u32::from(snap.usb_open)),
+        snap.target_mhz
+    )
+}
+
+/// Anomaly escalation using built-in tools only (no network LLM).
+pub fn builtin_anomaly_plan(
+    anomalies: &[String],
+    snap: &AssistSnapshot,
+) -> (String, Vec<PendingTool>) {
+    let report = evaluate_mining_watch(snap);
+    let mut tools: Vec<PendingTool> = report
+        .steps
+        .into_iter()
+        .enumerate()
+        .map(|(i, step)| PendingTool {
+            id: format!("anom-{}", i + 1),
+            action: step.action,
+        })
+        .collect();
+    if tools.is_empty() && snap.stratum_authorized && !snap.bench_busy {
+        tools.push(PendingTool {
+            id: "anom-opt".into(),
+            action: AssistAction::OptimizeHashrate,
+        });
+    }
+    (
+        format!(
+            "Built-in AI · anomaly [{}]\n{}",
+            anomalies.join(", "),
+            format_watch_report(&evaluate_mining_watch(snap))
         ),
         tools,
     )
@@ -875,7 +999,7 @@ pub fn suggest_chips() -> &'static [&'static str] {
         "Bench",
         "Clock 240",
         "Scan boards",
-        "Status",
+        "Help",
     ]
 }
 
@@ -938,45 +1062,96 @@ pub enum LlmRound {
 }
 
 pub struct AssistClient {
+    pub backend: AssistBackend,
     pub api_key: String,
     pub base_url: String,
     pub model: String,
 }
 
 impl AssistClient {
-    pub fn from_env_or(key: &str, base: &str, model: &str) -> Self {
-        let api_key = if key.trim().is_empty() {
-            std::env::var("OPENAI_API_KEY")
-                .or_else(|_| std::env::var("CYD_ASSIST_API_KEY"))
-                .unwrap_or_default()
-        } else {
-            key.trim().to_string()
-        };
-        let base_url = if base.trim().is_empty() {
-            DEFAULT_BASE_URL.to_string()
-        } else {
-            base.trim().trim_end_matches('/').to_string()
-        };
-        let model = if model.trim().is_empty() {
-            DEFAULT_MODEL.to_string()
-        } else {
-            model.trim().to_string()
-        };
-        Self {
-            api_key,
-            base_url,
-            model,
+    pub fn from_backend(
+        backend: AssistBackend,
+        key: &str,
+        base: &str,
+        model: &str,
+    ) -> Self {
+        match backend {
+            AssistBackend::BuiltIn => Self {
+                backend,
+                api_key: String::new(),
+                base_url: String::new(),
+                model: "built-in".into(),
+            },
+            AssistBackend::Ollama => {
+                let base_url = if base.trim().is_empty() {
+                    OLLAMA_BASE_URL.to_string()
+                } else {
+                    base.trim().trim_end_matches('/').to_string()
+                };
+                let model = if model.trim().is_empty() {
+                    OLLAMA_DEFAULT_MODEL.to_string()
+                } else {
+                    model.trim().to_string()
+                };
+                // Ollama accepts any/empty key; use a placeholder for Authorization headers.
+                let api_key = if key.trim().is_empty() {
+                    "ollama".into()
+                } else {
+                    key.trim().to_string()
+                };
+                Self {
+                    backend,
+                    api_key,
+                    base_url,
+                    model,
+                }
+            }
+            AssistBackend::Cloud => {
+                let api_key = if key.trim().is_empty() {
+                    std::env::var("OPENAI_API_KEY")
+                        .or_else(|_| std::env::var("CYD_ASSIST_API_KEY"))
+                        .unwrap_or_default()
+                } else {
+                    key.trim().to_string()
+                };
+                let base_url = if base.trim().is_empty() {
+                    DEFAULT_BASE_URL.to_string()
+                } else {
+                    base.trim().trim_end_matches('/').to_string()
+                };
+                let model = if model.trim().is_empty() {
+                    DEFAULT_MODEL.to_string()
+                } else {
+                    model.trim().to_string()
+                };
+                Self {
+                    backend,
+                    api_key,
+                    base_url,
+                    model,
+                }
+            }
         }
     }
 
+    pub fn uses_http(&self) -> bool {
+        !matches!(self.backend, AssistBackend::BuiltIn)
+    }
+
     pub fn configured(&self) -> bool {
-        !self.api_key.is_empty()
+        match self.backend {
+            AssistBackend::BuiltIn => true,
+            AssistBackend::Ollama => !self.base_url.is_empty(),
+            AssistBackend::Cloud => !self.api_key.is_empty(),
+        }
     }
 
     pub fn chat_round(&self, messages: &[AssistMessage]) -> Result<LlmRound, String> {
-        if !self.configured() {
-            return Err("No Assist API key — set one in Settings → Assist, or OPENAI_API_KEY."
-                .into());
+        if matches!(self.backend, AssistBackend::BuiltIn) {
+            return Err("Built-in AI does not use HTTP — use local_assist.".into());
+        }
+        if matches!(self.backend, AssistBackend::Cloud) && self.api_key.is_empty() {
+            return Err("Cloud Assist needs an API key in Settings.".into());
         }
         let url = format!("{}/chat/completions", self.base_url);
         let body = json!({
