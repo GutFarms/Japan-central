@@ -6770,16 +6770,23 @@ impl App for CompanionApp {
                 // Keep the Ready CTA responsive while the flash thread waits.
                 ctx.request_repaint_after(Duration::from_millis(100));
             }
+            // Fixed size — phase/status lines change every tick; auto-fit made the
+            // window pulse bigger/smaller as espflash codes scrolled by.
+            const FLASH_PANEL_W: f32 = 540.0;
+            const FLASH_PANEL_H: f32 = 360.0;
             egui::Window::new("Updating board")
                 .collapsible(false)
                 .resizable(false)
                 .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+                .default_size([FLASH_PANEL_W, FLASH_PANEL_H])
+                .min_size([FLASH_PANEL_W, FLASH_PANEL_H])
+                .max_size([FLASH_PANEL_W, FLASH_PANEL_H])
                 .show(ctx, |ui| {
-                    ui.set_min_width(420.0);
+                    ui.set_min_size(egui::vec2(FLASH_PANEL_W - 24.0, FLASH_PANEL_H - 40.0));
                     ui.vertical_centered(|ui| {
-                        ui.add_space(12.0);
+                        ui.add_space(10.0);
                         ui.add(egui::Spinner::new().size(44.0).color(C_LIME));
-                        ui.add_space(12.0);
+                        ui.add_space(10.0);
                         ui.label(
                             RichText::new(if self.post_flash_verify.is_some() {
                                 "Verifying board firmware"
@@ -6795,65 +6802,85 @@ impl App for CompanionApp {
                             .color(C_LIME)
                             .font(display_font(22.0)),
                         );
-                        ui.add_space(12.0);
+                        ui.add_space(10.0);
                         let pct = (self.flash_progress.clamp(0.0, 1.0) * 100.0).round() as u32;
                         let phase = if self.flash_phase.is_empty() {
                             "Working…".to_string()
                         } else {
                             self.flash_phase.clone()
                         };
-                        ui.label(
-                            RichText::new(format!("{phase} · {pct}%"))
-                                .color(C_TEXT)
-                                .font(mono_ui_font(13.0)),
+                        // Fixed-height phase row so % text length changes don't reflow.
+                        ui.allocate_ui_with_layout(
+                            egui::vec2(ui.available_width().min(500.0), 22.0),
+                            egui::Layout::top_down(egui::Align::Center),
+                            |ui| {
+                                ui.label(
+                                    RichText::new(format!("{phase} · {pct}%"))
+                                        .color(C_TEXT)
+                                        .font(mono_ui_font(13.0)),
+                                );
+                            },
                         );
                         ui.add_space(8.0);
-                        let bar_w = ui.available_width().min(360.0);
                         ui.add(
                             egui::ProgressBar::new(self.flash_progress.clamp(0.0, 1.0))
-                                .desired_width(bar_w)
+                                .desired_width(480.0)
                                 .animate(true)
                                 .fill(C_LIME),
                         );
                         ui.add_space(10.0);
-                        ui.label(
-                            RichText::new(if self.update_status.is_empty() {
-                                "Starting…".to_string()
-                            } else {
-                                self.update_status.clone()
-                            })
-                            .color(C_MUTED)
-                            .font(mono_ui_font(11.0)),
-                        );
-                        ui.add_space(10.0);
-                        if awaiting_boot {
-                            ui.label(
-                                RichText::new(
-                                    "1) Hold BOOT · 2) Tap RESET · 3) Keep BOOT held · 4) Ready · keep BOOT until Writing %",
-                                )
-                                .color(C_TEXT)
-                                .size(13.0),
-                            );
-                            ui.add_space(12.0);
-                            if cta_button(ui, "Ready", true, 160.0).clicked() {
-                                if let Some(r) = &self.flash_boot_ready {
-                                    r.store(true, Ordering::SeqCst);
-                                }
-                                self.flash_phase = "Syncing download mode".into();
-                                self.update_status =
-                                    "Ready — syncing ROM, then writing…".into();
-                            }
-                            ui.add_space(8.0);
+                        // Fixed 2-line status well — long espflash lines used to grow the box.
+                        let status = if self.update_status.is_empty() {
+                            "Starting…".to_string()
                         } else {
-                            ui.label(
-                                RichText::new(
-                                    "Keep USB connected · hold BOOT + tap RESET if needed",
-                                )
-                                .color(C_DIM)
-                                .size(12.0),
-                            );
-                            ui.add_space(8.0);
-                        }
+                            self.update_status.clone()
+                        };
+                        ui.allocate_ui_with_layout(
+                            egui::vec2(ui.available_width().min(500.0), 40.0),
+                            egui::Layout::top_down(egui::Align::Center),
+                            |ui| {
+                                ui.label(
+                                    RichText::new(status)
+                                        .color(C_MUTED)
+                                        .font(mono_ui_font(11.0)),
+                                );
+                            },
+                        );
+                        ui.add_space(8.0);
+                        // Always reserve BOOT instruction height so Ready ↔ Writing doesn't jump.
+                        ui.allocate_ui_with_layout(
+                            egui::vec2(ui.available_width().min(500.0), 56.0),
+                            egui::Layout::top_down(egui::Align::Center),
+                            |ui| {
+                                if awaiting_boot {
+                                    ui.label(
+                                        RichText::new(
+                                            "1) Hold BOOT · 2) Tap RESET · 3) Keep BOOT held · 4) Ready · keep BOOT until Writing %",
+                                        )
+                                        .color(C_TEXT)
+                                        .size(13.0),
+                                    );
+                                    ui.add_space(8.0);
+                                    if cta_button(ui, "Ready", true, 160.0).clicked() {
+                                        if let Some(r) = &self.flash_boot_ready {
+                                            r.store(true, Ordering::SeqCst);
+                                        }
+                                        self.flash_phase = "Syncing download mode".into();
+                                        self.update_status =
+                                            "Ready — syncing ROM, then writing…".into();
+                                    }
+                                } else {
+                                    ui.label(
+                                        RichText::new(
+                                            "Keep USB connected · hold BOOT + tap RESET if needed",
+                                        )
+                                        .color(C_DIM)
+                                        .size(12.0),
+                                    );
+                                }
+                            },
+                        );
+                        ui.add_space(8.0);
                         if soft_button(ui, "Cancel", 120.0).clicked() {
                             if let Some(c) = &self.flash_cancel {
                                 c.store(true, Ordering::SeqCst);
@@ -6867,7 +6894,7 @@ impl App for CompanionApp {
                                     .into();
                             self.push_log(LogKind::Usb, self.update_status.clone());
                         }
-                        ui.add_space(8.0);
+                        ui.add_space(6.0);
                     });
                 });
         }
