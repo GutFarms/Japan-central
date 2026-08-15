@@ -1107,8 +1107,7 @@ impl CompanionApp {
             header_coins,
             assist_chat: VecDeque::from([(
                 AssistRole::Assistant,
-                "Assist watches stratum health and pushes hashrate (clock 240 · start mine · bench when soft). \
-Enable Continuous watch for auto fixes, or tap Watch stratum / Max hashrate.".into(),
+                "Assist watches stratum continuously (events + baseline). On cliffs/auth drops it auto-fixes, remasures after bench, and can escalate to AI. Toggle Continuous watch / AI on anomalies.".into(),
             )]),
             assist_llm: Vec::new(),
             assist_input: String::new(),
