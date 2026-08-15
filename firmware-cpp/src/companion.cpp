@@ -10,9 +10,9 @@
 extern "C" float cyd_run_bench(uint32_t n, bool tune);
 
 #if CYD_D0_BUILD
-static constexpr const char* kFwTag = "0.8.153-sha256-d0";
+static constexpr const char* kFwTag = "0.8.154-sha256-d0";
 #else
-static constexpr const char* kFwTag = "0.8.153-sha256";
+static constexpr const char* kFwTag = "0.8.154-sha256";
 #endif
 
 void CompanionLink::begin(uint32_t baud) {
@@ -383,6 +383,81 @@ void CompanionLink::handleLine(const String& line, AppConfig& cfg, const MinerSn
     return;
   }
   
+  if (verb == "pool") {
+    if (args.length() == 0 || args.equalsIgnoreCase("status")) {
+      char buf[280];
+      snprintf(buf, sizeof(buf),
+               "CMPACK pool indep=%u url=%s worker=%s phase=%s ep=%s",
+               cfg.mineIndep ? 1u : 0u,
+               cfg.poolUrl.length() ? cfg.poolUrl.c_str() : "-",
+               cfg.poolWorker.length() ? cfg.poolWorker.c_str() : "-",
+               snap.poolPhase.length() ? snap.poolPhase.c_str() : "-",
+               snap.poolEndpoint.length() ? snap.poolEndpoint.c_str() : "-");
+      out_->println(buf);
+      out_->flush();
+      return;
+    }
+    if (args.equalsIgnoreCase("clear") || args.indexOf("clear=1") >= 0) {
+      cfg.poolUrl = "";
+      cfg.poolWorker = "";
+      cfg.poolPass = "x";
+      cfg.mineIndep = false;
+      if (onWifiPersist_ && !onWifiPersist_()) {
+        out_->println("CMPERR pool nvs");
+        out_->flush();
+        return;
+      }
+      out_->println("CMPACK pool cleared");
+      out_->flush();
+      return;
+    }
+    // cmp pool url=…&worker=…&pass=…&indep=1
+    int start = 0;
+    while (start < (int)args.length()) {
+      int amp = args.indexOf('&', start);
+      String pair = (amp < 0) ? args.substring(start) : args.substring(start, amp);
+      int eq = pair.indexOf('=');
+      String key = (eq < 0) ? pair : pair.substring(0, eq);
+      String val = (eq < 0) ? "" : urlDecode(pair.substring(eq + 1));
+      key.toLowerCase();
+      if (key == "url" || key == "pool" || key == "host") {
+        if (val.length() > 120) val = val.substring(0, 120);
+        cfg.poolUrl = val;
+      } else if (key == "worker" || key == "user" || key == "login") {
+        if (val.length() > 80) val = val.substring(0, 80);
+        cfg.poolWorker = val;
+      } else if (key == "pass" || key == "password" || key == "pwd") {
+        if (val.length() > 64) val = val.substring(0, 64);
+        cfg.poolPass = val;
+      } else if (key == "indep" || key == "independent" || key == "en" || key == "enable") {
+        cfg.mineIndep =
+            !(val == "0" || val.equalsIgnoreCase("false") || val.equalsIgnoreCase("off"));
+      }
+      if (amp < 0) break;
+      start = amp + 1;
+    }
+    cfg.poolUrl.trim();
+    cfg.poolWorker.trim();
+    if (cfg.poolUrl.length() == 0 || cfg.poolWorker.length() == 0) {
+      out_->println("CMPERR pool need url+worker");
+      out_->flush();
+      return;
+    }
+    if (cfg.poolPass.length() == 0) cfg.poolPass = "x";
+    cfg.mineIndep = true;
+    if (onWifiPersist_ && !onWifiPersist_()) {
+      out_->println("CMPERR pool nvs");
+      out_->flush();
+      return;
+    }
+    char ack[200];
+    snprintf(ack, sizeof(ack), "CMPACK pool saved url=%s worker=%s indep=1",
+             cfg.poolUrl.c_str(), cfg.poolWorker.c_str());
+    out_->println(ack);
+    out_->flush();
+    return;
+  }
+
   if (verb == "wifi") {
     if (args.length() == 0 || args.equalsIgnoreCase("status")) {
       char buf[220];
@@ -520,7 +595,7 @@ void CompanionLink::handleLine(const String& line, AppConfig& cfg, const MinerSn
   }
 
   out_->println(
-      "CMPERR unknown (ping|status|config|wifi|ota|mesh|via|jh|jt|ja|job|stop|stats|bench|clock|reboot|netdata)");
+      "CMPERR unknown (ping|status|config|wifi|pool|ota|mesh|via|jh|jt|ja|job|stop|stats|bench|clock|reboot|netdata)");
 }
 
 static void copyJsonSafe(char* dst, size_t dstLen, const char* src, size_t maxCopy) {
@@ -548,7 +623,10 @@ void CompanionLink::replyStatus(const AppConfig& cfg, const MinerSnapshot& snap)
   copyJsonSafe(sha, sizeof(sha), snap.shaMode.length() ? snap.shaMode.c_str() : "-", 8);
   char mac[20];
   copyJsonSafe(mac, sizeof(mac), snap.mac.length() ? snap.mac.c_str() : "", 17);
-  char buf[520];
+  char pep[48], pph[16];
+  copyJsonSafe(pep, sizeof(pep), snap.poolEndpoint.c_str(), 44);
+  copyJsonSafe(pph, sizeof(pph), snap.poolPhase.c_str(), 12);
+  char buf[640];
   snprintf(
       buf, sizeof(buf),
       "{\"hashrate_hs\":%.0f,\"hashrate_khs\":%.3f,\"shares\":%llu,\"hashes\":%llu,"
@@ -556,14 +634,15 @@ void CompanionLink::replyStatus(const AppConfig& cfg, const MinerSnapshot& snap)
       "\"link\":\"cmp\",\"difficulty\":0,\"uptime_secs\":%u,\"cpu_mhz\":%u,"
       "\"hash_focus\":true,\"net_ticker\":\"\",\"job\":\"%s\",\"sha_mode\":\"%s\","
       "\"full_v\":true,\"bench_hs\":%.0f,\"nonce\":\"%s\",\"mac\":\"%s\","
-      "\"mesh_root\":%s,\"mesh_bridging\":%s,\"mesh_peers\":%u}",
+      "\"mesh_root\":%s,\"mesh_bridging\":%s,\"mesh_peers\":%u,"
+      "\"mine_indep\":%s,\"pool_ep\":\"%s\",\"pool_phase\":\"%s\"}",
       (double)snap.hashrateHs, (double)(snap.hashrateHs / 1000.0f),
       (unsigned long long)snap.shares, (unsigned long long)snap.totalHashes,
       snap.mining ? "true" : "false", (unsigned)snap.accepted, (unsigned)snap.rejected, pool,
       snap.connected ? "true" : "false", (unsigned)(millis() / 1000),
       (unsigned)(snap.cpuMhz ? snap.cpuMhz : cfg.cpuMhz), job, sha, (double)snap.benchHs, nonceHex,
       mac, snap.meshRoot ? "true" : "false", snap.meshBridging ? "true" : "false",
-      (unsigned)snap.meshPeers);
+      (unsigned)snap.meshPeers, snap.mineIndep ? "true" : "false", pep, pph);
   out_->print("CMPSTATUS ");
   out_->println(buf);
 }
@@ -579,13 +658,17 @@ void CompanionLink::replyConfig(const AppConfig& cfg, const MinerSnapshot& snap)
   copyJsonSafe(wip, sizeof(wip), snap.wifiIp.c_str(), 18);
   char wap[36];
   copyJsonSafe(wap, sizeof(wap), snap.wifiAp.c_str(), 32);
-  char buf[320];
+  char poolUrl[96], poolWorker[64];
+  copyJsonSafe(poolUrl, sizeof(poolUrl), cfg.poolUrl.c_str(), 90);
+  copyJsonSafe(poolWorker, sizeof(poolWorker), cfg.poolWorker.c_str(), 60);
+  char buf[520];
   snprintf(buf, sizeof(buf),
            "{\"cpu_mhz\":%u,\"hash_focus\":true,\"fw\":\"%s\",\"mode\":\"usb-wifi-sha256\","
            "\"configured\":true,\"mac\":\"%s\",\"wifi_en\":%s,\"wifi_ssid\":\"%s\","
-           "\"wifi_mode\":\"%s\",\"wifi_ip\":\"%s\",\"wifi_ap\":\"%s\",\"wifi_tcp\":%u}",
+           "\"wifi_mode\":\"%s\",\"wifi_ip\":\"%s\",\"wifi_ap\":\"%s\",\"wifi_tcp\":%u,"
+           "\"mine_indep\":%s,\"pool_url\":\"%s\",\"pool_worker\":\"%s\"}",
            (unsigned)cfg.cpuMhz, kFwTag, mac, cfg.wifiEnabled ? "true" : "false", ssid, wmode, wip,
-           wap, 19284u);
+           wap, 19284u, cfg.mineIndep ? "true" : "false", poolUrl, poolWorker);
   out_->print("CMPCONFIG ");
   out_->println(buf);
 }

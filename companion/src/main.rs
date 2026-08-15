@@ -458,6 +458,12 @@ struct StatusJson {
     mesh_bridging: bool,
     #[serde(default)]
     mesh_peers: u8,
+    #[serde(default)]
+    mine_indep: bool,
+    #[serde(default)]
+    pool_ep: String,
+    #[serde(default)]
+    pool_phase: String,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -5093,9 +5099,10 @@ Phone: join SoftAP — Board Setup opens automatically to set home Wi‑Fi.",
                 for w in &self.connected_workers {
                     ui.label(
                         RichText::new(format!(
-                            "  {}  {}{}",
+                            "  {}  {}{}{}",
                             w.endpoint,
                             format_hashrate(w.hashrate_hs),
+                            if w.mine_indep { " · indep" } else { "" },
                             if w.mining { "" } else { " · idle" }
                         ))
                         .color(if w.hashrate_hs > 0.0 { C_LIME } else { C_DIM })
@@ -8223,6 +8230,8 @@ fn mine_worker(cmd_rx: Receiver<NetCmd>, msg_tx: Sender<NetMsg>) {
         /// Root is bridging ESP-NOW leaves (hash intentionally reduced on this board).
         mesh_bridging: bool,
         mesh_peers: u8,
+        /// Board owns its own stratum session — Companion monitors H/s only.
+        mine_indep: bool,
     }
 
     /// Board reached only through a USB/Wi‑Fi root via ESP-NOW (`cmp via`).
@@ -8236,6 +8245,7 @@ fn mine_worker(cmd_rx: Receiver<NetCmd>, msg_tx: Sender<NetMsg>) {
         hashes: u64,
         mining: bool,
         status_fails: u8,
+        mine_indep: bool,
     }
 
     fn live_from(boards: &[UsbBoard], mesh: &[MeshBoard]) -> Vec<WorkerLive> {
@@ -8255,6 +8265,7 @@ fn mine_worker(cmd_rx: Receiver<NetCmd>, msg_tx: Sender<NetMsg>) {
                 mining: b.mining,
                 mesh_bridging: b.mesh_bridging,
                 mesh_peers: b.mesh_peers,
+                mine_indep: b.mine_indep,
             })
             .collect();
         for m in mesh {
@@ -8272,6 +8283,7 @@ fn mine_worker(cmd_rx: Receiver<NetCmd>, msg_tx: Sender<NetMsg>) {
                 mining: m.mining,
                 mesh_bridging: false,
                 mesh_peers: 0,
+                mine_indep: m.mine_indep,
             });
         }
         out
@@ -8603,6 +8615,7 @@ Power a 2nd board nearby with wall/power-bank only (no PC cable)."
                 hashes: 0,
                 mining: false,
                 status_fails: 0,
+                mine_indep: false,
             };
             if !list_only {
                 // Discovery via — one attempt so stratum stays in charge.
@@ -8755,6 +8768,7 @@ Power a 2nd board nearby with wall/power-bank only (no PC cable)."
                 hashes: 0,
                 mining: false,
                 status_fails: 0,
+                mine_indep: false,
                 download_mode: false,
                 mesh_bridging: false,
                 mesh_peers: 0,
@@ -8865,6 +8879,7 @@ Power a 2nd board nearby with wall/power-bank only (no PC cable)."
                             hashes: 0,
                             mining: false,
                             status_fails: 0,
+                            mine_indep: false,
                             download_mode: true,
                             mesh_bridging: false,
                             mesh_peers: 0,
@@ -8889,6 +8904,7 @@ Power a 2nd board nearby with wall/power-bank only (no PC cable)."
                 hashes: 0,
                 mining: false,
                 status_fails: 0,
+                mine_indep: false,
                 download_mode: false,
                 mesh_bridging: false,
                 mesh_peers: 0,
@@ -9751,7 +9767,7 @@ Power a 2nd board nearby with wall/power-bank only (no PC cable)."
                             mesh.len()
                         ),
                     );
-                    let mut client = StratumClient::new(worker, password);
+                    let mut client = StratumClient::new(worker.clone(), password.clone());
                     let mut pool_ready = false;
                     match client.connect(&endpoint) {
                         Ok(()) => {
@@ -9811,6 +9827,50 @@ Power a 2nd board nearby with wall/power-bank only (no PC cable)."
                                 mining = true;
                                 reconnect_backoff = Duration::from_secs(1);
                                 pool_ready = true;
+                                // Push pool credentials so STA boards mine independently
+                                // (each board owns stratum). Companion keeps polling H/s.
+                                for b in boards.iter_mut() {
+                                    if b.download_mode || board_endpoint_is_softap_setup(&b.name) {
+                                        continue;
+                                    }
+                                    let cmd = format!(
+                                        "cmp pool url={}&worker={}&pass={}&indep=1",
+                                        urlenc(&endpoint),
+                                        urlenc(&worker),
+                                        urlenc(&password)
+                                    );
+                                    match usb_cmd(&mut b.port, &mut b.rx, &cmd) {
+                                        Ok(line) if line.to_ascii_lowercase().contains("cmpack") => {
+                                            b.mine_indep = true;
+                                            log_msg(
+                                                &msg_tx,
+                                                LogKind::Usb,
+                                                format!(
+                                                    "Board {} ← independent pool {endpoint} (D0 path; Companion monitors H/s)",
+                                                    b.name
+                                                ),
+                                            );
+                                        }
+                                        Ok(line) => {
+                                            log_msg(
+                                                &msg_tx,
+                                                LogKind::Warn,
+                                                format!(
+                                                    "Board {} pool push: {}",
+                                                    b.name,
+                                                    trunc(&line, 96)
+                                                ),
+                                            );
+                                        }
+                                        Err(e) => {
+                                            log_msg(
+                                                &msg_tx,
+                                                LogKind::Warn,
+                                                format!("Board {} pool push failed: {e}", b.name),
+                                            );
+                                        }
+                                    }
+                                }
                             }
                         }
                         Err(e) => {
@@ -9867,11 +9927,19 @@ Power a 2nd board nearby with wall/power-bank only (no PC cable)."
                             );
                             last_mesh_sync = Instant::now();
                         }
-                        let fleet_n = boards.len().saturating_add(mesh.len()).max(1);
+                        let fleet_n = boards
+                            .iter()
+                            .filter(|b| !b.mine_indep)
+                            .count()
+                            .saturating_add(mesh.iter().filter(|m| !m.mine_indep).count())
+                            .max(1);
                         let jobs = client.take_job_batch(fleet_n);
                         if !jobs.is_empty() {
                             let mut remaining: VecDeque<WorkJob> = jobs.into();
                             for b in boards.iter_mut() {
+                                if b.mine_indep {
+                                    continue;
+                                }
                                 let Some(job) = remaining.pop_front() else { break };
                                 let mut legacy = b.legacy_job;
                                 let _ = usb_cmd_ex(
@@ -9923,6 +9991,9 @@ Power a 2nd board nearby with wall/power-bank only (no PC cable)."
                             }
                             // Mesh leaves get the same unique-en2 treatment as USB/Wi‑Fi.
                             for m in mesh.iter_mut() {
+                                if m.mine_indep {
+                                    continue;
+                                }
                                 if reconnect_at.is_some() || client.has_pending_job() {
                                     break;
                                 }
@@ -10201,6 +10272,7 @@ Power a 2nd board nearby with wall/power-bank only (no PC cable)."
                                     }
                                     b.mesh_bridging = st.mesh_bridging;
                                     b.mesh_peers = st.mesh_peers;
+                                    b.mine_indep = st.mine_indep;
                                     total_hs += b.hashrate_hs;
                                     total_hashes = total_hashes.saturating_add(b.hashes);
                                     any_mining |= b.mining;
@@ -10334,6 +10406,7 @@ Power a 2nd board nearby with wall/power-bank only (no PC cable)."
                                             m.hashes = st.hashes;
                                         }
                                         m.mining = st.mining || (mining && m.hashrate_hs > 0.0);
+                                        m.mine_indep = st.mine_indep;
                                         total_hs += m.hashrate_hs;
                                         total_hashes = total_hashes.saturating_add(m.hashes);
                                         any_mining |= m.mining;
@@ -10921,8 +10994,14 @@ Power a 2nd board nearby with wall/power-bank only (no PC cable)."
                         ),
                     );
                 }
-                // Fleet: one unique extranonce2 per USB/mesh worker (NerdMiner/multi-worker style).
-                let fleet_n = boards.len().saturating_add(mesh.len()).max(1);
+                // Fleet: one unique extranonce2 per Companion-fed USB/mesh worker.
+                // Independent boards mine their own pool and do not take PC jobs.
+                let _fleet_n = boards
+                    .iter()
+                    .filter(|b| !b.mine_indep)
+                    .count()
+                    .saturating_add(mesh.iter().filter(|m| !m.mine_indep).count())
+                    .max(1);
                 // SoftAP setup net has no pool uplink — don't keep pushing work that can't submit.
                 let softap_blocked = softap_setup_client_ipv4()
                     .map(|ip| ip.starts_with("10.88.88."))
@@ -10958,6 +11037,18 @@ Power a 2nd board nearby with wall/power-bank only (no PC cable)."
                 // header (firmware also flushes its ring in onJob as of 0.8.127).
                 if !softap_blocked && client.has_pending_job() {
                     for b in boards.iter_mut() {
+                        if b.mine_indep {
+                            // Board submits to its own pool — drain CMPSHARE noise only.
+                            harvest_shares(
+                                &mut b.port,
+                                &mut b.rx,
+                                None,
+                                &recent_jobs,
+                                &mut held_board_shares,
+                                &msg_tx,
+                            );
+                            continue;
+                        }
                         harvest_shares(
                             &mut b.port,
                             &mut b.rx,
@@ -10968,16 +11059,25 @@ Power a 2nd board nearby with wall/power-bank only (no PC cable)."
                         );
                     }
                 }
+                let companion_fleet = boards
+                    .iter()
+                    .filter(|b| !b.mine_indep)
+                    .count()
+                    .saturating_add(mesh.iter().filter(|m| !m.mine_indep).count())
+                    .max(1);
                 let jobs = if softap_blocked {
                     Vec::new()
                 } else {
-                    client.take_job_batch(fleet_n)
+                    client.take_job_batch(companion_fleet)
                 };
                 if !jobs.is_empty() {
                     let mut pushed = 0usize;
                     let mut stale_abort = false;
                     let mut remaining: VecDeque<WorkJob> = jobs.into();
                     for b in boards.iter_mut() {
+                        if b.mine_indep {
+                            continue;
+                        }
                         let Some(job) = remaining.pop_front() else { break };
                         let mut legacy = b.legacy_job;
                         let push_res = {
@@ -11018,6 +11118,9 @@ Power a 2nd board nearby with wall/power-bank only (no PC cable)."
                     }
                     if !stale_abort {
                         for m in mesh.iter_mut() {
+                            if m.mine_indep {
+                                continue;
+                            }
                             if client.has_pending_job() {
                                 stale_abort = true;
                                 remaining.clear();

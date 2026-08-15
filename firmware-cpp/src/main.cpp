@@ -2,6 +2,7 @@
 #include "config.hpp"
 #include "display_ui.hpp"
 #include "mesh_link.hpp"
+#include "pool_stratum.hpp"
 #include "sha256_hw.hpp"
 #include "sha256_miner.hpp"
 #include "wifi_link.hpp"
@@ -21,6 +22,7 @@ static ConfigStore g_store;
 static AppConfig g_cfg;
 static CompanionLink g_cmp;
 static WifiLink g_wifi;
+static PoolStratum g_pool;
 static DisplayUi g_ui;
 static Sha256Miner g_minerA;  // core 1 (HW SHA owner, or primary SW lane)
 static Sha256Miner g_minerB;  // core 0 SW assist (disjoint nonce range)
@@ -72,14 +74,24 @@ static void applyCpu(uint8_t mhz) {
 }
 
 extern "C" float cyd_last_bench_hs();
+extern "C" float cyd_run_bench(uint32_t n, bool tune);
 
 static void refreshLabels() {
-  if (g_jobLoaded && g_hwSha) {
+  if (g_pool.authorized() && g_jobLoaded && g_hwSha) {
+    snprintf(g_poolLabel, sizeof(g_poolLabel), "POOL-%s", cyd_sha_hw::mode_label());
+    snprintf(g_shaLabel, sizeof(g_shaLabel), "%s", cyd_sha_hw::mode_label());
+  } else if (g_pool.authorized() && g_jobLoaded) {
+    snprintf(g_poolLabel, sizeof(g_poolLabel), "POOL");
+    snprintf(g_shaLabel, sizeof(g_shaLabel), "SW");
+  } else if (g_jobLoaded && g_hwSha) {
     snprintf(g_poolLabel, sizeof(g_poolLabel), "SHA256-%s", cyd_sha_hw::mode_label());
     snprintf(g_shaLabel, sizeof(g_shaLabel), "%s", cyd_sha_hw::mode_label());
   } else if (g_jobLoaded) {
     snprintf(g_poolLabel, sizeof(g_poolLabel), "SHA256");
     snprintf(g_shaLabel, sizeof(g_shaLabel), "SW");
+  } else if (g_pool.active(g_cfg)) {
+    snprintf(g_poolLabel, sizeof(g_poolLabel), "POOL %s", g_pool.phase());
+    snprintf(g_shaLabel, sizeof(g_shaLabel), g_hwSha ? cyd_sha_hw::mode_label() : "SW");
   } else {
     snprintf(g_poolLabel, sizeof(g_poolLabel), "WAIT USB");
     snprintf(g_shaLabel, sizeof(g_shaLabel), g_hwSha ? cyd_sha_hw::mode_label() : "SW");
@@ -150,10 +162,15 @@ static void fillSnap() {
   g_snap.hashrateHs = g_hashrate;
   g_snap.shares = g_shareCounter;
   g_snap.totalHashes = g_hashCounter.load(std::memory_order_relaxed);
-  g_snap.accepted = g_accepted;
-  g_snap.rejected = g_rejected;
+  if (g_pool.authorized()) {
+    g_snap.accepted = g_pool.accepted();
+    g_snap.rejected = g_pool.rejected();
+  } else {
+    g_snap.accepted = g_accepted;
+    g_snap.rejected = g_rejected;
+  }
   g_snap.pool = g_poolLabel;
-  g_snap.connected = g_jobLoaded;
+  g_snap.connected = g_jobLoaded || g_pool.authorized();
   g_snap.mining = g_mining && g_jobLoaded;
   g_snap.difficulty = 0;
   g_snap.nonce = g_minerA.nonce();
@@ -166,6 +183,9 @@ static void fillSnap() {
   g_snap.mac = g_macStr;
   g_snap.wifiMode = g_wifi.modeLabel();
   g_snap.wifiAp = g_wifi.softApSsid();
+  g_snap.mineIndep = g_cfg.mineIndep && g_cfg.poolConfigured();
+  g_snap.poolEndpoint = g_pool.endpoint().length() ? g_pool.endpoint() : g_cfg.poolUrl;
+  g_snap.poolPhase = g_pool.phase();
   if (WiFi.status() == WL_CONNECTED) {
     g_snap.wifiIp = WiFi.localIP().toString();
   } else {
@@ -218,6 +238,12 @@ static void onJob(const UsbJob& job) {
   g_windowHashesStart = g_hashCounter.load(std::memory_order_relaxed);
 }
 
+/// Companion-fed jobs are ignored while onboard pool owns mining.
+static void onJobFromCompanion(const UsbJob& job) {
+  if (g_pool.active(g_cfg)) return;
+  onJob(job);
+}
+
 static void onStop() {
   flushShareQueue();
   portENTER_CRITICAL(&g_mux);
@@ -230,9 +256,33 @@ static void onStop() {
   refreshLabels();
 }
 
+static void onStopFromCompanion() {
+  if (g_pool.active(g_cfg)) return;
+  onStop();
+}
+
 static void onStats(uint32_t accepted, uint32_t rejected) {
+  // Independent pool owns accept/reject counters while authorized.
+  if (g_pool.authorized()) return;
   g_accepted = accepted;
   g_rejected = rejected;
+}
+
+static void onPoolStats(uint32_t accepted, uint32_t rejected) {
+  g_accepted = accepted;
+  g_rejected = rejected;
+}
+
+static volatile bool g_needIndepTune = false;
+
+static void onIndepTune() {
+  // Defer heavy D0 Bench off the USB/pool poll path (blocks tens of seconds).
+  if (!g_hwSha) return;
+  if (g_cfg.pathTuned && g_cfg.shaPath > 0) {
+    cyd_sha_hw::set_preferred_mode(g_cfg.shaPath);
+    return;
+  }
+  g_needIndepTune = true;
 }
 
 static void noteShare(uint32_t nonce) {
@@ -284,7 +334,11 @@ static void flushShareQueue() {
     }
     portEXIT_CRITICAL(&g_mux);
     if (!got) break;
-    g_cmp.emitShare(s);
+    if (g_pool.authorized()) {
+      (void)g_pool.submitShare(s);
+    } else {
+      g_cmp.emitShare(s);
+    }
   }
 }
 
@@ -297,12 +351,15 @@ static void serviceCompanion() {
     g_lastSnapMs = now;
   }
   auto onApply = applyConfig;
-  auto job = onJob;
-  auto stop = onStop;
+  auto job = onJobFromCompanion;
+  auto stop = onStopFromCompanion;
   auto stats = onStats;
   // Drain hits before poll so a cmp ja/job cannot wipe them inside onJob
   // without a prior emit (onJob also flushes; this covers the common path).
   flushShareQueue();
+  // Independent pool mining (STA + pool URL) — each board owns its own stratum.
+  g_pool.poll(g_cfg);
+  refreshLabels();
   // Mesh leaf: always keep ESP-NOW mirror2 so SoftAP/TCP clients cannot steal shares.
   if (!g_mesh.isRoot() && g_mesh.hasRootPeer()) {
     g_cmp.setShareMirror2(&g_mesh.leafOut());
@@ -474,7 +531,7 @@ void setup() {
   g_cmp.begin(460800);
   // Start USB cmp early — SoftAP / splash can take >1s; Companion probes must get
   // `CMP ok` even while Wi‑Fi is still coming up (second board after UART reset).
-  xTaskCreatePinnedToCore(usbTask, "usb", 6144, nullptr, 3, &g_usbTask, 0);
+  xTaskCreatePinnedToCore(usbTask, "usb", 8192, nullptr, 3, &g_usbTask, 0);
 
   g_ui.begin();
   g_ui.showSplash();
@@ -494,6 +551,7 @@ void setup() {
     g_store.save(g_cfg);
     g_wifi.applyConfig(g_cfg);
   });
+  g_pool.setCallbacks(onJob, onStop, onPoolStats, onIndepTune);
 
   g_minerA.begin();
   g_minerB.begin();
@@ -540,6 +598,15 @@ void setup() {
 }
 
 void loop() {
+  if (g_needIndepTune) {
+    g_needIndepTune = false;
+    // First independent authorize: D0 auto-tune once so boards follow the high
+    // hash-rate path without needing a Companion Bench click.
+    (void)cyd_run_bench(60000, true);
+    g_cfg.pathTuned = true;
+    g_store.save(g_cfg);
+    refreshLabels();
+  }
   syncMinePriorities();
 
   // Idle: logo + link / rate / Wi‑Fi IP (no animated bars).

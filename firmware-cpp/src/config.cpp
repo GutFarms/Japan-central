@@ -10,6 +10,11 @@ bool ConfigStore::load(AppConfig& cfg) {
   const int raw_path = prefs_.getInt("sha_path", 0);
   const bool path_migrated = prefs_.getBool("path_v87", false);
   cfg.shaPath = (int8_t)((raw_path < 0) ? 0 : raw_path);
+  cfg.mineIndep = prefs_.getBool("mine_indep", true);
+  cfg.poolUrl = prefs_.getString("pool_url", "");
+  cfg.poolWorker = prefs_.getString("pool_user", "");
+  cfg.poolPass = prefs_.getString("pool_pass", "x");
+  cfg.pathTuned = prefs_.getBool("path_tuned", false);
   prefs_.end();
   // 0.8.87: one-shot reset to Full HW. Prior auto-bench could lock Mid/HW-SW
   // paths that look fast but yield few valid pool shares; Bench can re-lock.
@@ -31,6 +36,11 @@ bool ConfigStore::save(const AppConfig& cfg) {
   prefs_.putString("wifi_ssid", cfg.wifiSsid);
   prefs_.putString("wifi_pass", cfg.wifiPass);
   prefs_.putInt("sha_path", (int)cfg.shaPath);
+  prefs_.putBool("mine_indep", cfg.mineIndep);
+  prefs_.putString("pool_url", cfg.poolUrl);
+  prefs_.putString("pool_user", cfg.poolWorker);
+  prefs_.putString("pool_pass", cfg.poolPass);
+  prefs_.putBool("path_tuned", cfg.pathTuned);
   prefs_.end();
   return true;
 }

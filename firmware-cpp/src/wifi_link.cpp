@@ -252,6 +252,10 @@ void WifiLink::startPortal() {
   http_.on("/save", HTTP_POST, [this]() { handlePortalSave(); });
   http_.on("/clear", HTTP_GET, [this]() { handlePortalClear(); });
   http_.on("/clear", HTTP_POST, [this]() { handlePortalClear(); });
+  http_.on("/pool", HTTP_GET, [this]() { handlePortalPool(); });
+  http_.on("/pool", HTTP_POST, [this]() { handlePortalPool(); });
+  http_.on("/poolclear", HTTP_GET, [this]() { handlePortalPoolClear(); });
+  http_.on("/poolclear", HTTP_POST, [this]() { handlePortalPoolClear(); });
   http_.on("/reboot", HTTP_GET, [this]() { handlePortalReboot(); });
   http_.on("/reboot", HTTP_POST, [this]() { handlePortalReboot(); });
   // Captive probes — serve the control page directly so the phone Sign-in browser
@@ -297,6 +301,8 @@ String WifiLink::portalPageHtml(bool saved, const char* flash) const {
 
   const char* mode = modeLabel();
   String home = portalCfg_ && portalCfg_->wifiSsid.length() ? portalCfg_->wifiSsid : String("—");
+  String poolUrl = portalCfg_ && portalCfg_->poolUrl.length() ? portalCfg_->poolUrl : String("—");
+  String poolWorker = portalCfg_ && portalCfg_->poolWorker.length() ? portalCfg_->poolWorker : String("—");
   String boardMac = mac_.length() ? mac_ : String("—");
   String fw = "—";
   String rate = "—";
@@ -364,6 +370,8 @@ String WifiLink::portalPageHtml(bool saved, const char* flash) const {
   row("MAC", boardMac);
   row("Home Wi‑Fi", home);
   row("Hashrate", rate);
+  row("Pool", poolUrl);
+  row("Worker", poolWorker);
   page += F("</div>");
 
   page += F("<div class=card><h2>Home Wi‑Fi</h2>"
@@ -378,6 +386,21 @@ String WifiLink::portalPageHtml(bool saved, const char* flash) const {
             "<button type=submit>Save &amp; connect</button></form>"
             "<form method=POST action=/clear style=\"margin-top:8px\">"
             "<button class=btn2 type=submit>Clear home Wi‑Fi</button></form>"
+            "</div>");
+
+
+  page += F("<div class=card><h2>Mining pool (independent)</h2>"
+            "<p>After home Wi‑Fi, each board mines this pool on its own. Companion still shows H/s.</p>"
+            "<form method=POST action=/pool>"
+            "<label>Pool URL (stratum+tcp://host:port)</label>"
+            "<input name=url maxlength=120 placeholder=\"public-pool.io:21496\">"
+            "<label>Worker</label>"
+            "<input name=worker maxlength=80 placeholder=\"yourwallet.worker\">"
+            "<label>Password</label>"
+            "<input name=pass maxlength=64 placeholder=\"x\" value=\"x\">"
+            "<button type=submit>Save pool &amp; mine</button></form>"
+            "<form method=POST action=/poolclear style=\"margin-top:8px\">"
+            "<button class=btn2 type=submit>Clear pool</button></form>"
             "</div>");
 
   page += F("<div class=card>"
@@ -456,6 +479,51 @@ void WifiLink::handlePortalClear() {
   }
 }
 
+void WifiLink::handlePortalPool() {
+  if (!portalCfg_) {
+    http_.send(503, "text/plain", "Portal busy — retry");
+    return;
+  }
+  String url = http_.hasArg("url") ? http_.arg("url") : "";
+  String worker = http_.hasArg("worker") ? http_.arg("worker") : "";
+  String pass = http_.hasArg("pass") ? http_.arg("pass") : "x";
+  url.trim();
+  worker.trim();
+  if (url.isEmpty() || worker.isEmpty()) {
+    http_.send(400, "text/html",
+               portalPageHtml(false, "Pool URL and worker required."));
+    return;
+  }
+  if (url.length() > 120) url = url.substring(0, 120);
+  if (worker.length() > 80) worker = worker.substring(0, 80);
+  if (pass.length() > 64) pass = pass.substring(0, 64);
+  if (pass.isEmpty()) pass = "x";
+  portalCfg_->poolUrl = url;
+  portalCfg_->poolWorker = worker;
+  portalCfg_->poolPass = pass;
+  portalCfg_->mineIndep = true;
+  http_.send(200, "text/html",
+             portalPageHtml(false, "Pool saved — board mines independently after home Wi‑Fi."));
+  http_.client().flush();
+  delay(40);
+  if (persist_) persist_();
+}
+
+void WifiLink::handlePortalPoolClear() {
+  if (!portalCfg_) {
+    http_.send(503, "text/plain", "Portal busy — retry");
+    return;
+  }
+  portalCfg_->poolUrl = "";
+  portalCfg_->poolWorker = "";
+  portalCfg_->poolPass = "x";
+  portalCfg_->mineIndep = false;
+  http_.send(200, "text/html", portalPageHtml(false, "Pool cleared — Companion-fed mining only."));
+  http_.client().flush();
+  delay(40);
+  if (persist_) persist_();
+}
+
 void WifiLink::handlePortalReboot() {
   http_.send(200, "text/html",
              F("<!DOCTYPE html><html><body style=\"background:#04141f;color:#7edcff;"
@@ -476,11 +544,11 @@ void WifiLink::beacon() {
   IPAddress advertise = (WiFi.status() == WL_CONNECTED) ? sta : ap;
   char msg[220];
 #if CYD_D0_BUILD
-  static constexpr const char* kFwTag = "0.8.153-sha256-d0";
-  static constexpr const char* kFwShort = "0.8.153-d0";
+  static constexpr const char* kFwTag = "0.8.154-sha256-d0";
+  static constexpr const char* kFwShort = "0.8.154-d0";
 #else
-  static constexpr const char* kFwTag = "0.8.153-sha256";
-  static constexpr const char* kFwShort = "0.8.153";
+  static constexpr const char* kFwTag = "0.8.154-sha256";
+  static constexpr const char* kFwShort = "0.8.154";
 #endif
   snprintf(msg, sizeof(msg),
            "%s|v=%s|mac=%s|fw=%s|tcp=%u|ip=%u.%u.%u.%u|ap=%s|mode=%s",
