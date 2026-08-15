@@ -82,6 +82,7 @@ pub struct StratumClient {
     pub lines_rx: u64,
     pub lines_tx: u64,
     /// Count of `mining.submit` lines successfully written (not accepts).
+    /// Reset with Accept/Reject on authorize so the Live panel stays session-scoped.
     pub submits: u64,
     pub last_rx: String,
     pub last_tx: String,
@@ -97,6 +98,9 @@ pub struct StratumClient {
     pub recent: Vec<String>,
     share_events: Vec<ShareOutcome>,
 }
+
+/// How long a mining.submit may wait for a pool reply before we count it lost.
+const PENDING_SHARE_TIMEOUT: Duration = Duration::from_secs(90);
 
 impl StratumClient {
     pub fn new(worker: String, password: String) -> Self {
@@ -207,8 +211,7 @@ impl StratumClient {
         self.difficulty = 1.0;
         self.job_wait_since = None;
         // Keep recent_submit_keys across reconnect so duplicate board shares are dropped.
-        self.accepted = 0;
-        self.rejected = 0;
+        self.reset_share_counters("reconnect");
         self.last_error.clear();
         self.auth_give_up = false;
         self.transport_fails = 0;
@@ -230,8 +233,7 @@ impl StratumClient {
         self.post_auth_job = false;
         self.have_difficulty = false;
         self.job_wait_since = None;
-        self.accepted = 0;
-        self.rejected = 0;
+        self.reset_share_counters("disconnect");
         self.transport_fails = 0;
         self.want_reconnect = false;
         // Keep last_error / auth_give_up so the UI can show why we stopped.
@@ -310,7 +312,53 @@ impl StratumClient {
         std::mem::take(&mut self.share_events)
     }
 
+    pub fn pending_share_count(&self) -> u32 {
+        self.pending_shares.len() as u32
+    }
+
+    /// Align Submits with Accept/Reject after soft reconnect / re-auth.
+    fn reset_share_counters(&mut self, why: &str) {
+        self.accepted = 0;
+        self.rejected = 0;
+        self.submits = 0;
+        self.push_recent(format!("← share counters reset ({why})"));
+    }
+
+    /// Mark timed-out mining.submit ids as rejects so Accept+Reject+Pending ≈ Submits.
+    fn expire_pending_shares(&mut self) {
+        let now = Instant::now();
+        let expired: Vec<u64> = self
+            .pending_shares
+            .iter()
+            .filter(|(_, started)| now.duration_since(**started) >= PENDING_SHARE_TIMEOUT)
+            .map(|(id, _)| *id)
+            .collect();
+        for id in expired {
+            let Some(started) = self.pending_shares.remove(&id) else {
+                continue;
+            };
+            let latency_ms = Some(started.elapsed().as_millis() as u64);
+            let (job_id, nonce) = self
+                .pending_share_meta
+                .remove(&id)
+                .map(|(k, n)| {
+                    let job = k.split('|').next().unwrap_or("").to_string();
+                    (job, n)
+                })
+                .unwrap_or_default();
+            self.record_share_outcome(
+                false,
+                id,
+                "no pool reply (timeout)".into(),
+                latency_ms,
+                nonce,
+                job_id,
+            );
+        }
+    }
+
     pub fn poll(&mut self) -> Result<(), String> {
+        self.expire_pending_shares();
         let mut lines = Vec::new();
         if let Some(reader) = self.reader.as_mut() {
             loop {
@@ -801,16 +849,15 @@ impl StratumClient {
         self.authorized = true;
         self.auth_give_up = false;
         self.last_error.clear();
-        self.accepted = 0;
-        self.rejected = 0;
         self.pending_shares.clear();
         self.pending_share_meta.clear();
+        self.reset_share_counters("authorize");
         self.pending_job = None;
         self.post_auth_job = false;
         // Swallow only the first few seconds of pool rejects while the first clean job settles.
         self.reject_grace_until = Some(Instant::now() + Duration::from_secs(5));
         self.phase = "idle".into();
-        self.push_recent("← authorized (share counters reset; reject grace 5s)".into());
+        self.push_recent("← authorized (reject grace 5s)".into());
         // NerdMiner-class: suggest a low share difficulty so ESP fleets are visible
         // on solo/public pools before vardiff settles.
         let _ = self.send_suggest_difficulty(self.suggest_difficulty);
@@ -1378,5 +1425,35 @@ mod tests {
             c.take_job().is_some(),
             "after suggest latch, notify must emit a job without another hold"
         );
+    }
+
+    #[test]
+    fn pending_share_timeout_counts_reject() {
+        let mut c = primed_client();
+        c.pending_shares
+            .insert(7, Instant::now() - Duration::from_secs(120));
+        c.pending_share_meta
+            .insert(7, ("jobX|en2|aabbccdd".into(), "aabbccdd".into()));
+        c.submits = 1;
+        c.expire_pending_shares();
+        assert!(c.pending_shares.is_empty());
+        assert_eq!(c.rejected, 1);
+        assert_eq!(c.accepted, 0);
+        let ev = c.take_share_events();
+        assert_eq!(ev.len(), 1);
+        assert!(!ev[0].accepted);
+        assert!(ev[0].detail.contains("timeout"));
+    }
+
+    #[test]
+    fn authorize_resets_submits_with_accepts() {
+        let mut c = primed_client();
+        c.submits = 50;
+        c.accepted = 3;
+        c.rejected = 2;
+        c.on_authorized();
+        assert_eq!(c.submits, 0);
+        assert_eq!(c.accepted, 0);
+        assert_eq!(c.rejected, 0);
     }
 }

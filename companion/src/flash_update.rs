@@ -777,6 +777,7 @@ pub const REPO_NAME: &str = "Japan-central";
 /// Branches probed for Companion/firmware updates (newest VERSION wins).
 /// Tip first — apps still on older builds may only hit the legacy CYD branch.
 pub const REPO_REFS: &[&str] = &[
+    "cursor/share-pending-timeout-e801",
     "cursor/flash-com-thrash-e801",
     "cursor/ai-assist-e801",
     "cursor/flash-14pct-e801",

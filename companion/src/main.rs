@@ -440,7 +440,10 @@ struct StratumLive {
     lines_rx: u64,
     lines_tx: u64,
     /// mining.submit lines sent (Pool TX also counts subscribe/auth/suggest).
+    /// Session-scoped — resets with Accept/Reject on authorize.
     submits: u64,
+    /// mining.submit still waiting for a pool reply.
+    pending: u32,
     last_job: String,
     last_rx: String,
     last_tx: String,
@@ -2992,19 +2995,32 @@ impl CompanionApp {
         }
     }
 
+    fn fleet_hashrate_hs(&self) -> f64 {
+        if self.mining && self.displayed_khs > 0.5 {
+            self.displayed_khs as f64 * 1000.0
+        } else if self.status.hashrate_hs > 0.0 {
+            self.status.hashrate_hs
+        } else {
+            self.connected_workers
+                .iter()
+                .map(|w| w.hashrate_hs)
+                .sum()
+        }
+    }
+
     fn expected_shares_label(&self) -> String {
-        let exp = expected_shares_per_hour(
-            self.status.hashrate_hs,
-            self.stratum_live.difficulty,
-        );
+        let hs = self.fleet_hashrate_hs();
+        let exp = expected_shares_per_hour(hs, self.stratum_live.difficulty);
         if exp <= 0.0 {
             "—".into()
         } else if exp >= 10.0 {
             format!("{exp:.1}/h")
         } else if exp >= 1.0 {
             format!("{exp:.2}/h")
-        } else {
+        } else if exp >= 0.01 {
             format!("{exp:.3}/h")
+        } else {
+            format!("{exp:.4}/h")
         }
     }
 
@@ -3033,7 +3049,7 @@ impl CompanionApp {
         };
         let hours = (started.elapsed().as_secs_f64() / 3600.0).max(1.0 / 3600.0);
         let expected = expected_shares_per_hour(
-            self.status.hashrate_hs,
+            self.fleet_hashrate_hs(),
             self.stratum_live.difficulty,
         ) * hours;
         if expected < 0.01 && self.session_accepted == 0 {
@@ -6197,11 +6213,7 @@ Phone: join SoftAP — Board Setup opens automatically to set home Wi‑Fi.",
             ui.add_space(4.0);
             ui.horizontal_wrapped(|ui| {
                 // Use smoothed display rate so soft-fails don't blink the chip.
-                let rate_hs = if self.mining && self.displayed_khs > 0.5 {
-                    self.displayed_khs as f64 * 1000.0
-                } else {
-                    self.status.hashrate_hs
-                };
+                let rate_hs = self.fleet_hashrate_hs();
                 mini_stat(ui, "Fleet", &format_hashrate(rate_hs));
                 let pool_hs = self.pool_estimated_hs();
                 mini_stat(
@@ -6391,6 +6403,7 @@ Phone: join SoftAP — Board Setup opens automatically to set home Wi‑Fi.",
                 mini_stat(ui, "Msgs↓", &s.lines_rx.to_string());
                 mini_stat(ui, "Jobs", &s.jobs.to_string());
                 mini_stat(ui, "Submits", &s.submits.to_string());
+                mini_stat(ui, "Pending", &s.pending.to_string());
                 mini_stat(ui, "Accept", &acc.to_string());
                 mini_stat(ui, "Reject", &rej.to_string());
                 mini_stat(ui, "Expect/h", &self.expected_shares_label());
@@ -6402,20 +6415,21 @@ Phone: join SoftAP — Board Setup opens automatically to set home Wi‑Fi.",
             });
             ui.label(
                 RichText::new(
-                    "Msgs↑/↓ = stratum JSON lines (subscribe/auth/jobs). Submits = mining.submit to pool.",
+                    "Submits = mining.submit this session. Pending = awaiting pool reply (timeout 90s → Reject). Accept+Reject+Pending ≈ Submits.",
                 )
                 .color(C_DIM)
                 .font(mono_ui_font(10.0)),
             );
-            let exp = expected_shares_per_hour(self.status.hashrate_hs, s.difficulty);
-            if s.authorized && s.difficulty >= 0.05 && self.status.hashrate_hs > 50_000.0 && exp < 5.0
+            let hs = self.fleet_hashrate_hs();
+            let exp = expected_shares_per_hour(hs, s.difficulty);
+            if s.authorized && s.difficulty >= 0.05 && hs > 50_000.0 && exp < 5.0
             {
                 ui.add_space(4.0);
                 ui.label(
                     RichText::new(format!(
                         "Share diff {:.3} is hard for ~{:.0} kH/s (≈{:.1} accepts/h). Use an ESP pool port or wait for vardiff after suggest 0.001.",
                         s.difficulty,
-                        self.status.hashrate_hs / 1000.0,
+                        hs / 1000.0,
                         exp
                     ))
                     .color(C_ERR)
@@ -9367,6 +9381,7 @@ fn push_stratum_live(tx: &Sender<NetMsg>, client: &StratumClient) {
         lines_rx: client.lines_rx,
         lines_tx: client.lines_tx,
         submits: client.submits,
+        pending: client.pending_share_count(),
         last_job: client.job_id().to_string(),
         last_rx: client.last_rx.clone(),
         last_tx: client.last_tx.clone(),
