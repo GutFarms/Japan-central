@@ -777,6 +777,7 @@ pub const REPO_NAME: &str = "Japan-central";
 /// Branches probed for Companion/firmware updates (newest VERSION wins).
 /// Tip first — apps still on older builds may only hit the legacy CYD branch.
 pub const REPO_REFS: &[&str] = &[
+    "cursor/event-log-detail-e801",
     "cursor/wifi-creds-save-e801",
     "cursor/push-update-preempt-e801",
     "cursor/flash-overlay-size-e801",
