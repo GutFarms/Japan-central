@@ -1,14 +1,14 @@
-# Njörðr Seas' CYD miner 0.8.157 — verify with: sha256sum -c SHA256SUMS.txt
+# Njörðr Seas' CYD miner 0.8.158 — verify with: sha256sum -c SHA256SUMS.txt
 # Firmware images
-fe10d56ff24fb71a56b4bc74b156c43e0d8c5925cd535a7faeb048c07da6a93c  esp32-2432s028-sha256-miner.bin
-718caab8d9782b5ed557870dc6bfc22ea44960a049d7adac19fdc3d9a96695d2  esp32-2432s028-sha256-miner-merged.bin
-fe10d56ff24fb71a56b4bc74b156c43e0d8c5925cd535a7faeb048c07da6a93c  esp32-2432s028-sha256-miner-d0.bin
-718caab8d9782b5ed557870dc6bfc22ea44960a049d7adac19fdc3d9a96695d2  esp32-2432s028-sha256-miner-d0-merged.bin
+e76e28a373030bde6eadbd078c31dfbe44da0c6b2b6b024ff9f6ee468f1a33f2  esp32-2432s028-sha256-miner.bin
+0f4602a3e83818a112ad8823501d605e498d68d8c1800e62665728e958befafa  esp32-2432s028-sha256-miner-merged.bin
+e76e28a373030bde6eadbd078c31dfbe44da0c6b2b6b024ff9f6ee468f1a33f2  esp32-2432s028-sha256-miner-d0.bin
+0f4602a3e83818a112ad8823501d605e498d68d8c1800e62665728e958befafa  esp32-2432s028-sha256-miner-d0-merged.bin
 # Windows Companion packages
-d45617f81507293b8217a9c388f668495d63a4716ea1ddc28c1de4ef765b0fd9  cyd-companion.exe
-88d3eef1f750e370a6ee0e0e2b62ce8543999afeaff57103a4dcf05547530163  CYD-Companion-App-Only.zip
-b6f8e06db56a3360826b81d925ceab7def5c97e679bf481b310b4ad081f9dcfc  CYD-Companion-Portable.zip
-068b0252a1360e1d9e2448e558fcdbc233f9d187b622c7cd4bb4976d15e9f98f  CYD-Miner-Portable.zip
-f9c4abd591eb970efcd9ecc370f5e7ca14eb8f7e05b4ea6d1e242f3fc112ef11  CYD-Miner-Setup.exe
-f9c4abd591eb970efcd9ecc370f5e7ca14eb8f7e05b4ea6d1e242f3fc112ef11  CYD-Companion-Setup.exe
+3e954c330f6d4ad54bb0d98ceb2f978319b16bf8a9ac6227be4c4f87509ded85  cyd-companion.exe
+4f621c0d004106361da6c0aebe07a8438f9846e2c6762deab342863ec3add9d2  CYD-Companion-App-Only.zip
+55d6243729a128133ddd9318c598a5c10e6159ae2d346418036d1f35a8012d7b  CYD-Companion-Portable.zip
+d80a51988807688d826e27a18cc1f5ef8d7fd8488eef034d912837595ef7b584  CYD-Miner-Portable.zip
+5607166cb68e3aaf35d908586430c0313aee828c82f749e7ededecb8ddb602c5  CYD-Miner-Setup.exe
+5607166cb68e3aaf35d908586430c0313aee828c82f749e7ededecb8ddb602c5  CYD-Companion-Setup.exe
 0cc03364c70a86325236f18ad1aaed17eedf267d89312c0cdabe4964f5cb758e  espflash.exe
