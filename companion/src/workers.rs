@@ -47,6 +47,8 @@ pub struct WorkerLive {
     /// USB root currently bridging ESP-NOW mesh peers (hash rate intentionally reduced).
     pub mesh_bridging: bool,
     pub mesh_peers: u8,
+    /// Board mines to the pool itself; Companion only monitors H/s.
+    pub mine_indep: bool,
 }
 
 /// One OS serial port with a human-readable label (USB chip / product).

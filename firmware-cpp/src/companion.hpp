@@ -28,6 +28,10 @@ struct MinerSnapshot {
   bool meshRoot = false;
   bool meshBridging = false;
   uint8_t meshPeers = 0;
+  /// Board mines to pool itself (Companion monitors H/s only).
+  bool mineIndep = false;
+  String poolEndpoint;
+  String poolPhase;
 };
 
 struct NetFeed {

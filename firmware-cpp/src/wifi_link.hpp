@@ -87,6 +87,8 @@ class WifiLink {
   void handlePortalRoot();
   void handlePortalSave();
   void handlePortalClear();
+  void handlePortalPool();
+  void handlePortalPoolClear();
   void handlePortalReboot();
   void handlePortalCaptive();
   String portalPageHtml(bool saved, const char* flash) const;
