@@ -243,9 +243,11 @@ static void onJob(const UsbJob& job) {
 
 static volatile bool g_needIndepTune = false;
 
-/// Companion-fed jobs are ignored while onboard pool owns mining.
+/// Companion-fed jobs are ignored only once onboard pool is authorized.
+/// Gating on active() (Wi‑Fi up + pool URL) left a dead gap: STA joins, Companion
+/// jobs dropped, onboard stratum still connecting → pool sees no workers/shares.
 static void onJobFromCompanion(const UsbJob& job) {
-  if (g_pool.active(g_cfg)) return;
+  if (g_pool.authorized()) return;
   onJob(job);
   // First Companion-fed job: lock D0 high-rate path once (same as indep).
   if (g_hwSha && !(g_cfg.pathTuned && g_cfg.shaPath > 0)) {
@@ -266,7 +268,7 @@ static void onStop() {
 }
 
 static void onStopFromCompanion() {
-  if (g_pool.active(g_cfg)) return;
+  if (g_pool.authorized()) return;
   onStop();
 }
 

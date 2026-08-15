@@ -9752,7 +9752,9 @@ Power a 2nd board nearby with wall/power-bank only (no PC cable)."
                         continue;
                     }
                     mine_endpoint = endpoint.clone();
-                    mine_worker_name = worker.clone();
+                    // Bare BTC address → address.companion so HMPool lists a named worker.
+                    let pool_worker = stratum_worker_for_companion(&worker);
+                    mine_worker_name = pool_worker.clone();
                     mine_password = password.clone();
                     reconnect_backoff = Duration::from_secs(1);
                     reconnect_at = None;
@@ -9762,12 +9764,12 @@ Power a 2nd board nearby with wall/power-bank only (no PC cable)."
                         &msg_tx,
                         LogKind::Stratum,
                         format!(
-                            "Connecting pool {endpoint} as {worker} · {} USB/Wi‑Fi + {} mesh",
+                            "Connecting pool {endpoint} as {pool_worker} · {} USB/Wi‑Fi + {} mesh",
                             boards.len(),
                             mesh.len()
                         ),
                     );
-                    let mut client = StratumClient::new(worker.clone(), password.clone());
+                    let mut client = StratumClient::new(pool_worker.clone(), password.clone());
                     let mut pool_ready = false;
                     match client.connect(&endpoint) {
                         Ok(()) => {
@@ -9833,10 +9835,11 @@ Power a 2nd board nearby with wall/power-bank only (no PC cable)."
                                     if b.download_mode || board_endpoint_is_softap_setup(&b.name) {
                                         continue;
                                     }
+                                    let board_worker = stratum_worker_for_board(&worker, &b.mac);
                                     let cmd = format!(
                                         "cmp pool url={}&worker={}&pass={}&indep=1",
                                         urlenc(&endpoint),
-                                        urlenc(&worker),
+                                        urlenc(&board_worker),
                                         urlenc(&password)
                                     );
                                     match usb_cmd(&mut b.port, &mut b.rx, &cmd) {
@@ -9848,7 +9851,7 @@ Power a 2nd board nearby with wall/power-bank only (no PC cable)."
                                                 &msg_tx,
                                                 LogKind::Usb,
                                                 format!(
-                                                    "Board {} ← pool creds {endpoint} (Companion keeps feeding jobs until board pool authorizes)",
+                                                    "Board {} ← pool creds {endpoint} as {board_worker} (Companion keeps feeding jobs until board pool authorizes)",
                                                     b.name
                                                 ),
                                             );
@@ -11543,6 +11546,34 @@ fn board_indep_live(st: &StatusJson) -> bool {
         return false;
     }
     st.pool_phase.eq_ignore_ascii_case("ok")
+}
+
+/// HMPool-style `address.worker` label. Bare addresses get a stable `.cydXXXX` suffix
+/// from the board MAC so the pool dashboard lists a visible named worker.
+fn stratum_worker_for_board(base: &str, mac: &str) -> String {
+    let w = base.trim();
+    if w.is_empty() || w.contains('.') {
+        return w.to_string();
+    }
+    let hex: String = normalize_mac(mac)
+        .chars()
+        .filter(|c| c.is_ascii_hexdigit())
+        .collect();
+    let tail = if hex.len() >= 4 {
+        hex[hex.len() - 4..].to_ascii_lowercase()
+    } else {
+        "board".into()
+    };
+    format!("{w}.cyd{tail}")
+}
+
+/// Companion PC stratum session — bare address becomes `address.companion`.
+fn stratum_worker_for_companion(base: &str) -> String {
+    let w = base.trim();
+    if w.is_empty() || w.contains('.') {
+        return w.to_string();
+    }
+    format!("{w}.companion")
 }
 
 fn try_submit_board_share(
