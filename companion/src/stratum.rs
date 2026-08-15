@@ -938,7 +938,10 @@ impl StratumClient {
                 Some(ms) => format!("{detail} · {ms} ms"),
                 None => detail,
             };
-            self.push_recent(format!("← share ACCEPTED id={id} {detail}"));
+            self.push_recent(format!(
+                "← share ACCEPTED id={id} job={job_id} nonce={} {detail}",
+                if nonce.is_empty() { "—" } else { nonce.as_str() }
+            ));
             self.share_events.push(ShareOutcome {
                 accepted: true,
                 id,
@@ -954,7 +957,10 @@ impl StratumClient {
         // are never stuck silent — tag detail as warmup.
         if !self.post_auth_job || self.in_reject_grace() {
             let detail = format!("warmup · {detail}");
-            self.push_recent(format!("← share REJECTED (warmup) id={id} {detail}"));
+            self.push_recent(format!(
+                "← share REJECTED (warmup) id={id} job={job_id} nonce={} {detail}",
+                if nonce.is_empty() { "—" } else { nonce.as_str() }
+            ));
             self.rejected += 1;
             self.share_events.push(ShareOutcome {
                 accepted: false,
@@ -968,7 +974,10 @@ impl StratumClient {
         }
 
         self.rejected += 1;
-        self.push_recent(format!("← share REJECTED id={id} {detail}"));
+        self.push_recent(format!(
+            "← share REJECTED id={id} job={job_id} nonce={} {detail}",
+            if nonce.is_empty() { "—" } else { nonce.as_str() }
+        ));
         self.share_events.push(ShareOutcome {
             accepted: false,
             id,

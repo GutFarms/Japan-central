@@ -137,7 +137,7 @@ const C_MUTED: Color32 = Color32::from_rgb(120, 158, 186);
 const C_DIM: Color32 = Color32::from_rgb(70, 108, 138);
 const C_WARN: Color32 = Color32::from_rgb(255, 196, 91);
 const C_ERR: Color32 = Color32::from_rgb(255, 108, 91);
-const MAX_LOGS: usize = 500;
+const MAX_LOGS: usize = 800;
 const HASH_HISTORY_SAMPLES: usize = 90;
 const LOGO_PNG: egui::ImageSource<'static> = egui::include_image!("../assets/cyd-logo.png");
 
@@ -278,14 +278,15 @@ fn bubble(ui: &mut egui::Ui, label: &str, lime: bool) -> egui::Response {
 }
 
 fn stamp() -> String {
-    let secs = SystemTime::now()
+    let dur = SystemTime::now()
         .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_secs();
+        .unwrap_or_default();
+    let secs = dur.as_secs();
+    let ms = dur.subsec_millis();
     let h = (secs / 3600) % 24;
     let m = (secs / 60) % 60;
     let s = secs % 60;
-    format!("{h:02}:{m:02}:{s:02}")
+    format!("{h:02}:{m:02}:{s:02}.{ms:03}")
 }
 
 /// Uptime: `45s` → `3m 12s` → `2h 5m` → `1d 4h`.
@@ -495,6 +496,8 @@ enum WifiSetupPhase {
         endpoint: String,
         mac: String,
         home_ssid: String,
+        /// Throttle progress lines in the event log.
+        last_progress_log: Instant,
     },
     Done {
         ip: String,
@@ -1385,6 +1388,11 @@ impl CompanionApp {
         }
     }
 
+    /// Indented detail line under a parent event-log entry.
+    fn push_log_detail(&mut self, kind: LogKind, text: impl Into<String>) {
+        self.push_log(kind, format!("  · {}", text.into()));
+    }
+
     fn persist(&self, storage: &mut dyn eframe::Storage) {
         let p = PersistedMine {
             stratum: self.edit_stratum.clone(),
@@ -1905,20 +1913,38 @@ impl CompanionApp {
         self.push_log(
             LogKind::Info,
             format!(
-                "Start mining → {} as {}",
+                "Start mining → {} as {} · linked USB/Wi‑Fi={} · mesh peers from gateways",
                 self.edit_stratum.trim(),
-                self.edit_worker.trim()
+                self.edit_worker.trim(),
+                self.connected_workers.len().max(usize::from(self.usb_open)),
+            ),
+        );
+        self.push_log_detail(
+            LogKind::Info,
+            format!(
+                "session counters reset · target clock {} MHz · auto-connect={}",
+                self.target_mhz, self.auto_connect
             ),
         );
     }
 
     fn stop_mine(&mut self) {
         let _ = self.cmd_tx.send(NetCmd::StopMine);
+        let up = self
+            .session_started
+            .map(|t| format_uptime(t.elapsed().as_secs()))
+            .unwrap_or_else(|| "—".into());
+        let acc = self.session_accepted;
+        let rej = self.session_rejected;
+        let pool = self.edit_stratum.trim().to_string();
         self.mining = false;
         self.session_started = None;
         self.clear_hash_display();
         self.last_ok = "Mining stopped.".into();
-        self.push_log(LogKind::Info, "Mining stopped".into());
+        self.push_log(
+            LogKind::Info,
+            format!("Mining stopped · session {up} · accepted={acc} rejected={rej} · pool {pool}"),
+        );
     }
 
     fn request_bench(&mut self) {
@@ -2632,16 +2658,28 @@ impl CompanionApp {
         };
         self.last_ok = self.update_status.clone();
         self.last_error.clear();
+        let fw_ver = self
+            .firmware
+            .as_ref()
+            .map(|f| f.version.as_str())
+            .filter(|v| !v.is_empty())
+            .unwrap_or("?");
+        let fw_kb = self.firmware.as_ref().map(|f| f.bytes / 1024).unwrap_or(0);
+        let img_note = if image.is_empty() {
+            format!("fetch+flash · kit {fw_ver}")
+        } else {
+            format!("{image} · {fw_ver} ({fw_kb} KB)")
+        };
         self.push_log(
             LogKind::Usb,
             if wifi_ota {
-                format!("Push update (Wi‑Fi) → {port}")
+                format!("Push update (Wi‑Fi) → {port} · {img_note}")
             } else if live_push {
-                format!("Push update → {port} (no BOOT; auto-reset)")
+                format!("Push update → {port} · {img_note} · no BOOT (auto-reset)")
             } else if image.is_empty() {
-                format!("Flash (BOOT) → fetch firmware + flash on {port}")
+                format!("Flash (BOOT) → {port} · {img_note}")
             } else {
-                format!("Flash (BOOT) → {image} on {port}")
+                format!("Flash (BOOT) → {port} · {img_note}")
             },
         );
         // Release USB/TCP in the worker before flash so the update path owns the board.
@@ -3108,6 +3146,14 @@ impl CompanionApp {
                     self.connected_workers.clear();
                     self.clear_hash_display();
                     self.push_log(LogKind::Usb, "Disconnect requested".into());
+                    self.push_log_detail(
+                        LogKind::Usb,
+                        format!(
+                            "closing linked workers={} · mining was {}",
+                            self.connected_workers.len(),
+                            if self.mining { "on" } else { "off" }
+                        ),
+                    );
                 } else {
                     self.connect_or_add_usb();
                 }
@@ -4667,6 +4713,12 @@ Or open http://10.88.88.1/ (SoftAP). After save, board prefers 192.168.1.88 on h
                         "{msg} — Wi‑Fi “{home_ssid}” saved over USB ({endpoint}). Board joins home Wi‑Fi; SoftAP may stay up for mesh."
                     );
                     self.push_log(LogKind::Usb, self.last_ok.clone());
+                    self.push_log(
+                        LogKind::Usb,
+                        format!(
+                            "  · NVS write confirmed · path=USB · endpoint={endpoint} · SSID “{home_ssid}” · SoftAP may stay for mesh"
+                        ),
+                    );
                     return;
                 }
                 let mac = self
@@ -4683,18 +4735,42 @@ Or open http://10.88.88.1/ (SoftAP). After save, board prefers 192.168.1.88 on h
                     .unwrap_or_default();
                 self.wifi_setup_phase = WifiSetupPhase::WaitingSta {
                     since: Instant::now(),
-                    endpoint,
-                    mac,
+                    endpoint: endpoint.clone(),
+                    mac: mac.clone(),
                     home_ssid: home_ssid.clone(),
+                    last_progress_log: Instant::now(),
                 };
                 self.last_ok = format!(
                     "{msg} — waiting for board on “{home_ssid}” (switch PC back to home Wi‑Fi)"
                 );
                 self.push_log(LogKind::Usb, self.last_ok.clone());
+                self.push_log(
+                    LogKind::Usb,
+                    format!(
+                        "  · STA wait started · SoftAP was {endpoint} · mac={} · home SSID “{home_ssid}” · timeout 90s",
+                        if mac.is_empty() { "unknown" } else { mac.as_str() }
+                    ),
+                );
             }
             Err(e) => {
                 self.wifi_setup_phase = WifiSetupPhase::Failed(e.clone());
-                self.last_error = e;
+                self.last_error = e.clone();
+                let ep = if endpoint.is_empty() {
+                    self.wifi_setup_target.trim().to_string()
+                } else {
+                    endpoint
+                };
+                self.push_log(
+                    LogKind::Err,
+                    format!(
+                        "Wi‑Fi Push & save FAILED{}: {e}",
+                        if ep.is_empty() {
+                            String::new()
+                        } else {
+                            format!(" on {ep}")
+                        }
+                    ),
+                );
             }
         }
     }
@@ -4709,31 +4785,55 @@ Or open http://10.88.88.1/ (SoftAP). After save, board prefers 192.168.1.88 on h
             }
             Err(e) => {
                 self.wifi_setup_phase = WifiSetupPhase::Failed(e.clone());
-                self.last_error = e;
+                self.last_error = e.clone();
+                self.push_log(
+                    LogKind::Err,
+                    format!("Wi‑Fi clear FAILED on {endpoint}: {e}"),
+                );
             }
         }
     }
 
     fn tick_wifi_setup_wait(&mut self) {
-        let (since, endpoint, mac, home_ssid) = match &self.wifi_setup_phase {
+        let (since, endpoint, mac, home_ssid, last_progress_log) = match &self.wifi_setup_phase {
             WifiSetupPhase::WaitingSta {
                 since,
                 endpoint,
                 mac,
                 home_ssid,
+                last_progress_log,
             } => (
                 *since,
                 endpoint.clone(),
                 mac.clone(),
                 home_ssid.clone(),
+                *last_progress_log,
             ),
             _ => return,
         };
         if since.elapsed() > Duration::from_secs(90) {
-            self.wifi_setup_phase = WifiSetupPhase::Failed(
-                "Timed out waiting for home Wi‑Fi. Re-join SoftAP or check SSID/password.".into(),
+            let msg = format!(
+                "Timed out waiting for home Wi‑Fi “{home_ssid}” after SoftAP push ({endpoint}). Re-join SoftAP or check SSID/password."
             );
+            self.wifi_setup_phase = WifiSetupPhase::Failed(msg.clone());
+            self.last_error = msg.clone();
+            self.push_log(LogKind::Err, msg);
             return;
+        }
+        if last_progress_log.elapsed() >= Duration::from_secs(15) {
+            if let WifiSetupPhase::WaitingSta {
+                last_progress_log, ..
+            } = &mut self.wifi_setup_phase
+            {
+                *last_progress_log = Instant::now();
+            }
+            let secs = since.elapsed().as_secs();
+            self.push_log(
+                LogKind::Usb,
+                format!(
+                    "  · still waiting for STA on “{home_ssid}”… {secs}s / 90s · SoftAP was {endpoint}"
+                ),
+            );
         }
         let softap_host = endpoint.split(':').next().unwrap_or("").to_string();
         // Success: beacon shows STA/apsta and a different IP than the SoftAP push endpoint.
@@ -4754,12 +4854,18 @@ Or open http://10.88.88.1/ (SoftAP). After save, board prefers 192.168.1.88 on h
                 || (detail.contains("sta") && !detail.contains("softap"));
             let ip = w.host.clone();
             if on_lan && !ip.is_empty() && ip != softap_host {
+                let beacon = w.endpoint.clone();
+                let detail_snip: String = w.detail.chars().take(120).collect();
                 self.wifi_setup_phase = WifiSetupPhase::Done {
                     ip: ip.clone(),
                     ssid: home_ssid.clone(),
                 };
                 self.last_ok = format!("Board on “{home_ssid}” at {ip}");
                 self.push_log(LogKind::Usb, self.last_ok.clone());
+                self.push_log(
+                    LogKind::Usb,
+                    format!("  · STA joined · beacon {beacon} · detail={detail_snip}"),
+                );
                 return;
             }
         }
@@ -4773,12 +4879,17 @@ Or open http://10.88.88.1/ (SoftAP). After save, board prefers 192.168.1.88 on h
             if w.endpoint.contains(':') && !w.endpoint.to_ascii_uppercase().starts_with("COM") {
                 let ip = w.endpoint.split(':').next().unwrap_or("").to_string();
                 if !ip.is_empty() && ip != softap_host {
+                    let mac = w.mac.clone();
                     self.wifi_setup_phase = WifiSetupPhase::Done {
                         ip: ip.clone(),
                         ssid: home_ssid.clone(),
                     };
                     self.last_ok = format!("Board on “{home_ssid}” at {ip}");
                     self.push_log(LogKind::Usb, self.last_ok.clone());
+                    self.push_log(
+                        LogKind::Usb,
+                        format!("  · STA joined via linked worker {ip} · mac={mac}"),
+                    );
                     return;
                 }
             }
@@ -5232,7 +5343,7 @@ Phone: join SoftAP — Board Setup opens automatically to set home Wi‑Fi.",
                     ScrollArea::vertical()
                         .id_source("logs_scroll")
                         .stick_to_bottom(self.log_auto_scroll)
-                        .max_height(170.0)
+                        .max_height(240.0)
                         .auto_shrink([false, false])
                         .show(ui, |ui| {
                             for e in &self.logs {
@@ -5525,9 +5636,23 @@ impl App for CompanionApp {
                     );
                     if self.last_ports_log_sig.as_deref() != Some(sig.as_str()) {
                         self.last_ports_log_sig = Some(sig);
+                        let listed: Vec<&str> = self
+                            .ports
+                            .iter()
+                            .map(|x| x.name.as_str())
+                            .take(10)
+                            .collect();
+                        let more = if n > listed.len() {
+                            format!(" +{} more", n - listed.len())
+                        } else {
+                            String::new()
+                        };
                         self.push_log(
                             LogKind::Usb,
-                            format!("Serial ports: {n} reported · selected {sel}"),
+                            format!(
+                                "Serial ports: {n} reported · selected {sel} · [{}{more}]",
+                                listed.join(", ")
+                            ),
                         );
                     }
                     self.maybe_auto_connect_usb();
@@ -5846,6 +5971,41 @@ impl App for CompanionApp {
                     while self.share_history.len() > 40 {
                         self.share_history.pop_front();
                     }
+                    let lat = match ev.latency_ms {
+                        Some(ms) => format!(" · {ms} ms"),
+                        None => String::new(),
+                    };
+                    let why = if ev.accepted {
+                        String::new()
+                    } else if ev.detail.is_empty() {
+                        String::new()
+                    } else {
+                        format!(" · {}", trunc(&ev.detail, 64))
+                    };
+                    self.push_log(
+                        if ev.accepted {
+                            LogKind::Stratum
+                        } else {
+                            LogKind::Warn
+                        },
+                        format!(
+                            "Share {} · job={} · nonce={} · id={}{lat}{why} · session A={} R={}",
+                            if ev.accepted { "ACCEPTED" } else { "REJECTED" },
+                            if ev.job_id.is_empty() {
+                                "—"
+                            } else {
+                                ev.job_id.as_str()
+                            },
+                            if ev.nonce.is_empty() {
+                                "—"
+                            } else {
+                                ev.nonce.as_str()
+                            },
+                            ev.id,
+                            self.session_accepted,
+                            self.session_rejected,
+                        ),
+                    );
                 }
                 NetMsg::FirmwareFetched(result) => {
                     self.fetch_busy = false;
@@ -7962,6 +8122,36 @@ fn log_msg(tx: &Sender<NetMsg>, kind: LogKind, text: impl Into<String>) {
     });
 }
 
+/// Drain stratum chatter into the event log. Share accept/reject lines are skipped —
+/// those are logged once from `NetMsg::Share` with session counters.
+fn drain_stratum_log(tx: &Sender<NetMsg>, client: &mut StratumClient) {
+    for line in client.take_recent() {
+        let low = line.to_ascii_lowercase();
+        if low.contains("← share accepted")
+            || low.contains("← share rejected")
+            || low.contains("<- share accepted")
+            || low.contains("<- share rejected")
+        {
+            continue;
+        }
+        log_msg(tx, LogKind::Stratum, line);
+    }
+}
+
+fn drain_stratum_log_lines(tx: &Sender<NetMsg>, lines: impl IntoIterator<Item = String>) {
+    for line in lines {
+        let low = line.to_ascii_lowercase();
+        if low.contains("← share accepted")
+            || low.contains("← share rejected")
+            || low.contains("<- share accepted")
+            || low.contains("<- share rejected")
+        {
+            continue;
+        }
+        log_msg(tx, LogKind::Stratum, line);
+    }
+}
+
 fn push_stratum_live(tx: &Sender<NetMsg>, client: &StratumClient) {
     let _ = tx.send(NetMsg::Stratum(StratumLive {
         endpoint: client.endpoint.clone(),
@@ -8449,7 +8639,10 @@ Power a 2nd board nearby with wall/power-bank only (no PC cable)."
                 msg_tx,
                 LogKind::Usb,
                 format!(
-                    "Mesh peer {mac} via {gname} ({})",
+                    "Mesh peer {mac} via {gname} · fw={} · {:.0} H/s · mining={} · ({})",
+                    if mb.fw.is_empty() { "?" } else { mb.fw.as_str() },
+                    mb.hashrate_hs,
+                    mb.mining,
                     if list_only {
                         "list — jobs next"
                     } else {
@@ -8730,39 +8923,76 @@ Power a 2nd board nearby with wall/power-bank only (no PC cable)."
             );
             return;
         }
-        if let Ok(line) = usb_cmd(&mut board.port, &mut board.rx, "cmp config") {
-            if let Ok(cfg) = parse_cmp_config(&line) {
-                board.legacy_job = !fw_supports_split_jobs(&cfg.fw);
-                board.fw = cfg.fw.clone();
-                if !cfg.mac.is_empty() {
-                    board.mac = normalize_mac(&cfg.mac);
-                }
-                if board.legacy_job {
+        match usb_cmd(&mut board.port, &mut board.rx, "cmp config") {
+            Ok(line) => {
+                if let Ok(cfg) = parse_cmp_config(&line) {
+                    board.legacy_job = !fw_supports_split_jobs(&cfg.fw);
+                    board.fw = cfg.fw.clone();
+                    if !cfg.mac.is_empty() {
+                        board.mac = normalize_mac(&cfg.mac);
+                    }
+                    if board.legacy_job {
+                        log_msg(
+                            msg_tx,
+                            LogKind::Warn,
+                            format!(
+                                "Board {} fw {} lacks jh/jt/ja — using legacy job",
+                                board.name, cfg.fw
+                            ),
+                        );
+                    }
+                    let _ = msg_tx.send(NetMsg::Config(Ok(cfg)));
+                } else {
                     log_msg(
                         msg_tx,
                         LogKind::Warn,
                         format!(
-                            "Board {} fw {} lacks jh/jt/ja — using legacy job",
-                            board.name, cfg.fw
+                            "{} config parse failed: {}",
+                            board.name,
+                            trunc(&line, 96)
+                        ),
+                    );
+                    let _ = msg_tx.send(NetMsg::Config(parse_cmp_config(&line)));
+                }
+            }
+            Err(e) => {
+                log_msg(
+                    msg_tx,
+                    LogKind::Warn,
+                    format!("{} config probe failed: {e}", board.name),
+                );
+            }
+        }
+        match usb_cmd(&mut board.port, &mut board.rx, "cmp status") {
+            Ok(line) => {
+                if let Ok(st) = parse_cmp_status(&line) {
+                    board.hashrate_hs = st.hashrate_hs;
+                    board.hashes = st.hashes;
+                    board.mining = st.mining;
+                    if !st.mac.is_empty() {
+                        board.mac = normalize_mac(&st.mac);
+                    }
+                    board.mesh_bridging = st.mesh_bridging;
+                    board.mesh_peers = st.mesh_peers;
+                    let _ = msg_tx.send(NetMsg::Status(Ok(st)));
+                } else {
+                    log_msg(
+                        msg_tx,
+                        LogKind::Warn,
+                        format!(
+                            "{} status parse failed: {}",
+                            board.name,
+                            trunc(&line, 96)
                         ),
                     );
                 }
-                let _ = msg_tx.send(NetMsg::Config(Ok(cfg)));
-            } else {
-                let _ = msg_tx.send(NetMsg::Config(parse_cmp_config(&line)));
             }
-        }
-        if let Ok(line) = usb_cmd(&mut board.port, &mut board.rx, "cmp status") {
-            if let Ok(st) = parse_cmp_status(&line) {
-                board.hashrate_hs = st.hashrate_hs;
-                board.hashes = st.hashes;
-                board.mining = st.mining;
-                if !st.mac.is_empty() {
-                    board.mac = normalize_mac(&st.mac);
-                }
-                board.mesh_bridging = st.mesh_bridging;
-                board.mesh_peers = st.mesh_peers;
-                let _ = msg_tx.send(NetMsg::Status(Ok(st)));
+            Err(e) => {
+                log_msg(
+                    msg_tx,
+                    LogKind::Warn,
+                    format!("{} status probe failed: {e}", board.name),
+                );
             }
         }
         if !board.mac.is_empty() {
@@ -8771,10 +9001,15 @@ Power a 2nd board nearby with wall/power-bank only (no PC cable)."
                 msg_tx,
                 LogKind::Usb,
                 format!(
-                    "Board {} identity {} ({})",
+                    "Board {} identity {} ({}) · fw={}",
                     board.name,
                     board.mac,
-                    if id.is_empty() { "port" } else { &id }
+                    if id.is_empty() { "port" } else { &id },
+                    if board.fw.is_empty() {
+                        "?"
+                    } else {
+                        board.fw.as_str()
+                    }
                 ),
             );
         }
@@ -8852,9 +9087,7 @@ Power a 2nd board nearby with wall/power-bank only (no PC cable)."
                 }
             }
         }
-        for line in client.take_recent() {
-            log_msg(msg_tx, LogKind::Stratum, line);
-        }
+        drain_stratum_log(msg_tx, client);
         if err.is_none() {
             push_stratum_live(msg_tx, client);
         }
@@ -9035,6 +9268,16 @@ Power a 2nd board nearby with wall/power-bank only (no PC cable)."
                                 mining,
                                 None,
                             );
+                            let mac = if board.mac.is_empty() {
+                                "—".into()
+                            } else {
+                                board.mac.clone()
+                            };
+                            let fw = if board.fw.is_empty() {
+                                "?".into()
+                            } else {
+                                board.fw.clone()
+                            };
                             boards.push(board);
                             {
                                 let mut noop = || {};
@@ -9052,13 +9295,13 @@ Power a 2nd board nearby with wall/power-bank only (no PC cable)."
                             publish_live(&msg_tx, &boards, &mesh);
                             let _ = msg_tx.send(NetMsg::Action(Ok(if dl {
                                 format!(
-                                    "USB open {name} (download mode / BOOT) · flash with Update board · {} board(s)+mesh {}",
+                                    "USB open {name} (download mode / BOOT) · mac={mac} · fw={fw} · flash with Update board · {} board(s)+mesh {}",
                                     boards.len(),
                                     mesh.len()
                                 )
                             } else {
                                 format!(
-                                    "USB open {name}{} · {} board(s)+mesh {}",
+                                    "USB open {name}{} · mac={mac} · fw={fw} · {} board(s)+mesh {}",
                                     if saw { " (pong)" } else { "" },
                                     boards.len(),
                                     mesh.len()
@@ -9067,7 +9310,9 @@ Power a 2nd board nearby with wall/power-bank only (no PC cable)."
                         }
                         Err(e) => {
                             publish_live(&msg_tx, &boards, &mesh);
-                            let _ = msg_tx.send(NetMsg::Action(Err(e)));
+                            let _ = msg_tx.send(NetMsg::Action(Err(format!(
+                                "USB open {name} failed: {e}"
+                            ))));
                         }
                     }
                 }
@@ -9138,6 +9383,16 @@ Power a 2nd board nearby with wall/power-bank only (no PC cable)."
                                 resume_mine,
                                 None,
                             );
+                            let mac = if board.mac.is_empty() {
+                                "—".into()
+                            } else {
+                                board.mac.clone()
+                            };
+                            let fw = if board.fw.is_empty() {
+                                "?".into()
+                            } else {
+                                board.fw.clone()
+                            };
                             boards.push(board);
                             {
                                 let mut noop = || {};
@@ -9155,13 +9410,13 @@ Power a 2nd board nearby with wall/power-bank only (no PC cable)."
                             publish_live(&msg_tx, &boards, &mesh);
                             let _ = msg_tx.send(NetMsg::Action(Ok(if dl {
                                 format!(
-                                    "Worker linked {name} (download mode / BOOT) · Update board to flash · {} total+mesh {}",
+                                    "Worker linked {name} (download mode / BOOT) · mac={mac} · fw={fw} · Update board to flash · {} total+mesh {}",
                                     boards.len(),
                                     mesh.len()
                                 )
                             } else {
                                 format!(
-                                    "Worker linked {name}{} · {} total+mesh {}",
+                                    "Worker linked {name}{} · mac={mac} · fw={fw} · {} total+mesh {}",
                                     if saw { " (pong)" } else { "" },
                                     boards.len(),
                                     mesh.len()
@@ -9213,6 +9468,16 @@ Power a 2nd board nearby with wall/power-bank only (no PC cable)."
                                 mining,
                                 None,
                             );
+                            let mac = if board.mac.is_empty() {
+                                "—".into()
+                            } else {
+                                board.mac.clone()
+                            };
+                            let fw = if board.fw.is_empty() {
+                                "?".into()
+                            } else {
+                                board.fw.clone()
+                            };
                             boards.push(board);
                             {
                                 let mut noop = || {};
@@ -9229,7 +9494,7 @@ Power a 2nd board nearby with wall/power-bank only (no PC cable)."
                             last_mesh_sync = Instant::now();
                             publish_live(&msg_tx, &boards, &mesh);
                             let _ = msg_tx.send(NetMsg::Action(Ok(format!(
-                                "Wi‑Fi worker linked {endpoint}{} · {} total+mesh {}",
+                                "Wi‑Fi worker linked {endpoint}{} · mac={mac} · fw={fw} · {} total+mesh {}",
                                 if saw { " (pong)" } else { "" },
                                 boards.len(),
                                 mesh.len()
@@ -9314,6 +9579,11 @@ Power a 2nd board nearby with wall/power-bank only (no PC cable)."
                                     ack_has_ssid || low.contains("wifi saved")
                                 };
                                 if verified {
+                                    let path = if is_usb_serial_port(&endpoint) {
+                                        "USB"
+                                    } else {
+                                        "SoftAP/TCP"
+                                    };
                                     let _ = msg_tx.send(NetMsg::Action(Ok(format!(
                                         "BOARD_WIFI_SAVED|{endpoint}|{reply}"
                                     ))));
@@ -9321,7 +9591,8 @@ Power a 2nd board nearby with wall/power-bank only (no PC cable)."
                                         &msg_tx,
                                         LogKind::Usb,
                                         format!(
-                                            "Wi‑Fi credentials stored on {endpoint} · SSID “{ssid}”"
+                                            "Wi‑Fi credentials stored on {endpoint} · path={path} · SSID “{ssid}” · ACK {}",
+                                            trunc(&reply, 96)
                                         ),
                                     );
                                 }
@@ -9514,9 +9785,7 @@ Power a 2nd board nearby with wall/power-bank only (no PC cable)."
                                 }
                                 thread::sleep(Duration::from_millis(25));
                             }
-                            for line in client.take_recent() {
-                                log_msg(&msg_tx, LogKind::Stratum, line);
-                            }
+                            drain_stratum_log(&msg_tx, &mut client);
                             push_stratum_live(&msg_tx, &client);
                             if let Some(e) = handshake_err {
                                 if client.auth_give_up {
@@ -9579,15 +9848,17 @@ Power a 2nd board nearby with wall/power-bank only (no PC cable)."
                             let wait = Instant::now() + Duration::from_millis(1800);
                             while Instant::now() < wait && !client.has_pending_job() {
                                 if let Err(e) = client.poll() {
-                                    log_msg(&msg_tx, LogKind::Warn, format!("Pool: {e}"));
+                                    log_msg(
+                                        &msg_tx,
+                                        LogKind::Warn,
+                                        format!("Pool {endpoint} poll: {e}"),
+                                    );
                                     break;
                                 }
                                 thread::sleep(Duration::from_millis(25));
                             }
                         }
-                        for line in client.take_recent() {
-                            log_msg(&msg_tx, LogKind::Stratum, line);
-                        }
+                        drain_stratum_log(&msg_tx, client);
                         push_stratum_live(&msg_tx, client);
                         // Discover mesh peers before sizing the fleet so leaves get unique en2.
                         let can_mesh = client.authorized()
@@ -9780,9 +10051,7 @@ Power a 2nd board nearby with wall/power-bank only (no PC cable)."
                     mine_endpoint.clear();
                     if let Some(mut s) = stratum.take() {
                         s.disconnect();
-                        for line in s.take_recent() {
-                            log_msg(&msg_tx, LogKind::Stratum, line);
-                        }
+                        drain_stratum_log(&msg_tx, &mut s);
                     }
                     for b in boards.iter_mut() {
                         let _ = usb_cmd(&mut b.port, &mut b.rx, "cmp stop");
@@ -9866,12 +10135,24 @@ Power a 2nd board nearby with wall/power-bank only (no PC cable)."
                         if let Some(mut s) = stratum.take() {
                             s.disconnect();
                         }
-                        log_msg(&msg_tx, LogKind::Err, format!("Pool: {e}"));
+                        log_msg(
+                            &msg_tx,
+                            LogKind::Err,
+                            format!("Pool {mine_endpoint} as {mine_worker_name}: {e}"),
+                        );
                         if give_up {
                             mining = false;
                             reconnect_at = None;
                         } else if mining && !mine_endpoint.is_empty() {
                             reconnect_at = Some(Instant::now() + reconnect_backoff);
+                            log_msg(
+                                &msg_tx,
+                                LogKind::Warn,
+                                format!(
+                                    "Pool reconnect in {}s · {mine_endpoint} · backoff growing",
+                                    reconnect_backoff.as_secs().max(1)
+                                ),
+                            );
                             reconnect_backoff =
                                 (reconnect_backoff * 2).min(Duration::from_secs(60));
                         }
@@ -10529,18 +10810,14 @@ Power a 2nd board nearby with wall/power-bank only (no PC cable)."
                         break;
                     }
                     if let Err(e) = client.poll() {
-                        for line in client.take_recent() {
-                            log_msg(&msg_tx, LogKind::Stratum, line);
-                        }
+                        drain_stratum_log(&msg_tx, client);
                         push_stratum_live(&msg_tx, client);
                         fatal = Some((e, client.auth_give_up));
                         break;
                     }
                 }
                 if fatal.is_none() {
-                    for line in client.take_recent() {
-                        log_msg(&msg_tx, LogKind::Stratum, line);
-                    }
+                    drain_stratum_log(&msg_tx, client);
                     push_stratum_live(&msg_tx, client);
                 }
             }
@@ -10581,12 +10858,14 @@ Power a 2nd board nearby with wall/power-bank only (no PC cable)."
                     .map(|s| s.auth_give_up || s.phase == "auth-fail")
                     .unwrap_or(false);
                 if let Some(client) = stratum.as_mut() {
-                    for line in client.take_recent() {
-                        log_msg(&msg_tx, LogKind::Stratum, line);
-                    }
+                    drain_stratum_log(&msg_tx, client);
                     push_stratum_live(&msg_tx, client);
                 }
-                log_msg(&msg_tx, LogKind::Err, format!("Pool: {e}"));
+                log_msg(
+                    &msg_tx,
+                    LogKind::Err,
+                    format!("Pool {mine_endpoint} as {mine_worker_name}: {e}"),
+                );
                 if let Some(mut s) = stratum.take() {
                     s.disconnect();
                 }
@@ -10605,7 +10884,7 @@ Power a 2nd board nearby with wall/power-bank only (no PC cable)."
                         &msg_tx,
                         LogKind::Warn,
                         format!(
-                            "Pool reconnect in {}s…",
+                            "Pool reconnect in {}s · {mine_endpoint} · last error above",
                             reconnect_backoff.as_secs().max(1)
                         ),
                     );
@@ -10629,9 +10908,7 @@ Power a 2nd board nearby with wall/power-bank only (no PC cable)."
                         );
                     }
                 }
-                for line in client.take_recent() {
-                    log_msg(&msg_tx, LogKind::Stratum, line);
-                }
+                drain_stratum_log(&msg_tx, client);
                 for ev in client.take_share_events() {
                     let _ = msg_tx.send(NetMsg::Share(ev));
                 }
@@ -10790,11 +11067,22 @@ Power a 2nd board nearby with wall/power-bank only (no PC cable)."
                         log_msg(
                             &msg_tx,
                             LogKind::Stratum,
-                            "Job superseded mid-push — pool stays first",
+                            format!(
+                                "Job superseded mid-push — already pushed {pushed} · {} left in batch · pool stays first",
+                                remaining.len()
+                            ),
                         );
                     } else if pushed > 0 {
+                        let job_id = recent_jobs
+                            .back()
+                            .map(|j| j.job_id.as_str())
+                            .unwrap_or("?");
+                        let en2 = recent_jobs
+                            .back()
+                            .map(|j| j.extranonce2_hex.as_str())
+                            .unwrap_or("?");
                         let _ = msg_tx.send(NetMsg::Action(Ok(format!(
-                            "USB ← job → {pushed} board(s)/mesh (unique en2)"
+                            "USB ← job → {pushed} board(s)/mesh · job={job_id} · en2={en2} · unique en2"
                         ))));
                     } else if let Some(job) = remaining.pop_front() {
                         // Total failure — restore so the next loop retries (pre-0.8.121 behavior).
@@ -10845,20 +11133,22 @@ Power a 2nd board nearby with wall/power-bank only (no PC cable)."
                 log_msg(
                     &msg_tx,
                     LogKind::Stratum,
-                    format!("Reconnecting pool {mine_endpoint}"),
+                    format!(
+                        "Reconnecting pool {mine_endpoint} as {mine_worker_name} · {} board(s)+mesh {}",
+                        boards.len(),
+                        mesh.len()
+                    ),
                 );
                 let mut client =
                     StratumClient::new(mine_worker_name.clone(), mine_password.clone());
                 match client.connect(&mine_endpoint) {
                     Ok(()) => {
-                        for line in client.take_recent() {
-                            log_msg(&msg_tx, LogKind::Stratum, line);
-                        }
+                        drain_stratum_log(&msg_tx, &mut client);
                         push_stratum_live(&msg_tx, &client);
                         stratum = Some(client);
                         reconnect_backoff = Duration::from_secs(1);
                         let _ = msg_tx.send(NetMsg::Action(Ok(format!(
-                            "Pool reconnected {mine_endpoint}"
+                            "Pool reconnected {mine_endpoint} as {mine_worker_name} · authorized next"
                         ))));
                         // Keep hashrate across the gap — re-push unique cached en2 jobs only
                         // (never broadcast one en2 to the whole fleet).
@@ -11036,13 +11326,15 @@ fn harvest_shares(
                 held.pop_front();
             }
         }
-        if held.len() > before {
+            if held.len() > before {
             log_msg(
                 msg_tx,
                 LogKind::Info,
                 format!(
-                    "Holding {} board share(s) until pool reconnects",
-                    held.len()
+                    "Holding {} board share(s) until pool reconnects · newest job={} nonce={}",
+                    held.len(),
+                    held.back().map(|h| h.0.as_str()).unwrap_or("—"),
+                    held.back().map(|h| h.3.as_str()).unwrap_or("—"),
                 ),
             );
         }
@@ -11106,7 +11398,7 @@ fn try_submit_board_share(
     match s.submit_share(job, en2, ntime, nonce) {
         Ok(()) => {
             let _ = msg_tx.send(NetMsg::Action(Ok(format!(
-                "Share submitted {nonce} job={job}"
+                "Share submitted nonce={nonce} job={job} en2={en2_l} ntime={ntime}"
             ))));
             ShareSubmitResult::Ok
         }
@@ -11114,7 +11406,7 @@ fn try_submit_board_share(
             log_msg(
                 msg_tx,
                 LogKind::Warn,
-                format!("Duplicate share skipped {nonce} job={job}"),
+                format!("Duplicate share skipped nonce={nonce} job={job} en2={en2_l}"),
             );
             ShareSubmitResult::Dropped
         }
@@ -11122,12 +11414,14 @@ fn try_submit_board_share(
             log_msg(
                 msg_tx,
                 LogKind::Info,
-                format!("Holding share {nonce} until authorize"),
+                format!("Holding share nonce={nonce} job={job} en2={en2_l} until authorize"),
             );
             ShareSubmitResult::Hold
         }
         Err(e) => {
-            let _ = msg_tx.send(NetMsg::Action(Err(format!("Share submit: {e}"))));
+            let _ = msg_tx.send(NetMsg::Action(Err(format!(
+                "Share submit failed nonce={nonce} job={job}: {e}"
+            ))));
             ShareSubmitResult::Dropped
         }
     }
