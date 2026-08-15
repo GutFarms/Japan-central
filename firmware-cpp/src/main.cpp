@@ -367,6 +367,11 @@ static void mineTaskA(void*) {
     // USB mesh root still hashes while bridging — mild batch cut + yields leave
     // headroom for ESP-NOW / cmp via without cratering solo-class H/s.
     const bool bridging = g_mesh.isBridging();
+    if (g_mesh.viaBusy()) {
+      vTaskDelay(pdMS_TO_TICKS(3));
+      esp_task_wdt_reset();
+      continue;
+    }
     if (g_hwSha) {
       mineLane(g_minerA, 1, bridging ? 49152 : 65536);
       const uint32_t mask = bridging ? 63u : 127u;
@@ -392,6 +397,12 @@ static void mineTaskB(void*) {
   for (;;) {
     if (!g_mining || !g_jobLoaded) {
       vTaskDelay(pdMS_TO_TICKS(2));
+      continue;
+    }
+    // Root mid `cmp via`: step aside so ESP-NOW RX/TX + USB get core-0.
+    if (g_mesh.viaBusy()) {
+      vTaskDelay(pdMS_TO_TICKS(5));
+      esp_task_wdt_reset();
       continue;
     }
     // Bridging root: keep SW assist alive at a smaller batch so fleet H/s stays
