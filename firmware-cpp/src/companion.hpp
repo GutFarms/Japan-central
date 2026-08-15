@@ -63,14 +63,18 @@ class CompanionLink {
   using JobFn = std::function<void(const UsbJob& job)>;
   using StopFn = std::function<void()>;
   using StatsFn = std::function<void(uint32_t accepted, uint32_t rejected)>;
-  using WifiFn = std::function<void()>;  // notify Wi‑Fi settings changed
+  /// Persist Wi‑Fi credentials to NVS (return false on failure).
+  using WifiPersistFn = std::function<bool()>;
+  /// Apply SoftAP/STA after credentials are ACK'd on the wire.
+  using WifiApplyFn = std::function<void()>;
 
   void begin(uint32_t baud = 460800);
   void setShareMirror(Print* mirror) { shareMirror_ = mirror; }
   /// Second sink (mesh leaf ESP-NOW) — used with TCP mirror so SoftAP clients
   /// cannot steal shares from the USB root path.
   void setShareMirror2(Print* mirror) { shareMirror2_ = mirror; }
-  void setWifiApply(WifiFn fn) { onWifi_ = std::move(fn); }
+  void setWifiPersist(WifiPersistFn fn) { onWifiPersist_ = std::move(fn); }
+  void setWifiApply(WifiApplyFn fn) { onWifiApply_ = std::move(fn); }
 
   bool poll(AppConfig& cfg, const MinerSnapshot& snap, ApplyFn onApply, NetFeed* net, JobFn onJob,
             StopFn onStop, StatsFn onStats);
@@ -100,7 +104,8 @@ class CompanionLink {
   Print* out_ = &Serial;
   Print* shareMirror_ = nullptr;
   Print* shareMirror2_ = nullptr;
-  WifiFn onWifi_;
+  WifiPersistFn onWifiPersist_;
+  WifiApplyFn onWifiApply_;
 
   char* activeLineBuf_ = lineBuf_;
   size_t* activeLineLen_ = &lineLen_;

@@ -9280,9 +9280,51 @@ Power a 2nd board nearby with wall/power-bank only (no PC cable)."
                                     "BOARD_WIFI_ERR|{endpoint}|{reply}"
                                 ))));
                             } else if enable {
-                                let _ = msg_tx.send(NetMsg::Action(Ok(format!(
-                                    "BOARD_WIFI_SAVED|{endpoint}|{reply}"
-                                ))));
+                                let ssid_l = ssid.to_ascii_lowercase();
+                                let ack_has_ssid = low.contains(&format!("ssid={ssid_l}"))
+                                    || reply.contains(&format!("ssid={ssid}"));
+                                // USB: re-read cmp wifi so we know NVS actually holds the SSID.
+                                // SoftAP TCP may drop after apply — trust ACK ssid= when present.
+                                let verified = if is_usb_serial_port(&endpoint) {
+                                    thread::sleep(Duration::from_millis(80));
+                                    match board_wifi_cmd(&mut boards, &endpoint, "cmp wifi") {
+                                        Ok(st) => {
+                                            let st_l = st.to_ascii_lowercase();
+                                            let ok = st_l.contains(&format!("ssid={ssid_l}"))
+                                                || st.contains(&format!("ssid={ssid}"));
+                                            if !ok {
+                                                let _ = msg_tx.send(NetMsg::Action(Err(format!(
+                                                    "BOARD_WIFI_ERR|{endpoint}|saved ACK but board reports “{st}” (expected SSID “{ssid}”)"
+                                                ))));
+                                            }
+                                            ok
+                                        }
+                                        Err(e) => {
+                                            if ack_has_ssid {
+                                                true
+                                            } else {
+                                                let _ = msg_tx.send(NetMsg::Action(Err(format!(
+                                                    "BOARD_WIFI_ERR|{endpoint}|save ACK “{reply}” but verify failed: {e}"
+                                                ))));
+                                                false
+                                            }
+                                        }
+                                    }
+                                } else {
+                                    ack_has_ssid || low.contains("wifi saved")
+                                };
+                                if verified {
+                                    let _ = msg_tx.send(NetMsg::Action(Ok(format!(
+                                        "BOARD_WIFI_SAVED|{endpoint}|{reply}"
+                                    ))));
+                                    log_msg(
+                                        &msg_tx,
+                                        LogKind::Usb,
+                                        format!(
+                                            "Wi‑Fi credentials stored on {endpoint} · SSID “{ssid}”"
+                                        ),
+                                    );
+                                }
                             } else {
                                 let _ = msg_tx.send(NetMsg::Action(Ok(format!(
                                     "BOARD_WIFI_CLEARED|{endpoint}|{reply}"
@@ -11135,6 +11177,9 @@ fn usb_cmd_ex(
     } else if cmd.contains(" via ") {
         // Firmware via wait ≤4.5s + mid-resend; leave margin for USB drain.
         (10_000u64, 1usize, 256usize, 0u64)
+    } else if cmd.contains("wifi") {
+        // SoftAP/STA apply after save can briefly stall the USB task.
+        (3_500u64, 2usize, 256usize, 0u64)
     } else if cmd.contains("status") {
         // Board may be mid mineB batch; firmware yields on RX, but allow headroom.
         (1_800u64, 3usize, 256usize, 0u64)
@@ -11169,7 +11214,14 @@ fn usb_cmd_ex(
         let deadline = Instant::now() + Duration::from_millis(wait_ms);
         let mut last_pump = Instant::now() - Duration::from_millis(200);
         while Instant::now() < deadline {
-            if USB_FLASH_PREEMPT.load(Ordering::SeqCst) {
+            // Only abort hash/mesh traffic for flash — never cancel Wi‑Fi save/ping/config.
+            if USB_FLASH_PREEMPT.load(Ordering::SeqCst)
+                && (cmd.contains(" via ")
+                    || cmd.contains(" jh")
+                    || cmd.contains(" jt")
+                    || cmd.contains(" ja")
+                    || cmd.contains(" job "))
+            {
                 return Err("aborted for board update".into());
             }
             // Pump often — stratum presidency means the pool is polled during every USB wait.

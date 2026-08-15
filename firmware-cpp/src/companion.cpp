@@ -10,9 +10,9 @@
 extern "C" float cyd_run_bench(uint32_t n, bool tune);
 
 #if CYD_D0_BUILD
-static constexpr const char* kFwTag = "0.8.151-sha256-d0";
+static constexpr const char* kFwTag = "0.8.152-sha256-d0";
 #else
-static constexpr const char* kFwTag = "0.8.151-sha256";
+static constexpr const char* kFwTag = "0.8.152-sha256";
 #endif
 
 void CompanionLink::begin(uint32_t baud) {
@@ -400,16 +400,39 @@ void CompanionLink::handleLine(const String& line, AppConfig& cfg, const MinerSn
     if (args.equalsIgnoreCase("clear") || args.indexOf("clear=1") >= 0) {
       cfg.wifiSsid = "";
       cfg.wifiPass = "";
+      // Keep SoftAP alive for setup/mesh after clearing home STA.
+      cfg.wifiEnabled = true;
+      if (onWifiPersist_ && !onWifiPersist_()) {
+        out_->println("CMPERR wifi nvs");
+        out_->flush();
+        return;
+      }
       out_->println("CMPACK wifi cleared");
       out_->flush();
-      if (onWifi_) onWifi_();
+      if (onWifiApply_) onWifiApply_();
       return;
     }
     parseWifiBody(args, cfg);
-    // Persist + apply SoftAP/STA; credentials land in NVS via setWifiApply.
-    out_->println("CMPACK wifi saved");
+    cfg.wifiSsid.trim();
+    if (cfg.wifiSsid.length() == 0) {
+      out_->println("CMPERR wifi need ssid");
+      out_->flush();
+      return;
+    }
+    // Always enable radio when home credentials are pushed.
+    cfg.wifiEnabled = true;
+    // Persist to NVS BEFORE ACK so SoftAP TCP teardown cannot strand unsaved creds.
+    if (onWifiPersist_ && !onWifiPersist_()) {
+      out_->println("CMPERR wifi nvs");
+      out_->flush();
+      return;
+    }
+    char ack[160];
+    snprintf(ack, sizeof(ack), "CMPACK wifi saved ssid=%s", cfg.wifiSsid.c_str());
+    out_->println(ack);
     out_->flush();
-    if (onWifi_) onWifi_();
+    // Apply SoftAP/STA after the host has the ACK (TCP may drop on SoftAP rebuild).
+    if (onWifiApply_) onWifiApply_();
     return;
   }
 
@@ -597,6 +620,7 @@ void CompanionLink::parseWifiBody(const String& body, AppConfig& cfg) {
     key.toLowerCase();
     if (key == "ssid") {
       if (val.length() > 32) val = val.substring(0, 32);
+      val.trim();
       cfg.wifiSsid = val;
     } else if (key == "pass" || key == "password" || key == "psk") {
       if (val.length() > 63) val = val.substring(0, 63);
