@@ -777,6 +777,7 @@ pub const REPO_NAME: &str = "Japan-central";
 /// Branches probed for Companion/firmware updates (newest VERSION wins).
 /// Tip first — apps still on older builds may only hit the legacy CYD branch.
 pub const REPO_REFS: &[&str] = &[
+    "cursor/flash-14pct-e801",
     "cursor/indep-handoff-e801",
     "cursor/hashrate-top-e801",
     "cursor/indep-pool-mine-e801",
@@ -1212,10 +1213,10 @@ const ATTEMPT_GAP: Duration = Duration::from_millis(450);
 /// No useful output at all → stuck before connect.
 const IDLE_TIMEOUT: Duration = Duration::from_secs(35);
 /// Chip MAC/connect seen but no write progress yet.
-/// Keep short even in "patient" mode — MAC-then-stall (UI stuck ~14%) must fail
-/// fast so we can escalate (stub hang / ROM deflate hang), not sit for minutes.
-const IDLE_AFTER_CONNECT: Duration = Duration::from_secs(28);
-const IDLE_AFTER_CONNECT_PATIENT: Duration = Duration::from_secs(32);
+/// Keep short — MAC-then-stall (UI stuck ~14% "Chip connected") must fail
+/// fast so we escalate to no-stub / BOOT Ready, not sit for minutes.
+const IDLE_AFTER_CONNECT: Duration = Duration::from_secs(16);
+const IDLE_AFTER_CONNECT_PATIENT: Duration = Duration::from_secs(22);
 /// During active write/erase (% / `\r` ticks), allow longer silence between ticks.
 const IDLE_DURING_WRITE: Duration = Duration::from_secs(75);
 const IDLE_DURING_WRITE_PATIENT: Duration = Duration::from_secs(120);
@@ -1305,6 +1306,72 @@ fn clamp_timeout(cap: Duration, budget: Duration) -> Duration {
     } else {
         t
     }
+}
+
+/// Copy the firmware image into a local temp file so espflash/esptool never read
+/// through OneDrive/cloud placeholders mid-write (common stall at "Chip connected" ~14%).
+fn stage_flash_image_local(image: &Path, progress: &dyn Fn(String)) -> Result<PathBuf, String> {
+    let meta = std::fs::metadata(image).map_err(|e| format!("firmware stat: {e}"))?;
+    let bytes = meta.len();
+    if bytes < 64_000 {
+        return Err(format!(
+            "Firmware too small ({} bytes) — re-fetch Update board firmware",
+            bytes
+        ));
+    }
+    let name = image
+        .file_name()
+        .and_then(|s| s.to_str())
+        .unwrap_or(MERGED_BIN_NAME);
+    let dir = std::env::temp_dir().join("cyd-flash");
+    std::fs::create_dir_all(&dir).map_err(|e| format!("mkdir flash staging: {e}"))?;
+    let dest = dir.join(name);
+    if dest.is_file() {
+        if let Ok(dm) = std::fs::metadata(&dest) {
+            if dm.len() == bytes {
+                // Same size already staged — still refresh if source is newer.
+                let src_t = meta.modified().ok();
+                let dst_t = dm.modified().ok();
+                if let (Some(s), Some(d)) = (src_t, dst_t) {
+                    if d >= s {
+                        progress(format!(
+                            "Flash staging ready · {} ({} KB local temp)",
+                            dest.display(),
+                            bytes / 1024
+                        ));
+                        return Ok(dest);
+                    }
+                }
+            }
+        }
+    }
+    progress(format!(
+        "Staging firmware locally ({:.1} MB) — avoids OneDrive/cloud locks during write…",
+        bytes as f64 / (1024.0 * 1024.0)
+    ));
+    // Full read forces cloud hydrate, then write a local copy for the flash tool.
+    let data = std::fs::read(image).map_err(|e| {
+        format!(
+            "Could not read firmware {} ({e}) — if it is on OneDrive, right-click → Always keep on this device",
+            image.display()
+        )
+    })?;
+    if (data.len() as u64) != bytes {
+        return Err(format!(
+            "Firmware read truncated ({} of {} bytes) — OneDrive may still be syncing; retry",
+            data.len(),
+            bytes
+        ));
+    }
+    let tmp = dir.join(format!("{name}.part"));
+    std::fs::write(&tmp, &data).map_err(|e| format!("write flash staging: {e}"))?;
+    std::fs::rename(&tmp, &dest).map_err(|e| format!("promote flash staging: {e}"))?;
+    progress(format!(
+        "Flash staging ready · {} ({} KB)",
+        dest.display(),
+        data.len() / 1024
+    ));
+    Ok(dest)
 }
 
 fn run_espflash_erase(
@@ -1624,6 +1691,8 @@ pub fn flash_merged_bin(
     if !image.is_file() {
         return Err(format!("Firmware missing: {}", image.display()));
     }
+    let staged = stage_flash_image_local(image, progress)?;
+    let image = staged.as_path();
 
     let port_arg = flash_port_arg(port);
     // Fail fast with a clear list if Windows no longer sees the COM (common after unplug
@@ -1768,31 +1837,32 @@ Available: {hint}. Unplug/replug the CYD, pick the COM again, then Update board.
         if need_ready {
             wait_for_boot_ready(ctrl, progress, round_label)?;
         }
-        // Compact = fail-fast (Push / post-stall). Full = blank-board BOOT path.
+        // Compact = fail-fast (Push / post-stall). Lead with no-stub after one stub try —
+        // CH340 boards often hang uploading the RAM stub right after MAC (UI ~14%).
         let attempts: &[(&str, &str, bool, bool, bool)] = if prefer_default_reset && compact {
             &[
                 ("esptool stub+compress default_reset", "default_reset", false, true, true),
-                ("espflash stub default-reset", "default-reset", false, false, false),
                 ("espflash no-stub default-reset", "default-reset", true, false, false),
+                ("espflash stub default-reset", "default-reset", false, false, false),
             ]
         } else if prefer_default_reset {
             &[
                 ("esptool stub+compress default_reset", "default_reset", false, true, true),
+                ("espflash no-stub default-reset", "default-reset", true, false, false),
                 ("esptool stub+compress no_reset", "no_reset", false, true, true),
                 ("espflash stub default-reset", "default-reset", false, false, false),
-                ("espflash no-stub default-reset", "default-reset", true, false, false),
             ]
         } else if compact {
             &[
-                ("esptool stub+compress no_reset", "no_reset", false, true, true),
                 ("espflash no-stub no-reset", "no-reset", true, false, false),
+                ("esptool stub+compress no_reset", "no_reset", false, true, true),
                 ("espflash no-stub default-reset", "default-reset", true, false, false),
             ]
         } else {
             &[
+                ("espflash no-stub no-reset", "no-reset", true, false, false),
                 ("esptool stub+compress no_reset", "no_reset", false, true, true),
                 ("esptool stub+compress default_reset", "default_reset", false, true, true),
-                ("espflash no-stub no-reset", "no-reset", true, false, false),
                 ("espflash no-stub default-reset", "default-reset", true, false, false),
             ]
         };
@@ -1961,7 +2031,9 @@ Available: {hint}. Unplug/replug the CYD, pick the COM again, then Update board.
         let tip = safety_fail_tip(started.elapsed(), &esp_err, &py_err, false);
         append_flash_log(&tip);
         return Err(format!(
-            "Update failed — chip did not enter download mode (hold BOOT, tap RESET, keep BOOT held, click Ready). {tip}"
+            "Update failed at chip connect (~14%) — write never started. \
+Hold BOOT, tap RESET, keep BOOT held, click Ready. Use a short data USB cable \
+(not charge-only). If the .bin is on OneDrive, Always keep on this device. {tip}"
         ));
     }
 
