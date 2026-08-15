@@ -487,10 +487,8 @@ void setup() {
   cyd_sha_hw::set_preferred_mode(g_cfg.shaPath);
   g_wifi.begin(g_macStr, g_cfg);
   g_mesh.begin(mac);
-  g_cmp.setWifiApply([]() {
-    g_store.save(g_cfg);
-    g_wifi.applyConfig(g_cfg);
-  });
+  g_cmp.setWifiPersist([]() -> bool { return g_store.save(g_cfg); });
+  g_cmp.setWifiApply([]() { g_wifi.applyConfig(g_cfg); });
   // Phone SoftAP portal uses the same NVS + SoftAP/STA apply path.
   g_wifi.setPersist([]() {
     g_store.save(g_cfg);
