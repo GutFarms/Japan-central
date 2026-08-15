@@ -183,7 +183,10 @@ static void fillSnap() {
   g_snap.mac = g_macStr;
   g_snap.wifiMode = g_wifi.modeLabel();
   g_snap.wifiAp = g_wifi.softApSsid();
-  g_snap.mineIndep = g_cfg.mineIndep && g_cfg.poolConfigured();
+  // Companion only hands off job ownership once the board pool is authorized
+  // (phase "ok"). Configured-but-offline must keep accepting USB/Wi‑Fi jobs.
+  g_snap.mineIndep =
+      g_cfg.mineIndep && g_cfg.poolConfigured() && g_pool.authorized();
   g_snap.poolEndpoint = g_pool.endpoint().length() ? g_pool.endpoint() : g_cfg.poolUrl;
   g_snap.poolPhase = g_pool.phase();
   if (WiFi.status() == WL_CONNECTED) {

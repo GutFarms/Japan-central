@@ -9841,12 +9841,14 @@ Power a 2nd board nearby with wall/power-bank only (no PC cable)."
                                     );
                                     match usb_cmd(&mut b.port, &mut b.rx, &cmd) {
                                         Ok(line) if line.to_ascii_lowercase().contains("cmpack") => {
-                                            b.mine_indep = true;
+                                            // Keep Companion job ownership until status shows
+                                            // pool_phase=ok (STA + onboard stratum authorized).
+                                            b.mine_indep = false;
                                             log_msg(
                                                 &msg_tx,
                                                 LogKind::Usb,
                                                 format!(
-                                                    "Board {} ← independent pool {endpoint} (D0 path; Companion monitors H/s)",
+                                                    "Board {} ← pool creds {endpoint} (Companion keeps feeding jobs until board pool authorizes)",
                                                     b.name
                                                 ),
                                             );
@@ -10034,8 +10036,12 @@ Power a 2nd board nearby with wall/power-bank only (no PC cable)."
                         }
                     }
                     // Fallback: no pool header yet — keep boards warm until notify lands.
+                    // Skip boards already on independent pool (they must not hash easy warmup).
                     if armed_pool == 0 {
                         for b in boards.iter_mut() {
+                            if b.mine_indep {
+                                continue;
+                            }
                             let stats_cmd = "cmp stats accepted=0&rejected=0";
                             {
                                 let mut pump = || {
@@ -10080,6 +10086,9 @@ Power a 2nd board nearby with wall/power-bank only (no PC cable)."
                             }
                         }
                         for m in mesh.iter_mut() {
+                            if m.mine_indep {
+                                continue;
+                            }
                             if pool_has_presidency(&stratum, reconnect_at) {
                                 break;
                             }
@@ -10234,10 +10243,15 @@ Power a 2nd board nearby with wall/power-bank only (no PC cable)."
                         harvest_shares(
                             &mut b.port,
                             &mut b.rx,
-                            stratum.as_mut(),
+                            if b.mine_indep {
+                                None
+                            } else {
+                                stratum.as_mut()
+                            },
                             &recent_jobs,
                             &mut held_board_shares,
                             &msg_tx,
+                            b.mine_indep,
                         );
                         let status_reply = {
                             let mut pump = || {
@@ -10272,7 +10286,37 @@ Power a 2nd board nearby with wall/power-bank only (no PC cable)."
                                     }
                                     b.mesh_bridging = st.mesh_bridging;
                                     b.mesh_peers = st.mesh_peers;
-                                    b.mine_indep = st.mine_indep;
+                                    let indep_live = board_indep_live(&st);
+                                    if indep_live && !b.mine_indep {
+                                        log_msg(
+                                            &msg_tx,
+                                            LogKind::Usb,
+                                            format!(
+                                                "Board {} independent pool live (phase={}) — Companion stops job push; monitors H/s",
+                                                b.name,
+                                                if st.pool_phase.is_empty() {
+                                                    "ok"
+                                                } else {
+                                                    st.pool_phase.as_str()
+                                                }
+                                            ),
+                                        );
+                                    } else if b.mine_indep && !indep_live {
+                                        log_msg(
+                                            &msg_tx,
+                                            LogKind::Usb,
+                                            format!(
+                                                "Board {} indep pool down (phase={}) — Companion resumes job push",
+                                                b.name,
+                                                if st.pool_phase.is_empty() {
+                                                    "-"
+                                                } else {
+                                                    st.pool_phase.as_str()
+                                                }
+                                            ),
+                                        );
+                                    }
+                                    b.mine_indep = indep_live;
                                     total_hs += b.hashrate_hs;
                                     total_hashes = total_hashes.saturating_add(b.hashes);
                                     any_mining |= b.mining;
@@ -10406,7 +10450,23 @@ Power a 2nd board nearby with wall/power-bank only (no PC cable)."
                                             m.hashes = st.hashes;
                                         }
                                         m.mining = st.mining || (mining && m.hashrate_hs > 0.0);
-                                        m.mine_indep = st.mine_indep;
+                                        let indep_live = board_indep_live(&st);
+                                        if indep_live && !m.mine_indep {
+                                            log_msg(
+                                                &msg_tx,
+                                                LogKind::Usb,
+                                                format!(
+                                                    "Mesh {} independent pool live (phase={}) — Companion stops job push",
+                                                    m.mac,
+                                                    if st.pool_phase.is_empty() {
+                                                        "ok"
+                                                    } else {
+                                                        st.pool_phase.as_str()
+                                                    }
+                                                ),
+                                            );
+                                        }
+                                        m.mine_indep = indep_live;
                                         total_hs += m.hashrate_hs;
                                         total_hashes = total_hashes.saturating_add(m.hashes);
                                         any_mining |= m.mining;
@@ -10592,7 +10652,7 @@ Power a 2nd board nearby with wall/power-bank only (no PC cable)."
                             );
                             let job = remaining.pop_front().unwrap_or_else(warmup_job);
                             let had_pool = !job.job_id.is_empty()
-                                && job.job_id != "warmup"
+                                && !is_warmup_job_id(&job.job_id)
                                 && !job.extranonce2_hex.is_empty();
                             match usb_push_job(
                                 &mut b.port,
@@ -11030,7 +11090,7 @@ Power a 2nd board nearby with wall/power-bank only (no PC cable)."
                 if !softap_blocked && client.has_pending_job() {
                     for b in boards.iter_mut() {
                         if b.mine_indep {
-                            // Board submits to its own pool — drain CMPSHARE noise only.
+                            // Board submits to its own pool — discard CMPSHARE (do not hold/submit).
                             harvest_shares(
                                 &mut b.port,
                                 &mut b.rx,
@@ -11038,6 +11098,7 @@ Power a 2nd board nearby with wall/power-bank only (no PC cable)."
                                 &recent_jobs,
                                 &mut held_board_shares,
                                 &msg_tx,
+                                true,
                             );
                             continue;
                         }
@@ -11048,6 +11109,7 @@ Power a 2nd board nearby with wall/power-bank only (no PC cable)."
                             &recent_jobs,
                             &mut held_board_shares,
                             &msg_tx,
+                            false,
                         );
                     }
                 }
@@ -11311,14 +11373,27 @@ Power a 2nd board nearby with wall/power-bank only (no PC cable)."
             .unwrap_or(false);
         if !boards.is_empty() && !softap_no_uplink {
             for b in boards.iter_mut() {
-                harvest_shares(
-                    &mut b.port,
-                    &mut b.rx,
-                    stratum.as_mut(),
-                    &recent_jobs,
-                    &mut held_board_shares,
-                    &msg_tx,
-                );
+                if b.mine_indep {
+                    harvest_shares(
+                        &mut b.port,
+                        &mut b.rx,
+                        None,
+                        &recent_jobs,
+                        &mut held_board_shares,
+                        &msg_tx,
+                        true,
+                    );
+                } else {
+                    harvest_shares(
+                        &mut b.port,
+                        &mut b.rx,
+                        stratum.as_mut(),
+                        &recent_jobs,
+                        &mut held_board_shares,
+                        &msg_tx,
+                        false,
+                    );
+                }
             }
         } else if !boards.is_empty() && softap_no_uplink {
             // Drain CMPSHARE into the hold queue without touching the pool socket.
@@ -11330,6 +11405,7 @@ Power a 2nd board nearby with wall/power-bank only (no PC cable)."
                     &recent_jobs,
                     &mut held_board_shares,
                     &msg_tx,
+                    b.mine_indep,
                 );
             }
         }
@@ -11350,6 +11426,7 @@ fn harvest_shares(
     recent_jobs: &VecDeque<WorkJob>,
     held: &mut VecDeque<(String, String, String, String)>,
     msg_tx: &Sender<NetMsg>,
+    discard: bool,
 ) {
     port.drain(buf);
     let mut keep = String::new();
@@ -11373,6 +11450,16 @@ fn harvest_shares(
                     _ => {}
                 }
             }
+            if discard || is_warmup_job_id(&job) {
+                if !discard && is_warmup_job_id(&job) {
+                    log_msg(
+                        msg_tx,
+                        LogKind::Info,
+                        format!("Ignoring local/warmup share nonce={nonce}"),
+                    );
+                }
+                continue;
+            }
             shares.push((job, en2, ntime, nonce));
         } else if !t.is_empty() {
             keep.push_str(t);
@@ -11381,11 +11468,23 @@ fn harvest_shares(
     }
     *buf = keep;
 
+    if discard {
+        return;
+    }
+
     if let Some(s) = stratum {
         let mut pending: Vec<(String, String, String, String)> =
             std::mem::take(held).into_iter().collect();
         pending.extend(shares);
         for (job, en2, ntime, nonce) in pending {
+            if is_warmup_job_id(&job) {
+                log_msg(
+                    msg_tx,
+                    LogKind::Info,
+                    format!("Ignoring local/warmup share nonce={nonce}"),
+                );
+                continue;
+            }
             match try_submit_board_share(s, recent_jobs, &job, &en2, &ntime, &nonce, msg_tx) {
                 ShareSubmitResult::Ok | ShareSubmitResult::Dropped => {}
                 ShareSubmitResult::Hold => {
@@ -11399,7 +11498,7 @@ fn harvest_shares(
     } else {
         let before = held.len();
         for (job, en2, ntime, nonce) in shares {
-            if job == "warmup" || job.is_empty() {
+            if is_warmup_job_id(&job) {
                 continue;
             }
             held.push_back((job, en2, ntime, nonce));
@@ -11407,7 +11506,7 @@ fn harvest_shares(
                 held.pop_front();
             }
         }
-            if held.len() > before {
+        if held.len() > before {
             log_msg(
                 msg_tx,
                 LogKind::Info,
@@ -11428,6 +11527,24 @@ enum ShareSubmitResult {
     Hold,
 }
 
+/// Local easy-target arming / truncated USB job ids (`warm`, `warmu`, `warmup`).
+fn is_warmup_job_id(job: &str) -> bool {
+    let j = job.trim();
+    if j.is_empty() {
+        return true;
+    }
+    let lower = j.to_ascii_lowercase();
+    lower == "warmup" || lower.starts_with("warm")
+}
+
+/// Board owns stratum only after onboard pool authorize (phase ok).
+fn board_indep_live(st: &StatusJson) -> bool {
+    if !st.mine_indep {
+        return false;
+    }
+    st.pool_phase.eq_ignore_ascii_case("ok")
+}
+
 fn try_submit_board_share(
     s: &mut StratumClient,
     recent_jobs: &VecDeque<WorkJob>,
@@ -11437,7 +11554,7 @@ fn try_submit_board_share(
     nonce: &str,
     msg_tx: &Sender<NetMsg>,
 ) -> ShareSubmitResult {
-    if job == "warmup" || job.is_empty() {
+    if is_warmup_job_id(job) {
         log_msg(
             msg_tx,
             LogKind::Info,
