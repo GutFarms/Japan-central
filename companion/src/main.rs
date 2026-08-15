@@ -2810,15 +2810,36 @@ impl CompanionApp {
                 0.14,
             )
         } else if lower.contains("write-bin")
+            || lower.contains("write_flash")
             || lower.contains("writing firmware")
             || lower.contains("writing after")
             || lower.contains("patient write")
+            || lower.contains("auto-reset")
+            || lower.contains("push update round")
         {
             ("Writing firmware", 0.12)
-        } else if lower.contains("usb released") || lower.contains("waiting for com") {
-            ("Releasing USB", 0.04)
-        } else if lower.contains("flash budget") || lower.contains("starting") {
-            ("Starting flash", 0.02)
+        } else if lower.contains("connecting to chip")
+            || lower.contains("espflash write")
+            || lower.contains("esptool write")
+        {
+            ("Connecting to chip", 0.10)
+        } else if lower.contains("released")
+            || lower.contains("releasing")
+            || lower.contains("waiting for com")
+        {
+            ("Releasing USB", 0.05)
+        } else if lower.contains("staging firmware") || lower.contains("flash staging")
+        {
+            ("Staging firmware", 0.07)
+        } else if lower.contains("espflash")
+            && (lower.contains("found") || lower.contains("ready") || lower.contains("download"))
+        {
+            ("Preparing flash tool", 0.08)
+        } else if lower.contains("download") && (lower.contains("firmware") || lower.contains("kb"))
+        {
+            ("Downloading firmware", 0.06)
+        } else if lower.contains("flash budget") {
+            ("Starting flash", 0.09)
         } else if lower.contains("wifi ota") || lower.contains("wi‑fi ota") || lower.contains("wi-fi ota")
         {
             ("Wi‑Fi OTA", 0.12)
@@ -2826,11 +2847,8 @@ impl CompanionApp {
             ("Board ready for OTA", 0.15)
         } else if lower.contains("upload complete") || lower.contains("pushed over wi") {
             ("Wi‑Fi push complete", 0.88)
-        } else if lower.contains("download") && lower.contains("firmware") {
-            ("Downloading firmware", 0.05)
-        } else if lower.contains("espflash") && lower.contains("found") {
-            ("Preparing flash tool", 0.06)
         } else {
+            // Keep status text moving even when phase is unknown — avoids frozen 2%.
             return;
         };
         self.flash_phase = phase.into();
@@ -6448,9 +6466,22 @@ impl App for CompanionApp {
                 self.push_log(LogKind::Err, msg);
             }
         }
-        // UI watchdog: flash (~160s) + verify. Unlock if FlashDone/verify never finishes.
+        // UI watchdog: fail fast if flash never leaves the 2% "starting" band.
         if self.update_busy {
             let flash_cap = Duration::from_secs(400);
+            let starting_stall = self
+                .update_busy_since
+                .map(|since| {
+                    since.elapsed() > Duration::from_secs(75)
+                        && self.flash_progress < 0.10
+                        && self.post_flash_verify.is_none()
+                        && !self
+                            .flash_need_boot
+                            .as_ref()
+                            .map(|n| n.load(Ordering::SeqCst))
+                            .unwrap_or(false)
+                })
+                .unwrap_or(false);
             let verify_overdue = self
                 .post_flash_verify
                 .as_ref()
@@ -6465,6 +6496,19 @@ impl App for CompanionApp {
                     "Flash wrote OK but verify timed out (board never answered)."
                         .into(),
                 );
+            } else if starting_stall {
+                if let Some(c) = &self.flash_cancel {
+                    c.store(true, Ordering::SeqCst);
+                }
+                self.clear_flash_overlay();
+                let msg = "Flash stuck before chip connect (~2%) — close other COM apps, \
+use a short data USB cable, Keep Firmware on this device (OneDrive), then Push again \
+or Flash (BOOT) with BOOT held + Ready."
+                    .to_string();
+                self.update_status = msg.clone();
+                self.last_error = msg.clone();
+                self.push_log(LogKind::Err, msg);
+                self.arm_flash_cooldown(8);
             } else if flash_overdue && self.post_flash_verify.is_none() {
                 self.clear_flash_overlay();
                 let msg = "Board update timed out — hold BOOT, tap RESET, click Ready, then Update board again."
@@ -10758,6 +10802,9 @@ Power a 2nd board nearby with wall/power-bank only (no PC cable)."
                     wifi_ota,
                 } => {
                     flash_hold = Some((port.clone(), hold.clone()));
+                    // Preempt already aborted in-flight via/job waits. Clear it so our own
+                    // cmp stop below is not immediately cancelled (that froze UI at 2%).
+                    USB_FLASH_PREEMPT.store(false, Ordering::SeqCst);
                     // Only release the flash target — keep other linked boards.
                     if let Some(idx) = boards
                         .iter()
@@ -10798,12 +10845,13 @@ Power a 2nd board nearby with wall/power-bank only (no PC cable)."
                             boards.len()
                         ),
                     );
+                    // Brief settle only — long sleeps left the overlay frozen at 2%.
                     thread::sleep(Duration::from_millis(if wifi_ota {
-                        400
+                        250
                     } else if live_push {
-                        900
+                        350
                     } else {
-                        1800
+                        500
                     }));
 
                     // Run flash off the mine-worker so Cancel / port list keep working.
@@ -10814,6 +10862,9 @@ Power a 2nd board nearby with wall/power-bank only (no PC cable)."
                         let progress = move |line: String| {
                             let _ = progress_tx.send(NetMsg::FlashProgress(line));
                         };
+                        progress(format!(
+                            "Released {port} — preparing flash tool…"
+                        ));
                         let result = (|| {
                             if cancel.load(Ordering::SeqCst) {
                                 return Err("flash cancelled".into());
@@ -11764,13 +11815,11 @@ fn usb_cmd_ex(
         let deadline = Instant::now() + Duration::from_millis(wait_ms);
         let mut last_pump = Instant::now() - Duration::from_millis(200);
         while Instant::now() < deadline {
-            // Only abort hash/mesh traffic for flash — never cancel Wi‑Fi save/ping/config.
+            // Abort USB waits for board update — including cmp stop/status that used
+            // to hold the mine-worker so UpdateFirmware never started (UI frozen at 2%).
             if USB_FLASH_PREEMPT.load(Ordering::SeqCst)
-                && (cmd.contains(" via ")
-                    || cmd.contains(" jh")
-                    || cmd.contains(" jt")
-                    || cmd.contains(" ja")
-                    || cmd.contains(" job "))
+                && !cmd.contains("wifi")
+                && !cmd.contains("pool")
             {
                 return Err("aborted for board update".into());
             }

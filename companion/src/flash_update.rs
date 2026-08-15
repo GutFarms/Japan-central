@@ -1211,7 +1211,7 @@ const MAX_PORT_BUSY: u8 = 1;
 /// Quiet gap between tool launches so Windows can release the COM handle.
 const ATTEMPT_GAP: Duration = Duration::from_millis(450);
 /// No useful output at all → stuck before connect.
-const IDLE_TIMEOUT: Duration = Duration::from_secs(35);
+const IDLE_TIMEOUT: Duration = Duration::from_secs(22);
 /// Chip MAC/connect seen but no write progress yet.
 /// Keep short — MAC-then-stall (UI stuck ~14% "Chip connected") must fail
 /// fast so we escalate to no-stub / BOOT Ready, not sit for minutes.
@@ -1349,13 +1349,32 @@ fn stage_flash_image_local(image: &Path, progress: &dyn Fn(String)) -> Result<Pa
         "Staging firmware locally ({:.1} MB) — avoids OneDrive/cloud locks during write…",
         bytes as f64 / (1024.0 * 1024.0)
     ));
-    // Full read forces cloud hydrate, then write a local copy for the flash tool.
-    let data = std::fs::read(image).map_err(|e| {
+    // Chunked read forces cloud hydrate and shows progress (was silent → UI stuck at 2%).
+    let mut file = std::fs::File::open(image).map_err(|e| {
         format!(
-            "Could not read firmware {} ({e}) — if it is on OneDrive, right-click → Always keep on this device",
+            "Could not open firmware {} ({e}) — if it is on OneDrive, right-click → Always keep on this device",
             image.display()
         )
     })?;
+    let mut data = Vec::with_capacity(bytes as usize);
+    let mut buf = [0u8; 256 * 1024];
+    let mut last_report = 0u64;
+    loop {
+        let n = std::io::Read::read(&mut file, &mut buf).map_err(|e| format!("read firmware: {e}"))?;
+        if n == 0 {
+            break;
+        }
+        data.extend_from_slice(&buf[..n]);
+        let got = data.len() as u64;
+        if got.saturating_sub(last_report) >= 256 * 1024 {
+            last_report = got;
+            progress(format!(
+                "Staging firmware… {} / {} KB",
+                got / 1024,
+                bytes / 1024
+            ));
+        }
+    }
     if (data.len() as u64) != bytes {
         return Err(format!(
             "Firmware read truncated ({} of {} bytes) — OneDrive may still be syncing; retry",
@@ -1440,6 +1459,7 @@ fn run_espflash_write(
         espflash.display(),
         timeout.as_secs()
     ));
+    progress(format!("Connecting to chip on {port}…"));
     let addr = "0x0";
     let img = image.to_string_lossy();
     // Build argv with optional --no-stub (ROM loader — blank/CH340 boards often stall
@@ -1602,6 +1622,7 @@ fn run_esptool_write(
         "esptool write_flash {stub} {comp} before={before} @ 115200 [timeout {}s]…",
         py_timeout.as_secs()
     ));
+    progress(format!("Connecting to chip on {port}…"));
     let mut cmd = Command::new(&py);
     if let Some(pp) = pythonpath {
         #[cfg(windows)]
