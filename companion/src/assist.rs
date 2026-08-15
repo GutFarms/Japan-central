@@ -107,6 +107,13 @@ pub struct AssistSnapshot {
     /// Rough healthy floor per board (kH/s) used by the watch loop.
     pub target_khs_per_board: f64,
     pub bench_busy: bool,
+    /// Rolling median kH/s (0 if not enough samples yet).
+    pub baseline_khs: f64,
+    /// True when current rate fell sharply vs baseline.
+    pub rate_cliff: bool,
+    pub reject_streak: u32,
+    /// Authorized but jobs not advancing while rate is soft.
+    pub jobs_stalled: bool,
     pub ports: Vec<String>,
     pub linked: Vec<String>,
     pub discovered: Vec<String>,
@@ -161,6 +168,78 @@ pub struct WatchReport {
     pub steps: Vec<WatchStep>,
     /// Stable signature so the UI can avoid spamming identical notes.
     pub signature: String,
+    /// Human-readable anomaly tags for optional LLM escalation.
+    pub anomalies: Vec<String>,
+}
+
+/// Median of a small f64 slice (empty → 0).
+pub fn median_f64(values: &[f64]) -> f64 {
+    if values.is_empty() {
+        return 0.0;
+    }
+    let mut v = values.to_vec();
+    v.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    let mid = v.len() / 2;
+    if v.len() % 2 == 0 {
+        (v[mid - 1] + v[mid]) / 2.0
+    } else {
+        v[mid]
+    }
+}
+
+/// Detect mining anomalies from live snapshot (used for event-driven LLM escalate).
+pub fn collect_anomalies(snap: &AssistSnapshot) -> Vec<String> {
+    let mut out = Vec::new();
+    if snap.mining
+        && (snap.stratum_phase.eq_ignore_ascii_case("auth-fail")
+            || !snap.stratum_last_error.is_empty())
+        && !snap.stratum_authorized
+    {
+        out.push(format!(
+            "stratum_auth_fail: {}",
+            if snap.stratum_last_error.is_empty() {
+                snap.stratum_phase.clone()
+            } else {
+                trunc(&snap.stratum_last_error, 80)
+            }
+        ));
+    }
+    if snap.mining && !snap.stratum_connected && !snap.stratum_authorized {
+        out.push("stratum_disconnected".into());
+    }
+    if snap.rate_cliff && snap.baseline_khs > 20.0 {
+        out.push(format!(
+            "rate_cliff: {:.0}→{:.0} kH/s (baseline)",
+            snap.baseline_khs, snap.hashrate_khs
+        ));
+    }
+    if snap.jobs_stalled {
+        out.push("jobs_stalled_authorized_soft_hashrate".into());
+    }
+    if snap.reject_streak >= 3 {
+        out.push(format!("reject_streak:{}", snap.reject_streak));
+    }
+    if snap.stratum_authorized
+        && snap.stratum_difficulty >= 0.05
+        && snap.hashrate_hs > 50_000.0
+        && snap.expected_shares_per_hour < 5.0
+    {
+        out.push(format!(
+            "hard_share_diff:{:.3}_for_{:.0}_khs",
+            snap.stratum_difficulty, snap.hashrate_khs
+        ));
+    }
+    out
+}
+
+pub fn anomaly_system_addon(anomalies: &[String]) -> String {
+    format!(
+        "ANOMALY ESCALATION — continuous watch already runs local safe fixes. \
+You see: [{}]. Call watch_stratum once, then at most one of: optimize_hashrate, \
+set_pool_config (ESP port like stratum+tcp://btc.hmpool.io:3337), set_clock 240, \
+or bench_boards. Do not flash. Reply in ≤4 short lines with what you did and why.",
+        anomalies.join(", ")
+    )
 }
 
 #[derive(Clone, Debug)]
@@ -392,6 +471,7 @@ pub fn evaluate_mining_watch(snap: &AssistSnapshot) -> WatchReport {
             detail: "Flash owns the COM; mining watch resumes when Update board finishes.".into(),
             steps,
             signature: "flash_busy".into(),
+            anomalies: Vec::new(),
         };
     }
 
@@ -483,24 +563,32 @@ pub fn evaluate_mining_watch(snap: &AssistSnapshot) -> WatchReport {
             }
         }
 
-        // Hashrate push
+        // Hashrate push — prefer measured cliff vs rolling baseline over a fixed floor alone.
         if snap.target_mhz < 240 {
             steps.push(WatchStep {
                 action: AssistAction::SetClock { mhz: 240 },
                 reason: format!("Clock {} MHz → 240 for max SHA throughput", snap.target_mhz),
             });
         }
-        if snap.stratum_authorized
-            && !snap.bench_busy
-            && (per < snap.target_khs_per_board || snap.boards_below_target_khs > 0)
-            && khs > 0.0
-        {
-            steps.push(WatchStep {
-                action: AssistAction::BenchBoards,
-                reason: format!(
+        let soft = per < snap.target_khs_per_board || snap.boards_below_target_khs > 0;
+        let cliff = snap.rate_cliff && snap.baseline_khs > 20.0;
+        if snap.stratum_authorized && !snap.bench_busy && (soft || cliff || snap.jobs_stalled) {
+            let why = if cliff {
+                format!(
+                    "Rate cliff {:.0}→{:.0} kH/s vs baseline — bench HW/HW+/HW-SW",
+                    snap.baseline_khs, khs
+                )
+            } else if snap.jobs_stalled {
+                "Jobs stalled / soft hashrate while authorized — bench retune".into()
+            } else {
+                format!(
                     "Rate soft (~{:.0} kH/s/board, floor {:.0}) — bench HW/HW+/HW-SW",
                     per, snap.target_khs_per_board
-                ),
+                )
+            };
+            steps.push(WatchStep {
+                action: AssistAction::BenchBoards,
+                reason: why,
             });
         } else if snap.stratum_authorized && khs < 1.0 && snap.stratum_jobs > 0 && !snap.bench_busy
         {
@@ -508,6 +596,14 @@ pub fn evaluate_mining_watch(snap: &AssistSnapshot) -> WatchReport {
                 action: AssistAction::BenchBoards,
                 reason: "Jobs flowing but hashrate ~0 — retune boards".into(),
             });
+        }
+        if snap.baseline_khs > 0.0 {
+            notes.push(format!(
+                "Baseline {:.0} kH/s · now {:.0}{}",
+                snap.baseline_khs,
+                khs,
+                if snap.rate_cliff { " · CLIFF" } else { "" }
+            ));
         }
     }
 
@@ -530,9 +626,13 @@ pub fn evaluate_mining_watch(snap: &AssistSnapshot) -> WatchReport {
         "Watch · fleet idle".into()
     };
 
+    let anomalies = collect_anomalies(snap);
+    if !anomalies.is_empty() {
+        notes.push(format!("Anomalies: {}", anomalies.join(", ")));
+    }
     let detail = notes.join("\n");
     let signature = format!(
-        "{}|{}|{}|{}|{}|{:.0}|{}",
+        "{}|{}|{}|{}|{}|{:.0}|{}|{}",
         snap.mining,
         snap.stratum_authorized,
         snap.stratum_phase,
@@ -543,7 +643,8 @@ pub fn evaluate_mining_watch(snap: &AssistSnapshot) -> WatchReport {
             .join(","),
         snap.target_mhz,
         khs,
-        snap.session_accepted + snap.session_rejected
+        snap.session_accepted + snap.session_rejected,
+        anomalies.join(";")
     );
 
     WatchReport {
@@ -551,6 +652,7 @@ pub fn evaluate_mining_watch(snap: &AssistSnapshot) -> WatchReport {
         detail,
         steps,
         signature,
+        anomalies,
     }
 }
 

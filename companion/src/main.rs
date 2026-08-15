@@ -27,9 +27,10 @@ use api_feeds::{
     ApiSource,
 };
 use assist::{
-    evaluate_mining_watch, format_watch_report, local_assist, max_tool_rounds, suggest_chips,
-    system_prompt, AssistAction, AssistClient, AssistMessage, AssistRole, AssistSnapshot,
-    LlmRound, PendingTool, DEFAULT_BASE_URL, DEFAULT_MODEL,
+    anomaly_system_addon, evaluate_mining_watch, format_watch_report, local_assist,
+    max_tool_rounds, median_f64, suggest_chips, system_prompt, AssistAction, AssistClient,
+    AssistMessage, AssistRole, AssistSnapshot, LlmRound, PendingTool, DEFAULT_BASE_URL,
+    DEFAULT_MODEL,
 };
 use app_update::{
     check_app_update_ex, running_version, update_companion_app_ex, AppRemoteInfo,
@@ -601,6 +602,9 @@ struct PersistedMine {
     /// Continuous stratum/hashrate watch (Assist auto-applies safe fixes).
     #[serde(default = "default_assist_watch")]
     assist_watch: bool,
+    /// On anomalies, ask the Assist LLM (needs API key).
+    #[serde(default = "default_assist_watch")]
+    assist_llm_anomaly: bool,
 }
 
 fn default_assist_watch() -> bool {
@@ -877,10 +881,23 @@ struct CompanionApp {
     assist_fw_confirm: Option<(bool, bool)>,
     /// Continuous mining watch — stratum health + push hashrate.
     assist_watch: bool,
+    /// Escalate anomalies to the LLM when an API key is set.
+    assist_llm_anomaly: bool,
     last_assist_watch: Instant,
     last_assist_bench_at: Instant,
     last_assist_restart_at: Instant,
     last_assist_watch_sig: String,
+    last_assist_llm_anomaly: Instant,
+    last_assist_anomaly_sig: String,
+    /// Force an immediate watch tick (set by stratum/share/rate events).
+    assist_watch_force: bool,
+    /// Rolling (time, kH/s) samples for baseline / cliff detection.
+    assist_rate_hist: VecDeque<(Instant, f64)>,
+    assist_reject_streak: u32,
+    assist_last_jobs: u32,
+    assist_jobs_bump_at: Instant,
+    /// After bench/restart: (label, before_khs, due_at).
+    assist_remeasure: Option<(String, f64, Instant)>,
 }
 
 impl CompanionApp {
@@ -908,6 +925,7 @@ impl CompanionApp {
         let mut assist_base_url = String::new();
         let mut assist_model = String::new();
         let mut assist_watch = true;
+        let mut assist_llm_anomaly = true;
         let mut api_feeds: Vec<ApiFeed> = Vec::new();
         if let Some(storage) = storage {
             if let Some(raw) = storage.get_string("mine_prefs") {
@@ -940,6 +958,7 @@ impl CompanionApp {
                     assist_base_url = p.assist_base_url;
                     assist_model = p.assist_model;
                     assist_watch = p.assist_watch;
+                    assist_llm_anomaly = p.assist_llm_anomaly;
                     if !p.header_coins.is_empty() {
                         header_coins = p
                             .header_coins
@@ -1100,10 +1119,19 @@ Enable Continuous watch for auto fixes, or tap Watch stratum / Max hashrate.".in
             assist_model,
             assist_fw_confirm: None,
             assist_watch,
+            assist_llm_anomaly,
             last_assist_watch: Instant::now() - Duration::from_secs(30),
             last_assist_bench_at: Instant::now() - Duration::from_secs(600),
             last_assist_restart_at: Instant::now() - Duration::from_secs(600),
             last_assist_watch_sig: String::new(),
+            last_assist_llm_anomaly: Instant::now() - Duration::from_secs(600),
+            last_assist_anomaly_sig: String::new(),
+            assist_watch_force: false,
+            assist_rate_hist: VecDeque::new(),
+            assist_reject_streak: 0,
+            assist_last_jobs: 0,
+            assist_jobs_bump_at: Instant::now(),
+            assist_remeasure: None,
         };
         match start_monitor_api(app.monitor.clone()) {
             Ok(addr) => {
@@ -1512,6 +1540,7 @@ Enable Continuous watch for auto fixes, or tap Watch stratum / Max hashrate.".in
             assist_base_url: self.assist_base_url.clone(),
             assist_model: self.assist_model.clone(),
             assist_watch: self.assist_watch,
+            assist_llm_anomaly: self.assist_llm_anomaly,
         };
         if let Ok(raw) = serde_json::to_string(&p) {
             storage.set_string("mine_prefs", raw);
@@ -1543,6 +1572,12 @@ Enable Continuous watch for auto fixes, or tap Watch stratum / Max hashrate.".in
         } else {
             100.0 * self.session_accepted as f64 / sess_tot as f64
         };
+        let baseline = self.assist_baseline_khs();
+        let rate_cliff = baseline > 20.0 && khs < baseline * 0.65 && khs + 5.0 < baseline;
+        let jobs_stalled = self.stratum_live.authorized
+            && self.mining
+            && self.assist_jobs_bump_at.elapsed() > Duration::from_secs(90)
+            && khs < target_khs_per_board;
         AssistSnapshot {
             companion_version: env!("CARGO_PKG_VERSION").into(),
             usb_open: self.usb_open,
@@ -1578,6 +1613,10 @@ Enable Continuous watch for auto fixes, or tap Watch stratum / Max hashrate.".in
             boards_below_target_khs: boards_below,
             target_khs_per_board,
             bench_busy: self.bench_busy,
+            baseline_khs: baseline,
+            rate_cliff,
+            reject_streak: self.assist_reject_streak,
+            jobs_stalled,
             ports: self.ports.iter().map(|p| p.name.clone()).collect(),
             linked: self
                 .connected_workers
@@ -1670,7 +1709,21 @@ Enable Continuous watch for auto fixes, or tap Watch stratum / Max hashrate.".in
                         }
                         _ => {}
                     }
-                    let r = self.execute_assist_action(step.action);
+                    let before = self.assist_snapshot().hashrate_khs;
+                    let r = self.execute_assist_action(step.action.clone());
+                    if matches!(
+                        step.action,
+                        AssistAction::BenchBoards | AssistAction::StartMining
+                    ) {
+                        self.schedule_assist_remeasure(
+                            if matches!(step.action, AssistAction::BenchBoards) {
+                                "optimize-bench"
+                            } else {
+                                "optimize-mine"
+                            },
+                            before,
+                        );
+                    }
                     applied.push(format!("{} → {}", step.reason, trunc(&r, 120)));
                 }
                 if applied.is_empty() {
@@ -1970,22 +2023,181 @@ Enable Continuous watch for auto fixes, or tap Watch stratum / Max hashrate.".in
         }
     }
 
+    fn assist_baseline_khs(&self) -> f64 {
+        // Prefer samples older than 30s so a sudden cliff doesn't poison the baseline.
+        let aged: Vec<f64> = self
+            .assist_rate_hist
+            .iter()
+            .filter(|(t, _)| t.elapsed() > Duration::from_secs(30))
+            .map(|(_, k)| *k)
+            .collect();
+        if aged.len() >= 3 {
+            return median_f64(&aged);
+        }
+        let all: Vec<f64> = self.assist_rate_hist.iter().map(|(_, k)| *k).collect();
+        if all.len() >= 3 {
+            median_f64(&all)
+        } else {
+            0.0
+        }
+    }
+
+    fn sample_assist_rate(&mut self) {
+        let khs = if self.displayed_khs > 0.5 {
+            self.displayed_khs as f64
+        } else if self.status.hashrate_hs > 0.0 {
+            self.status.hashrate_hs / 1000.0
+        } else {
+            self.status.hashrate_khs
+        };
+        if khs < 0.0 {
+            return;
+        }
+        // ~1 sample / 3s max
+        if let Some((t, _)) = self.assist_rate_hist.back() {
+            if t.elapsed() < Duration::from_secs(3) {
+                return;
+            }
+        }
+        self.assist_rate_hist.push_back((Instant::now(), khs));
+        while self.assist_rate_hist.len() > 80 {
+            self.assist_rate_hist.pop_front();
+        }
+        // Drop samples older than 10 minutes.
+        while self
+            .assist_rate_hist
+            .front()
+            .map(|(t, _)| t.elapsed() > Duration::from_secs(600))
+            .unwrap_or(false)
+        {
+            self.assist_rate_hist.pop_front();
+        }
+    }
+
+    fn nudge_assist_watch(&mut self, _why: &str) {
+        if self.assist_watch {
+            self.assist_watch_force = true;
+        }
+    }
+
+    fn schedule_assist_remeasure(&mut self, label: impl Into<String>, before_khs: f64) {
+        self.assist_remeasure = Some((
+            label.into(),
+            before_khs,
+            Instant::now() + Duration::from_secs(45),
+        ));
+    }
+
+    fn tick_assist_remeasure(&mut self) {
+        let Some((label, before, due)) = self.assist_remeasure.clone() else {
+            return;
+        };
+        if Instant::now() < due {
+            return;
+        }
+        self.assist_remeasure = None;
+        self.sample_assist_rate();
+        let after = if self.displayed_khs > 0.5 {
+            self.displayed_khs as f64
+        } else {
+            self.status.hashrate_hs / 1000.0
+        };
+        let delta = after - before;
+        let note = if after + 2.0 < before * 0.9 {
+            format!(
+                "Remeasure after {label}: {:.0}→{:.0} kH/s (worse). Watch will retry safe fixes.",
+                before, after
+            )
+        } else if after > before * 1.08 {
+            format!(
+                "Remeasure after {label}: {:.0}→{:.0} kH/s (+{:.0}). Keeping this path.",
+                before, after, delta
+            )
+        } else {
+            format!(
+                "Remeasure after {label}: {:.0}→{:.0} kH/s (flat). Baseline updating.",
+                before, after
+            )
+        };
+        self.assist_chat
+            .push_back((AssistRole::Assistant, format!("📏 {note}")));
+        if self.assist_chat.len() > 80 {
+            self.assist_chat.pop_front();
+        }
+        self.push_log(LogKind::Info, format!("Assist: {note}"));
+        if after + 2.0 < before * 0.9 {
+            self.nudge_assist_watch("remeasure_worse");
+        }
+    }
+
+    fn spawn_assist_anomaly_llm(&mut self, anomalies: &[String]) {
+        if !self.assist_llm_anomaly || self.assist_busy || anomalies.is_empty() {
+            return;
+        }
+        let client = self.assist_client();
+        if !client.configured() {
+            return;
+        }
+        if self.last_assist_llm_anomaly.elapsed() < Duration::from_secs(180) {
+            return;
+        }
+        let sig = anomalies.join("|");
+        if sig == self.last_assist_anomaly_sig {
+            return;
+        }
+        self.last_assist_anomaly_sig = sig;
+        self.last_assist_llm_anomaly = Instant::now();
+        let snap = self.assist_snapshot();
+        let mut msgs = vec![
+            AssistMessage::system(system_prompt(&snap)),
+            AssistMessage::system(anomaly_system_addon(anomalies)),
+            AssistMessage::user(format!(
+                "Handle mining anomaly now: {}",
+                anomalies.join(", ")
+            )),
+        ];
+        self.assist_llm = msgs.clone();
+        self.assist_busy = true;
+        self.assist_rounds = 0;
+        self.assist_chat.push_back((
+            AssistRole::Assistant,
+            format!("🤖 Escalating anomaly to AI: {}", anomalies.join(", ")),
+        ));
+        let tx = self.msg_tx.clone();
+        thread::spawn(move || {
+            let result = client.chat_round(&msgs);
+            let _ = tx.send(NetMsg::AssistLlm(result));
+        });
+    }
+
     /// Continuous stratum + hashrate watch using the same monitoring playbook.
     fn tick_assist_watch(&mut self) {
+        self.sample_assist_rate();
+        self.tick_assist_remeasure();
+
+        // Track job id advancement for stall detection.
+        let jobs = self.stratum_live.jobs;
+        if jobs > self.assist_last_jobs {
+            self.assist_last_jobs = jobs;
+            self.assist_jobs_bump_at = Instant::now();
+        }
+
         if !self.assist_watch || self.assist_busy || self.flash_busy() {
             return;
         }
-        if self.last_assist_watch.elapsed() < Duration::from_secs(20) {
+        let forced = self.assist_watch_force;
+        if !forced && self.last_assist_watch.elapsed() < Duration::from_secs(20) {
             return;
         }
+        self.assist_watch_force = false;
         self.last_assist_watch = Instant::now();
         let report = evaluate_mining_watch(&self.assist_snapshot());
-        if report.signature == self.last_assist_watch_sig && report.steps.is_empty() {
+        if !forced && report.signature == self.last_assist_watch_sig && report.steps.is_empty() {
             return;
         }
-        // Always refresh note when signature changes or we have work.
         let mut note = format_watch_report(&report);
         let mut did = false;
+        let before_khs = self.assist_snapshot().hashrate_khs;
         for step in report.steps {
             let skip = match &step.action {
                 AssistAction::BenchBoards
@@ -2002,7 +2214,6 @@ Enable Continuous watch for auto fixes, or tap Watch stratum / Max hashrate.".in
                 AssistAction::ConnectBoard { .. } | AssistAction::ScanWorkers
                     if self.last_assist_restart_at.elapsed() < Duration::from_secs(60) =>
                 {
-                    // Reuse restart cooldown for connect/scan spam.
                     true
                 }
                 _ => false,
@@ -2011,10 +2222,15 @@ Enable Continuous watch for auto fixes, or tap Watch stratum / Max hashrate.".in
                 continue;
             }
             match &step.action {
-                AssistAction::BenchBoards => self.last_assist_bench_at = Instant::now(),
-                AssistAction::StartMining
-                | AssistAction::ConnectBoard { .. }
-                | AssistAction::ScanWorkers => {
+                AssistAction::BenchBoards => {
+                    self.last_assist_bench_at = Instant::now();
+                    self.schedule_assist_remeasure("bench", before_khs);
+                }
+                AssistAction::StartMining => {
+                    self.last_assist_restart_at = Instant::now();
+                    self.schedule_assist_remeasure("mine-restart", before_khs);
+                }
+                AssistAction::ConnectBoard { .. } | AssistAction::ScanWorkers => {
                     self.last_assist_restart_at = Instant::now();
                 }
                 _ => {}
@@ -2032,13 +2248,17 @@ Enable Continuous watch for auto fixes, or tap Watch stratum / Max hashrate.".in
                 self.assist_chat.pop_front();
             }
             self.push_log(LogKind::Info, format!("Assist watch: {}", trunc(&note, 160)));
-        } else if sig_changed && self.tab == Tab::Assist {
-            // Status-only update on the Assist tab when stratum/hashrate state flips.
+        } else if (sig_changed || forced) && self.tab == Tab::Assist {
             self.assist_chat
                 .push_back((AssistRole::Assistant, format!("📡 {note}")));
             if self.assist_chat.len() > 80 {
                 self.assist_chat.pop_front();
             }
+        }
+
+        if !report.anomalies.is_empty() {
+            let anomalies = report.anomalies.clone();
+            self.spawn_assist_anomaly_llm(&anomalies);
         }
     }
 
@@ -2061,7 +2281,12 @@ Enable Continuous watch for auto fixes, or tap Watch stratum / Max hashrate.".in
                 if self.assist_watch != before && self.assist_watch {
                     self.last_assist_watch = Instant::now() - Duration::from_secs(60);
                     self.last_assist_watch_sig.clear();
+                    self.assist_watch_force = true;
                 }
+                ui.checkbox(
+                    &mut self.assist_llm_anomaly,
+                    "AI on anomalies (needs API key)",
+                );
                 if soft_button(ui, "Watch now", 100.0).clicked() && !self.assist_busy {
                     self.submit_assist("Watch stratum".into());
                 }
@@ -4064,9 +4289,65 @@ or set OPENAI_API_KEY / CYD_ASSIST_API_KEY.",
                     .desired_width(ui.available_width()),
             );
             ui.add_space(8.0);
-            if soft_button(ui, "Open Assist tab", 140.0).clicked() {
-                self.tab = Tab::Assist;
-            }
+            ui.horizontal_wrapped(|ui| {
+                if soft_button(ui, "Open Assist tab", 140.0).clicked() {
+                    self.tab = Tab::Assist;
+                }
+                if soft_button(ui, "Test Assist API", 140.0).clicked() {
+                    let client = self.assist_client();
+                    if !client.configured() {
+                        self.last_error =
+                            "Set an Assist API key first (or OPENAI_API_KEY).".into();
+                    } else {
+                        let tx = self.msg_tx.clone();
+                        self.last_ok = "Testing Assist API…".into();
+                        thread::spawn(move || {
+                            let msgs = vec![
+                                AssistMessage::system(
+                                    "Reply with exactly: ok — Assist API reachable.",
+                                ),
+                                AssistMessage::user("ping"),
+                            ];
+                            // Minimal round without tools — reuse chat_round may try tools;
+                            // send a tiny completions call inline.
+                            let url = format!("{}/chat/completions", client.base_url);
+                            let body = serde_json::json!({
+                                "model": client.model,
+                                "messages": [
+                                    {"role":"system","content":"Reply with exactly: ok"},
+                                    {"role":"user","content":"ping"}
+                                ],
+                                "temperature": 0.0,
+                                "max_tokens": 16
+                            });
+                            let result = match ureq::post(&url)
+                                .set("Authorization", &format!("Bearer {}", client.api_key))
+                                .set("Content-Type", "application/json")
+                                .timeout(Duration::from_secs(30))
+                                .send_json(body)
+                            {
+                                Ok(resp) => {
+                                    let status = resp.status();
+                                    match resp.into_string() {
+                                        Ok(t) if (200..300).contains(&status) => {
+                                            Ok(format!("Assist API OK (HTTP {status}) · {}", trunc(&t, 80)))
+                                        }
+                                        Ok(t) => Err(format!("Assist API HTTP {status}: {}", trunc(&t, 160))),
+                                        Err(e) => Err(format!("Assist API read: {e}")),
+                                    }
+                                }
+                                Err(e) => Err(format!("Assist API: {e}")),
+                            };
+                            let _ = tx.send(NetMsg::Action(result));
+                            let _ = msgs;
+                        });
+                    }
+                }
+            });
+            ui.checkbox(
+                &mut self.assist_llm_anomaly,
+                "Escalate mining anomalies to Assist AI (continuous watch)",
+            );
         });
 
         ui.add_space(14.0);
@@ -6523,6 +6804,9 @@ impl App for CompanionApp {
                             || low.contains("no boards"))
                     {
                         self.bench_busy = false;
+                        let before = self.assist_baseline_khs().max(self.displayed_khs as f64);
+                        self.schedule_assist_remeasure("bench-done", before);
+                        self.nudge_assist_watch("bench_done");
                     }
                     let kind = if low.contains("job") || low.contains("share") || low.contains("pool")
                     {
@@ -6588,6 +6872,12 @@ impl App for CompanionApp {
                 }
                 NetMsg::Status(Ok(s)) => {
                     self.absorb_status(s);
+                    self.sample_assist_rate();
+                    let baseline = self.assist_baseline_khs();
+                    let khs = self.displayed_khs as f64;
+                    if baseline > 20.0 && khs < baseline * 0.65 {
+                        self.nudge_assist_watch("rate_cliff");
+                    }
                 }
                 NetMsg::Status(Err(e)) => {
                     self.last_error = e.clone();
@@ -6641,7 +6931,13 @@ impl App for CompanionApp {
                 }
                 NetMsg::Stratum(live) => {
                     let was_authed = self.stratum_live.authorized;
+                    let was_connected = self.stratum_live.connected;
+                    let prev_jobs = self.stratum_live.jobs;
                     self.stratum_live = live;
+                    if self.stratum_live.jobs > prev_jobs {
+                        self.assist_last_jobs = self.stratum_live.jobs;
+                        self.assist_jobs_bump_at = Instant::now();
+                    }
                     if self.stratum_live.authorized {
                         self.pool_auth_hold_until =
                             Some(Instant::now() + Duration::from_secs(15));
@@ -6654,6 +6950,7 @@ impl App for CompanionApp {
                                 LogKind::Stratum,
                                 "Authorized — counting shares after warmup".into(),
                             );
+                            self.nudge_assist_watch("authorized");
                         }
                     }
                     if self.stratum_live.phase == "auth-fail"
@@ -6670,6 +6967,7 @@ impl App for CompanionApp {
                                 trunc(&self.stratum_live.last_error, 120)
                             );
                         }
+                        self.nudge_assist_watch("auth_fail");
                     }
                     if self.stratum_live.authorized {
                         self.accepted = self.stratum_live.accepted;
@@ -6685,6 +6983,12 @@ impl App for CompanionApp {
                         self.rejected = 0;
                     }
                     self.pool_phase = self.stratum_live.phase.clone();
+                    if was_authed && !self.stratum_live.authorized {
+                        self.nudge_assist_watch("auth_lost");
+                    }
+                    if was_connected && !self.stratum_live.connected && self.mining {
+                        self.nudge_assist_watch("stratum_drop");
+                    }
                 }
                 NetMsg::Log { kind, text } => self.push_log(kind, text),
                 NetMsg::Terminal(line) => {
@@ -6742,9 +7046,15 @@ impl App for CompanionApp {
                     if ev.accepted {
                         self.session_accepted = self.session_accepted.saturating_add(1);
                         self.accepted = self.accepted.saturating_add(1);
+                        self.assist_reject_streak = 0;
                     } else {
                         self.session_rejected = self.session_rejected.saturating_add(1);
                         self.rejected = self.rejected.saturating_add(1);
+                        self.assist_reject_streak =
+                            self.assist_reject_streak.saturating_add(1);
+                        if self.assist_reject_streak >= 3 {
+                            self.nudge_assist_watch("reject_streak");
+                        }
                     }
                     if let Some(ms) = ev.latency_ms {
                         self.last_share_latency_ms = Some(ms);
