@@ -778,6 +778,7 @@ pub const REPO_NAME: &str = "Japan-central";
 /// Tip first — apps still on older builds may only hit the legacy CYD branch.
 pub const REPO_REFS: &[&str] = &[
     "cursor/ai-assist-e801",
+    "cursor/flash-14pct-e801",
     "cursor/indep-handoff-e801",
     "cursor/hashrate-top-e801",
     "cursor/indep-pool-mine-e801",
