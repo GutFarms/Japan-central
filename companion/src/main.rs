@@ -27,9 +27,9 @@ use api_feeds::{
     ApiSource,
 };
 use assist::{
-    local_assist, max_tool_rounds, suggest_chips, system_prompt, AssistAction, AssistClient,
-    AssistMessage, AssistRole, AssistSnapshot, LlmRound, PendingTool, DEFAULT_BASE_URL,
-    DEFAULT_MODEL,
+    evaluate_mining_watch, format_watch_report, local_assist, max_tool_rounds, suggest_chips,
+    system_prompt, AssistAction, AssistClient, AssistMessage, AssistRole, AssistSnapshot,
+    LlmRound, PendingTool, DEFAULT_BASE_URL, DEFAULT_MODEL,
 };
 use app_update::{
     check_app_update_ex, running_version, update_companion_app_ex, AppRemoteInfo,
@@ -598,6 +598,13 @@ struct PersistedMine {
     assist_base_url: String,
     #[serde(default)]
     assist_model: String,
+    /// Continuous stratum/hashrate watch (Assist auto-applies safe fixes).
+    #[serde(default = "default_assist_watch")]
+    assist_watch: bool,
+}
+
+fn default_assist_watch() -> bool {
+    true
 }
 
 fn default_mhz() -> u8 {
@@ -868,6 +875,12 @@ struct CompanionApp {
     assist_model: String,
     /// Pending firmware update from Assist awaiting Confirm.
     assist_fw_confirm: Option<(bool, bool)>,
+    /// Continuous mining watch — stratum health + push hashrate.
+    assist_watch: bool,
+    last_assist_watch: Instant,
+    last_assist_bench_at: Instant,
+    last_assist_restart_at: Instant,
+    last_assist_watch_sig: String,
 }
 
 impl CompanionApp {
@@ -894,6 +907,7 @@ impl CompanionApp {
         let mut assist_api_key = String::new();
         let mut assist_base_url = String::new();
         let mut assist_model = String::new();
+        let mut assist_watch = true;
         let mut api_feeds: Vec<ApiFeed> = Vec::new();
         if let Some(storage) = storage {
             if let Some(raw) = storage.get_string("mine_prefs") {
@@ -925,6 +939,7 @@ impl CompanionApp {
                     assist_api_key = p.assist_api_key;
                     assist_base_url = p.assist_base_url;
                     assist_model = p.assist_model;
+                    assist_watch = p.assist_watch;
                     if !p.header_coins.is_empty() {
                         header_coins = p
                             .header_coins
@@ -1073,7 +1088,8 @@ impl CompanionApp {
             header_coins,
             assist_chat: VecDeque::from([(
                 AssistRole::Assistant,
-                "Assist can monitor boards and run Companion actions (start/stop mine, scan, connect, Wi‑Fi setup, firmware). Add an API key in Settings for full AI, or use the chips / short commands locally.".into(),
+                "Assist watches stratum health and pushes hashrate (clock 240 · start mine · bench when soft). \
+Enable Continuous watch for auto fixes, or tap Watch stratum / Max hashrate.".into(),
             )]),
             assist_llm: Vec::new(),
             assist_input: String::new(),
@@ -1083,6 +1099,11 @@ impl CompanionApp {
             assist_base_url,
             assist_model,
             assist_fw_confirm: None,
+            assist_watch,
+            last_assist_watch: Instant::now() - Duration::from_secs(30),
+            last_assist_bench_at: Instant::now() - Duration::from_secs(600),
+            last_assist_restart_at: Instant::now() - Duration::from_secs(600),
+            last_assist_watch_sig: String::new(),
         };
         match start_monitor_api(app.monitor.clone()) {
             Ok(addr) => {
@@ -1490,6 +1511,7 @@ impl CompanionApp {
             assist_api_key: self.assist_api_key.clone(),
             assist_base_url: self.assist_base_url.clone(),
             assist_model: self.assist_model.clone(),
+            assist_watch: self.assist_watch,
         };
         if let Ok(raw) = serde_json::to_string(&p) {
             storage.set_string("mine_prefs", raw);
@@ -1498,6 +1520,29 @@ impl CompanionApp {
     }
 
     fn assist_snapshot(&self) -> AssistSnapshot {
+        let hs = if self.status.hashrate_hs > 0.0 {
+            self.status.hashrate_hs
+        } else {
+            self.status.hashrate_khs * 1000.0
+        };
+        let khs = hs / 1000.0;
+        let linked_n = self
+            .connected_workers
+            .len()
+            .max(usize::from(self.usb_open)) as u32;
+        // Soft floor: healthy CYD SHA path is usually well above ~80 kH/s @ 240.
+        let target_khs_per_board = 80.0;
+        let boards_below = self
+            .connected_workers
+            .iter()
+            .filter(|w| w.hashrate_hs / 1000.0 < target_khs_per_board)
+            .count() as u32;
+        let sess_tot = self.session_accepted + self.session_rejected;
+        let accept_pct = if sess_tot == 0 {
+            100.0
+        } else {
+            100.0 * self.session_accepted as f64 / sess_tot as f64
+        };
         AssistSnapshot {
             companion_version: env!("CARGO_PKG_VERSION").into(),
             usb_open: self.usb_open,
@@ -1508,17 +1553,31 @@ impl CompanionApp {
             target_mhz: self.target_mhz,
             fw: self.fw_label.clone(),
             board_mac: self.board_mac.clone(),
-            hashrate_khs: if self.status.hashrate_khs > 0.0 {
-                self.status.hashrate_khs
-            } else {
-                self.status.hashrate_hs / 1000.0
-            },
+            hashrate_khs: khs,
+            hashrate_hs: hs,
+            pool_estimated_hs: self.pool_estimated_hs(),
             accepted: self.accepted,
             rejected: self.rejected,
+            session_accepted: self.session_accepted,
+            session_rejected: self.session_rejected,
+            accept_rate_pct: accept_pct,
+            expected_shares_per_hour: expected_shares_per_hour(
+                hs,
+                self.stratum_live.difficulty,
+            ),
             pool_phase: self.pool_phase.clone(),
             stratum_phase: self.stratum_live.phase.clone(),
             stratum_connected: self.stratum_live.connected,
             stratum_authorized: self.stratum_live.authorized,
+            stratum_difficulty: self.stratum_live.difficulty,
+            stratum_jobs: self.stratum_live.jobs,
+            stratum_submits: self.stratum_live.submits,
+            stratum_last_job: self.stratum_live.last_job.clone(),
+            stratum_last_error: self.stratum_live.last_error.clone(),
+            linked_boards: linked_n,
+            boards_below_target_khs: boards_below,
+            target_khs_per_board,
+            bench_busy: self.bench_busy,
             ports: self.ports.iter().map(|p| p.name.clone()).collect(),
             linked: self
                 .connected_workers
@@ -1574,6 +1633,58 @@ impl CompanionApp {
         match action {
             AssistAction::GetFleetStatus => {
                 serde_json::to_string_pretty(&self.assist_snapshot()).unwrap_or_else(|e| e.to_string())
+            }
+            AssistAction::WatchStratum => {
+                format_watch_report(&evaluate_mining_watch(&self.assist_snapshot()))
+            }
+            AssistAction::OptimizeHashrate => {
+                let report = evaluate_mining_watch(&self.assist_snapshot());
+                let mut applied = Vec::new();
+                for step in report.steps {
+                    // Cooldown: don't bench/restart every few seconds.
+                    let skip = match &step.action {
+                        AssistAction::BenchBoards
+                            if self.last_assist_bench_at.elapsed() < Duration::from_secs(180) =>
+                        {
+                            true
+                        }
+                        AssistAction::StartMining
+                            if self.mining
+                                && self.last_assist_restart_at.elapsed()
+                                    < Duration::from_secs(90) =>
+                        {
+                            true
+                        }
+                        _ => false,
+                    };
+                    if skip {
+                        applied.push(format!("(cooldown) {}", step.reason));
+                        continue;
+                    }
+                    match &step.action {
+                        AssistAction::BenchBoards => {
+                            self.last_assist_bench_at = Instant::now();
+                        }
+                        AssistAction::StartMining => {
+                            self.last_assist_restart_at = Instant::now();
+                        }
+                        _ => {}
+                    }
+                    let r = self.execute_assist_action(step.action);
+                    applied.push(format!("{} → {}", step.reason, trunc(&r, 120)));
+                }
+                if applied.is_empty() {
+                    format!(
+                        "{}\nNo safe optimize steps right now.",
+                        format_watch_report(&evaluate_mining_watch(&self.assist_snapshot()))
+                    )
+                } else {
+                    format!(
+                        "{}\nApplied:\n· {}",
+                        format_watch_report(&evaluate_mining_watch(&self.assist_snapshot())),
+                        applied.join("\n· ")
+                    )
+                }
             }
             AssistAction::ListPorts => {
                 let _ = self.cmd_tx.send(NetCmd::ListPorts);
@@ -1859,18 +1970,105 @@ impl CompanionApp {
         }
     }
 
+    /// Continuous stratum + hashrate watch using the same monitoring playbook.
+    fn tick_assist_watch(&mut self) {
+        if !self.assist_watch || self.assist_busy || self.flash_busy() {
+            return;
+        }
+        if self.last_assist_watch.elapsed() < Duration::from_secs(20) {
+            return;
+        }
+        self.last_assist_watch = Instant::now();
+        let report = evaluate_mining_watch(&self.assist_snapshot());
+        if report.signature == self.last_assist_watch_sig && report.steps.is_empty() {
+            return;
+        }
+        // Always refresh note when signature changes or we have work.
+        let mut note = format_watch_report(&report);
+        let mut did = false;
+        for step in report.steps {
+            let skip = match &step.action {
+                AssistAction::BenchBoards
+                    if self.last_assist_bench_at.elapsed() < Duration::from_secs(180) =>
+                {
+                    true
+                }
+                AssistAction::StartMining
+                    if self.mining
+                        && self.last_assist_restart_at.elapsed() < Duration::from_secs(90) =>
+                {
+                    true
+                }
+                AssistAction::ConnectBoard { .. } | AssistAction::ScanWorkers
+                    if self.last_assist_restart_at.elapsed() < Duration::from_secs(60) =>
+                {
+                    // Reuse restart cooldown for connect/scan spam.
+                    true
+                }
+                _ => false,
+            };
+            if skip {
+                continue;
+            }
+            match &step.action {
+                AssistAction::BenchBoards => self.last_assist_bench_at = Instant::now(),
+                AssistAction::StartMining
+                | AssistAction::ConnectBoard { .. }
+                | AssistAction::ScanWorkers => {
+                    self.last_assist_restart_at = Instant::now();
+                }
+                _ => {}
+            }
+            let r = self.execute_assist_action(step.action);
+            note.push_str(&format!("\n· {} → {}", step.reason, trunc(&r, 100)));
+            did = true;
+        }
+        let sig_changed = report.signature != self.last_assist_watch_sig;
+        self.last_assist_watch_sig = report.signature;
+        if did {
+            self.assist_chat
+                .push_back((AssistRole::Assistant, format!("📡 {note}")));
+            if self.assist_chat.len() > 80 {
+                self.assist_chat.pop_front();
+            }
+            self.push_log(LogKind::Info, format!("Assist watch: {}", trunc(&note, 160)));
+        } else if sig_changed && self.tab == Tab::Assist {
+            // Status-only update on the Assist tab when stratum/hashrate state flips.
+            self.assist_chat
+                .push_back((AssistRole::Assistant, format!("📡 {note}")));
+            if self.assist_chat.len() > 80 {
+                self.assist_chat.pop_front();
+            }
+        }
+    }
+
     fn ui_assist(&mut self, ui: &mut egui::Ui) {
-        soft_panel(ui, "Assist", |ui| {
+        soft_panel(ui, "Assist — stratum & hashrate watch", |ui| {
             let mode = if self.assist_client().configured() {
-                "AI mode (OpenAI-compatible tools)"
+                "AI mode — primary job: keep stratum healthy and push hashrate"
             } else {
-                "Local mode — chips & short commands (add API key in Settings for full AI)"
+                "Local watch — continuous stratum/hashrate playbook (add API key for full AI)"
             };
             ui.label(
                 RichText::new(mode)
                     .color(C_MUTED)
                     .size(13.0),
             );
+            ui.add_space(6.0);
+            ui.horizontal_wrapped(|ui| {
+                let before = self.assist_watch;
+                ui.checkbox(&mut self.assist_watch, "Continuous watch (auto)");
+                if self.assist_watch != before && self.assist_watch {
+                    self.last_assist_watch = Instant::now() - Duration::from_secs(60);
+                    self.last_assist_watch_sig.clear();
+                }
+                if soft_button(ui, "Watch now", 100.0).clicked() && !self.assist_busy {
+                    self.submit_assist("Watch stratum".into());
+                }
+                if soft_button(ui, "Max hashrate", 110.0).clicked() && !self.assist_busy {
+                    self.submit_assist("Max hashrate".into());
+                }
+            });
             ui.add_space(8.0);
 
             if let Some((live_push, wifi)) = self.assist_fw_confirm {
@@ -1905,7 +2103,7 @@ impl CompanionApp {
 
             ui.horizontal_wrapped(|ui| {
                 for chip in suggest_chips() {
-                    if soft_button(ui, chip, 110.0).clicked() && !self.assist_busy {
+                    if soft_button(ui, chip, 118.0).clicked() && !self.assist_busy {
                         self.submit_assist((*chip).to_string());
                     }
                 }
@@ -1947,7 +2145,7 @@ impl CompanionApp {
             ui.add_space(8.0);
             ui.horizontal(|ui| {
                 let edit = TextEdit::singleline(&mut self.assist_input)
-                    .hint_text("Ask Assist to check status, start mining, scan boards…")
+                    .hint_text("e.g. watch stratum · max hashrate · why are accepts low?")
                     .desired_width(ui.available_width() - 100.0);
                 let resp = ui.add(edit);
                 let send = soft_button(ui, if self.assist_busy { "…" } else { "Send" }, 72.0)
@@ -3836,8 +4034,9 @@ impl CompanionApp {
         soft_panel(ui, "Assist (AI)", |ui| {
             ui.label(
                 RichText::new(
-                    "OpenAI-compatible API for the Assist tab. Leave blank to use local chips/commands, \
-or set OPENAI_API_KEY / CYD_ASSIST_API_KEY in the environment.",
+                    "OpenAI-compatible API for Assist. Primary job: continuous stratum monitoring \
+and pushing hashrate (clock / mine / bench). Leave blank for local watch chips, \
+or set OPENAI_API_KEY / CYD_ASSIST_API_KEY.",
                 )
                 .color(C_MUTED)
                 .size(13.0),
@@ -7806,6 +8005,7 @@ or Flash (BOOT) with BOOT held + Ready."
         ctx.request_repaint_after(Duration::from_millis(16));
         self.refresh_monitor_lan_ip();
         self.publish_phone_monitor();
+        self.tick_assist_watch();
     }
 }
 

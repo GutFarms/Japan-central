@@ -84,12 +84,29 @@ pub struct AssistSnapshot {
     pub fw: String,
     pub board_mac: String,
     pub hashrate_khs: f64,
+    pub hashrate_hs: f64,
+    /// Pool-inferred H/s from accepted shares (0 if unknown).
+    pub pool_estimated_hs: f64,
     pub accepted: u32,
     pub rejected: u32,
+    pub session_accepted: u32,
+    pub session_rejected: u32,
+    pub accept_rate_pct: f64,
+    pub expected_shares_per_hour: f64,
     pub pool_phase: String,
     pub stratum_phase: String,
     pub stratum_connected: bool,
     pub stratum_authorized: bool,
+    pub stratum_difficulty: f64,
+    pub stratum_jobs: u32,
+    pub stratum_submits: u64,
+    pub stratum_last_job: String,
+    pub stratum_last_error: String,
+    pub linked_boards: u32,
+    pub boards_below_target_khs: u32,
+    /// Rough healthy floor per board (kH/s) used by the watch loop.
+    pub target_khs_per_board: f64,
+    pub bench_busy: bool,
     pub ports: Vec<String>,
     pub linked: Vec<String>,
     pub discovered: Vec<String>,
@@ -102,6 +119,10 @@ pub struct AssistSnapshot {
 #[derive(Clone, Debug)]
 pub enum AssistAction {
     GetFleetStatus,
+    /// Focused stratum + hashrate health report (same data, mining-first summary).
+    WatchStratum,
+    /// Apply safe max-hashrate steps: clock 240 → start mine if idle → bench if slow.
+    OptimizeHashrate,
     ListPorts,
     ScanWorkers,
     ConnectBoard { endpoint: Option<String> },
@@ -126,6 +147,22 @@ pub enum AssistAction {
     SwitchTab { tab: String },
 }
 
+/// One automatic watch-loop recommendation.
+#[derive(Clone, Debug)]
+pub struct WatchStep {
+    pub action: AssistAction,
+    pub reason: String,
+}
+
+#[derive(Clone, Debug)]
+pub struct WatchReport {
+    pub headline: String,
+    pub detail: String,
+    pub steps: Vec<WatchStep>,
+    /// Stable signature so the UI can avoid spamming identical notes.
+    pub signature: String,
+}
+
 #[derive(Clone, Debug)]
 pub struct PendingTool {
     pub id: String,
@@ -137,8 +174,24 @@ pub fn tool_definitions() -> Value {
         {
             "type": "function",
             "function": {
+                "name": "watch_stratum",
+                "description": "PRIMARY: read stratum connection health + hashrate flow (jobs, auth, accepts/rejects, difficulty, board rates) and return a mining-first report.",
+                "parameters": { "type": "object", "properties": {} }
+            }
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "optimize_hashrate",
+                "description": "PRIMARY: push hashrate as high as safe — set 240 MHz, start mining if linked+idle, bench boards when rate is soft. Uses live monitoring signals.",
+                "parameters": { "type": "object", "properties": {} }
+            }
+        },
+        {
+            "type": "function",
+            "function": {
                 "name": "get_fleet_status",
-                "description": "Read current USB/Wi-Fi link, mining, pool, hashrate, accepts/rejects, firmware.",
+                "description": "Full fleet JSON snapshot (USB/Wi-Fi link, mining, pool, hashrate, accepts/rejects, firmware).",
                 "parameters": { "type": "object", "properties": {} }
             }
         },
@@ -222,7 +275,7 @@ pub fn tool_definitions() -> Value {
             "type": "function",
             "function": {
                 "name": "set_clock",
-                "description": "Set board CPU clock to 80, 160, or 240 MHz.",
+                "description": "Set board CPU clock to 80, 160, or 240 MHz. Prefer 240 for max hashrate.",
                 "parameters": {
                     "type": "object",
                     "properties": {
@@ -236,7 +289,7 @@ pub fn tool_definitions() -> Value {
             "type": "function",
             "function": {
                 "name": "bench_boards",
-                "description": "Run a short hashrate bench / retune on linked boards.",
+                "description": "Run D0 HW/HW+/HW-SW retune to lock the fastest SHA path on linked boards.",
                 "parameters": { "type": "object", "properties": {} }
             }
         },
@@ -308,16 +361,205 @@ pub fn tool_definitions() -> Value {
 
 pub fn system_prompt(snap: &AssistSnapshot) -> String {
     format!(
-        "You are the built-in assistant for Njörðr Seas' CYD miner Companion v{}. \
-You help the user monitor and control ESP32-2432S028 (CYD) SHA-256 miner boards. \
-Use tools to take real actions — do not pretend you changed something without calling a tool. \
-Be concise. Prefer get_fleet_status before diagnosing. \
-Never invent hashrates or accept counts — read them from tools. \
-Firmware updates need confirmation; warn briefly before calling update_board_firmware. \
-Current snapshot (may be slightly stale):\n{}",
+        "You are the mining watch assistant for Njörðr Seas' CYD miner Companion v{}.\n\
+PRIMARY MISSION (always):\n\
+1) Continuously reason about stratum connection health (connected → authorized → jobs flowing → accepts).\n\
+2) Push board hashrate as high as it will safely go using live monitoring: clock 240 MHz, start mining when linked, bench/retune when rates are soft, restart mining only when the pool link is clearly dead.\n\
+3) Prefer tools watch_stratum and optimize_hashrate before other actions.\n\
+Rules:\n\
+- Never invent hashrates, jobs, or accept counts — read watch_stratum / get_fleet_status.\n\
+- If auth-fail: fix worker/BTC address (set_pool_config) — do not spam start/stop.\n\
+- If share difficulty is hard for CYD hashrates, recommend an ESP/IoT pool port (e.g. HM Pool :3337).\n\
+- Be concise; report stratum phase, fleet kH/s, A/R, and the next action you took.\n\
+- Firmware flash needs UI confirmation.\n\
+Current snapshot:\n{}",
         snap.companion_version,
         serde_json::to_string_pretty(snap).unwrap_or_else(|_| "{}".into())
     )
+}
+
+/// Continuous-monitoring playbook from live telemetry (no LLM required).
+pub fn evaluate_mining_watch(snap: &AssistSnapshot) -> WatchReport {
+    let mut steps = Vec::new();
+    let mut notes = Vec::new();
+    let boards = snap.linked_boards.max(1);
+    let khs = snap.hashrate_khs;
+    let per = khs / boards as f64;
+
+    if snap.flash_busy {
+        return WatchReport {
+            headline: "Watch paused — firmware update in progress".into(),
+            detail: "Flash owns the COM; mining watch resumes when Update board finishes.".into(),
+            steps,
+            signature: "flash_busy".into(),
+        };
+    }
+
+    if !snap.usb_open && snap.linked_boards == 0 {
+        if !snap.ports.is_empty() {
+            steps.push(WatchStep {
+                action: AssistAction::ConnectBoard { endpoint: None },
+                reason: "No board linked — connect selected COM".into(),
+            });
+        } else {
+            steps.push(WatchStep {
+                action: AssistAction::ScanWorkers,
+                reason: "No ports/boards — scan for CYDs".into(),
+            });
+        }
+        notes.push("Fleet idle: need a linked board before stratum/hashrate watch can run.".into());
+    } else if !snap.mining {
+        steps.push(WatchStep {
+            action: AssistAction::StartMining,
+            reason: "Board linked but mining off — start stratum + job push".into(),
+        });
+        notes.push("Mining was off; starting pool session.".into());
+    } else {
+        // Stratum health
+        if !snap.stratum_authorized {
+            if snap.stratum_phase.eq_ignore_ascii_case("auth-fail")
+                || !snap.stratum_last_error.is_empty()
+            {
+                notes.push(format!(
+                    "Stratum AUTH FAIL — fix worker/BTC address (now {}). {}",
+                    if snap.worker.is_empty() {
+                        "empty"
+                    } else {
+                        snap.worker.as_str()
+                    },
+                    if snap.stratum_last_error.is_empty() {
+                        String::new()
+                    } else {
+                        trunc(&snap.stratum_last_error, 100)
+                    }
+                ));
+            } else if !snap.stratum_connected {
+                steps.push(WatchStep {
+                    action: AssistAction::StartMining,
+                    reason: "Stratum not connected while mining — restart pool session".into(),
+                });
+                notes.push(format!(
+                    "Stratum phase={} — reconnecting pool.",
+                    if snap.stratum_phase.is_empty() {
+                        "…"
+                    } else {
+                        snap.stratum_phase.as_str()
+                    }
+                ));
+            } else {
+                notes.push(format!(
+                    "Stratum connected, waiting authorize (phase {}). Jobs={} submits={}.",
+                    snap.stratum_phase, snap.stratum_jobs, snap.stratum_submits
+                ));
+            }
+        } else {
+            notes.push(format!(
+                "Stratum AUTHORIZED · diff={:.4} · jobs={} · submits={} · A={} R={} ({:.0}% ok) · expect {:.2}/h",
+                snap.stratum_difficulty,
+                snap.stratum_jobs,
+                snap.stratum_submits,
+                snap.session_accepted,
+                snap.session_rejected,
+                snap.accept_rate_pct,
+                snap.expected_shares_per_hour
+            ));
+            if snap.stratum_jobs == 0 && snap.stratum_submits == 0 {
+                notes.push("Authorized but no jobs yet — waiting for pool notify.".into());
+            }
+            if snap.stratum_difficulty >= 0.05
+                && snap.hashrate_hs > 50_000.0
+                && snap.expected_shares_per_hour < 5.0
+            {
+                notes.push(format!(
+                    "Share diff {:.3} is hard for ~{:.0} kH/s — use an ESP/IoT pool port (HM :3337) or wait for vardiff.",
+                    snap.stratum_difficulty, snap.hashrate_khs
+                ));
+            }
+            if snap.session_accepted + snap.session_rejected >= 8 && snap.accept_rate_pct < 70.0 {
+                notes.push(format!(
+                    "Reject pressure high ({:.0}% accepts) — check difficulty / worker / stale jobs.",
+                    snap.accept_rate_pct
+                ));
+            }
+        }
+
+        // Hashrate push
+        if snap.target_mhz < 240 {
+            steps.push(WatchStep {
+                action: AssistAction::SetClock { mhz: 240 },
+                reason: format!("Clock {} MHz → 240 for max SHA throughput", snap.target_mhz),
+            });
+        }
+        if snap.stratum_authorized
+            && !snap.bench_busy
+            && (per < snap.target_khs_per_board || snap.boards_below_target_khs > 0)
+            && khs > 0.0
+        {
+            steps.push(WatchStep {
+                action: AssistAction::BenchBoards,
+                reason: format!(
+                    "Rate soft (~{:.0} kH/s/board, floor {:.0}) — bench HW/HW+/HW-SW",
+                    per, snap.target_khs_per_board
+                ),
+            });
+        } else if snap.stratum_authorized && khs < 1.0 && snap.stratum_jobs > 0 && !snap.bench_busy
+        {
+            steps.push(WatchStep {
+                action: AssistAction::BenchBoards,
+                reason: "Jobs flowing but hashrate ~0 — retune boards".into(),
+            });
+        }
+    }
+
+    let headline = if snap.stratum_authorized {
+        format!(
+            "Watch · {:.0} kH/s · stratum OK · {} board(s)",
+            khs, snap.linked_boards.max(u32::from(snap.usb_open))
+        )
+    } else if snap.mining {
+        format!(
+            "Watch · mining · stratum {} · {:.0} kH/s",
+            if snap.stratum_phase.is_empty() {
+                "…"
+            } else {
+                snap.stratum_phase.as_str()
+            },
+            khs
+        )
+    } else {
+        "Watch · fleet idle".into()
+    };
+
+    let detail = notes.join("\n");
+    let signature = format!(
+        "{}|{}|{}|{}|{}|{:.0}|{}",
+        snap.mining,
+        snap.stratum_authorized,
+        snap.stratum_phase,
+        steps
+            .iter()
+            .map(|s| format!("{:?}", std::mem::discriminant(&s.action)))
+            .collect::<Vec<_>>()
+            .join(","),
+        snap.target_mhz,
+        khs,
+        snap.session_accepted + snap.session_rejected
+    );
+
+    WatchReport {
+        headline,
+        detail,
+        steps,
+        signature,
+    }
+}
+
+pub fn format_watch_report(report: &WatchReport) -> String {
+    if report.detail.is_empty() {
+        report.headline.clone()
+    } else {
+        format!("{}\n{}", report.headline, report.detail)
+    }
 }
 
 pub fn parse_action(name: &str, arguments: &str) -> Result<AssistAction, String> {
@@ -334,6 +576,8 @@ pub fn parse_action(name: &str, arguments: &str) -> Result<AssistAction, String>
     };
     match name {
         "get_fleet_status" => Ok(AssistAction::GetFleetStatus),
+        "watch_stratum" => Ok(AssistAction::WatchStratum),
+        "optimize_hashrate" => Ok(AssistAction::OptimizeHashrate),
         "list_ports" => Ok(AssistAction::ListPorts),
         "scan_workers" => Ok(AssistAction::ScanWorkers),
         "connect_board" => Ok(AssistAction::ConnectBoard {
@@ -395,107 +639,142 @@ pub fn parse_action(name: &str, arguments: &str) -> Result<AssistAction, String>
 pub fn local_assist(user: &str, snap: &AssistSnapshot) -> (String, Vec<PendingTool>) {
     let low = user.to_ascii_lowercase();
     let mut tools = Vec::new();
-    let mut say = String::new();
 
-    let push = |tools: &mut Vec<PendingTool>, name: &str, action: AssistAction| {
+    let push = |tools: &mut Vec<PendingTool>, action: AssistAction| {
         tools.push(PendingTool {
             id: format!("local-{}", tools.len() + 1),
             action,
         });
-        let _ = name;
     };
 
-    if low.contains("status")
+    if low.contains("watch")
+        || low.contains("stratum")
+        || low.contains("monitor")
+        || low.contains("status")
         || low.contains("hashrate")
         || low.contains("how's")
         || low.contains("how is")
-        || low.contains("monitor")
         || low == "fleet"
     {
-        push(&mut tools, "get_fleet_status", AssistAction::GetFleetStatus);
-        say = "Checking fleet status…".into();
-    } else if low.contains("scan") || low.contains("find board") || low.contains("find worker") {
-        push(&mut tools, "scan_workers", AssistAction::ScanWorkers);
-        say = "Scanning for CYD boards…".into();
-    } else if low.contains("list port") || low.contains("com port") || low.contains("serial") {
-        push(&mut tools, "list_ports", AssistAction::ListPorts);
-        say = "Refreshing serial ports…".into();
-    } else if low.contains("stop mine") || low.contains("stop mining") || low == "stop" {
-        push(&mut tools, "stop_mining", AssistAction::StopMining);
-        say = "Stopping mining…".into();
-    } else if low.contains("start mine") || low.contains("start mining") || low == "mine" {
-        push(&mut tools, "start_mining", AssistAction::StartMining);
-        say = "Starting mining…".into();
-    } else if low.contains("connect") || low.contains("link") {
+        push(&mut tools, AssistAction::WatchStratum);
+        if low.contains("max")
+            || low.contains("optim")
+            || low.contains("push")
+            || low.contains("faster")
+            || low.contains("boost")
+        {
+            push(&mut tools, AssistAction::OptimizeHashrate);
+        }
+        return ("Watching stratum + hashrate…".into(), tools);
+    }
+    if low.contains("optim")
+        || low.contains("max hash")
+        || low.contains("maximise")
+        || low.contains("maximize")
+        || low.contains("boost")
+        || low.contains("tune")
+        || low == "max hashrate"
+    {
+        push(&mut tools, AssistAction::OptimizeHashrate);
+        return ("Pushing hashrate with live monitoring…".into(), tools);
+    }
+    if low.contains("scan") || low.contains("find board") || low.contains("find worker") {
+        push(&mut tools, AssistAction::ScanWorkers);
+        return ("Scanning for CYD boards…".into(), tools);
+    }
+    if low.contains("list port") || low.contains("com port") || low.contains("serial") {
+        push(&mut tools, AssistAction::ListPorts);
+        return ("Refreshing serial ports…".into(), tools);
+    }
+    if low.contains("stop mine") || low.contains("stop mining") || low == "stop" {
+        push(&mut tools, AssistAction::StopMining);
+        return ("Stopping mining…".into(), tools);
+    }
+    if low.contains("start mine") || low.contains("start mining") || low == "mine" {
+        push(&mut tools, AssistAction::StartMining);
+        return ("Starting mining…".into(), tools);
+    }
+    if low.contains("connect") || low.contains("link") {
         push(
             &mut tools,
-            "connect_board",
             AssistAction::ConnectBoard { endpoint: None },
         );
-        say = "Linking the selected board…".into();
-    } else if low.contains("disconnect") || low.contains("close usb") {
+        return ("Linking the selected board…".into(), tools);
+    }
+    if low.contains("disconnect") || low.contains("close usb") {
         push(
             &mut tools,
-            "disconnect_board",
             AssistAction::DisconnectBoard { endpoint: None },
         );
-        say = "Disconnecting…".into();
-    } else if low.contains("bench") || low.contains("retune") {
-        push(&mut tools, "bench_boards", AssistAction::BenchBoards);
-        say = "Running board bench…".into();
-    } else if low.contains("log") || low.contains("event") {
+        return ("Disconnecting…".into(), tools);
+    }
+    if low.contains("bench") || low.contains("retune") {
+        push(&mut tools, AssistAction::BenchBoards);
+        return ("Running board bench…".into(), tools);
+    }
+    if low.contains("log") || low.contains("event") {
+        push(&mut tools, AssistAction::GetEventLog { limit: 16 });
+        return ("Pulling recent event log…".into(), tools);
+    }
+    if low.contains("setup") && low.contains("wifi") {
         push(
             &mut tools,
-            "get_event_log",
-            AssistAction::GetEventLog { limit: 16 },
-        );
-        say = "Pulling recent event log…".into();
-    } else if low.contains("setup") && low.contains("wifi") {
-        push(
-            &mut tools,
-            "switch_tab",
             AssistAction::SwitchTab {
                 tab: "setup".into(),
             },
         );
-        say = "Opening Setup for Wi‑Fi credentials…".into();
-    } else if low.contains("flash") || low.contains("firmware") || low.contains("update board") {
+        return ("Opening Setup for Wi‑Fi credentials…".into(), tools);
+    }
+    if low.contains("flash") || low.contains("firmware") || low.contains("update board") {
         push(
             &mut tools,
-            "update_board_firmware",
             AssistAction::UpdateBoardFirmware {
                 live_push: true,
                 wifi: false,
             },
         );
-        say = "Firmware update needs your confirmation…".into();
-    } else if low.contains("240") && (low.contains("mhz") || low.contains("clock")) {
-        push(&mut tools, "set_clock", AssistAction::SetClock { mhz: 240 });
-        say = "Setting clock to 240 MHz…".into();
-    } else if low.contains("160") && (low.contains("mhz") || low.contains("clock")) {
-        push(&mut tools, "set_clock", AssistAction::SetClock { mhz: 160 });
-        say = "Setting clock to 160 MHz…".into();
-    } else if low.contains("80") && (low.contains("mhz") || low.contains("clock")) {
-        push(&mut tools, "set_clock", AssistAction::SetClock { mhz: 80 });
-        say = "Setting clock to 80 MHz…".into();
-    } else {
-        say = format!(
-            "Local Assist (no API key). USB={} · mining={} · {:.1} kH/s · A={} R={} · COM={}.\n\n\
-Try: status · start mining · stop mining · scan · connect · list ports · bench · logs · flash.\n\
-Add an OpenAI-compatible API key in Settings → Assist for full natural-language control.",
-            if snap.usb_open { "linked" } else { "idle" },
-            if snap.mining { "on" } else { "off" },
-            snap.hashrate_khs,
-            snap.accepted,
-            snap.rejected,
-            if snap.com_port.is_empty() {
-                "—"
-            } else {
-                snap.com_port.as_str()
-            }
-        );
+        return ("Firmware update needs your confirmation…".into(), tools);
     }
-    (say, tools)
+    if low.contains("240") && (low.contains("mhz") || low.contains("clock")) {
+        push(&mut tools, AssistAction::SetClock { mhz: 240 });
+        return ("Setting clock to 240 MHz…".into(), tools);
+    }
+    if low.contains("160") && (low.contains("mhz") || low.contains("clock")) {
+        push(&mut tools, AssistAction::SetClock { mhz: 160 });
+        return ("Setting clock to 160 MHz…".into(), tools);
+    }
+    if low.contains("80") && (low.contains("mhz") || low.contains("clock")) {
+        push(&mut tools, AssistAction::SetClock { mhz: 80 });
+        return ("Setting clock to 80 MHz…".into(), tools);
+    }
+
+    // Default: mining watch report (no tools) — continuous-focus help.
+    let report = evaluate_mining_watch(snap);
+    (
+        format!(
+            "{}\n\nChips: Watch stratum · Max hashrate · Start mining · Bench · Clock 240.\n\
+Continuous watch can auto-apply safe fixes when enabled on Assist.",
+            format_watch_report(&report)
+        ),
+        tools,
+    )
+}
+
+pub fn max_tool_rounds() -> u8 {
+    MAX_TOOL_ROUNDS
+}
+
+pub fn suggest_chips() -> &'static [&'static str] {
+    &[
+        "Watch stratum",
+        "Max hashrate",
+        "Start mining",
+        "Stop mining",
+        "Bench",
+        "Clock 240",
+        "Scan boards",
+        "Status",
+    ]
 }
 
 fn messages_to_openai(msgs: &[AssistMessage]) -> Value {
@@ -700,21 +979,4 @@ fn trunc(s: &str, n: usize) -> String {
     } else {
         format!("{}…", &s[..n])
     }
-}
-
-pub fn max_tool_rounds() -> u8 {
-    MAX_TOOL_ROUNDS
-}
-
-pub fn suggest_chips() -> &'static [&'static str] {
-    &[
-        "Status",
-        "Start mining",
-        "Stop mining",
-        "Scan boards",
-        "Connect",
-        "List ports",
-        "Bench",
-        "Recent logs",
-    ]
 }
