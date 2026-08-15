@@ -1197,32 +1197,36 @@ fn which_on_path(name: &str) -> Option<PathBuf> {
 }
 
 /// Per-attempt ceilings — espflash can hang forever waiting for serial sync / prompts.
-const WRITE_TIMEOUT: Duration = Duration::from_secs(140);
-const ERASE_TIMEOUT: Duration = Duration::from_secs(120);
-const RESET_TIMEOUT: Duration = Duration::from_secs(15);
-const ESPTOOL_TIMEOUT: Duration = Duration::from_secs(180);
+const WRITE_TIMEOUT: Duration = Duration::from_secs(90);
+const ERASE_TIMEOUT: Duration = Duration::from_secs(90);
+const RESET_TIMEOUT: Duration = Duration::from_secs(12);
+const ESPTOOL_TIMEOUT: Duration = Duration::from_secs(100);
 /// Hard wall-clock budget for the whole Update board flash sequence.
 /// Push + one BOOT Ready round — fail fast instead of thrashing the COM for minutes.
-const FLASH_BUDGET: Duration = Duration::from_secs(180);
+const FLASH_BUDGET: Duration = Duration::from_secs(150);
 /// Abort a write round after this many connect/MAC stalls (stops terminal/COM thrash).
 const MAX_CONNECT_STALLS_PER_ROUND: u8 = 2;
 /// Abort immediately after this many Access Denied / port-busy errors.
 const MAX_PORT_BUSY: u8 = 1;
 /// Quiet gap between tool launches so Windows can release the COM handle.
-const ATTEMPT_GAP: Duration = Duration::from_millis(450);
+const ATTEMPT_GAP: Duration = Duration::from_millis(200);
+/// Preferred write baud when the USB-UART (often CH340) tolerates it — ~3–4× faster
+/// than 115200 for a ~1.7 MB merged image.
+const FLASH_FAST_BAUD: &str = "460800";
+const FLASH_SAFE_BAUD: &str = "115200";
 /// No useful output at all → stuck before connect.
-const IDLE_TIMEOUT: Duration = Duration::from_secs(22);
+const IDLE_TIMEOUT: Duration = Duration::from_secs(14);
 /// Chip MAC/connect seen but no write progress yet.
 /// Keep short — MAC-then-stall (UI stuck ~14% "Chip connected") must fail
 /// fast so we escalate to no-stub / BOOT Ready, not sit for minutes.
-const IDLE_AFTER_CONNECT: Duration = Duration::from_secs(16);
-const IDLE_AFTER_CONNECT_PATIENT: Duration = Duration::from_secs(22);
+const IDLE_AFTER_CONNECT: Duration = Duration::from_secs(10);
+const IDLE_AFTER_CONNECT_PATIENT: Duration = Duration::from_secs(16);
 /// During active write/erase (% / `\r` ticks), allow longer silence between ticks.
-const IDLE_DURING_WRITE: Duration = Duration::from_secs(75);
-const IDLE_DURING_WRITE_PATIENT: Duration = Duration::from_secs(120);
+const IDLE_DURING_WRITE: Duration = Duration::from_secs(50);
+const IDLE_DURING_WRITE_PATIENT: Duration = Duration::from_secs(90);
 /// After stdout/stderr EOF, wait for the tool to exit (hard-reset / flush) before kill.
 /// Matches esptool-js / ESP Terminator: never yank the serial mid-operation.
-const EXIT_GRACE: Duration = Duration::from_secs(45);
+const EXIT_GRACE: Duration = Duration::from_secs(30);
 
 #[derive(Clone, Copy)]
 enum FlashToolKind {
@@ -1446,7 +1450,7 @@ fn run_espflash_write(
 ) -> Result<(), String> {
     let timeout = clamp_timeout(
         if patient {
-            Duration::from_secs(200)
+            Duration::from_secs(140)
         } else {
             WRITE_TIMEOUT
         },
@@ -1522,7 +1526,7 @@ Keep BOOT held until you see Writing %."
             );
             // Brief settle only — do NOT open the COM ourselves (CH340 DTR on
             // close kicks the chip out of download mode before espflash starts).
-            std::thread::sleep(Duration::from_millis(450));
+            std::thread::sleep(Duration::from_millis(200));
             return Ok(());
         }
         if tick % 20 == 0 {
@@ -1573,6 +1577,7 @@ fn run_esptool_write(
     before: &str,
     no_stub: bool,
     compress: bool,
+    baud: &str,
     progress: &dyn Fn(String),
     budget: Duration,
     cancel: Option<&AtomicBool>,
@@ -1585,7 +1590,7 @@ fn run_esptool_write(
         "--port".into(),
         port.to_string(),
         "--baud".into(),
-        "115200".into(),
+        baud.to_string(),
         "--before".into(),
         before.to_string(),
     ]);
@@ -1610,7 +1615,7 @@ fn run_esptool_write(
     ]);
     let py_timeout = clamp_timeout(
         if patient {
-            Duration::from_secs(300)
+            Duration::from_secs(180)
         } else {
             ESPTOOL_TIMEOUT
         },
@@ -1619,7 +1624,7 @@ fn run_esptool_write(
     let stub = if no_stub { "no-stub" } else { "stub" };
     let comp = if compress { "compress" } else { "no-compress" };
     progress(format!(
-        "esptool write_flash {stub} {comp} before={before} @ 115200 [timeout {}s]…",
+        "esptool write_flash {stub} {comp} before={before} @ {baud} [timeout {}s]…",
         py_timeout.as_secs()
     ));
     progress(format!("Connecting to chip on {port}…"));
@@ -1685,11 +1690,13 @@ fn append_flash_log(line: &str) {
 ///
 /// `live_push`: board was answering cmp — try auto-reset write first (no BOOT Ready).
 /// Blank / download-mode boards keep the Ready + BOOT path.
+/// Flash merged firmware @ 0x0 via USB.
 ///
 /// Strategy:
-/// 1) Live push: esptool/espflash with `default_reset` (silent) → fall back to Ready on stall
-/// 2) Blank: user-gated Ready, then write attempts
-/// 3) Prefer esptool stub+compress; fail MAC-stall in ~32s
+/// 1) Live push: espflash stub @ 460800 first (fast path), then no-stub @ 115200;
+///    skip Python esptool on the compact round (slow startup + CH340 stub hangs).
+/// 2) Blank / BOOT Ready: user-gated Ready, then write attempts
+/// 3) Compact rounds use aggressive idle timeouts; escalate MAC-stall quickly
 pub fn flash_merged_bin(
     port: &str,
     image: &Path,
@@ -1751,7 +1758,7 @@ Available: {hint}. Unplug/replug the CYD, pick the COM again, then Update board.
     ));
     if live_push {
         progress(
-            "Live board — trying silent auto-reset push (no BOOT). Ready only if that fails."
+            "Live board — fast push @ 460800 (no BOOT). Ready only if that fails."
                 .into(),
         );
     } else {
@@ -1761,17 +1768,17 @@ Available: {hint}. Unplug/replug the CYD, pick the COM again, then Update board.
         );
     }
     append_flash_log(&format!(
-        "begin port={port} arg={port_arg} live_push={live_push} image={}",
+        "begin port={port} arg={port_arg} live_push={live_push} fast_baud={FLASH_FAST_BAUD} image={}",
         image.display()
     ));
 
+    let started = Instant::now();
     let log_progress = |line: String| {
-        append_flash_log(&line);
+        append_flash_log(&format!("+{}ms {line}", started.elapsed().as_millis()));
         progress(line);
     };
     let progress = &log_progress;
 
-    let started = Instant::now();
     let budget_left = || FLASH_BUDGET.saturating_sub(started.elapsed());
     let ensure_budget = |progress: &dyn Fn(String)| -> Result<(), String> {
         if flash_cancelled(cancel) {
@@ -1858,39 +1865,140 @@ Available: {hint}. Unplug/replug the CYD, pick the COM again, then Update board.
         if need_ready {
             wait_for_boot_ready(ctrl, progress, round_label)?;
         }
-        // Compact = fail-fast (Push / post-stall). Lead with no-stub after one stub try —
-        // CH340 boards often hang uploading the RAM stub right after MAC (UI ~14%).
-        let attempts: &[(&str, &str, bool, bool, bool)] = if prefer_default_reset && compact {
+        // Compact = fail-fast (Push / post-stall). Lead with espflash @ 460800 —
+        // skip Python esptool on compact (slow cold-start; CH340 stub hangs ~14%).
+        // Tuple: (label, before, no_stub, compress, use_esptool, baud)
+        let attempts: &[(&str, &str, bool, bool, bool, &str)] = if prefer_default_reset && compact {
             &[
-                ("esptool stub+compress default_reset", "default_reset", false, true, true),
-                ("espflash no-stub default-reset", "default-reset", true, false, false),
-                ("espflash stub default-reset", "default-reset", false, false, false),
+                (
+                    "espflash stub default-reset @460800",
+                    "default-reset",
+                    false,
+                    false,
+                    false,
+                    FLASH_FAST_BAUD,
+                ),
+                (
+                    "espflash stub default-reset @115200",
+                    "default-reset",
+                    false,
+                    false,
+                    false,
+                    FLASH_SAFE_BAUD,
+                ),
+                (
+                    "espflash no-stub default-reset @115200",
+                    "default-reset",
+                    true,
+                    false,
+                    false,
+                    FLASH_SAFE_BAUD,
+                ),
             ]
         } else if prefer_default_reset {
             &[
-                ("esptool stub+compress default_reset", "default_reset", false, true, true),
-                ("espflash no-stub default-reset", "default-reset", true, false, false),
-                ("esptool stub+compress no_reset", "no_reset", false, true, true),
-                ("espflash stub default-reset", "default-reset", false, false, false),
+                (
+                    "espflash stub default-reset @460800",
+                    "default-reset",
+                    false,
+                    false,
+                    false,
+                    FLASH_FAST_BAUD,
+                ),
+                (
+                    "espflash no-stub default-reset @115200",
+                    "default-reset",
+                    true,
+                    false,
+                    false,
+                    FLASH_SAFE_BAUD,
+                ),
+                (
+                    "esptool stub+compress default_reset @460800",
+                    "default_reset",
+                    false,
+                    true,
+                    true,
+                    FLASH_FAST_BAUD,
+                ),
+                (
+                    "espflash stub default-reset @115200",
+                    "default-reset",
+                    false,
+                    false,
+                    false,
+                    FLASH_SAFE_BAUD,
+                ),
             ]
         } else if compact {
             &[
-                ("espflash no-stub no-reset", "no-reset", true, false, false),
-                ("esptool stub+compress no_reset", "no_reset", false, true, true),
-                ("espflash no-stub default-reset", "default-reset", true, false, false),
+                (
+                    "espflash no-stub no-reset @115200",
+                    "no-reset",
+                    true,
+                    false,
+                    false,
+                    FLASH_SAFE_BAUD,
+                ),
+                (
+                    "espflash stub default-reset @460800",
+                    "default-reset",
+                    false,
+                    false,
+                    false,
+                    FLASH_FAST_BAUD,
+                ),
+                (
+                    "espflash no-stub default-reset @115200",
+                    "default-reset",
+                    true,
+                    false,
+                    false,
+                    FLASH_SAFE_BAUD,
+                ),
             ]
         } else {
             &[
-                ("espflash no-stub no-reset", "no-reset", true, false, false),
-                ("esptool stub+compress no_reset", "no_reset", false, true, true),
-                ("esptool stub+compress default_reset", "default_reset", false, true, true),
-                ("espflash no-stub default-reset", "default-reset", true, false, false),
+                (
+                    "espflash no-stub no-reset @115200",
+                    "no-reset",
+                    true,
+                    false,
+                    false,
+                    FLASH_SAFE_BAUD,
+                ),
+                (
+                    "espflash stub default-reset @460800",
+                    "default-reset",
+                    false,
+                    false,
+                    false,
+                    FLASH_FAST_BAUD,
+                ),
+                (
+                    "esptool stub+compress no_reset @115200",
+                    "no_reset",
+                    false,
+                    true,
+                    true,
+                    FLASH_SAFE_BAUD,
+                ),
+                (
+                    "espflash no-stub default-reset @115200",
+                    "default-reset",
+                    true,
+                    false,
+                    false,
+                    FLASH_SAFE_BAUD,
+                ),
             ]
         };
 
+        // Compact rounds: aggressive idle kill so we escalate instead of sitting at ~14%.
+        let patient = !compact;
         let mut esptool_usable = true;
         let round_stall_start = *stall_hits;
-        for &(label, before, no_stub, compress, use_esptool) in attempts {
+        for &(label, before, no_stub, compress, use_esptool, baud) in attempts {
             if flash_cancelled(cancel) {
                 ctrl.need_boot.store(false, Ordering::SeqCst);
                 return Err("flash cancelled".into());
@@ -1909,7 +2017,7 @@ Available: {hint}. Unplug/replug the CYD, pick the COM again, then Update board.
                 );
                 return Ok(false);
             }
-            if budget_left() < Duration::from_secs(15) {
+            if budget_left() < Duration::from_secs(12) {
                 break;
             }
             if use_esptool && !esptool_usable {
@@ -1923,10 +2031,11 @@ Available: {hint}. Unplug/replug the CYD, pick the COM again, then Update board.
                     before,
                     no_stub,
                     compress,
+                    baud,
                     progress,
                     budget_left(),
                     cancel,
-                    true,
+                    patient,
                 ) {
                     Ok(()) => Ok(()),
                     Err(e) => {
@@ -1947,10 +2056,10 @@ Available: {hint}. Unplug/replug the CYD, pick the COM again, then Update board.
                 run_espflash_write(
                     &espflash,
                     &port_arg,
-                    "115200",
+                    baud,
                     before,
                     no_stub,
-                    true,
+                    patient,
                     image,
                     progress,
                     budget_left(),
@@ -1993,7 +2102,7 @@ Available: {hint}. Unplug/replug the CYD, pick the COM again, then Update board.
     // ── Live push: silent auto-reset first (no BOOT Ready) ─────────────────
     if live_push {
         ensure_budget(progress)?;
-        progress("Push update round — auto-reset (no BOOT)…".into());
+        progress("Push update round — espflash @ 460800 first (no BOOT)…".into());
         if run_attempt_matrix(
             false,
             "push",
@@ -2058,10 +2167,11 @@ Hold BOOT, tap RESET, keep BOOT held, click Ready. Use a short data USB cable \
         ));
     }
 
-    // Secondary: stub / higher baud without another Ready spam
+    // Secondary: try fast baud stub, then safe no-stub — without another Ready spam
     let fallback: &[(&str, &str, bool)] = &[
-        ("115200", "default-reset", false),
-        ("115200", "no-reset", false),
+        (FLASH_FAST_BAUD, "default-reset", false),
+        (FLASH_SAFE_BAUD, "default-reset", true),
+        (FLASH_SAFE_BAUD, "no-reset", true),
     ];
     for &(baud, before, no_stub) in fallback {
         ensure_budget(progress)?;
@@ -2150,6 +2260,7 @@ Hold BOOT, tap RESET, keep BOOT held, click Ready. Use a short data USB cable \
                             before,
                             true,
                             false,
+                            FLASH_SAFE_BAUD,
                             progress,
                             budget_left(),
                             cancel,
@@ -2159,7 +2270,7 @@ Hold BOOT, tap RESET, keep BOOT held, click Ready. Use a short data USB cable \
                         run_espflash_write(
                             &espflash,
                             &port_arg,
-                            "115200",
+                            FLASH_SAFE_BAUD,
                             before,
                             true,
                             true,
