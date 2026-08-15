@@ -2,7 +2,7 @@
 name = "cyd-companion"
 version = "0.8.154"
 edition = "2021"
-description = "Njörðr Seas' CYD miner — USB SHA-256 Bitcoin mining control (PC stratum, board hashes)"
+description = "Njörðr Seas' CYD miner — USB/Wi‑Fi SHA-256 mining (boards can mine independently; Companion monitors)"
 authors = ["GutFarms <https://github.com/GutFarms>"]
 license = "MIT OR Apache-2.0"
 

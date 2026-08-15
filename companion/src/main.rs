@@ -10994,14 +10994,6 @@ Power a 2nd board nearby with wall/power-bank only (no PC cable)."
                         ),
                     );
                 }
-                // Fleet: one unique extranonce2 per Companion-fed USB/mesh worker.
-                // Independent boards mine their own pool and do not take PC jobs.
-                let _fleet_n = boards
-                    .iter()
-                    .filter(|b| !b.mine_indep)
-                    .count()
-                    .saturating_add(mesh.iter().filter(|m| !m.mine_indep).count())
-                    .max(1);
                 // SoftAP setup net has no pool uplink — don't keep pushing work that can't submit.
                 let softap_blocked = softap_setup_client_ipv4()
                     .map(|ip| ip.starts_with("10.88.88."))
