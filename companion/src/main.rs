@@ -2803,8 +2803,12 @@ impl CompanionApp {
             ("Erasing flash", 0.08)
         } else if lower.contains("chip seen")
             || (lower.contains("mac") && lower.contains("connect"))
+            || lower.contains("chip connected")
         {
-            ("Chip connected", 0.14)
+            (
+                "Chip connected — starting write (BOOT+Ready if stuck)",
+                0.14,
+            )
         } else if lower.contains("write-bin")
             || lower.contains("writing firmware")
             || lower.contains("writing after")
