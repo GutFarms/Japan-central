@@ -8138,20 +8138,6 @@ fn drain_stratum_log(tx: &Sender<NetMsg>, client: &mut StratumClient) {
     }
 }
 
-fn drain_stratum_log_lines(tx: &Sender<NetMsg>, lines: impl IntoIterator<Item = String>) {
-    for line in lines {
-        let low = line.to_ascii_lowercase();
-        if low.contains("← share accepted")
-            || low.contains("← share rejected")
-            || low.contains("<- share accepted")
-            || low.contains("<- share rejected")
-        {
-            continue;
-        }
-        log_msg(tx, LogKind::Stratum, line);
-    }
-}
-
 fn push_stratum_live(tx: &Sender<NetMsg>, client: &StratumClient) {
     let _ = tx.send(NetMsg::Stratum(StratumLive {
         endpoint: client.endpoint.clone(),
