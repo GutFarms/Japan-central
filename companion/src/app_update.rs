@@ -549,8 +549,9 @@ fn schedule_windows_replace_and_restart(install: &Path) -> Result<(), String> {
     let exe_name = "cyd-companion.exe";
     let staging = STAGING_DIR_NAME;
     let bat_path = install.join("cyd-companion-update.bat");
-    // No `timeout /nobreak` — that flashes a console and loops when stdin is redirected.
-    // Short ping delays only; fail after ~12s if the old exe stays locked.
+    // Overwrite kit files in place — never wipe the whole install folder.
+    // A full clean-sweep deleted Firmware/Tools then re-copied; on OneDrive Desktop
+    // that race often left a truncated/locked exe and the relaunched app "crashed".
     let bat = format!(
         "@echo off\r\n\
          setlocal EnableExtensions\r\n\
@@ -559,28 +560,29 @@ fn schedule_windows_replace_and_restart(install: &Path) -> Result<(), String> {
          set /a tries=0\r\n\
          :wait_unlock\r\n\
          set /a tries+=1\r\n\
-         if exist \"{exe}\" del /f /q \"{exe}\" >nul 2>nul\r\n\
          if exist \"{exe}\" (\r\n\
-           if %tries% geq 12 exit /b 1\r\n\
-           ping -n 2 127.0.0.1 >nul\r\n\
-           goto wait_unlock\r\n\
-         )\r\n\
-         REM Clean sweep — remove stale files/dirs left by older builds\r\n\
-         for /d %%D in (*) do (\r\n\
-           if /i not \"%%~nxD\"==\"{staging}\" rd /s /q \"%%D\" 2>nul\r\n\
-         )\r\n\
-         for %%F in (*) do (\r\n\
-           if /i not \"%%~nxF\"==\"cyd-companion-update.bat\" if /i not \"%%~nxF\"==\"Uninstall.exe\" if /i not \"%%~nxF\"==\"{staging}\" del /f /q \"%%F\" 2>nul\r\n\
+           del /f /q \"{exe}\" >nul 2>nul\r\n\
+           if exist \"{exe}\" (\r\n\
+             if %tries% geq 20 exit /b 1\r\n\
+             ping -n 2 127.0.0.1 >nul\r\n\
+             goto wait_unlock\r\n\
+           )\r\n\
          )\r\n\
          if not exist \"{staging}\\{exe}\" exit /b 1\r\n\
-         xcopy /e /y /i \"{staging}\\*\" \".\\\" >nul\r\n\
-         if errorlevel 1 (\r\n\
-           robocopy \"{staging}\" \".\" /E /NFL /NDL /NJH /NJS /NC /NS >nul\r\n\
-           if errorlevel 8 exit /b 1\r\n\
+         REM Promote staged tree over the install (keep extra user files).\r\n\
+         robocopy \"{staging}\" \".\" /E /IS /IT /R:4 /W:2 /NFL /NDL /NJH /NJS /NC /NS >nul\r\n\
+         set rc=%ERRORLEVEL%\r\n\
+         if %rc% geq 8 (\r\n\
+           xcopy /e /y /i \"{staging}\\*\" \".\\\" >nul\r\n\
+           if errorlevel 1 exit /b 1\r\n\
          )\r\n\
-         rd /s /q \"{staging}\" 2>nul\r\n\
          if not exist \"{exe}\" exit /b 1\r\n\
-         start \"\" \"{exe}\"\r\n\
+         for %%A in (\"{exe}\") do set SZ=%%~zA\r\n\
+         if not defined SZ exit /b 1\r\n\
+         if %SZ% LSS 1000000 exit /b 1\r\n\
+         rd /s /q \"{staging}\" 2>nul\r\n\
+         ping -n 2 127.0.0.1 >nul\r\n\
+         start \"\" \"%~dp0{exe}\"\r\n\
          del \"%~f0\"\r\n",
         dir = install.display(),
         exe = exe_name,
@@ -613,8 +615,8 @@ fn schedule_windows_replace_and_restart(_install: &Path) -> Result<(), String> {
 
 /// Download latest Companion build into the install folder and restart (Windows).
 ///
-/// Updates stage into `_update_staging/`, then a helper bat clean-sweeps the install
-/// directory (drops stale files from older kits) before promoting the new tree.
+/// Updates stage into `_update_staging/`, then a helper bat promotes the new tree
+/// over the install directory (in-place overwrite — safe on OneDrive Desktop).
 ///
 /// Pass `cancel` so the UI Cancel button can stop mirror retries immediately.
 pub fn update_companion_app(progress: &dyn Fn(String)) -> Result<AppRemoteInfo, String> {
@@ -634,7 +636,7 @@ pub fn update_companion_app_ex(
 
     let install = install_dir()?;
     progress(format!(
-        "Updating Companion {local} → {} (clean sweep) in {}",
+        "Updating Companion {local} → {} in {}",
         info.version,
         install.display()
     ));
@@ -762,14 +764,37 @@ pub fn update_companion_app_ex(
     );
 
     ensure_not_cancelled(cancel)?;
+    // Refuse to restart on a truncated/corrupt staged exe (OneDrive partial sync).
+    let staged_exe = staging.join("cyd-companion.exe");
+    match std::fs::metadata(&staged_exe) {
+        Ok(meta) if meta.len() > 1_000_000 => {}
+        Ok(meta) => {
+            let _ = std::fs::remove_dir_all(&staging);
+            return Err(format!(
+                "Staged cyd-companion.exe too small ({} bytes) — update aborted",
+                meta.len()
+            ));
+        }
+        Err(e) => {
+            let _ = std::fs::remove_dir_all(&staging);
+            return Err(format!("Staged cyd-companion.exe missing: {e}"));
+        }
+    }
+    if let Ok(mut f) = std::fs::File::open(&staged_exe) {
+        let mut magic = [0u8; 2];
+        if std::io::Read::read_exact(&mut f, &mut magic).is_ok() && magic != *b"MZ" {
+            let _ = std::fs::remove_dir_all(&staging);
+            return Err("Staged cyd-companion.exe is not a Windows PE (bad download)".into());
+        }
+    }
     progress(format!(
-        "Companion {} staged — clean-sweeping install dir and restarting…",
+        "Companion {} staged — promoting install files and restarting…",
         info.version
     ));
 
     #[cfg(windows)]
     {
-        progress("Clean-sweeping install directory…".into());
+        progress("Promoting staged Companion (in-place, OneDrive-safe)…".into());
         schedule_windows_replace_and_restart(&install)?;
         Ok(AppRemoteInfo {
             version: info.version.clone(),

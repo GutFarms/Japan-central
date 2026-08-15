@@ -85,6 +85,7 @@ fn load_app_icon() -> Option<IconData> {
 }
 
 fn main() -> eframe::Result<()> {
+    install_crash_log_hook();
     let mut viewport = egui::ViewportBuilder::default()
         .with_inner_size([1200.0, 820.0])
         .with_min_inner_size([640.0, 480.0])
@@ -97,7 +98,8 @@ fn main() -> eframe::Result<()> {
     }
     let options = NativeOptions {
         viewport,
-        multisampling: 8,
+        // MSAA 8 crashes OpenGL startup on some Intel/AMD Windows drivers.
+        multisampling: 0,
         depth_buffer: 0,
         persist_window: true,
         ..Default::default()
@@ -114,6 +116,27 @@ fn main() -> eframe::Result<()> {
             Box::new(CompanionApp::new(cc.storage))
         }),
     )
+}
+
+/// Write panics next to the exe so OneDrive/update crashes are diagnosable.
+fn install_crash_log_hook() {
+    std::panic::set_hook(Box::new(|info| {
+        let msg = format!("{info}");
+        let loc = info
+            .location()
+            .map(|l| format!("{}:{}:{}", l.file(), l.line(), l.column()))
+            .unwrap_or_else(|| "unknown".into());
+        let body = format!(
+            "Njörðr seas CYD miner {} panic\n{loc}\n{msg}\n",
+            env!("CARGO_PKG_VERSION")
+        );
+        if let Ok(exe) = std::env::current_exe() {
+            if let Some(dir) = exe.parent() {
+                let _ = std::fs::write(dir.join("cyd-companion-crash.log"), &body);
+            }
+        }
+        eprintln!("{body}");
+    }));
 }
 
 const C_BG: Color32 = Color32::from_rgb(2, 10, 22); // deep Njörðr sea
