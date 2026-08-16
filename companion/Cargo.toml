@@ -1,0 +1,39 @@
+[package]
+name = "cyd-companion"
+version = "0.8.146"
+edition = "2021"
+description = "Njörðr Seas' CYD miner — USB SHA-256 Bitcoin mining control (PC stratum, board hashes)"
+authors = ["GutFarms <https://github.com/GutFarms>"]
+license = "MIT OR Apache-2.0"
+
+[[bin]]
+name = "cyd-companion"
+path = "src/main.rs"
+
+[dependencies]
+eframe = { version = "=0.27.2", default-features = true, features = ["persistence"] }
+egui = { version = "=0.27.2" }
+egui_extras = { version = "=0.27.2", features = ["image"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1" }
+serialport = { version = "4.6", default-features = true }
+sha2 = "0.10"
+hex = "0.4"
+ureq = { version = "2.12", default-features = false, features = ["json", "tls"] }
+chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
+zip = { version = "0.6", default-features = false, features = ["deflate"] }
+qrcode = { version = "0.14", default-features = false }
+rand = "0.8"
+image = { version = "0.24", default-features = false, features = ["png"] }
+socket2 = "0.5"
+
+[target.'cfg(windows)'.dependencies]
+winreg = "0.52"
+
+[build-dependencies]
+winres = "0.1"
+
+[profile.release]
+lto = true
+codegen-units = 1
+opt-level = 3
