@@ -8116,8 +8116,16 @@ or Flash (BOOT) with BOOT held + Ready."
                                 ui,
                                 "Worker / BTC address",
                                 &mut self.edit_worker,
-                                "bc1… / 1… / 3…",
+                                "bc1… / 1… / 3… or address.workername",
                             );
+                            let resolved = stratum_worker_for_companion(self.edit_worker.trim());
+                            if !resolved.is_empty() {
+                                ui.label(
+                                    RichText::new(format!("Pool username → {resolved}"))
+                                        .color(C_MUTED)
+                                        .size(11.0),
+                                );
+                            }
                             labeled_edit(
                                 ui,
                                 "Stratum",
