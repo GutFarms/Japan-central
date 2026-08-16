@@ -175,9 +175,27 @@ fn collect_bin_candidates(file_name: &str) -> Vec<PathBuf> {
     candidates
 }
 
+/// True when a board fw tag / path names the CYD-D0 flavor.
+pub fn board_fw_is_d0(fw_or_path: &str) -> bool {
+    let f = fw_or_path.to_ascii_lowercase();
+    f.contains("-d0") || f.contains("_d0") || f.contains("d0.bin") || f.contains("d0-merged")
+}
+
+fn app_bin_names(prefer_d0: bool) -> [&'static str; 2] {
+    if prefer_d0 {
+        [APP_BIN_D0_NAME, APP_BIN_NAME]
+    } else {
+        [APP_BIN_NAME, APP_BIN_D0_NAME]
+    }
+}
+
 /// Resolve the app-only `.bin` used for wireless OTA (ESP Update / `cmp ota`).
 pub fn find_app_firmware_image() -> Result<FirmwareImage, String> {
-    for name in [APP_BIN_NAME, APP_BIN_D0_NAME] {
+    find_app_firmware_image_ex(false)
+}
+
+pub fn find_app_firmware_image_ex(prefer_d0: bool) -> Result<FirmwareImage, String> {
+    for name in app_bin_names(prefer_d0) {
         for path in collect_bin_candidates(name) {
             if path.is_file() {
                 let bytes = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
@@ -207,6 +225,19 @@ pub fn find_app_firmware_image() -> Result<FirmwareImage, String> {
 /// Prefer an app-only image for OTA. If `preferred` is already app-sized with ESP magic, use it;
 /// if it is a merged @ 0x0 image, look for the sibling app bin in the same folder / kit paths.
 pub fn resolve_ota_app_image(preferred: Option<&Path>) -> Result<FirmwareImage, String> {
+    let prefer_d0 = preferred
+        .and_then(|p| p.file_name())
+        .and_then(|n| n.to_str())
+        .map(board_fw_is_d0)
+        .unwrap_or(false);
+    resolve_ota_app_image_ex(preferred, prefer_d0)
+}
+
+/// Like [`resolve_ota_app_image`], but picks the D0 app bin first when `prefer_d0`.
+pub fn resolve_ota_app_image_ex(
+    preferred: Option<&Path>,
+    prefer_d0: bool,
+) -> Result<FirmwareImage, String> {
     if let Some(path) = preferred {
         if path.is_file() {
             let name = path
@@ -230,7 +261,7 @@ pub fn resolve_ota_app_image(preferred: Option<&Path>) -> Result<FirmwareImage, 
                 });
             }
             if let Some(dir) = path.parent() {
-                for sib in [APP_BIN_NAME, APP_BIN_D0_NAME] {
+                for sib in app_bin_names(prefer_d0) {
                     let p = dir.join(sib);
                     if p.is_file() {
                         let b = std::fs::metadata(&p).map(|m| m.len()).unwrap_or(0);
@@ -247,7 +278,36 @@ pub fn resolve_ota_app_image(preferred: Option<&Path>) -> Result<FirmwareImage, 
             }
         }
     }
-    find_app_firmware_image()
+    find_app_firmware_image_ex(prefer_d0)
+}
+
+/// Scan an ESP app image for an embedded `N.N.N-sha256` tag (from `kFwTag`).
+pub fn scan_app_bin_fw_tag(bytes: &[u8]) -> Option<String> {
+    // ASCII search for "0." … "-sha256" (optionally "-d0").
+    let needle = b"-sha256";
+    let mut i = 0usize;
+    while i + 12 < bytes.len() {
+        if let Some(rel) = bytes[i..].windows(needle.len()).position(|w| w == needle) {
+            let end = i + rel + needle.len();
+            let mut start = i + rel;
+            while start > 0 && (bytes[start - 1].is_ascii_digit() || bytes[start - 1] == b'.') {
+                start -= 1;
+            }
+            if start < i + rel && bytes[start].is_ascii_digit() {
+                let mut tag = String::from_utf8_lossy(&bytes[start..end]).into_owned();
+                if end + 3 <= bytes.len() && &bytes[end..end + 3] == b"-d0" {
+                    tag.push_str("-d0");
+                }
+                if tag.contains('.') && tag.contains("-sha256") {
+                    return Some(normalize_fw_version(&tag));
+                }
+            }
+            i = end;
+            continue;
+        }
+        break;
+    }
+    None
 }
 
 fn ota_wait_line<R: Read + ?Sized>(
@@ -365,24 +425,27 @@ fn push_firmware_ota_stream<S: Read + Write + ?Sized>(
     }
     stream.flush().map_err(|e| format!("ota final flush: {e}"))?;
 
-    // Board replies CMPACK ota ok then reboots (connection often drops).
+    // Drop leftover lines (esp. CMPACK ota ready) so we never treat ready/begin as success.
+    rx.clear();
+
+    // Board must reply CMPACK ota ok then reboots. Do NOT match bare "CMPACK ota"
+    // (that falsely accepted "CMPACK ota ready" left in the buffer).
     match ota_wait_line(
         stream,
         &mut rx,
         Instant::now() + Duration::from_secs(45),
-        &|t| t.starts_with("CMPACK ota ok") || t.starts_with("CMPACK ota"),
+        &|t| {
+            let low = t.to_ascii_lowercase();
+            low.starts_with("cmpack ota ok")
+        },
         label,
     ) {
         Ok(line) => progress(format!("Board · {line}")),
         Err(e) => {
-            // Full payload delivered — drop on reboot is OK.
-            if sent == total {
-                progress(format!(
-                    "Upload complete ({sent} B) — board rebooting (no final ACK: {e})"
-                ));
-            } else {
-                return Err(e);
-            }
+            // Full send without ok is a FAILED push — board may still be on the old image.
+            return Err(format!(
+                "{label} uploaded {sent}/{total} B but no CMPACK ota ok ({e}). Retry Push; use Flash (BOOT) if it keeps failing."
+            ));
         }
     }
     progress(format!(
@@ -397,13 +460,34 @@ fn push_firmware_ota_stream<S: Read + Write + ?Sized>(
 }
 
 fn load_ota_app_bytes(image: &Path) -> Result<(FirmwareImage, Vec<u8>), String> {
-    let img = resolve_ota_app_image(Some(image))?;
+    load_ota_app_bytes_ex(image, board_fw_is_d0(&image.to_string_lossy()))
+}
+
+fn load_ota_app_bytes_ex(image: &Path, prefer_d0: bool) -> Result<(FirmwareImage, Vec<u8>), String> {
+    let mut img = resolve_ota_app_image_ex(Some(image), prefer_d0)?;
     let bytes = std::fs::read(&img.path).map_err(|e| format!("read {}: {e}", img.path.display()))?;
     if bytes.len() < 64_000 || bytes[0] != 0xE9 {
         return Err(format!(
             "{} is not an ESP app image (need 0xE9 magic, >64 KB)",
             img.path.display()
         ));
+    }
+    if let Some(embedded) = scan_app_bin_fw_tag(&bytes) {
+        let near = img.version.clone();
+        if !near.is_empty() {
+            let a = fw_version_key(&near);
+            let b = fw_version_key(&embedded);
+            if a != b {
+                return Err(format!(
+                    "OTA image mismatch: VERSION.txt says {near} but {} embeds {embedded}. Re-fetch firmware / sync the Firmware folder.",
+                    img.path
+                        .file_name()
+                        .and_then(|n| n.to_str())
+                        .unwrap_or("app.bin")
+                ));
+            }
+        }
+        img.version = embedded;
     }
     Ok((img, bytes))
 }
@@ -415,7 +499,30 @@ pub fn push_firmware_ota(
     progress: &dyn Fn(String),
     cancel: &AtomicBool,
 ) -> Result<(), String> {
-    let (img, bytes) = load_ota_app_bytes(image)?;
+    push_firmware_ota_ex(endpoint, image, false, progress, cancel)
+}
+
+pub fn push_firmware_ota_ex(
+    endpoint: &str,
+    image: &Path,
+    prefer_d0: bool,
+    progress: &dyn Fn(String),
+    cancel: &AtomicBool,
+) -> Result<(), String> {
+    let (img, bytes) = load_ota_app_bytes_ex(image, prefer_d0)?;
+    progress(format!(
+        "OTA image · {} · {} · {} KB",
+        img.path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("app.bin"),
+        if img.version.is_empty() {
+            "?".into()
+        } else {
+            img.version.clone()
+        },
+        bytes.len() / 1024
+    ));
     let addr = endpoint
         .to_socket_addrs()
         .map_err(|e| format!("resolve {endpoint}: {e}"))?
@@ -449,7 +556,30 @@ pub fn push_firmware_ota_on_port<S: Read + Write + ?Sized>(
     progress: &dyn Fn(String),
     cancel: &AtomicBool,
 ) -> Result<(), String> {
-    let (img, bytes) = load_ota_app_bytes(image)?;
+    push_firmware_ota_on_port_ex(stream, image, false, progress, cancel)
+}
+
+pub fn push_firmware_ota_on_port_ex<S: Read + Write + ?Sized>(
+    stream: &mut S,
+    image: &Path,
+    prefer_d0: bool,
+    progress: &dyn Fn(String),
+    cancel: &AtomicBool,
+) -> Result<(), String> {
+    let (img, bytes) = load_ota_app_bytes_ex(image, prefer_d0)?;
+    progress(format!(
+        "OTA image · {} · {} · {} KB",
+        img.path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("app.bin"),
+        if img.version.is_empty() {
+            "?".into()
+        } else {
+            img.version.clone()
+        },
+        bytes.len() / 1024
+    ));
     push_firmware_ota_stream(
         stream,
         "USB OTA",
@@ -469,6 +599,16 @@ pub fn push_firmware_ota_usb(
     progress: &dyn Fn(String),
     cancel: &AtomicBool,
 ) -> Result<(), String> {
+    push_firmware_ota_usb_ex(port, image, false, progress, cancel)
+}
+
+pub fn push_firmware_ota_usb_ex(
+    port: &str,
+    image: &Path,
+    prefer_d0: bool,
+    progress: &dyn Fn(String),
+    cancel: &AtomicBool,
+) -> Result<(), String> {
     use crate::workers::{is_usb_serial_port, open_usb_serial};
 
     if !is_usb_serial_port(port) {
@@ -476,7 +616,20 @@ pub fn push_firmware_ota_usb(
             "USB OTA needs a COM port (got '{port}'). Use Push update (Wi‑Fi) for host:19284."
         ));
     }
-    let (img, bytes) = load_ota_app_bytes(image)?;
+    let (img, bytes) = load_ota_app_bytes_ex(image, prefer_d0)?;
+    progress(format!(
+        "OTA image · {} · {} · {} KB",
+        img.path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("app.bin"),
+        if img.version.is_empty() {
+            "?".into()
+        } else {
+            img.version.clone()
+        },
+        bytes.len() / 1024
+    ));
     let mut last = String::new();
     for baud in [460_800u32, 115_200] {
         if cancel.load(Ordering::SeqCst) {
@@ -3052,7 +3205,7 @@ fn trunc_tail(tail: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{fw_version_key, update_needed};
+    use super::{board_fw_is_d0, fw_version_key, scan_app_bin_fw_tag, update_needed};
 
     #[test]
     fn d0_board_matches_kit_without_d0_suffix() {
@@ -3069,5 +3222,22 @@ mod tests {
             Some(true)
         );
         assert_eq!(update_needed("", "0.8.77-sha256"), None);
+    }
+
+    #[test]
+    fn d0_flavor_detect() {
+        assert!(board_fw_is_d0("0.8.174-sha256-d0"));
+        assert!(board_fw_is_d0("esp32-2432s028-sha256-miner-d0.bin"));
+        assert!(!board_fw_is_d0("0.8.175-sha256"));
+    }
+
+    #[test]
+    fn scan_embedded_fw_tag() {
+        let mut blob = vec![0u8; 64];
+        blob.extend_from_slice(b"noise 0.8.175-sha256-d0 more");
+        assert_eq!(
+            scan_app_bin_fw_tag(&blob).as_deref(),
+            Some("0.8.175-sha256-d0")
+        );
     }
 }

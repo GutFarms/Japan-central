@@ -279,8 +279,15 @@ impl AssistMemory {
     pub fn recently_failed(&self, action_kind: &str, board_mac: &str) -> bool {
         let mac = board_mac.trim().to_ascii_lowercase();
         let mut fails = 0u32;
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
         for f in self.fixes.iter().rev().take(12) {
-            if !f.action_kind.eq_ignore_ascii_case(action_kind) {
+            if !f.action_kind.eq_ignore_ascii_case(action_kind)
+                && !(action_kind.eq_ignore_ascii_case("bench")
+                    && f.action_kind.eq_ignore_ascii_case("bench-timeout"))
+            {
                 continue;
             }
             if !mac.is_empty()
@@ -288,6 +295,12 @@ impl AssistMemory {
                 && !f.board_mac.eq_ignore_ascii_case(&mac)
             {
                 continue;
+            }
+            // Bench USB timeout: one hit is enough for a long cool-down (~15 min).
+            if f.action_kind.eq_ignore_ascii_case("bench-timeout")
+                && now.saturating_sub(f.ts_unix) < 900
+            {
+                return true;
             }
             if f.worsened() {
                 fails += 1;
@@ -297,6 +310,26 @@ impl AssistMemory {
             }
         }
         false
+    }
+
+    /// Record a bench USB timeout so watch skips auto-bench for a while.
+    pub fn record_bench_timeout(&mut self, board_mac: &str, before_khs: f64) {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+        self.push_fix(AssistFixRecord {
+            label: "bench-timeout".into(),
+            action_kind: "bench-timeout".into(),
+            before_khs,
+            after_khs: before_khs,
+            delta_khs: 0.0,
+            accept_pct_before: 100.0,
+            accept_pct_after: 100.0,
+            board_mac: board_mac.to_string(),
+            ts_unix: now,
+            user_vote: -1,
+        });
     }
 
     pub fn memory_prompt_line(&self) -> String {
@@ -742,13 +775,23 @@ pub fn evaluate_mining_watch(snap: &AssistSnapshot, memory: &AssistMemory) -> Wa
         }
         let soft = per < snap.target_khs_per_board || snap.boards_below_target_khs > 0;
         let cliff = snap.rate_cliff && snap.baseline_khs > 20.0;
+        // Healthy ~200 kH/s CYD: do not thrash auto-bench while already mining well.
+        let rate_healthy = per >= 120.0
+            && per + 5.0 >= snap.target_khs_per_board * 0.85
+            && !cliff
+            && !snap.jobs_stalled;
         let bench_failed = memory.recently_failed("bench", &snap.board_mac)
             || memory.recently_failed("optimize-bench", &snap.board_mac)
-            || memory.recently_failed("bench-done", &snap.board_mac);
-        if snap.stratum_authorized && !snap.bench_busy && (soft || cliff || snap.jobs_stalled) {
+            || memory.recently_failed("bench-done", &snap.board_mac)
+            || memory.recently_failed("bench-timeout", &snap.board_mac);
+        if snap.stratum_authorized
+            && !snap.bench_busy
+            && !rate_healthy
+            && (soft || cliff || snap.jobs_stalled)
+        {
             if bench_failed {
                 notes.push(
-                    "Bench recently hurt rate — skipping auto-bench; try clock/restart first."
+                    "Bench recently hurt rate or timed out — skipping auto-bench; try clock/restart first."
                         .into(),
                 );
                 if snap.target_mhz < 240 {
@@ -781,14 +824,21 @@ pub fn evaluate_mining_watch(snap: &AssistSnapshot, memory: &AssistMemory) -> Wa
                 reason: why,
             });
             }
-        } else if snap.stratum_authorized && khs < 1.0 && snap.stratum_jobs > 0 && !snap.bench_busy
+        } else if snap.stratum_authorized
+            && khs < 1.0
+            && snap.stratum_jobs > 0
+            && !snap.bench_busy
+            && !bench_failed
         {
-            if !bench_failed {
             steps.push(WatchStep {
                 action: AssistAction::BenchBoards,
                 reason: "Jobs flowing but hashrate ~0 — retune boards".into(),
             });
-            }
+        } else if rate_healthy {
+            notes.push(format!(
+                "Rate healthy (~{:.0} kH/s/board) — skipping auto-bench.",
+                per
+            ));
         }
         if snap.baseline_khs > 0.0 {
             notes.push(format!(

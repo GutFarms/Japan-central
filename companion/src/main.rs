@@ -37,10 +37,10 @@ use app_update::{
     check_app_update_ex, running_version, update_companion_app_ex, AppRemoteInfo,
 };
 use flash_update::{
-    ensure_firmware_image, fetch_latest_firmware, find_firmware_image, firmware_is_custom,
-    flash_merged_bin, load_firmware_bin, nudge_usb_reboot_for_push, push_firmware_ota,
-    push_firmware_ota_usb, resolve_ota_app_image, update_needed,
-    FirmwareImage, FlashControl,
+    board_fw_is_d0, ensure_firmware_image, fetch_latest_firmware, find_firmware_image,
+    firmware_is_custom, flash_merged_bin, load_firmware_bin, nudge_usb_reboot_for_push,
+    push_firmware_ota_ex, push_firmware_ota_on_port_ex, push_firmware_ota_usb_ex,
+    resolve_ota_app_image, resolve_ota_app_image_ex, update_needed, FirmwareImage, FlashControl,
 };
 use live_bar::{
     default_header_coins, format_change, format_usd, COIN_CATALOG, LiveFeed,
@@ -2118,8 +2118,13 @@ impl CompanionApp {
     }
 
     fn schedule_assist_remeasure(&mut self, label: impl Into<String>, before_khs: f64) {
+        let label = label.into();
+        // Don't arm a 0→0 remesure at bench *start* — wait for bench-done.
+        if label == "bench" && before_khs < 1.0 {
+            return;
+        }
         self.assist_remeasure = Some((
-            label.into(),
+            label,
             before_khs,
             Instant::now() + Duration::from_secs(45),
         ));
@@ -2130,6 +2135,15 @@ impl CompanionApp {
             return;
         };
         if Instant::now() < due {
+            return;
+        }
+        // Still benching — push remesure out until the board finishes.
+        if self.bench_busy {
+            self.assist_remeasure = Some((
+                label,
+                before,
+                Instant::now() + Duration::from_secs(20),
+            ));
             return;
         }
         self.assist_remeasure = None;
@@ -3762,16 +3776,25 @@ impl CompanionApp {
         if self.mining {
             self.stop_mine();
         }
+        let prefer_d0 = board_fw_is_d0(&self.fw_label)
+            || self
+                .firmware
+                .as_ref()
+                .map(|f| board_fw_is_d0(&f.path.to_string_lossy()))
+                .unwrap_or(false);
         let image = if wifi_ota {
-            resolve_ota_app_image(self.firmware.as_ref().map(|f| f.path.as_path()))
-                .ok()
-                .map(|fw| fw.path.to_string_lossy().into_owned())
-                .or_else(|| {
-                    self.firmware
-                        .as_ref()
-                        .map(|fw| fw.path.to_string_lossy().into_owned())
-                })
-                .unwrap_or_default()
+            resolve_ota_app_image_ex(
+                self.firmware.as_ref().map(|f| f.path.as_path()),
+                prefer_d0,
+            )
+            .ok()
+            .map(|fw| fw.path.to_string_lossy().into_owned())
+            .or_else(|| {
+                self.firmware
+                    .as_ref()
+                    .map(|fw| fw.path.to_string_lossy().into_owned())
+            })
+            .unwrap_or_default()
         } else {
             self.firmware
                 .as_ref()
@@ -4001,8 +4024,8 @@ impl CompanionApp {
     fn begin_post_flash_verify(&mut self, port: String) {
         self.post_flash_verify = Some(PostFlashVerify {
             port: port.clone(),
-            attempts_left: 2,
-            deadline: Instant::now() + Duration::from_secs(75),
+            attempts_left: 5,
+            deadline: Instant::now() + Duration::from_secs(120),
         });
         let via = if Self::is_wifi_ota_endpoint(&port) {
             "Wi‑Fi"
@@ -4012,11 +4035,11 @@ impl CompanionApp {
         self.update_status = format!("Update OK — booting board, then verifying on {port} ({via})…");
         self.flash_phase = "Reconnecting".into();
         self.flash_progress = self.flash_progress.max(0.88);
-        // Wi‑Fi OTA: board reboots longer before TCP comes back.
+        // USB OTA reboots shortly after ACK; give CH340 + companion listen time before verify.
         let delay = if Self::is_wifi_ota_endpoint(&port) {
-            Duration::from_secs(8)
+            Duration::from_secs(10)
         } else {
-            Duration::from_secs(4)
+            Duration::from_secs(10)
         };
         self.schedule_post_flash_reconnect(port, delay);
     }
@@ -4101,13 +4124,26 @@ impl CompanionApp {
         }
         match update_needed(board_fw, &kit) {
             Some(true) => {
-                // Flash write already succeeded and the board answers USB — don't
-                // thrash COM over a tag mismatch (kit VERSION vs board kFwTag).
+                // Board still on the old tag — Push/OTA did not stick. Fail verify so
+                // the UI does not claim success (e.g. 0.8.174 after a reported 0.8.175 push).
                 self.push_log(
                     LogKind::Warn,
                     format!("Post-flash tag differs · board {board_fw} · kit {kit}"),
                 );
-                self.finish_post_flash_ok(&format!("{board_fw} (kit expected {kit})"));
+                let attempts = self
+                    .post_flash_verify
+                    .as_ref()
+                    .map(|v| v.attempts_left)
+                    .unwrap_or(0);
+                if attempts > 0 {
+                    self.retry_post_flash_verify(&format!(
+                        "fw still {board_fw}, expected {kit}"
+                    ));
+                } else {
+                    self.fail_post_flash_verify(format!(
+                        "Update did not stick — board still {board_fw}, kit is {kit}. Retry Push update; if it fails again use Flash (BOOT)."
+                    ));
+                }
             }
             _ => {
                 self.finish_post_flash_ok(board_fw);
@@ -7049,6 +7085,16 @@ impl App for CompanionApp {
                         let before = self.assist_baseline_khs().max(self.displayed_khs as f64);
                         self.schedule_assist_remeasure("bench-done", before);
                         self.nudge_assist_watch("bench_done");
+                    }
+                    if low.contains("bench failed") && low.contains("timeout") {
+                        let before = self.assist_baseline_khs().max(self.displayed_khs as f64);
+                        self.assist_memory
+                            .record_bench_timeout(&self.board_mac, before);
+                        self.bench_busy = false;
+                        self.push_log(
+                            LogKind::Info,
+                            "Assist: bench timed out — cooling auto-bench ~15 min".into(),
+                        );
                     }
                     let kind = if low.contains("job") || low.contains("share") || low.contains("pool")
                     {
@@ -12153,6 +12199,8 @@ Power a 2nd board nearby with wall/power-bank only (no PC cable)."
                             .position(|b| port_names_match(&b.name, &port))
                         {
                             let mut b = boards.remove(idx);
+                            let prefer_d0 = board_fw_is_d0(&b.fw)
+                                || board_fw_is_d0(&image);
                             let _ = usb_cmd(&mut b.port, &mut b.rx, "cmp stop");
                             b.port.clear();
                             b.rx.clear();
@@ -12163,8 +12211,8 @@ Power a 2nd board nearby with wall/power-bank only (no PC cable)."
                                 } else {
                                     None
                                 };
-                                resolve_ota_app_image(preferred).or_else(|_| {
-                                    resolve_ota_app_image(None)
+                                resolve_ota_app_image_ex(preferred, prefer_d0).or_else(|_| {
+                                    resolve_ota_app_image_ex(None, prefer_d0)
                                 })
                             };
                             if let Ok(app) = app {
@@ -12180,15 +12228,17 @@ Power a 2nd board nearby with wall/power-bank only (no PC cable)."
                                     let _ = progress_tx.send(NetMsg::FlashProgress(line));
                                 };
                                 let ota = match &mut b.port {
-                                    BoardIo::Serial(p) => flash_update::push_firmware_ota_on_port(
+                                    BoardIo::Serial(p) => push_firmware_ota_on_port_ex(
                                         &mut **p,
                                         &app.path,
+                                        prefer_d0,
                                         &progress,
                                         &cancel,
                                     ),
-                                    BoardIo::Tcp(s) => flash_update::push_firmware_ota_on_port(
+                                    BoardIo::Tcp(s) => push_firmware_ota_on_port_ex(
                                         s,
                                         &app.path,
+                                        prefer_d0,
                                         &progress,
                                         &cancel,
                                     ),
@@ -12307,6 +12357,7 @@ Power a 2nd board nearby with wall/power-bank only (no PC cable)."
                                 return Err("flash cancelled".into());
                             }
                             if wifi_ota {
+                                let prefer_d0 = board_fw_is_d0(&image);
                                 let img = {
                                     let local = std::path::PathBuf::from(&image);
                                     let preferred = if !image.is_empty() && local.is_file() {
@@ -12314,14 +12365,23 @@ Power a 2nd board nearby with wall/power-bank only (no PC cable)."
                                     } else {
                                         None
                                     };
-                                    resolve_ota_app_image(preferred).or_else(|_| {
+                                    resolve_ota_app_image_ex(preferred, prefer_d0).or_else(|_| {
                                         ensure_firmware_image(&progress).and_then(|merged| {
-                                            resolve_ota_app_image(Some(merged.path.as_path()))
+                                            resolve_ota_app_image_ex(
+                                                Some(merged.path.as_path()),
+                                                prefer_d0,
+                                            )
                                         })
                                     })?
                                 };
                                 let _ = done_tx.send(NetMsg::FirmwareFetched(Ok(img.clone())));
-                                push_firmware_ota(&port, &img.path, &progress, &cancel)?;
+                                push_firmware_ota_ex(
+                                    &port,
+                                    &img.path,
+                                    prefer_d0,
+                                    &progress,
+                                    &cancel,
+                                )?;
                                 return Ok(format!(
                                     "Firmware {} pushed over Wi‑Fi to {port}",
                                     if img.version.is_empty() {
@@ -12353,13 +12413,16 @@ Power a 2nd board nearby with wall/power-bank only (no PC cable)."
                                 progress(
                                     "Live Push — USB app OTA (no BOOT, no hold)…".into(),
                                 );
-                                match resolve_ota_app_image(Some(img.path.as_path()))
-                                    .or_else(|_| resolve_ota_app_image(None))
+                                let prefer_d0 = board_fw_is_d0(&image)
+                                    || board_fw_is_d0(&img.path.to_string_lossy());
+                                match resolve_ota_app_image_ex(Some(img.path.as_path()), prefer_d0)
+                                    .or_else(|_| resolve_ota_app_image_ex(None, prefer_d0))
                                 {
                                     Ok(app) => {
-                                        match push_firmware_ota_usb(
+                                        match push_firmware_ota_usb_ex(
                                             &port,
                                             &app.path,
+                                            prefer_d0,
                                             &progress,
                                             &cancel,
                                         ) {
@@ -13269,6 +13332,7 @@ fn usb_cmd_ex(
     // Bigger writes + single flush cut job-push latency a lot vs per-chunk sleeps.
     let (wait_ms, retries, chunk, gap_ms) = if cmd.contains("bench") {
         // One long wait — retrying restarts a board that may still be mid-tune.
+        // Old firmware (no CMPBENCHPROG) can hang the full window; fail-fast below.
         (180_000u64, 1usize, 128usize, 1u64)
     } else if cmd.contains(" via ") {
         // Firmware via wait ≤4.5s + mid-resend; leave margin for USB drain.
@@ -13309,6 +13373,8 @@ fn usb_cmd_ex(
         let _ = port.flush();
         let deadline = Instant::now() + Duration::from_millis(wait_ms);
         let mut last_pump = Instant::now() - Duration::from_millis(200);
+        let mut saw_bench_prog = false;
+        let bench_fail_fast = Instant::now() + Duration::from_secs(35);
         while Instant::now() < deadline {
             // Abort USB waits for board update — including cmp stop/status that used
             // to hold the mine-worker so UpdateFirmware never started (UI frozen at 2%).
@@ -13341,12 +13407,23 @@ fn usb_cmd_ex(
                     return Err(reply);
                 }
                 if reply.starts_with("CMPBENCHPROG") {
+                    saw_bench_prog = true;
                     if let Some(tx) = progress {
                         let _ = tx.send(NetMsg::BenchProgress(reply));
                     }
                     continue;
                 }
                 return Ok(reply);
+            }
+            // Old FW: no live progress lines — don't sit 180s on a hung bench.
+            if cmd.contains("bench")
+                && !saw_bench_prog
+                && Instant::now() >= bench_fail_fast
+            {
+                return Err(format!(
+                    "USB timeout waiting for reply to `{}` (no CMPBENCHPROG — update board firmware)",
+                    cmd.chars().take(56).collect::<String>()
+                ));
             }
             thread::sleep(Duration::from_millis(2));
         }
