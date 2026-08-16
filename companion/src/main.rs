@@ -3051,25 +3051,34 @@ impl CompanionApp {
             self.last_error = "Enter worker / Bitcoin address.".into();
             return;
         }
+        let pool_user = stratum_worker_for_companion(self.edit_worker.trim());
+        let pool_pass = stratum_password(&self.edit_password);
         let _ = self.cmd_tx.send(NetCmd::StartMine {
             stratum: self.edit_stratum.trim().to_string(),
             worker: self.edit_worker.trim().to_string(),
-            password: self.edit_password.clone(),
+            password: pool_pass,
         });
         self.mining = true;
         self.session_started = Some(Instant::now());
         self.session_hash_start = self.status.hashes;
         self.reset_share_session_ui();
-        self.last_ok = "Starting pool on PC → pushing work over USB…".into();
+        self.last_ok = format!("Starting pool as {pool_user}…");
         self.push_log(
             LogKind::Info,
             format!(
-                "Start mining → {} as {} · linked USB/Wi‑Fi={} · mesh peers from gateways",
+                "Start mining → {} as {pool_user} · linked USB/Wi‑Fi={} · mesh peers from gateways",
                 self.edit_stratum.trim(),
-                self.edit_worker.trim(),
                 self.connected_workers.len().max(usize::from(self.usb_open)),
             ),
         );
+        if pool_user != self.edit_worker.trim() {
+            self.push_log(
+                LogKind::Info,
+                format!(
+                    "Pool username {pool_user} — on HMPool paste the BTC address (worker suffix after the dot)"
+                ),
+            );
+        }
         self.push_log_detail(
             LogKind::Info,
             format!(
@@ -5543,8 +5552,18 @@ hashrate with Continuous watch. Optional: Ollama on this PC, or a cloud API.",
                 ui,
                 "Worker",
                 &mut self.edit_worker,
-                "Bitcoin address (bc1... / 1... / 3...)",
+                "Bitcoin address or address.workername",
             );
+            let resolved = stratum_worker_for_companion(self.edit_worker.trim());
+            if !resolved.is_empty() {
+                ui.label(
+                    RichText::new(format!(
+                        "Pool registers as {resolved} — HMPool dashboard: paste the BTC address before the dot"
+                    ))
+                    .color(C_MUTED)
+                    .size(11.0),
+                );
+            }
             ui.horizontal(|ui| {
                 ui.label(RichText::new("Password").color(C_MUTED).size(12.0));
                 ui.add(
@@ -11200,9 +11219,11 @@ Power a 2nd board nearby with wall/power-bank only (no PC cable)."
                     }
                     mine_endpoint = endpoint.clone();
                     // Bare BTC address → address.companion so HMPool lists a named worker.
+                    // Boards get the SAME username (not a MAC .cydXXXX) so the dashboard
+                    // shows one worker whether Companion or the board submits.
                     let pool_worker = stratum_worker_for_companion(&worker);
                     mine_worker_name = pool_worker.clone();
-                    mine_password = password.clone();
+                    mine_password = stratum_password(&password);
                     reconnect_backoff = Duration::from_secs(1);
                     reconnect_at = None;
                     // Connect the pool FIRST so authorize is not starved by mesh via /
@@ -11216,7 +11237,7 @@ Power a 2nd board nearby with wall/power-bank only (no PC cable)."
                             mesh.len()
                         ),
                     );
-                    let mut client = StratumClient::new(pool_worker.clone(), password.clone());
+                    let mut client = StratumClient::new(pool_worker.clone(), mine_password.clone());
                     let mut pool_ready = false;
                     match client.connect(&endpoint) {
                         Ok(()) => {
@@ -11287,7 +11308,7 @@ Power a 2nd board nearby with wall/power-bank only (no PC cable)."
                                         "cmp pool url={}&worker={}&pass={}&indep=1",
                                         urlenc(&endpoint),
                                         urlenc(&board_worker),
-                                        urlenc(&password)
+                                        urlenc(&mine_password)
                                     );
                                     match usb_cmd(&mut b.port, &mut b.rx, &cmd) {
                                         Ok(line) if line.to_ascii_lowercase().contains("cmpack") => {
@@ -11298,7 +11319,7 @@ Power a 2nd board nearby with wall/power-bank only (no PC cable)."
                                                 &msg_tx,
                                                 LogKind::Usb,
                                                 format!(
-                                                    "Board {} ← pool creds {endpoint} as {board_worker} (Companion keeps feeding jobs until board pool authorizes)",
+                                                    "Board {} ← pool creds {endpoint} as {board_worker} (same pool user as Companion; keeps feeding jobs until board pool authorizes)",
                                                     b.name
                                                 ),
                                             );
@@ -13172,32 +13193,33 @@ fn board_indep_live(st: &StatusJson) -> bool {
     st.pool_phase.eq_ignore_ascii_case("ok")
 }
 
-/// HMPool-style `address.worker` label. Bare addresses get a stable `.cydXXXX` suffix
-/// from the board MAC so the pool dashboard lists a visible named worker.
-fn stratum_worker_for_board(base: &str, mac: &str) -> String {
-    let w = base.trim();
-    if w.is_empty() || w.contains('.') {
-        return w.to_string();
-    }
-    let hex: String = normalize_mac(mac)
-        .chars()
-        .filter(|c| c.is_ascii_hexdigit())
-        .collect();
-    let tail = if hex.len() >= 4 {
-        hex[hex.len() - 4..].to_ascii_lowercase()
-    } else {
-        "board".into()
-    };
-    format!("{w}.cyd{tail}")
-}
-
-/// Companion PC stratum session — bare address becomes `address.companion`.
+/// HMPool-style `address.worker` label.
+/// Bare addresses become `address.companion` so the dashboard always lists a named worker.
+/// Companion PC and every board use this same string — splitting `.companion` vs `.cydXXXX`
+/// made HMPool look like the worker never registered.
 fn stratum_worker_for_companion(base: &str) -> String {
     let w = base.trim();
-    if w.is_empty() || w.contains('.') {
+    if w.is_empty() {
+        return String::new();
+    }
+    if w.contains('.') {
         return w.to_string();
     }
     format!("{w}.companion")
+}
+
+/// Board onboard stratum uses the same pool username as Companion (no MAC suffix).
+fn stratum_worker_for_board(base: &str, _mac: &str) -> String {
+    stratum_worker_for_companion(base)
+}
+
+fn stratum_password(raw: &str) -> String {
+    let p = raw.trim();
+    if p.is_empty() {
+        "x".into()
+    } else {
+        p.to_string()
+    }
 }
 
 fn try_submit_board_share(
