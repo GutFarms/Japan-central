@@ -935,6 +935,7 @@ struct CompanionApp {
     last_assist_watch: Instant,
     last_assist_bench_at: Instant,
     last_assist_restart_at: Instant,
+    last_assist_pool_at: Instant,
     last_assist_watch_sig: String,
     last_assist_llm_anomaly: Instant,
     last_assist_anomaly_sig: String,
@@ -1022,8 +1023,8 @@ impl CompanionApp {
                     assist_base_url = p.assist_base_url;
                     assist_model = p.assist_model;
                     assist_backend = AssistBackend::parse(&p.assist_backend);
-                    assist_watch = p.assist_watch;
-                    assist_llm_anomaly = p.assist_llm_anomaly;
+                    assist_watch = true; // always-on — ignore persisted off
+                    assist_llm_anomaly = true;
                     assist_memory = p.assist_memory;
                     if !p.header_coins.is_empty() {
                         header_coins = p
@@ -1173,7 +1174,7 @@ impl CompanionApp {
             header_coins,
             assist_chat: VecDeque::from([(
                 AssistRole::Assistant,
-                "Built-in Local AI watches stratum + hashrate inside Companion (no cloud). Continuous watch auto-fixes; optional Ollama/Cloud in Settings.".into(),
+                "Built-in Local AI watches stratum + hashrate inside Companion (no cloud). Continuous watch is always on and auto-fixes pool/connect/clock/bench; optional Ollama/Cloud in Settings.".into(),
             )]),
             assist_llm: Vec::new(),
             assist_input: String::new(),
@@ -1191,6 +1192,7 @@ impl CompanionApp {
             last_assist_watch: Instant::now() - Duration::from_secs(30),
             last_assist_bench_at: Instant::now() - Duration::from_secs(600),
             last_assist_restart_at: Instant::now() - Duration::from_secs(600),
+            last_assist_pool_at: Instant::now() - Duration::from_secs(600),
             last_assist_watch_sig: String::new(),
             last_assist_llm_anomaly: Instant::now() - Duration::from_secs(600),
             last_assist_anomaly_sig: String::new(),
@@ -1889,7 +1891,20 @@ impl CompanionApp {
                 if parts.is_empty() {
                     "No pool fields provided.".into()
                 } else {
-                    format!("Pool config updated: {}", parts.join(", "))
+                    // Remember ESP-friendly ports that cleared hard-diff / auth issues.
+                    if self.edit_stratum.contains(":3337") {
+                        self.assist_memory.preferred_stratum = self.edit_stratum.clone();
+                    }
+                    // Apply immediately — watch SetPoolConfig used to only edit fields.
+                    if self.usb_open || !self.connected_workers.is_empty() {
+                        self.start_mine();
+                        format!(
+                            "Pool config updated: {} — restarting mine",
+                            parts.join(", ")
+                        )
+                    } else {
+                        format!("Pool config updated: {}", parts.join(", "))
+                    }
                 }
             }
             AssistAction::StartMining => {
@@ -2327,7 +2342,7 @@ impl CompanionApp {
     }
 
     fn spawn_assist_anomaly_llm(&mut self, anomalies: &[String]) {
-        if !self.assist_llm_anomaly || self.assist_busy || anomalies.is_empty() {
+        if !self.assist_llm_anomaly || anomalies.is_empty() {
             return;
         }
         if self.last_assist_llm_anomaly.elapsed() < Duration::from_secs(180) {
@@ -2342,9 +2357,10 @@ impl CompanionApp {
 
         let client = self.assist_client();
         // Built-in path (default): escalate with on-device optimizer — no network.
+        // Do not gate on assist_busy (chat must not block continuous auto-fix).
         if !client.uses_http() {
             let snap = self.assist_snapshot();
-            let (say, pending) = builtin_anomaly_plan(anomalies, &snap);
+            let (say, pending) = builtin_anomaly_plan(anomalies, &snap, &self.assist_memory);
             self.assist_chat
                 .push_back((AssistRole::Assistant, say));
             if !pending.is_empty() {
@@ -2354,7 +2370,7 @@ impl CompanionApp {
             }
             return;
         }
-        if !client.configured() {
+        if self.assist_busy || !client.configured() {
             return;
         }
         let snap = self.assist_snapshot();
@@ -2392,12 +2408,16 @@ impl CompanionApp {
             self.assist_jobs_bump_at = Instant::now();
         }
 
-        // Keep continuous watch alive during chat/LLM rounds — only flash pauses it.
-        if !self.assist_watch || self.flash_busy() {
+        // Always-on: Continuous watch cannot be turned off (user request).
+        // Chat/LLM must not pause it — only flash owns the COM.
+        self.assist_watch = true;
+        self.assist_llm_anomaly = true;
+        if self.flash_busy() {
             return;
         }
         let forced = self.assist_watch_force;
-        if !forced && self.last_assist_watch.elapsed() < Duration::from_secs(20) {
+        // Tighter cadence so errors are fixed promptly while mining.
+        if !forced && self.last_assist_watch.elapsed() < Duration::from_secs(12) {
             return;
         }
         self.assist_watch_force = false;
@@ -2416,9 +2436,14 @@ impl CompanionApp {
                 {
                     true
                 }
+                // Cooldown even when mining was cleared by auth-fail (prevents reconnect thrash).
                 AssistAction::StartMining
-                    if self.mining
-                        && self.last_assist_restart_at.elapsed() < Duration::from_secs(90) =>
+                    if self.last_assist_restart_at.elapsed() < Duration::from_secs(90) =>
+                {
+                    true
+                }
+                AssistAction::SetPoolConfig { .. }
+                    if self.last_assist_pool_at.elapsed() < Duration::from_secs(120) =>
                 {
                     true
                 }
@@ -2440,6 +2465,11 @@ impl CompanionApp {
                 AssistAction::StartMining => {
                     self.last_assist_restart_at = Instant::now();
                     self.schedule_assist_remeasure("mine-restart", before_khs);
+                }
+                AssistAction::SetPoolConfig { .. } => {
+                    self.last_assist_pool_at = Instant::now();
+                    self.last_assist_restart_at = Instant::now();
+                    self.schedule_assist_remeasure("pool-fix", before_khs);
                 }
                 AssistAction::ConnectBoard { .. } | AssistAction::ScanWorkers => {
                     self.last_assist_restart_at = Instant::now();
@@ -2489,18 +2519,21 @@ impl CompanionApp {
             );
             ui.add_space(6.0);
             ui.horizontal_wrapped(|ui| {
-                let before = self.assist_watch;
-                ui.checkbox(&mut self.assist_watch, "Continuous watch (auto)");
-                if self.assist_watch != before && self.assist_watch {
+                ui.label(
+                    RichText::new("Continuous watch · always on (auto-fixes)")
+                        .color(C_LIME)
+                        .strong()
+                        .size(13.0),
+                );
+                ui.label(
+                    RichText::new("· anomaly escalate on")
+                        .color(C_MUTED)
+                        .size(12.0),
+                );
+                if soft_button(ui, "Watch now", 100.0).clicked() && !self.assist_busy {
                     self.last_assist_watch = Instant::now() - Duration::from_secs(60);
                     self.last_assist_watch_sig.clear();
                     self.assist_watch_force = true;
-                }
-                ui.checkbox(
-                    &mut self.assist_llm_anomaly,
-                    "Escalate anomalies (built-in AI)",
-                );
-                if soft_button(ui, "Watch now", 100.0).clicked() && !self.assist_busy {
                     self.submit_assist("Watch stratum".into());
                 }
                 if soft_button(ui, "Max hashrate", 110.0).clicked() && !self.assist_busy {

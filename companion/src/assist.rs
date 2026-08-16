@@ -657,6 +657,60 @@ Current snapshot:\n{}",
 }
 
 /// Continuous-monitoring playbook from live telemetry (no LLM required).
+/// Known HM CPU / hard share port → ESP-friendly IoT port.
+fn esp_friendly_pool_url(stratum: &str) -> Option<&'static str> {
+    let s = stratum.trim().to_ascii_lowercase();
+    if s.is_empty() {
+        return None;
+    }
+    // HM public CPU port is far too hard for ~200 kH/s CYDs.
+    if s.contains(":3335") {
+        return Some("stratum+tcp://btc.hmpool.io:3337");
+    }
+    None
+}
+
+fn already_on_pool(stratum: &str, want: &str) -> bool {
+    stratum.trim().eq_ignore_ascii_case(want.trim())
+}
+
+/// Auto pool remediation when the URL is a known-bad ESP port (or memory prefers one).
+fn watch_pool_fix_step(snap: &AssistSnapshot, memory: &AssistMemory) -> Option<WatchStep> {
+    let want = if !memory.preferred_stratum.trim().is_empty() {
+        memory.preferred_stratum.trim().to_string()
+    } else if let Some(u) = esp_friendly_pool_url(&snap.stratum) {
+        u.to_string()
+    } else {
+        return None;
+    };
+    if already_on_pool(&snap.stratum, &want) {
+        // Still on preferred — only rewrite when current URL is explicitly :3335.
+        if esp_friendly_pool_url(&snap.stratum).is_none() {
+            return None;
+        }
+    }
+    // Only auto-switch when current looks like the known-bad port, or preferred differs
+    // from an active :3335 session.
+    if esp_friendly_pool_url(&snap.stratum).is_none() && !snap.stratum.contains(":3335") {
+        return None;
+    }
+    Some(WatchStep {
+        action: AssistAction::SetPoolConfig {
+            stratum: Some(want.clone()),
+            worker: None,
+            password: None,
+        },
+        reason: format!(
+            "Pool {} → {want} (ESP/IoT share difficulty)",
+            if snap.stratum.is_empty() {
+                "unset"
+            } else {
+                snap.stratum.as_str()
+            }
+        ),
+    })
+}
+
 pub fn evaluate_mining_watch(snap: &AssistSnapshot, memory: &AssistMemory) -> WatchReport {
     let mut steps = Vec::new();
     let mut notes = Vec::new();
@@ -692,6 +746,14 @@ pub fn evaluate_mining_watch(snap: &AssistSnapshot, memory: &AssistMemory) -> Wa
         }
         notes.push("Fleet idle: need a linked board before stratum/hashrate watch can run.".into());
     } else if !snap.mining {
+        // Auth-fail clears mining — fix known-bad pool ports before re-auth thrash.
+        if let Some(fix) = watch_pool_fix_step(snap, memory) {
+            notes.push(
+                "Mining off after pool trouble — switching to ESP-friendly port, then restart."
+                    .into(),
+            );
+            steps.push(fix);
+        }
         steps.push(WatchStep {
             action: AssistAction::StartMining,
             reason: "Board linked but mining off — start stratum + job push".into(),
@@ -704,7 +766,7 @@ pub fn evaluate_mining_watch(snap: &AssistSnapshot, memory: &AssistMemory) -> Wa
                 || !snap.stratum_last_error.is_empty()
             {
                 notes.push(format!(
-                    "Stratum AUTH FAIL — fix worker/BTC address (now {}). {}",
+                    "Stratum AUTH FAIL — worker={} {}",
                     if snap.worker.is_empty() {
                         "empty"
                     } else {
@@ -716,6 +778,20 @@ pub fn evaluate_mining_watch(snap: &AssistSnapshot, memory: &AssistMemory) -> Wa
                         trunc(&snap.stratum_last_error, 100)
                     }
                 ));
+                if let Some(fix) = watch_pool_fix_step(snap, memory) {
+                    steps.push(fix);
+                } else if snap.worker.trim().is_empty() {
+                    notes.push(
+                        "Worker/BTC address empty — set wallet.companion in Settings (Assist cannot invent an address)."
+                            .into(),
+                    );
+                } else {
+                    // Soft reconnect once; cooldown in tick prevents auth thrash.
+                    steps.push(WatchStep {
+                        action: AssistAction::StartMining,
+                        reason: "Auth fail — soft restart pool session".into(),
+                    });
+                }
             } else if !snap.stratum_connected {
                 steps.push(WatchStep {
                     action: AssistAction::StartMining,
@@ -749,20 +825,27 @@ pub fn evaluate_mining_watch(snap: &AssistSnapshot, memory: &AssistMemory) -> Wa
             if snap.stratum_jobs == 0 && snap.stratum_submits == 0 {
                 notes.push("Authorized but no jobs yet — waiting for pool notify.".into());
             }
-            if snap.stratum_difficulty >= 0.05
+            let hard_diff = snap.stratum_difficulty >= 0.05
                 && snap.hashrate_hs > 50_000.0
-                && snap.expected_shares_per_hour < 5.0
-            {
+                && snap.expected_shares_per_hour < 5.0;
+            let reject_pressure =
+                snap.session_accepted + snap.session_rejected >= 8 && snap.accept_rate_pct < 70.0;
+            if hard_diff {
                 notes.push(format!(
-                    "Share diff {:.3} is hard for ~{:.0} kH/s — use an ESP/IoT pool port (HM :3337) or wait for vardiff.",
+                    "Share diff {:.3} is hard for ~{:.0} kH/s — need ESP/IoT pool port (HM :3337).",
                     snap.stratum_difficulty, snap.hashrate_khs
                 ));
             }
-            if snap.session_accepted + snap.session_rejected >= 8 && snap.accept_rate_pct < 70.0 {
+            if reject_pressure {
                 notes.push(format!(
                     "Reject pressure high ({:.0}% accepts) — check difficulty / worker / stale jobs.",
                     snap.accept_rate_pct
                 ));
+            }
+            if (hard_diff || reject_pressure) && esp_friendly_pool_url(&snap.stratum).is_some() {
+                if let Some(fix) = watch_pool_fix_step(snap, memory) {
+                    steps.push(fix);
+                }
             }
         }
 
@@ -1174,8 +1257,9 @@ fn builtin_brief(snap: &AssistSnapshot) -> String {
 pub fn builtin_anomaly_plan(
     anomalies: &[String],
     snap: &AssistSnapshot,
+    memory: &AssistMemory,
 ) -> (String, Vec<PendingTool>) {
-    let report = evaluate_mining_watch(snap, &AssistMemory::default());
+    let report = evaluate_mining_watch(snap, memory);
     let mut tools: Vec<PendingTool> = report
         .steps
         .into_iter()
@@ -1186,16 +1270,24 @@ pub fn builtin_anomaly_plan(
         })
         .collect();
     if tools.is_empty() && snap.stratum_authorized && !snap.bench_busy {
-        tools.push(PendingTool {
-            id: "anom-opt".into(),
-            action: AssistAction::OptimizeHashrate,
-        });
+        // Don't force bench when rate is already healthy — escalate would thrash.
+        let per = snap.hashrate_khs / snap.linked_boards.max(1) as f64;
+        let healthy = per >= 120.0 && !snap.rate_cliff && !snap.jobs_stalled;
+        if !healthy
+            && !memory.recently_failed("bench", &snap.board_mac)
+            && !memory.recently_failed("bench-timeout", &snap.board_mac)
+        {
+            tools.push(PendingTool {
+                id: "anom-opt".into(),
+                action: AssistAction::OptimizeHashrate,
+            });
+        }
     }
     (
         format!(
             "Built-in AI · anomaly [{}]\n{}",
             anomalies.join(", "),
-            format_watch_report(&evaluate_mining_watch(snap, &AssistMemory::default()))
+            format_watch_report(&evaluate_mining_watch(snap, memory))
         ),
         tools,
     )
