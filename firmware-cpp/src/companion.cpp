@@ -1,18 +1,16 @@
 #include "companion.hpp"
 #include "mesh_link.hpp"
 #include "sha256_hw.hpp"
-#include <HTTPUpdate.h>
 #include <Update.h>
-#include <WiFiClient.h>
 #include <cstring>
 #include <esp_system.h>
 
 extern "C" float cyd_run_bench(uint32_t n, bool tune);
 
 #if CYD_D0_BUILD
-static constexpr const char* kFwTag = "0.8.188-sha256-d0";
+static constexpr const char* kFwTag = "0.8.189-sha256-d0";
 #else
-static constexpr const char* kFwTag = "0.8.188-sha256";
+static constexpr const char* kFwTag = "0.8.189-sha256";
 #endif
 
 void CompanionLink::begin(uint32_t baud) {
@@ -533,9 +531,7 @@ void CompanionLink::handleLine(const String& line, AppConfig& cfg, const MinerSn
 
   // Wireless (or USB) firmware push — app image only (not merged @ 0x0).
   //   cmp ota size=NNNN      → CMPACK ota ready → raw NNNN bytes → CMPACK ota ok → reboot
-  //   cmp ota url=http://…   → board HTTPUpdate pulls app.bin (PC must be reachable)
   if (verb == "ota" || verb == "update" || verb == "fwupdate") {
-    String url;
     size_t size = 0;
     int start = 0;
     while (start < (int)args.length()) {
@@ -545,9 +541,7 @@ void CompanionLink::handleLine(const String& line, AppConfig& cfg, const MinerSn
       String key = (eq < 0) ? pair : pair.substring(0, eq);
       String val = (eq < 0) ? "" : urlDecode(pair.substring(eq + 1));
       key.toLowerCase();
-      if (key == "url" || key == "http") {
-        url = val;
-      } else if (key == "size" || key == "bytes" || key == "len") {
+      if (key == "size" || key == "bytes" || key == "len") {
         long v = val.toInt();
         if (v > 0) size = (size_t)v;
       }
@@ -555,39 +549,13 @@ void CompanionLink::handleLine(const String& line, AppConfig& cfg, const MinerSn
       start = amp + 1;
     }
     // Bare number: `cmp ota 957536`
-    if (size == 0 && url.length() == 0 && args.length() && args.indexOf('=') < 0) {
+    if (size == 0 && args.length() && args.indexOf('=') < 0) {
       long v = args.toInt();
       if (v > 0) size = (size_t)v;
     }
 
-    if (url.length()) {
-      if (WiFi.status() != WL_CONNECTED && WiFi.softAPgetStationNum() == 0 &&
-          WiFi.getMode() == WIFI_OFF) {
-        out_->println("CMPERR ota wifi off");
-        out_->flush();
-        return;
-      }
-      out_->println("CMPACK ota begin");
-      out_->flush();
-      WiFiClient client;
-      HTTPUpdate httpUpdate;
-      httpUpdate.rebootOnUpdate(true);
-      t_httpUpdate_return ret = httpUpdate.update(client, url);
-      if (ret == HTTP_UPDATE_FAILED) {
-        char err[96];
-        snprintf(err, sizeof(err), "CMPERR ota http %d", httpUpdate.getLastError());
-        out_->println(err);
-        out_->flush();
-      } else if (ret == HTTP_UPDATE_NO_UPDATES) {
-        out_->println("CMPERR ota no update");
-        out_->flush();
-      }
-      // HTTP_UPDATE_OK reboots inside update().
-      return;
-    }
-
     if (size == 0) {
-      out_->println("CMPERR ota need size= or url=");
+      out_->println("CMPERR ota need size=");
       out_->flush();
       return;
     }

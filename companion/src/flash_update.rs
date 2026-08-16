@@ -1652,33 +1652,15 @@ pub const REPO_NAME: &str = "Japan-central";
 /// Branches probed for Companion/firmware updates (newest VERSION wins).
 /// Tip first — apps still on older builds may only hit the legacy CYD branch.
 pub const REPO_REFS: &[&str] = &[
-    "cursor/flash-cohesion-e801",
-    "cursor/mine-stability-e801",
-    "cursor/flash-ready-noreset-e801",
-    "cursor/flash-nostub-boot-e801",
-    "cursor/share-pending-timeout-e801",
-    "cursor/flash-com-thrash-e801",
-    "cursor/ai-assist-e801",
-    "cursor/flash-14pct-e801",
-    "cursor/indep-handoff-e801",
-    "cursor/hashrate-top-e801",
-    "cursor/indep-pool-mine-e801",
-    "cursor/event-log-detail-e801",
-    "cursor/wifi-creds-save-e801",
-    "cursor/push-update-preempt-e801",
-    "cursor/flash-overlay-size-e801",
-    "cursor/mesh-via-timeout-e801",
-    "cursor/mesh-via-send-fix-e801",
-    "cursor/project-debug-pass-e801",
-    "cursor/share-stratum-cohesion-e801",
-    "cursor/wifi-ota-push-e801",
-    "cursor/esp32-mesh-connectivity-e801",
-    "cursor/esp32-cyd-cpp-firmware-e801",
+    // Tip agent branches first — newest VERSION wins for Fetch firmware / app update.
+    "cursor/project-cleanup-e801",
+    "cursor/demote-fighting-systems-e801",
+    "cursor/ota-fail-15pct-e801",
+    "cursor/pool-hs-lag-e801",
+    "cursor/ota-still-fails-e801",
     "master",
     "main",
 ];
-/// First tip ref — app update early-exit matches this (not a hardcoded legacy name).
-pub const TIP_REF: &str = REPO_REFS[0];
 
 /// URL-encode a git ref for GitHub API `?ref=` / path segments.
 pub fn urlencode_ref(ref_name: &str) -> String {
@@ -1766,30 +1748,7 @@ pub fn repo_file_urls(path: &str) -> Vec<String> {
 }
 
 /// VERSION.txt only — skip branch-name raw CDN (can lag and falsely report "up to date").
-#[allow(dead_code)]
-pub fn repo_version_urls(path: &str) -> Vec<String> {
-    let path = path.trim_start_matches('/');
-    let mut out = Vec::new();
-    for r in REPO_REFS {
-        let enc = urlencode_ref(r);
-        out.push(format!(
-            "https://api.github.com/repos/{REPO_OWNER}/{REPO_NAME}/contents/{path}?ref={enc}"
-        ));
-        if let Some(sha) = resolve_ref_commit(r) {
-            out.push(format!(
-                "https://raw.githubusercontent.com/{REPO_OWNER}/{REPO_NAME}/{sha}/{path}"
-            ));
-            out.push(format!(
-                "https://cdn.jsdelivr.net/gh/{REPO_OWNER}/{REPO_NAME}@{sha}/{path}"
-            ));
-        }
-        // Branch tip via jsDelivr (not GitHub branch raw CDN).
-        out.push(format!(
-            "https://cdn.jsdelivr.net/gh/{REPO_OWNER}/{REPO_NAME}@{r}/{path}"
-        ));
-    }
-    out
-}
+
 
 fn firmware_writable_dir() -> Result<PathBuf, String> {
     if let Ok(exe) = std::env::current_exe() {

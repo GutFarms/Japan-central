@@ -642,20 +642,32 @@ pub fn tool_definitions() -> Value {
 }
 
 pub fn system_prompt(snap: &AssistSnapshot) -> String {
+    let indep_note = if snap.linked_boards > 0
+        && snap.indep_boards > 0
+        && snap.companion_fed_boards == 0
+    {
+        "- Fleet is INDEPENDENT: boards own stratum. Do NOT start_mining / restart PC pool / bench to fix accepts — monitor H/s and STA/pool on the board only.\n"
+    } else if snap.indep_boards > 0 {
+        "- Some boards are independent (onboard pool). Do not restart PC stratum for those; only companion-fed boards take USB jobs.\n"
+    } else {
+        ""
+    };
     format!(
         "You are the mining watch assistant for Njörðr Seas' CYD miner Companion v{}.\n\
-PRIMARY MISSION (always):\n\
-1) Continuously reason about stratum connection health (connected → authorized → jobs flowing → accepts).\n\
-2) Push board hashrate as high as it will safely go using live monitoring: clock 240 MHz, start mining when linked, bench/retune when rates are soft, restart mining only when the pool link is clearly dead.\n\
-3) Prefer tools watch_stratum and optimize_hashrate before other actions.\n\
+PRIMARY MISSION:\n\
+1) Watch stratum health for Companion-fed boards (connected → authorized → jobs → accepts).\n\
+2) When boards are independent, treat onboard PoolStratum as primary — Companion only monitors H/s.\n\
+3) Push hashrate safely: clock 240 MHz; start/bench only for companion-fed boards when rates are soft.\n\
+4) Prefer tools watch_stratum and optimize_hashrate before other actions.\n\
 Rules:\n\
 - Never invent hashrates, jobs, or accept counts — read watch_stratum / get_fleet_status.\n\
-- If auth-fail: fix worker/BTC address (set_pool_config) — do not spam start/stop.\n\
+- If auth-fail on companion-fed: fix worker/BTC address — do not spam start/stop.\n\
 - If share difficulty is hard for CYD hashrates, recommend an ESP/IoT pool port (e.g. HM Pool :3337).\n\
-- Be concise; report stratum phase, fleet kH/s, A/R, and the next action you took.\n\
+{}- Be concise; report stratum phase, fleet kH/s, A/R, and the next action you took.\n\
 - Firmware flash needs UI confirmation.\n\
 Current snapshot:\n{}",
         snap.companion_version,
+        indep_note,
         serde_json::to_string_pretty(snap).unwrap_or_else(|_| "{}".into())
     )
 }
@@ -1160,6 +1172,16 @@ pub fn local_assist(user: &str, snap: &AssistSnapshot) -> (String, Vec<PendingTo
         || low.contains("faster")
         || low.contains("speed up")
     {
+        if snap.linked_boards > 0
+            && snap.indep_boards > 0
+            && snap.companion_fed_boards == 0
+        {
+            push(&mut tools, AssistAction::SetClock { mhz: 240 });
+            return (
+                "Built-in AI · indep fleet — ensuring 240 MHz only (no PC mine/bench restart).".into(),
+                tools,
+            );
+        }
         push(&mut tools, AssistAction::OptimizeHashrate);
         return (
             "Built-in AI · pushing hashrate (clock / mine / bench from live signals)…".into(),
@@ -1179,6 +1201,15 @@ pub fn local_assist(user: &str, snap: &AssistSnapshot) -> (String, Vec<PendingTo
         return ("Built-in AI · stopping mining…".into(), tools);
     }
     if low.contains("start mine") || low.contains("start mining") || low == "mine" {
+        if snap.linked_boards > 0
+            && snap.indep_boards > 0
+            && snap.companion_fed_boards == 0
+        {
+            return (
+                "Built-in AI · fleet is independent (board pool owns mining). Monitoring only — no PC Start mining.".into(),
+                tools,
+            );
+        }
         push(&mut tools, AssistAction::StartMining);
         return ("Built-in AI · starting mining…".into(), tools);
     }
@@ -1191,6 +1222,15 @@ pub fn local_assist(user: &str, snap: &AssistSnapshot) -> (String, Vec<PendingTo
         return ("Built-in AI · disconnecting…".into(), tools);
     }
     if low.contains("bench") || low.contains("retune") {
+        if snap.linked_boards > 0
+            && snap.indep_boards > 0
+            && snap.companion_fed_boards == 0
+        {
+            return (
+                "Built-in AI · indep fleet already auto-tunes on authorize — skipping Assist bench thrash.".into(),
+                tools,
+            );
+        }
         push(&mut tools, AssistAction::BenchBoards);
         return ("Built-in AI · running board bench…".into(), tools);
     }
@@ -1342,11 +1382,9 @@ pub fn suggest_chips() -> &'static [&'static str] {
     &[
         "Watch stratum",
         "Max hashrate",
-        "Start mining",
-        "Stop mining",
-        "Bench",
         "Clock 240",
         "Scan boards",
+        "Stop mining",
         "Help",
     ]
 }

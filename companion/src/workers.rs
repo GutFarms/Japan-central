@@ -647,14 +647,8 @@ fn wait_for_pong(port: &mut dyn SerialPort, buf: &mut String, wait_ms: u64) -> O
     None
 }
 
-/// Probe a serial port for CYD companion firmware (`cmp ping` → `CMP ok`).
-#[allow(dead_code)]
-pub fn probe_usb_port(name: &str) -> Option<DiscoveredWorker> {
-    probe_usb_port_detailed(name).ok()
-}
 
-/// Like [`probe_usb_port`], but returns why a port was skipped (for Event log).
-#[allow(dead_code)]
+/// Like [`probe_usb_port_at`], but returns why a port was skipped (for Event log).
 pub fn probe_usb_port_detailed(name: &str) -> Result<DiscoveredWorker, String> {
     let mut last = String::new();
     for baud in [460_800u32, 115_200] {
@@ -774,16 +768,9 @@ fn scan_candidate_ports() -> Vec<(String, WorkerKind)> {
     out
 }
 
-/// Scan serial ports for CYD boards. Skips ports listed in `skip`.
-#[allow(dead_code)]
-pub fn scan_usb_workers(skip: &[String]) -> Vec<DiscoveredWorker> {
-    scan_usb_workers_with_progress(skip, |_, _| {})
-}
-
 /// Serial USB probe (one port at a time) with per-port progress + result callback.
 ///
 /// `on_port(port, detail)` — detail is `"probing"`, `"ok · …"`, or `"miss · …"`.
-#[allow(dead_code)]
 pub fn scan_usb_workers_with_progress(
     skip: &[String],
     on_port: impl Fn(&str, &str),
@@ -827,105 +814,6 @@ pub fn scan_usb_workers_with_progress(
     found
 }
 
-/// Probe a Wi‑Fi board over TCP using the same `cmp` line protocol.
-pub fn probe_wifi_endpoint(endpoint: &str) -> Option<DiscoveredWorker> {
-    let mut stream = TcpStream::connect_timeout(
-        &endpoint
-            .to_socket_addrs()
-            .ok()?
-            .next()?,
-        Duration::from_secs(2),
-    )
-    .ok()?;
-    let _ = stream.set_read_timeout(Some(Duration::from_millis(800)));
-    let _ = stream.set_write_timeout(Some(Duration::from_millis(800)));
-    let _ = stream.set_nodelay(true);
-    let _ = stream.write_all(b"\r\ncmp ping\r\n");
-    let _ = stream.flush();
-    let mut buf = String::new();
-    let deadline = Instant::now() + Duration::from_millis(2_000);
-    let mut mac = String::new();
-    let mut saw = false;
-    while Instant::now() < deadline {
-        let mut tmp = [0u8; 512];
-        match stream.read(&mut tmp) {
-            Ok(0) => break,
-            Ok(n) => buf.push_str(&String::from_utf8_lossy(&tmp[..n])),
-            Err(_) => std::thread::sleep(Duration::from_millis(20)),
-        }
-        if let Some(line) = buf.lines().find(|l| {
-            let t = l.trim();
-            t.starts_with("CMP ok") || t.eq_ignore_ascii_case("CMPACK ping")
-        }) {
-            saw = true;
-            if let Some(rest) = line.trim().split_once("mac=") {
-                mac = normalize_mac(rest.1.trim());
-            }
-            break;
-        }
-    }
-    if !saw {
-        return None;
-    }
-    let _ = stream.write_all(b"cmp config\r\n");
-    let _ = stream.flush();
-    let mut fw = String::new();
-    let cfg_deadline = Instant::now() + Duration::from_millis(1_500);
-    while Instant::now() < cfg_deadline {
-        let mut tmp = [0u8; 512];
-        match stream.read(&mut tmp) {
-            Ok(0) => break,
-            Ok(n) => buf.push_str(&String::from_utf8_lossy(&tmp[..n])),
-            Err(_) => std::thread::sleep(Duration::from_millis(20)),
-        }
-        if let Some(line) = buf
-            .lines()
-            .rev()
-            .find(|l| l.trim().starts_with('{') || l.trim().starts_with("CMPCONFIG "))
-        {
-            let json = line
-                .trim()
-                .strip_prefix("CMPCONFIG ")
-                .unwrap_or(line.trim());
-            if let Ok(v) = serde_json::from_str::<serde_json::Value>(json) {
-                fw = v
-                    .get("fw")
-                    .and_then(|x| x.as_str())
-                    .unwrap_or("")
-                    .to_string();
-                if let Some(m) = v.get("mac").and_then(|x| x.as_str()) {
-                    if !m.is_empty() {
-                        mac = normalize_mac(m);
-                    }
-                }
-                break;
-            }
-        }
-    }
-    let id = {
-        let mid = transport_mac_id(WorkerKind::Wifi, &mac);
-        if mid.is_empty() {
-            format!("wifi:{endpoint}")
-        } else {
-            mid
-        }
-    };
-    Some(DiscoveredWorker {
-        id,
-        kind: WorkerKind::Wifi,
-        endpoint: endpoint.to_string(),
-        mac,
-        fw: fw.clone(),
-        detail: if fw.is_empty() {
-            format!("Wi‑Fi TCP :{BOARD_WIFI_PORT}")
-        } else {
-            format!("fw {fw} · Wi‑Fi TCP")
-        },
-        host: endpoint.split(':').next().unwrap_or(endpoint).into(),
-        last_seen_ms: now_ms(),
-    })
-}
-
 pub fn open_wifi_tcp(endpoint: &str) -> Result<TcpStream, String> {
     let addr = endpoint
         .to_socket_addrs()
@@ -933,9 +821,10 @@ pub fn open_wifi_tcp(endpoint: &str) -> Result<TcpStream, String> {
         .next()
         .ok_or_else(|| format!("no address for {endpoint}"))?;
     let host = endpoint.split(':').next().unwrap_or(endpoint);
-    // SoftAP 10.88.88.1 / legacy 10.x / 192.168.1.88 and busy LAN boards may need longer.
-    let softap = host == "10.88.88.1" || host == "192.168.1.88" || host.starts_with("10.");
-    let timeout = if softap {
+    // SoftAP is 10.88.88.1; 192.168.1.88 is the preferred STA LAN address (not SoftAP).
+    let softap = host == "10.88.88.1" || host.starts_with("10.88.88.");
+    let prefer_sta = host == "192.168.1.88";
+    let timeout = if softap || prefer_sta {
         Duration::from_secs(5)
     } else {
         Duration::from_secs(4)

@@ -1,5 +1,6 @@
 //! Njörðr seas CYD miner — USB / Wi‑Fi worker control.
-//! PC owns stratum; boards hash work received over USB-C or Wi‑Fi TCP.
+//! Boards mine independently to the pool when STA+pool are set; Companion monitors
+//! H/s and can feed USB/Wi‑Fi jobs only while a board is not yet indep-authorized.
 
 #![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
 
@@ -412,9 +413,6 @@ enum Tab {
     /// In-app assistant — monitor boards and run Companion actions.
     Assist,
     Settings,
-    /// Hidden from nav (0.8.31+); kept so older persisted state still loads.
-    #[allow(dead_code)]
-    Debug,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -691,7 +689,6 @@ enum NetMsg {
         kind: LogKind,
         text: String,
     },
-    Terminal(String),
     /// Live erase/flash progress line for the loading overlay (not the terminal).
     FlashProgress(String),
     /// Firmware flash finished; `reopen` is the COM port to reclaim if flash succeeded.
@@ -727,7 +724,6 @@ enum NetCmd {
     SetClock(u8),
     PollStatus,
     Bench,
-    UsbRaw(String),
     /// Stop mining, release USB, flash merged.bin @ 0x0, optionally reopen.
     UpdateFirmware {
         port: String,
@@ -746,11 +742,6 @@ enum NetCmd {
         /// Stream app.bin over TCP `cmp ota` (Wi‑Fi-linked board).
         wifi_ota: bool,
     },
-    /// Push live ticker text to the ESP LCD.
-    PushNet {
-        text: String,
-    },
-    RebootBoard,
     /// Pull one user-configured API feed in the worker thread.
     PullApiFeed(ApiFeed),
     /// Probe USB / Wi‑Fi for CYD companion firmwares.
@@ -810,9 +801,6 @@ struct CompanionApp {
     stratum_live: StratumLive,
     /// Keep showing AUTHORIZED / RECONNECTING for a few seconds across soft pool drops.
     pool_auth_hold_until: Option<Instant>,
-    term_input: String,
-    term_history: VecDeque<String>,
-    term_out: VecDeque<String>,
     live: LiveFeed,
     firmware: Option<FirmwareImage>,
     update_confirm: bool,
@@ -862,8 +850,6 @@ struct CompanionApp {
     session_started: Option<Instant>,
     session_hash_start: u64,
     share_history: VecDeque<ShareRow>,
-    last_net_push: Instant,
-    last_ticker: String,
     session_accepted: u32,
     session_rejected: u32,
     last_share_latency_ms: Option<u64>,
@@ -1111,9 +1097,6 @@ impl CompanionApp {
             log_auto_scroll: true,
             stratum_live: StratumLive::default(),
             pool_auth_hold_until: None,
-            term_input: "cmp ping".into(),
-            term_history: VecDeque::new(),
-            term_out: VecDeque::new(),
             live: LiveFeed::start(),
             firmware: find_firmware_image().ok(),
             update_confirm: false,
@@ -1144,8 +1127,6 @@ impl CompanionApp {
             session_started: None,
             session_hash_start: 0,
             share_history: VecDeque::new(),
-            last_net_push: Instant::now() - Duration::from_secs(120),
-            last_ticker: String::new(),
             session_accepted: 0,
             session_rejected: 0,
             last_share_latency_ms: None,
@@ -3337,23 +3318,6 @@ impl CompanionApp {
         self.nudge_assist_watch("bench_cancel");
     }
 
-    fn push_board_ticker(&mut self, force: bool) {
-        if !self.usb_open || self.update_busy {
-            return;
-        }
-        let tick = self.live.board_ticker_for(&self.header_coins);
-        if !force && tick == self.last_ticker && self.last_net_push.elapsed() < Duration::from_secs(45)
-        {
-            return;
-        }
-        if !force && self.last_net_push.elapsed() < Duration::from_secs(40) {
-            return;
-        }
-        self.last_ticker = tick.clone();
-        self.last_net_push = Instant::now();
-        let _ = self.cmd_tx.send(NetCmd::PushNet { text: tick });
-    }
-
     fn session_elapsed_label(&self) -> String {
         match self.session_started {
             Some(t) => format_uptime(t.elapsed().as_secs()),
@@ -3667,23 +3631,6 @@ impl CompanionApp {
         }
         Err(
             "Select which board to update (USB COM / Wi‑Fi worker). COM1 / PCI motherboard ports are not flashable."
-                .into(),
-        )
-    }
-
-    /// USB COM for Update board / flash — respect the user’s selected worker first.
-    fn resolve_flash_usb_port(&self) -> Result<String, String> {
-        let target = self.resolve_flash_target()?;
-        if Self::is_wifi_ota_endpoint(&target) {
-            return Err(
-                "Selected board is Wi‑Fi — use Push update (Wi‑Fi), not USB Flash (BOOT).".into(),
-            );
-        }
-        if self.port_is_flashable_name(&target) {
-            return Ok(target);
-        }
-        Err(
-            "Select which board to update (USB COM / linked worker). COM1 / PCI motherboard ports are not flashable."
                 .into(),
         )
     }
@@ -4386,24 +4333,6 @@ impl CompanionApp {
         }
     }
 
-    #[allow(dead_code)]
-    fn send_term(&mut self) {
-        let cmd = self.term_input.trim().to_string();
-        if cmd.is_empty() {
-            return;
-        }
-        if !self.usb_open {
-            self.push_log(LogKind::Err, "USB not open — Connect first".into());
-            return;
-        }
-        self.term_history.push_back(format!(">>> {cmd}"));
-        while self.term_history.len() > 200 {
-            self.term_history.pop_front();
-        }
-        self.push_log(LogKind::Usb, format!("TX {cmd}"));
-        let _ = self.cmd_tx.send(NetCmd::UsbRaw(cmd));
-    }
-
     fn ui_mine(&mut self, ui: &mut egui::Ui) {
         // Brand-first Mine: hero → link board/pool → telemetry → events.
         // Updates, best-path tips, phone QR, and API feeds live in Settings.
@@ -4425,44 +4354,6 @@ impl CompanionApp {
 
         ui.add_space(16.0);
         self.ui_logs_panel(ui);
-    }
-
-    #[allow(dead_code)]
-    fn ui_data_flow(&self, ui: &mut egui::Ui) {
-        let (pool_label, pool_color) = self.pool_state();
-        let boards = self.connected_workers.len().max(if self.usb_open { 1 } else { 0 });
-        let jobs_live = self.mining && self.stratum_live.authorized;
-        let hash_live = self.board_hashing();
-        let job_burst = self.last_job_flow_at.elapsed() < Duration::from_millis(2_400);
-        let share_burst = self.last_share_flow_at.elapsed() < Duration::from_millis(2_800);
-        soft_panel(ui, "Data flow", |ui| {
-            ui.label(
-                RichText::new("Pool jobs down · board hashes · shares back up")
-                    .color(C_DIM)
-                    .font(mono_ui_font(11.0)),
-            );
-            ui.add_space(8.0);
-            paint_data_flow(
-                ui,
-                DataFlowView {
-                    pulse: self.pulse,
-                    pool_label,
-                    pool_color,
-                    usb_open: self.usb_open,
-                    mining: self.mining,
-                    jobs_live: jobs_live || job_burst,
-                    hash_live,
-                    share_burst: share_burst || (hash_live && jobs_live),
-                    board_count: boards,
-                    rate_label: format_hashrate(self.displayed_khs as f64 * 1000.0),
-                    accepted: if self.stratum_live.authorized {
-                        self.session_accepted
-                    } else {
-                        0
-                    },
-                },
-            );
-        });
     }
 
     fn ui_mining_hero(&mut self, ui: &mut egui::Ui) {
@@ -5485,45 +5376,6 @@ impl CompanionApp {
                 self.push_log(LogKind::Info, format!("API feed removed id={id}"));
             }
         });
-    }
-
-    #[allow(dead_code)]
-    fn ui_api_feeds_mine(&self, ui: &mut egui::Ui) {
-        let active: Vec<_> = self
-            .api_feeds
-            .iter()
-            .filter(|f| f.enabled && (!f.last_summary.is_empty() || !f.last_status.is_empty()))
-            .collect();
-        if active.is_empty() {
-            return;
-        }
-        soft_panel(ui, "API feeds", |ui| {
-            for feed in active.iter().take(6) {
-                ui.horizontal(|ui| {
-                    ui.label(
-                        RichText::new(&feed.name)
-                            .color(C_LIME)
-                            .font(mono_ui_font(11.0)),
-                    );
-                    ui.label(
-                        RichText::new(if feed.last_summary.is_empty() {
-                            feed.last_status.clone()
-                        } else {
-                            feed.last_summary.clone()
-                        })
-                        .color(C_TEXT)
-                        .font(mono_ui_font(11.0)),
-                    );
-                });
-            }
-            ui.add_space(4.0);
-            ui.label(
-                RichText::new("Manage feeds in Settings → API feeds")
-                    .color(C_DIM)
-                    .font(mono_ui_font(10.0)),
-            );
-        });
-        ui.add_space(12.0);
     }
 
     fn ui_connection_controls(&mut self, ui: &mut egui::Ui) {
@@ -7009,135 +6861,6 @@ Phone: join SoftAP — Board Setup opens automatically to set home Wi‑Fi.",
         });
     }
 
-    #[allow(dead_code)]
-    fn ui_debug(&mut self, ui: &mut egui::Ui) {
-        if self.update_busy {
-            soft_panel(ui, "Board update", |ui| {
-                ui.vertical_centered(|ui| {
-                    ui.add_space(24.0);
-                    ui.add(egui::Spinner::new().size(48.0).color(C_LIME));
-                    ui.add_space(14.0);
-                    ui.label(
-                        RichText::new("Updating board…")
-                            .color(C_LIME)
-                            .font(display_font(24.0)),
-                    );
-                    ui.add_space(6.0);
-                    ui.label(
-                        RichText::new(&self.update_status)
-                            .color(C_MUTED)
-                            .font(mono_ui_font(12.0)),
-                    );
-                    ui.add_space(18.0);
-                    ui.label(
-                        RichText::new("Terminal is paused while flash runs.")
-                            .color(C_DIM)
-                            .size(12.0),
-                    );
-                    ui.add_space(12.0);
-                });
-            });
-            return;
-        }
-        soft_panel(ui, "Debug / Terminal", |ui| {
-            ui.label(
-                RichText::new("Send raw cmp commands over USB-C without bypassing the worker path.")
-                    .color(C_MUTED)
-                    .size(13.0),
-            );
-            ui.add_space(8.0);
-            ui.horizontal(|ui| {
-                let resp = ui.add(
-                    TextEdit::singleline(&mut self.term_input)
-                        .desired_width((ui.available_width() - 360.0).max(240.0))
-                        .font(FontId::new(14.0, FontFamily::Monospace))
-                        .hint_text("cmp ping"),
-                );
-                if cta_button(ui, "Send", true, 96.0).clicked()
-                    || (resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)))
-                {
-                    self.send_term();
-                }
-                if soft_button(ui, "Ping", 82.0).clicked() {
-                    self.term_input = "cmp ping".into();
-                    self.send_term();
-                }
-                if soft_button(ui, "Status", 92.0).clicked() {
-                    self.term_input = "cmp status".into();
-                    self.send_term();
-                }
-                if soft_button(ui, "Config", 92.0).clicked() {
-                    self.term_input = "cmp config".into();
-                    self.send_term();
-                }
-                if soft_button(ui, "Stop", 82.0).clicked() {
-                    self.term_input = "cmp stop".into();
-                    self.send_term();
-                }
-                let bench_label = if self.bench_busy {
-                    let secs = self
-                        .bench_busy_since
-                        .map(|t| t.elapsed().as_secs())
-                        .unwrap_or(0);
-                    format!("Bench…{secs}s")
-                } else {
-                    "Bench D0".into()
-                };
-                if soft_button(ui, &bench_label, 96.0).clicked() && !self.bench_busy {
-                    self.request_bench();
-                }
-                if soft_button(ui, "Reboot", 92.0).clicked() {
-                    let _ = self.cmd_tx.send(NetCmd::RebootBoard);
-                    self.push_log(LogKind::Usb, "Board reboot requested".into());
-                }
-                if soft_button(ui, "Push ticker", 110.0).clicked() {
-                    self.push_board_ticker(true);
-                }
-            });
-            ui.add_space(10.0);
-            Frame::none()
-                .fill(Color32::from_rgba_unmultiplied(3, 12, 26, 230))
-                .rounding(Rounding::same(18.0))
-                .stroke(Stroke::new(1.0_f32, C_STROKE))
-                .inner_margin(Margin::same(14.0))
-                .show(ui, |ui| {
-                    ScrollArea::vertical()
-                        .id_source("term_scroll")
-                        .stick_to_bottom(true)
-                        .max_height(310.0)
-                        .auto_shrink([false, false])
-                        .show(ui, |ui| {
-                            for line in self.term_history.iter().chain(self.term_out.iter()) {
-                                let color = if line.starts_with(">>>") {
-                                    C_BUBBLE_HI
-                                } else if line.contains("CMPERR") || line.starts_with("ERR") {
-                                    C_ERR
-                                } else if line.contains("CMPACK") || line.contains("CMP ok") {
-                                    C_LIME
-                                } else {
-                                    C_TEXT
-                                };
-                                ui.label(
-                                    RichText::new(line)
-                                        .color(color)
-                                        .font(FontId::new(12.0, FontFamily::Monospace)),
-                                );
-                            }
-                        });
-                });
-            ui.add_space(8.0);
-            if soft_button(ui, "Clear terminal", 140.0).clicked() {
-                self.term_history.clear();
-                self.term_out.clear();
-            }
-        });
-
-        ui.add_space(14.0);
-        self.ui_stratum_panel(ui);
-        ui.add_space(12.0);
-        self.ui_logs_panel(ui);
-    }
-
     /// Top chrome: brand + tabs + status. Wraps on narrow windows so tabs never overlap.
     fn ui_app_nav(&mut self, ui: &mut egui::Ui) {
         let wide = ui.available_width() >= 760.0;
@@ -7570,19 +7293,6 @@ impl App for CompanionApp {
                     }
                 }
                 NetMsg::Log { kind, text } => self.push_log(kind, text),
-                NetMsg::Terminal(line) => {
-                    // During board update, keep the UI on the loading overlay — don't
-                    // flood Debug/Terminal with flash chatter.
-                    if self.update_busy {
-                        self.update_status = trunc(&line, 120);
-                    } else {
-                        self.term_out.push_back(line.clone());
-                        while self.term_out.len() > 300 {
-                            self.term_out.pop_front();
-                        }
-                        self.push_log(LogKind::Usb, format!("RX {line}"));
-                    }
-                }
                 NetMsg::FlashProgress(line) => {
                     self.absorb_flash_progress_line(&line);
                 }
@@ -8229,7 +7939,7 @@ or Flash (BOOT) with BOOT held + Ready."
                                 .font(display_font(26.0)),
                         );
                         ui.label(
-                            RichText::new("USB SHA-256 Bitcoin miner · PC owns the pool")
+                            RichText::new("USB SHA-256 Bitcoin miner · boards mine to the pool")
                                 .color(C_MUTED)
                                 .font(mono_ui_font(12.0)),
                         );
@@ -8953,7 +8663,7 @@ or Flash (BOOT) with BOOT held + Ready."
                     .show(ui, |ui| {
                         ui.set_min_width(ui.available_width());
                         match self.tab {
-                            Tab::Mine | Tab::Debug => self.ui_mine(ui),
+                            Tab::Mine => self.ui_mine(ui),
                             Tab::Setup => self.ui_setup(ui),
                             Tab::Assist => self.ui_assist(ui),
                             Tab::Settings => self.ui_settings(ui),
@@ -9441,302 +9151,6 @@ fn paint_hero_wash(ui: &mut egui::Ui, rect: Rect, pulse: f32, mining: bool) {
     }
 }
 
-fn hash_activity_bars(ui: &mut egui::Ui, khs: f32, pulse: f32, hashing: bool) {
-    let desired = Vec2::new((ui.available_width() * 0.72).clamp(320.0, 620.0), 28.0);
-    let (rect, _) = ui.allocate_exact_size(desired, Sense::hover());
-    let painter = ui.painter_at(rect);
-    let n = 28;
-    let gap = 3.0;
-    let bar_w = ((rect.width() - gap * (n as f32 - 1.0)) / n as f32).max(4.0);
-    for i in 0..n {
-        let phase = pulse * 2.4 + i as f32 * 0.37;
-        let breathe = 0.35 + 0.65 * (0.5 + 0.5 * phase.sin());
-        let level = if hashing {
-            ((khs / 60.0).clamp(0.08, 1.0) * breathe).clamp(0.12, 1.0)
-        } else {
-            0.08 + 0.04 * (0.5 + 0.5 * (pulse + i as f32 * 0.2).sin())
-        };
-        let h = rect.height() * level;
-        let x = rect.left() + i as f32 * (bar_w + gap);
-        let y = rect.bottom() - h;
-        let color = if hashing {
-            // Alternate neon cyan / ice blue for electric hash bars.
-            if i % 3 == 0 {
-                rgba(C_NEON, (90.0 + level * 150.0) as u8)
-            } else if i % 3 == 1 {
-                rgba(C_LIME, (70.0 + level * 140.0) as u8)
-            } else {
-                rgba(C_NEON_HOT, (60.0 + level * 130.0) as u8)
-            }
-        } else {
-            rgba(C_BUBBLE_HI, 50)
-        };
-        painter.rect_filled(
-            Rect::from_min_max(Pos2::new(x, y), Pos2::new(x + bar_w, rect.bottom())),
-            Rounding::same(2.0),
-            color,
-        );
-        if hashing && level > 0.55 {
-            painter.rect_filled(
-                Rect::from_min_max(
-                    Pos2::new(x, y),
-                    Pos2::new(x + bar_w, (y + 3.0).min(rect.bottom())),
-                ),
-                Rounding::same(1.0),
-                rgba(C_NEON_HOT, 180),
-            );
-        }
-    }
-}
-
-struct DataFlowView {
-    pulse: f32,
-    pool_label: &'static str,
-    pool_color: Color32,
-    usb_open: bool,
-    mining: bool,
-    jobs_live: bool,
-    hash_live: bool,
-    share_burst: bool,
-    board_count: usize,
-    rate_label: String,
-    accepted: u32,
-}
-
-fn paint_data_flow(ui: &mut egui::Ui, v: DataFlowView) {
-    let desired = Vec2::new(ui.available_width().clamp(280.0, 920.0), 118.0);
-    let (rect, _) = ui.allocate_exact_size(desired, Sense::hover());
-    let painter = ui.painter_at(rect);
-    painter.rect_filled(
-        rect,
-        Rounding::same(16.0),
-        Color32::from_rgba_unmultiplied(3, 14, 28, 200),
-    );
-    painter.rect_stroke(rect, Rounding::same(16.0), Stroke::new(1.0_f32, rgba(C_STROKE, 160)));
-
-    let pad = 18.0;
-    let node_w = 118.0;
-    let node_h = 64.0;
-    let y = rect.center().y;
-    let left = rect.left() + pad + node_w * 0.5;
-    let right = rect.right() - pad - node_w * 0.5;
-    let mid = rect.center().x;
-    let pool_c = Pos2::new(left, y);
-    let app_c = Pos2::new(mid, y);
-    let board_c = Pos2::new(right, y);
-
-    let link = |a: Pos2, b: Pos2, active: bool, reverse: bool, color: Color32| {
-        let stroke = Stroke::new(
-            if active { 2.4_f32 } else { 1.2_f32 },
-            rgba(color, if active { 160 } else { 55 }),
-        );
-        painter.line_segment([a, b], stroke);
-        // Traveling packets along the link.
-        let n = if active { 3 } else { 1 };
-        for i in 0..n {
-            let base = (v.pulse * (if reverse { -0.55 } else { 0.55 })
-                + i as f32 * (1.0 / n as f32))
-                .rem_euclid(1.0);
-            let t = if active {
-                base
-            } else {
-                0.15 + 0.1 * (v.pulse + i as f32).sin()
-            };
-            let p = Pos2::new(a.x + (b.x - a.x) * t, a.y + (b.y - a.y) * t);
-            let r = if active { 4.2 } else { 2.4 };
-            painter.circle_filled(p, r + 2.0, rgba(color, if active { 40 } else { 18 }));
-            painter.circle_filled(p, r, if active { color } else { rgba(color, 90) });
-        }
-    };
-
-    // Upper path: jobs pool → app → board. Lower path offset for shares back.
-    let job_y = y - 10.0;
-    let share_y = y + 10.0;
-    link(
-        Pos2::new(pool_c.x + node_w * 0.42, job_y),
-        Pos2::new(app_c.x - node_w * 0.42, job_y),
-        v.jobs_live,
-        false,
-        C_LIME,
-    );
-    link(
-        Pos2::new(app_c.x + node_w * 0.42, job_y),
-        Pos2::new(board_c.x - node_w * 0.42, job_y),
-        v.jobs_live && v.usb_open,
-        false,
-        C_LIME,
-    );
-    link(
-        Pos2::new(board_c.x - node_w * 0.42, share_y),
-        Pos2::new(app_c.x + node_w * 0.42, share_y),
-        v.share_burst || v.hash_live,
-        true,
-        C_WARN,
-    );
-    link(
-        Pos2::new(app_c.x - node_w * 0.42, share_y),
-        Pos2::new(pool_c.x + node_w * 0.42, share_y),
-        v.share_burst && v.jobs_live,
-        true,
-        C_WARN,
-    );
-
-    let glow = 0.55 + 0.45 * (0.5 + 0.5 * v.pulse.sin());
-    let draw_node = |center: Pos2, title: &str, detail: &str, live: bool, accent: Color32| {
-        let r = Rect::from_center_size(center, Vec2::new(node_w, node_h));
-        painter.rect_filled(
-            r,
-            Rounding::same(14.0),
-            Color32::from_rgba_unmultiplied(8, 26, 46, 235),
-        );
-        painter.rect_stroke(
-            r,
-            Rounding::same(14.0),
-            Stroke::new(
-                if live { 1.8_f32 } else { 1.0_f32 },
-                rgba(accent, if live { (90.0 + glow * 120.0) as u8 } else { 70 }),
-            ),
-        );
-        if live {
-            painter.circle_filled(
-                Pos2::new(r.right() - 12.0, r.top() + 12.0),
-                3.6,
-                accent,
-            );
-        }
-        painter.text(
-            Pos2::new(center.x, center.y - 12.0),
-            egui::Align2::CENTER_CENTER,
-            title,
-            mono_ui_font(12.0),
-            C_TEXT,
-        );
-        painter.text(
-            Pos2::new(center.x, center.y + 12.0),
-            egui::Align2::CENTER_CENTER,
-            detail,
-            mono_ui_font(10.0),
-            if live { accent } else { C_MUTED },
-        );
-    };
-
-    let board_detail = if v.usb_open {
-        if v.board_count > 1 {
-            format!("{} boards · {}", v.board_count, v.rate_label)
-        } else {
-            format!("USB · {}", v.rate_label)
-        }
-    } else {
-        "idle".into()
-    };
-    let app_detail = if v.mining {
-        format!("mine · {} ok", v.accepted)
-    } else if v.usb_open {
-        "linked".into()
-    } else {
-        "standby".into()
-    };
-
-    draw_node(pool_c, "POOL", v.pool_label, v.jobs_live, v.pool_color);
-    draw_node(app_c, "COMPANION", &app_detail, v.mining || v.usb_open, C_LIME);
-    draw_node(
-        board_c,
-        "BOARD",
-        &board_detail,
-        v.hash_live || v.usb_open,
-        if v.hash_live { C_LIME } else { C_BUBBLE_HI },
-    );
-
-    // Direction captions
-    painter.text(
-        Pos2::new(mid, rect.top() + 14.0),
-        egui::Align2::CENTER_CENTER,
-        if v.jobs_live { "jobs →" } else { "jobs idle" },
-        mono_ui_font(10.0),
-        if v.jobs_live { rgba(C_LIME, 200) } else { C_DIM },
-    );
-    painter.text(
-        Pos2::new(mid, rect.bottom() - 14.0),
-        egui::Align2::CENTER_CENTER,
-        if v.share_burst || v.hash_live {
-            "← shares / hash"
-        } else {
-            "← shares idle"
-        },
-        mono_ui_font(10.0),
-        if v.share_burst || v.hash_live {
-            rgba(C_WARN, 200)
-        } else {
-            C_DIM
-        },
-    );
-}
-
-fn sparkline(ui: &mut egui::Ui, values: &VecDeque<f32>, pulse: f32, history_phase: f32) {
-    let desired = Vec2::new((ui.available_width() * 0.72).clamp(320.0, 620.0), 86.0);
-    let (rect, _) = ui.allocate_exact_size(desired, Sense::hover());
-    let painter = ui.painter_at(rect);
-    painter.rect_filled(rect, Rounding::same(18.0), Color32::from_rgba_unmultiplied(3, 12, 26, 180));
-    painter.rect_stroke(
-        rect,
-        Rounding::same(18.0),
-        Stroke::new(1.0_f32, rgba(C_LIME, 28)),
-    );
-
-    for i in 1..4 {
-        let y = rect.top() + rect.height() * i as f32 / 4.0;
-        painter.line_segment(
-            [Pos2::new(rect.left() + 14.0, y), Pos2::new(rect.right() - 14.0, y)],
-            Stroke::new(
-                1.0_f32,
-                Color32::from_rgba_unmultiplied(235, 244, 238, 12),
-            ),
-        );
-    }
-
-    let max = values
-        .iter()
-        .copied()
-        .fold(1.0_f32, |acc, v| acc.max(v.max(0.0)));
-    let inner = rect.shrink2(Vec2::new(16.0, 14.0));
-    let len = values.len().max(2);
-    // Scroll smoothly between samples so the chart doesn't jump when a point drops off.
-    let dx = inner.width() / (len - 1) as f32;
-    let scroll = if values.len() >= HASH_HISTORY_SAMPLES {
-        history_phase.clamp(0.0, 1.0) * dx
-    } else {
-        0.0
-    };
-    let points: Vec<Pos2> = values
-        .iter()
-        .enumerate()
-        .map(|(i, v)| {
-            let x = inner.left() + dx * i as f32 - scroll;
-            let y = inner.bottom() - inner.height() * (v.max(0.0) / max).clamp(0.0, 1.0);
-            Pos2::new(x, y)
-        })
-        .filter(|p| p.x >= inner.left() - 2.0 && p.x <= inner.right() + 2.0)
-        .collect();
-    for pair in points.windows(2) {
-        painter.line_segment([pair[0], pair[1]], Stroke::new(6.0_f32, rgba(C_LIME, 22)));
-        painter.line_segment([pair[0], pair[1]], Stroke::new(2.25_f32, C_LIME));
-    }
-
-    let scan_t = (pulse * 0.16).rem_euclid(1.0);
-    let scan_fade = loop_edge_fade(scan_t, 0.12);
-    let scan_x = inner.left() + inner.width() * scan_t;
-    let scan_a = (80.0 * scan_fade) as u8;
-    if scan_a > 0 {
-        painter.line_segment(
-            [Pos2::new(scan_x, inner.top()), Pos2::new(scan_x, inner.bottom())],
-            Stroke::new(1.0_f32, rgba(C_BOLT, scan_a)),
-        );
-    }
-    if let Some(last) = points.last() {
-        painter.circle_filled(*last, 4.5, C_LIME);
-        painter.circle_filled(*last, 10.0 + pulse.sin().max(0.0) * 4.0, rgba(C_LIME, 28));
-    }
-}
 
 /// Fade a 0..1 looping parameter near the wrap so teleports aren't visible.
 fn loop_edge_fade(t: f32, edge: f32) -> f32 {
@@ -9857,27 +9271,6 @@ fn clock_chip(ui: &mut egui::Ui, mhz: u8, selected: bool) -> egui::Response {
         .rounding(Rounding::same(999.0))
         .min_size(Vec2::new(42.0, 30.0)),
     )
-}
-
-fn metric(ui: &mut egui::Ui, label: &str, value: &str, color: Color32) {
-    ui.vertical(|ui| {
-        ui.label(RichText::new(label).color(C_MUTED).font(mono_ui_font(11.0)));
-        ui.label(RichText::new(value).color(color).font(display_font(24.0)));
-    });
-}
-
-fn telemetry_line(ui: &mut egui::Ui, label: &str, value: &str) {
-    ui.horizontal(|ui| {
-        ui.set_min_height(24.0);
-        ui.label(RichText::new(label).color(C_DIM).font(mono_ui_font(11.0)));
-        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-            ui.label(
-                RichText::new(trunc(value, 48))
-                    .color(C_TEXT)
-                    .font(FontId::new(12.0, FontFamily::Monospace)),
-            );
-        });
-    });
 }
 
 fn stratum_line(ui: &mut egui::Ui, label: &str, value: &str) {
@@ -12530,20 +11923,6 @@ Power a 2nd board nearby with wall/power-bank only (no PC cable)."
                     };
                     let _ = msg_tx.send(NetMsg::Action(Ok(summary)));
                 }
-                NetCmd::UsbRaw(cmd) => {
-                    if let Some(b) = boards.first_mut() {
-                        match usb_cmd(&mut b.port, &mut b.rx, &cmd) {
-                            Ok(line) => {
-                                let _ = msg_tx.send(NetMsg::Terminal(line));
-                            }
-                            Err(e) => {
-                                let _ = msg_tx.send(NetMsg::Terminal(format!("ERR {e}")));
-                            }
-                        }
-                    } else {
-                        let _ = msg_tx.send(NetMsg::Terminal("ERR USB not open".into()));
-                    }
-                }
                 NetCmd::UpdateFirmware {
                     port,
                     image,
@@ -12915,28 +12294,6 @@ Blank boards need Flash (BOOT)."
                             reopen: reopen_port,
                         });
                     });
-                }
-                NetCmd::PushNet { text } => {
-                    for b in boards.iter_mut() {
-                        let cmd = format!("cmp netdata text={}", urlenc(&text));
-                        let _ = usb_cmd(&mut b.port, &mut b.rx, &cmd);
-                    }
-                }
-                NetCmd::RebootBoard => {
-                    if let Some(b) = boards.first_mut() {
-                        match usb_cmd(&mut b.port, &mut b.rx, "cmp reboot") {
-                            Ok(line) => {
-                                let _ = msg_tx.send(NetMsg::Action(Ok(format!(
-                                    "Board reboot queued ({line})"
-                                ))));
-                            }
-                            Err(e) => {
-                                let _ = msg_tx.send(NetMsg::Action(Err(format!("reboot: {e}"))));
-                            }
-                        }
-                    } else {
-                        let _ = msg_tx.send(NetMsg::Action(Err("USB not open".into())));
-                    }
                 }
                 NetCmd::PullApiFeed(feed) => {
                     let outcome = pull_feed(&feed);

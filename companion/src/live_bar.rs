@@ -26,11 +26,6 @@ pub fn default_header_coins() -> Vec<String> {
     vec!["BTC".into(), "LTC".into(), "ETH".into()]
 }
 
-#[allow(dead_code)]
-pub fn coin_symbol_valid(sym: &str) -> bool {
-    let u = sym.trim().to_ascii_uppercase();
-    COIN_CATALOG.iter().any(|(_, s)| *s == u)
-}
 
 #[derive(Debug, Clone, Default)]
 pub struct CryptoQuote {
@@ -114,42 +109,6 @@ impl LiveFeed {
             format!("{}, {}", self.snap.city, self.snap.country)
         } else {
             format!("{}, {}", self.snap.city, self.snap.country)
-        }
-    }
-
-    /// Short ticker for the ESP LCD (`cmp netdata text=…`).
-    #[allow(dead_code)]
-pub fn board_ticker(&self) -> String {
-        self.board_ticker_for(&default_header_coins())
-    }
-
-    pub fn board_ticker_for(&self, selected: &[String]) -> String {
-        let mut parts: Vec<String> = Vec::new();
-        let quotes = self.quotes_for(selected);
-        for q in quotes.iter().take(3) {
-            parts.push(format!("{} {}", q.symbol, format_usd(q.usd)));
-        }
-        if parts.is_empty() {
-            for q in self.snap.quotes.iter().take(3) {
-                parts.push(format!("{} {}", q.symbol, format_usd(q.usd)));
-            }
-        }
-        if self.snap.ready && !self.snap.city.is_empty() {
-            parts.push(format!(
-                "{} {:.0}F {}",
-                self.snap.city,
-                self.snap.temp_c * 9.0 / 5.0 + 32.0,
-                self.snap.weather
-            ));
-        }
-        let t = self.local_now_label();
-        if !t.is_empty() {
-            parts.push(t);
-        }
-        if parts.is_empty() {
-            "usb · companion linked".into()
-        } else {
-            parts.join(" · ")
         }
     }
 }

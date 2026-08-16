@@ -1,22 +1,22 @@
-# Japan-central — CYD USB SHA-256 miner
+# Japan-central — CYD SHA-256 miner
 
-ESP32-2432S028 board **hashes Bitcoin SHA-256 only**. **Njörðr Seas' CYD miner** on Windows owns the pool connection; work and shares move over **USB** (data serial / typical USB‑C on the CYD) or SoftAP/STA Wi‑Fi. Nearby boards can join an **ESP-NOW connectivity mesh** through a USB-linked root (power-only leaves OK).
+ESP32-2432S028 boards **hash Bitcoin SHA-256** and, with STA + pool configured, **mine independently** to the stratum pool. **Njörðr Seas' CYD miner** (Windows Companion) monitors H/s, pushes firmware, and can feed USB/Wi‑Fi jobs until a board is indep-authorized. Nearby boards can join an **ESP-NOW mesh** through a USB-linked root.
 
 ## Pieces
 
 | Path | Role |
 |------|------|
-| `firmware-cpp/` | C++ firmware — ESP32 HW SHA-256d + LCD + USB `cmp` + mesh bridge |
-| `companion/` | egui app — Bitcoin stratum on PC, USB/mesh job/share bridge |
+| `firmware-cpp/` | C++ firmware — ESP32 HW SHA-256d + LCD + USB `cmp` + onboard pool + mesh |
+| `companion/` | egui app — monitor / job bridge / OTA / Assist |
 | `flash/` | Merged `.bin` images + Windows downloads |
 | `scripts/clean-project.sh` | Wipe local `.pio` / `target` / `dist` caches |
 
 ## Flash & mine
 
-1. Flash `flash/esp32-2432s028-sha256-miner-merged.bin` @ **0x0** (DIO, 4 MB, 40 MHz)
-2. Power on — LCD: **Waiting for USB**
-3. Run Companion → COM → **Connect** → BTC address → **Start mining**
-4. Optional: power extra CYDs nearby — they mesh to the USB root (root keeps hashing, throttled)
+1. Prefer in-app **Push update** (USB OTA). Use **Flash (BOOT)** only for blank boards.
+2. Power on → Companion **Connect** → BTC address → **Start mining**
+3. With home Wi‑Fi, boards take over the pool; Companion shows fleet H/s
+4. Optional: extra CYDs mesh to the USB root
 
 Default pool: `stratum+tcp://btc.hmpool.io:3337` · worker = **Bitcoin address** · password `x`
 
@@ -28,12 +28,4 @@ Default pool: `stratum+tcp://btc.hmpool.io:3337` · worker = **Bitcoin address**
 ./scripts/verify-project.sh
 ```
 
-Clean local caches (keeps `flash/downloads/`):
-
-```bash
-./scripts/clean-project.sh
-```
-
-## Protocol
-
-See [`COMPANION.md`](COMPANION.md).
+See [`COMPANION.md`](COMPANION.md) for downloads and ownership rules.
