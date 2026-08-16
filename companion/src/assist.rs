@@ -160,6 +160,10 @@ pub struct AssistSnapshot {
     pub last_ok: String,
     pub last_error: String,
     pub recent_logs: Vec<String>,
+    /// Linked boards currently mining via onboard PoolStratum (Companion monitors only).
+    pub indep_boards: u32,
+    /// Linked boards still fed jobs by Companion PC stratum.
+    pub companion_fed_boards: u32,
 }
 
 #[derive(Clone, Debug)]
@@ -728,6 +732,43 @@ pub fn evaluate_mining_watch(snap: &AssistSnapshot, memory: &AssistMemory) -> Wa
             detail: "Flash owns the COM; mining watch resumes when Update board finishes.".into(),
             steps,
             signature: "flash_busy".into(),
+            anomalies: Vec::new(),
+        };
+    }
+
+    // Board PoolStratum wins when the fleet is independent — PC stratum accepts /
+    // StartMining / auto-bench were fighting onboard mining (false "0 accepts").
+    let fleet_indep = snap.linked_boards > 0
+        && snap.indep_boards > 0
+        && snap.companion_fed_boards == 0;
+    if fleet_indep {
+        notes.push(format!(
+            "Fleet independent ({}/{} boards) — onboard pool owns shares; Companion monitors H/s only.",
+            snap.indep_boards, snap.linked_boards
+        ));
+        if snap.target_mhz < 240 {
+            steps.push(WatchStep {
+                action: AssistAction::SetClock { mhz: 240 },
+                reason: format!("Clock {} MHz → 240 for max SHA throughput", snap.target_mhz),
+            });
+        }
+        let soft = per < snap.target_khs_per_board || snap.boards_below_target_khs > 0;
+        let cliff = snap.rate_cliff && snap.baseline_khs > 20.0;
+        if soft || cliff {
+            notes.push(format!(
+                "Indep rate {:.0} kH/s (floor {:.0}) — check STA/pool on the board; Assist will not restart PC stratum.",
+                khs, snap.target_khs_per_board * boards as f64
+            ));
+        }
+        return WatchReport {
+            headline: if soft || cliff {
+                format!("Indep fleet · {:.0} kH/s (soft) — board pool owns mining", khs)
+            } else {
+                format!("Indep fleet · {:.0} kH/s — monitoring only", khs)
+            },
+            detail: notes.last().cloned().unwrap_or_default(),
+            steps,
+            signature: format!("indep_monitor_{:.0}", khs),
             anomalies: Vec::new(),
         };
     }

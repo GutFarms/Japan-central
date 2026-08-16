@@ -544,11 +544,11 @@ void WifiLink::beacon() {
   IPAddress advertise = (WiFi.status() == WL_CONNECTED) ? sta : ap;
   char msg[220];
 #if CYD_D0_BUILD
-  static constexpr const char* kFwTag = "0.8.187-sha256-d0";
-  static constexpr const char* kFwShort = "0.8.187-d0";
+  static constexpr const char* kFwTag = "0.8.188-sha256-d0";
+  static constexpr const char* kFwShort = "0.8.188-d0";
 #else
-  static constexpr const char* kFwTag = "0.8.187-sha256";
-  static constexpr const char* kFwShort = "0.8.187";
+  static constexpr const char* kFwTag = "0.8.188-sha256";
+  static constexpr const char* kFwShort = "0.8.188";
 #endif
   snprintf(msg, sizeof(msg),
            "%s|v=%s|mac=%s|fw=%s|tcp=%u|ip=%u.%u.%u.%u|ap=%s|mode=%s",
@@ -605,7 +605,16 @@ void WifiLink::poll(CompanionLink& cmp, AppConfig& cfg, const MinerSnapshot& sna
 
   acceptClient();
   if (client_ && client_.connected()) {
-    cmp.setShareMirror(&client_);
+    // SoftAP setup clients must not steal CMPSHARE from the USB Companion path
+    // (Serial + TCP dual emit was a fighting double). Mirror shares only when the
+    // TCP peer is on the STA LAN, not the SoftAP subnet.
+    IPAddress rip = client_.remoteIP();
+    IPAddress ap = WiFi.softAPIP();
+    const bool fromSoftAp =
+        rip[0] == ap[0] && rip[1] == ap[1] && rip[2] == ap[2];
+    if (!fromSoftAp) {
+      cmp.setShareMirror(&client_);
+    }
     cmp.pollTcp(client_, client_, cfg, snap, onApply, net, onJob, onStop, onStats);
   }
   // When TCP drops, leave mirror alone — serviceCompanion restores mesh leaf mirror.

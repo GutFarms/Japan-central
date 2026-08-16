@@ -1675,7 +1675,15 @@ impl CompanionApp {
         };
         let baseline = self.assist_baseline_khs();
         let rate_cliff = baseline > 20.0 && khs < baseline * 0.65 && khs + 5.0 < baseline;
-        let jobs_stalled = self.stratum_live.authorized
+        let indep_boards = self
+            .connected_workers
+            .iter()
+            .filter(|w| w.mine_indep)
+            .count() as u32;
+        let companion_fed_boards = linked_n.saturating_sub(indep_boards);
+        // Jobs-stalled only applies to Companion-fed boards (PC stratum owns notifies).
+        let jobs_stalled = companion_fed_boards > 0
+            && self.stratum_live.authorized
             && self.mining
             && self.assist_jobs_bump_at.elapsed() > Duration::from_secs(90)
             && khs < target_khs_per_board;
@@ -1724,11 +1732,12 @@ impl CompanionApp {
                 .iter()
                 .map(|w| {
                     format!(
-                        "{} · {} · {:.1} kH/s · {}",
+                        "{} · {} · {:.1} kH/s · {}{}",
                         w.endpoint,
                         if w.mac.is_empty() { "—" } else { &w.mac },
                         w.hashrate_hs / 1000.0,
-                        if w.fw.is_empty() { "—" } else { &w.fw }
+                        if w.fw.is_empty() { "—" } else { &w.fw },
+                        if w.mine_indep { " · indep" } else { "" }
                     )
                 })
                 .collect(),
@@ -1750,6 +1759,8 @@ impl CompanionApp {
                 .into_iter()
                 .rev()
                 .collect(),
+            indep_boards,
+            companion_fed_boards,
         }
     }
 
@@ -12769,9 +12780,8 @@ Power a 2nd board nearby with wall/power-bank only (no PC cable)."
                                 }
                             };
                             let _ = done_tx.send(NetMsg::FirmwareFetched(Ok(img.clone())));
-                            // Live Push: stream app.bin over USB `cmp ota` first — no BOOT hold,
-                            // no espflash. Fall back to silent ROM only if the companion link
-                            // never answered (blank / download-mode boards).
+                            // Live Push: USB app OTA only (no BOOT). Silent ROM fallthrough
+                            // was demoted — it fought OTA and failed at Chip connected ~14%.
                             if live_push {
                                 progress(
                                     "Live Push — USB app OTA (no BOOT, no hold)…".into(),
@@ -12849,25 +12859,24 @@ If this keeps failing, unplug/replug USB then Push again."
                                                         }
                                                     }
                                                 }
-                                                progress(format!(
-                                                    "USB OTA unavailable ({e}) — nudging reboot, then silent ROM…"
+                                                // Live Push = app OTA only. Silent ROM was the
+                                                // fighting double that failed at Chip connected ~14%.
+                                                return Err(format!(
+                                                    "USB OTA unavailable ({e}). Retry Push. \
+Use Flash (BOOT) only for blank / download-mode boards — Push will not fall through to ROM."
                                                 ));
-                                                let _ = nudge_usb_reboot_for_push(
-                                                    &port, &progress, &cancel,
-                                                );
                                             }
                                         }
                                     }
                                     Err(e) => {
-                                        progress(format!(
-                                            "No app image for USB OTA ({e}) — silent ROM push…"
+                                        return Err(format!(
+                                            "No app image for USB OTA ({e}). Fetch firmware, then Push again. \
+Blank boards need Flash (BOOT)."
                                         ));
-                                        let _ = nudge_usb_reboot_for_push(
-                                            &port, &progress, &cancel,
-                                        );
                                     }
                                 }
                             }
+                            // Flash (BOOT) path only — never reached for live_push after OTA.
                             let ctrl = FlashControl {
                                 cancel,
                                 need_boot,
@@ -13133,10 +13142,14 @@ If this keeps failing, unplug/replug USB then Push again."
                         log_msg(
                             &msg_tx,
                             LogKind::Warn,
-                            "PC on SoftAP (10.88.88.x) — pool has no uplink. Rejoin home Wi‑Fi; shares held until then."
+                            "PC on SoftAP (10.88.88.x) — pool has no uplink. Rejoin home Wi‑Fi; Companion-fed shares held. Indep boards keep mining."
                                 .to_string(),
                         );
+                        // SoftAP setup must not stop authorized indep miners (board pool wins).
                         for b in boards.iter_mut() {
+                            if b.mine_indep {
+                                continue;
+                            }
                             let _ = usb_cmd(&mut b.port, &mut b.rx, "cmp stop");
                             b.mining = false;
                         }
@@ -13176,9 +13189,10 @@ If this keeps failing, unplug/replug USB then Push again."
                     .iter()
                     .filter(|b| !b.mine_indep)
                     .count()
-                    .saturating_add(mesh.iter().filter(|m| !m.mine_indep).count())
-                    .max(1);
-                let jobs = if softap_blocked {
+                    .saturating_add(mesh.iter().filter(|m| !m.mine_indep).count());
+                // When every board is indep, do not take_job_batch(.max(1)) — that consumed
+                // pool notifies on the PC and dropped them (PC stratum fighting board pool).
+                let jobs = if softap_blocked || companion_fleet == 0 {
                     Vec::new()
                 } else {
                     client.take_job_batch(companion_fleet)
