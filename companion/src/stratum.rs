@@ -138,8 +138,8 @@ impl StratumClient {
             post_auth_job: false,
             have_difficulty: false,
             job_wait_since: None,
-            // Match NerdMiner / public-pool ESP defaults — pool may ignore or vardiff up.
-            suggest_difficulty: 0.001,
+            // Match ESP/IoT share target the pool should honor (or vardiff toward).
+            suggest_difficulty: 0.01,
             last_tx_at: Instant::now(),
             accepted: 0,
             rejected: 0,
@@ -645,7 +645,7 @@ impl StratumClient {
             let params = v.get("params").cloned().unwrap_or(Value::Null);
             if method == "mining.set_difficulty" {
                 if let Some(d) = parse_difficulty_param(&params) {
-                    // Public-pool style solo pools use fractional difficulty (e.g. 0.001).
+                    // Public-pool style solo pools use fractional difficulty (e.g. 0.01).
                     let next = if d > 0.0 { d } else { 1e-12 };
                     let changed = !self.have_difficulty || (next - self.difficulty).abs() > 1e-15;
                     let harder = self.have_difficulty && next > self.difficulty * 1.05;
@@ -1383,7 +1383,7 @@ mod tests {
         c.authorized = true;
         c.subscribed = true;
         c.have_difficulty = true;
-        c.difficulty = 0.001;
+        c.difficulty = 0.01;
         c.extranonce1 = vec![0x00, 0x01];
         c.extranonce2_size = 4;
         c
@@ -1446,9 +1446,9 @@ mod tests {
     #[test]
     fn set_difficulty_parses_string_param() {
         let mut c = primed_client();
-        c.handle_line(r#"{"id":null,"method":"mining.set_difficulty","params":["0.001"]}"#)
+        c.handle_line(r#"{"id":null,"method":"mining.set_difficulty","params":["0.01"]}"#)
             .unwrap();
-        assert!((c.difficulty() - 0.001).abs() < 1e-12);
+        assert!((c.difficulty() - 0.01).abs() < 1e-12);
     }
 
     #[test]
@@ -1458,7 +1458,7 @@ mod tests {
         c.subscribed = true;
         c.have_difficulty = false;
         c.difficulty = 1.0; // connect default — must NOT be used for ESP work
-        c.suggest_difficulty = 0.001;
+        c.suggest_difficulty = 0.01;
         c.extranonce1 = vec![0x00, 0x01];
         c.extranonce2_size = 4;
         c.job_id = "abc".into();
@@ -1469,7 +1469,7 @@ mod tests {
         c.job_wait_since = Some(Instant::now() - Duration::from_secs(4));
         c.release_held_job_if_ready();
         assert!(
-            (c.difficulty() - 0.001).abs() < 1e-12,
+            (c.difficulty() - 0.01).abs() < 1e-12,
             "timeout must apply suggest_difficulty, got {}",
             c.difficulty()
         );

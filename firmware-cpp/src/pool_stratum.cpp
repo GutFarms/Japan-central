@@ -80,7 +80,7 @@ bool PoolStratum::connectPool(const AppConfig& cfg) {
   subscribed_ = false;
   authorized_ = false;
   haveDifficulty_ = false;
-  difficulty_ = 0.001f;
+  difficulty_ = 0.01f;
   wantReconnect_ = false;
   pendingShareId_ = 0;
   jobWaitSinceMs_ = 0;
@@ -138,7 +138,7 @@ bool PoolStratum::sendSuggestDifficulty() {
   uint32_t id = msgId_++;
   char buf[128];
   snprintf(buf, sizeof(buf),
-           "{\"id\":%u,\"method\":\"mining.suggest_difficulty\",\"params\":[0.001]}",
+           "{\"id\":%u,\"method\":\"mining.suggest_difficulty\",\"params\":[0.01]}",
            (unsigned)id);
   lastSuggestMs_ = millis();
   return sendLine(buf);
@@ -169,10 +169,10 @@ void PoolStratum::releaseHeldJobIfReady() {
     jobWaitSinceMs_ = millis();
     return;
   }
-  // Pools that omit set_difficulty: emit at ESP suggest 0.001 (not stuck forever).
+  // Pools that omit set_difficulty: emit at ESP suggest 0.01 (not stuck forever).
   if (millis() - jobWaitSinceMs_ < 3000) return;
   haveDifficulty_ = true;
-  difficulty_ = 0.001f;
+  difficulty_ = 0.01f;
   jobWaitSinceMs_ = 0;
   emitJob();
 }

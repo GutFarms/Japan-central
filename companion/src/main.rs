@@ -6880,7 +6880,7 @@ Phone: join SoftAP — Board Setup opens automatically to set home Wi‑Fi.",
                 ui.add_space(4.0);
                 ui.label(
                     RichText::new(format!(
-                        "Share diff {:.3} is hard for ~{:.0} kH/s (≈{:.1} accepts/h). Use an ESP pool port or wait for vardiff after suggest 0.001.",
+                        "Share diff {:.3} is hard for ~{:.0} kH/s (≈{:.1} accepts/h). Use an ESP pool port or wait for vardiff after suggest 0.01.",
                         s.difficulty,
                         hs / 1000.0,
                         exp

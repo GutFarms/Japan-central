@@ -62,7 +62,7 @@ class PoolStratum {
   size_t en1Len_ = 0;
   size_t en2Size_ = 4;
   uint64_t en2Counter_ = 1;
-  float difficulty_ = 0.001f;
+  float difficulty_ = 0.01f;
   char phase_[16] = "off";
 
   String jobId_;
@@ -83,7 +83,7 @@ class PoolStratum {
   uint32_t lastConnectAttemptMs_ = 0;
   uint32_t reconnectBackoffMs_ = 2000;
   uint32_t lastSuggestMs_ = 0;
-  /// When notify arrived before set_difficulty — emit after 3s with suggest 0.001.
+  /// When notify arrived before set_difficulty — emit after 3s with suggest 0.01.
   uint32_t jobWaitSinceMs_ = 0;
 
   bool parseEndpoint(const String& raw, String& host, uint16_t& port) const;
