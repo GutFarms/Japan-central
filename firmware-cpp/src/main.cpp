@@ -17,6 +17,7 @@
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
 #include <WiFi.h>
+#include <cmath>
 
 static ConfigStore g_store;
 static AppConfig g_cfg;
@@ -527,6 +528,45 @@ static float runBench(uint32_t hashes) {
   return (float)hashes * 1000000.0f / (float)dt;
 }
 
+/// Live progress for Companion — keeps UI kH updating while USB waits on CMPBENCH.
+static void emitBenchProg(const char* step, const char* path, float hs, uint8_t mhz) {
+  if (hs > 0) g_lastBenchHs = hs;
+  char line[192];
+  snprintf(line, sizeof(line),
+           "CMPBENCHPROG step=%s path=%s mhz=%u hs=%.0f khs=%.2f", step, path ? path : "?",
+           (unsigned)mhz, hs, hs / 1000.0f);
+  Serial.println(line);
+  Serial.flush();
+}
+
+/// Two timed windows; reject if they disagree by >12% (unstable). Returns mean H/s or 0.
+static float runBenchStable(uint32_t hashes, const char* path, uint8_t mhz) {
+  uint32_t half = hashes / 2;
+  if (half < 8000) half = 8000;
+  float a = runBench(half);
+  emitBenchProg("pass1", path, a, mhz);
+  esp_task_wdt_reset();
+  float b = runBench(half);
+  emitBenchProg("pass2", path, b, mhz);
+  esp_task_wdt_reset();
+  float avg = (a + b) * 0.5f;
+  if (avg < 1000.0f) return 0;
+  float spread = fabsf(a - b) / avg;
+  if (spread > 0.12f) {
+    // One more settling pass — take the better of mean vs third if still close.
+    float c = runBench(half);
+    emitBenchProg("pass3", path, c, mhz);
+    float avg2 = (avg + c) / 2.0f;
+    float spread2 = fabsf(avg - c) / (avg2 > 1 ? avg2 : 1);
+    if (spread2 > 0.15f) {
+      emitBenchProg("unstable", path, avg2, mhz);
+      return 0;
+    }
+    return avg2;
+  }
+  return avg;
+}
+
 void setup() {
   uint8_t mac[6] = {0};
   if (esp_read_mac(mac, ESP_MAC_WIFI_STA) == ESP_OK) {
@@ -669,42 +709,53 @@ extern "C" float cyd_run_bench(uint32_t n, bool tune) {
   if (hashes > 400000) hashes = 400000;
 
   if (tune && g_hwSha) {
-    // Full D0 auto-tune: time each correct SHA path with a real hash window,
-    // then lock the winner into NVS so boot keeps the best option.
+    // Climb paths low→high throughput: MidHw → FullHw → HW/SW.
+    // Dual-window timing rejects unstable scores; lock the highest stable path.
     cyd_sha_hw::set_preferred_mode(-1);
     cyd_sha_hw::force_recalibrate();
-    g_minerA.setJob(hdr, tgt, 1);  // correctness gate + micro calibrate
+    g_minerA.setJob(hdr, tgt, 1);
     cyd_sha_hw::begin_tune_session();
 
     const cyd_sha_hw::Mode candidates[] = {
-        cyd_sha_hw::Mode::FullHw,
-        cyd_sha_hw::Mode::HwSwSecond,
-        cyd_sha_hw::Mode::MidHw,
+        cyd_sha_hw::Mode::MidHw,       // start lower
+        cyd_sha_hw::Mode::FullHw,      // climb
+        cyd_sha_hw::Mode::HwSwSecond,  // usually peak on D0
     };
-    // Per-path sample — enough to rank stably; keep short so USB wait never
-    // looks like a dead "Bench boards" click (Companion ~120s budget).
     uint32_t per = hashes / 3;
-    if (per < 12000) per = 12000;
-    if (per > 80000) per = 80000;
+    if (per < 16000) per = 16000;
+    if (per > 90000) per = 90000;
+    uint8_t mhz = (uint8_t)getCpuFrequencyMhz();
+    if (mhz < 80) mhz = 240;
 
+    emitBenchProg("start", "—", 0, mhz);
     for (cyd_sha_hw::Mode m : candidates) {
       if (m == cyd_sha_hw::Mode::MidHw && !cyd_sha_hw::midstate_ok()) continue;
       if (m == cyd_sha_hw::Mode::HwSwSecond && !cyd_sha_hw::hybrid_ok()) continue;
       cyd_sha_hw::force_mode(m);
       g_minerA.setJob(hdr, tgt, (uint32_t)m + 10);
+      const char* label = cyd_sha_hw::mode_label_of(m);
       char msg[40];
-      snprintf(msg, sizeof(msg), "bench %s…", cyd_sha_hw::mode_label_of(m));
+      snprintf(msg, sizeof(msg), "bench %s…", label);
       g_ui.showMessage("D0 AUTO-TUNE", msg);
-      float hs = runBench(per);
+      emitBenchProg("path", label, g_lastBenchHs, mhz);
+      float hs = runBenchStable(per, label, mhz);
+      if (hs <= 0) {
+        // Unstable — one longer single window as fallback score.
+        hs = runBench(per);
+        emitBenchProg("fallback", label, hs, mhz);
+      }
       cyd_sha_hw::record_path_hs(m, hs);
+      emitBenchProg("scored", label, hs, mhz);
       esp_task_wdt_reset();
     }
 
     auto report = cyd_sha_hw::finish_tune_session();
     g_cfg.shaPath = (int8_t)report.best;
+    g_cfg.pathTuned = true;
     cyd_sha_hw::set_preferred_mode(g_cfg.shaPath);
     g_store.save(g_cfg);
     g_lastBenchHs = report.best_hs > 0 ? report.best_hs : runBench(hashes);
+    emitBenchProg("best", cyd_sha_hw::mode_label(), g_lastBenchHs, mhz);
     refreshLabels();
     char done[40];
     snprintf(done, sizeof(done), "best %s · %.0f kH/s", cyd_sha_hw::mode_label(),
@@ -719,7 +770,10 @@ extern "C" float cyd_run_bench(uint32_t n, bool tune) {
       cyd_sha_hw::force_recalibrate();
       g_minerA.setJob(hdr, tgt, 2);
     }
+    uint8_t mhz = (uint8_t)getCpuFrequencyMhz();
+    emitBenchProg("run", cyd_sha_hw::mode_label(), 0, mhz);
     g_lastBenchHs = runBench(hashes);
+    emitBenchProg("done", cyd_sha_hw::mode_label(), g_lastBenchHs, mhz);
   }
 
   g_mining = was;

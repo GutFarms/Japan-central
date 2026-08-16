@@ -27,10 +27,11 @@ use api_feeds::{
     ApiSource,
 };
 use assist::{
-    anomaly_system_addon, builtin_anomaly_plan, evaluate_mining_watch, format_watch_report,
-    local_assist, max_tool_rounds, median_f64, suggest_chips, system_prompt, AssistAction,
-    AssistBackend, AssistClient, AssistMessage, AssistRole, AssistSnapshot, LlmRound,
-    PendingTool, DEFAULT_BASE_URL, DEFAULT_MODEL, OLLAMA_BASE_URL, OLLAMA_DEFAULT_MODEL,
+    anomaly_system_addon, assist_target_floor_khs, builtin_anomaly_plan, evaluate_mining_watch,
+    format_watch_report, local_assist, max_tool_rounds, median_f64, suggest_chips, system_prompt,
+    AssistAction, AssistBackend, AssistClient, AssistFixRecord, AssistMemory, AssistMessage,
+    AssistRole, AssistSnapshot, LlmRound, PendingTool, DEFAULT_BASE_URL, DEFAULT_MODEL,
+    OLLAMA_BASE_URL, OLLAMA_DEFAULT_MODEL,
 };
 use app_update::{
     check_app_update_ex, running_version, update_companion_app_ex, AppRemoteInfo,
@@ -612,6 +613,9 @@ struct PersistedMine {
     /// built_in (default) | ollama | cloud
     #[serde(default)]
     assist_backend: String,
+    /// Persisted Assist remesure outcomes / learned floor.
+    #[serde(default)]
+    assist_memory: AssistMemory,
 }
 
 fn default_assist_watch() -> bool {
@@ -641,6 +645,8 @@ enum NetMsg {
     Ports(Vec<PortChoice>),
     Action(Result<String, String>),
     Status(Result<StatusJson, String>),
+    /// Live bench climb progress from firmware (`CMPBENCHPROG`).
+    BenchProgress(String),
     Config(Result<ConfigJson, String>),
     MineStats {
         accepted: u32,
@@ -892,6 +898,10 @@ struct CompanionApp {
     assist_watch: bool,
     /// Escalate anomalies via built-in AI (or HTTP LLM if Ollama/Cloud).
     assist_llm_anomaly: bool,
+    /// Learned remesure outcomes + floor (persisted).
+    assist_memory: AssistMemory,
+    /// Pending remesure chat line index for helped/worse buttons (label key).
+    assist_remeasure_votes: VecDeque<String>,
     last_assist_watch: Instant,
     last_assist_bench_at: Instant,
     last_assist_restart_at: Instant,
@@ -936,6 +946,7 @@ impl CompanionApp {
         let mut assist_backend = AssistBackend::BuiltIn;
         let mut assist_watch = true;
         let mut assist_llm_anomaly = true;
+        let mut assist_memory = AssistMemory::default();
         let mut api_feeds: Vec<ApiFeed> = Vec::new();
         if let Some(storage) = storage {
             if let Some(raw) = storage.get_string("mine_prefs") {
@@ -970,6 +981,7 @@ impl CompanionApp {
                     assist_backend = AssistBackend::parse(&p.assist_backend);
                     assist_watch = p.assist_watch;
                     assist_llm_anomaly = p.assist_llm_anomaly;
+                    assist_memory = p.assist_memory;
                     if !p.header_coins.is_empty() {
                         header_coins = p
                             .header_coins
@@ -1131,6 +1143,8 @@ impl CompanionApp {
             assist_fw_confirm: None,
             assist_watch,
             assist_llm_anomaly,
+            assist_memory,
+            assist_remeasure_votes: VecDeque::new(),
             last_assist_watch: Instant::now() - Duration::from_secs(30),
             last_assist_bench_at: Instant::now() - Duration::from_secs(600),
             last_assist_restart_at: Instant::now() - Duration::from_secs(600),
@@ -1335,6 +1349,9 @@ impl CompanionApp {
     fn board_hashing(&self) -> bool {
         // Live hashing — hold true across brief status soft-fails so the hero
         // subtitle / activity bars don't blink "waiting for hashrate".
+        if self.bench_busy && self.displayed_khs > 0.5 {
+            return true;
+        }
         self.usb_open
             && self.mining
             && (self.status.mining
@@ -1481,7 +1498,16 @@ impl CompanionApp {
         // While mining, never slow-bleed the display toward 0 on a missed poll —
         // that looked like "raises, slow drops, raises again". Hold flat on 0;
         // ease only when the board reports a sustained lower rate.
-        let target = if !self.usb_open || !self.mining {
+        let target = if self.bench_busy {
+            // Bench climbs paths — show measured kH, never force 0.
+            if target > 0.5 {
+                target
+            } else if self.displayed_khs > 0.5 {
+                self.displayed_khs
+            } else {
+                target
+            }
+        } else if !self.usb_open || !self.mining {
             0.0
         } else if target <= 0.0 && self.displayed_khs > 1.0 {
             self.displayed_khs
@@ -1553,6 +1579,7 @@ impl CompanionApp {
             assist_watch: self.assist_watch,
             assist_llm_anomaly: self.assist_llm_anomaly,
             assist_backend: self.assist_backend.as_str().to_string(),
+            assist_memory: self.assist_memory.clone(),
         };
         if let Ok(raw) = serde_json::to_string(&p) {
             storage.set_string("mine_prefs", raw);
@@ -1571,8 +1598,10 @@ impl CompanionApp {
             .connected_workers
             .len()
             .max(usize::from(self.usb_open)) as u32;
-        // Soft floor: healthy CYD SHA path is usually well above ~80 kH/s @ 240.
-        let target_khs_per_board = 80.0;
+        // Soft floor: learned from remesures when available, else ~80 kH/s @ 240.
+        let baseline_pre = self.assist_baseline_khs();
+        let target_khs_per_board =
+            assist_target_floor_khs(&self.assist_memory, baseline_pre, linked_n.max(1));
         let boards_below = self
             .connected_workers
             .iter()
@@ -1679,10 +1708,10 @@ impl CompanionApp {
                 serde_json::to_string_pretty(&self.assist_snapshot()).unwrap_or_else(|e| e.to_string())
             }
             AssistAction::WatchStratum => {
-                format_watch_report(&evaluate_mining_watch(&self.assist_snapshot()))
+                format_watch_report(&evaluate_mining_watch(&self.assist_snapshot(), &self.assist_memory))
             }
             AssistAction::OptimizeHashrate => {
-                let report = evaluate_mining_watch(&self.assist_snapshot());
+                let report = evaluate_mining_watch(&self.assist_snapshot(), &self.assist_memory);
                 let mut applied = Vec::new();
                 for step in report.steps {
                     // Cooldown: don't bench/restart every few seconds.
@@ -1734,12 +1763,12 @@ impl CompanionApp {
                 if applied.is_empty() {
                     format!(
                         "{}\nNo safe optimize steps right now.",
-                        format_watch_report(&evaluate_mining_watch(&self.assist_snapshot()))
+                        format_watch_report(&evaluate_mining_watch(&self.assist_snapshot(), &self.assist_memory))
                     )
                 } else {
                     format!(
                         "{}\nApplied:\n· {}",
-                        format_watch_report(&evaluate_mining_watch(&self.assist_snapshot())),
+                        format_watch_report(&evaluate_mining_watch(&self.assist_snapshot(), &self.assist_memory)),
                         applied.join("\n· ")
                     )
                 }
@@ -2111,6 +2140,39 @@ impl CompanionApp {
             self.status.hashrate_hs / 1000.0
         };
         let delta = after - before;
+        let accept_after = {
+            let tot = self.session_accepted + self.session_rejected;
+            if tot == 0 {
+                100.0
+            } else {
+                100.0 * self.session_accepted as f64 / tot as f64
+            }
+        };
+        let action_kind = label
+            .split(|c| c == '-' || c == ' ')
+            .next()
+            .unwrap_or(label.as_str())
+            .to_string();
+        let rec = AssistFixRecord {
+            label: label.clone(),
+            action_kind: if label.contains("bench") {
+                "bench".into()
+            } else {
+                action_kind
+            },
+            before_khs: before,
+            after_khs: after,
+            delta_khs: delta,
+            accept_pct_before: accept_after,
+            accept_pct_after: accept_after,
+            board_mac: self.board_mac.clone(),
+            ts_unix: std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_secs())
+                .unwrap_or(0),
+            user_vote: 0,
+        };
+        self.assist_memory.push_fix(rec);
         let note = if after + 2.0 < before * 0.9 {
             format!(
                 "Remeasure after {label}: {:.0}→{:.0} kH/s (worse). Watch will retry safe fixes.",
@@ -2129,6 +2191,10 @@ impl CompanionApp {
         };
         self.assist_chat
             .push_back((AssistRole::Assistant, format!("📏 {note}")));
+        self.assist_remeasure_votes.push_back(label.clone());
+        while self.assist_remeasure_votes.len() > 12 {
+            self.assist_remeasure_votes.pop_front();
+        }
         if self.assist_chat.len() > 80 {
             self.assist_chat.pop_front();
         }
@@ -2136,6 +2202,70 @@ impl CompanionApp {
         if after + 2.0 < before * 0.9 {
             self.nudge_assist_watch("remeasure_worse");
         }
+    }
+
+    fn vote_assist_remeasure(&mut self, label: &str, helped: bool) {
+        if let Some(rec) = self
+            .assist_memory
+            .fixes
+            .iter_mut()
+            .rev()
+            .find(|f| f.label == label)
+        {
+            rec.user_vote = if helped { 1 } else { -1 };
+            let msg = if helped {
+                format!("Noted: {label} helped — prefer this again.")
+            } else {
+                format!("Noted: {label} hurt — avoid auto-retrying soon.")
+            };
+            self.assist_chat
+                .push_back((AssistRole::Assistant, format!("👍 {msg}")));
+            self.push_log(LogKind::Info, format!("Assist vote: {msg}"));
+            if !helped {
+                self.nudge_assist_watch("user_vote_worse");
+            }
+        }
+    }
+
+    fn absorb_bench_progress(&mut self, line: &str) {
+        // CMPBENCHPROG step=… path=… mhz=… hs=… khs=…
+        let mut khs = None;
+        let mut path = String::new();
+        let mut step = String::new();
+        for part in line.split_whitespace() {
+            if let Some(v) = part.strip_prefix("khs=") {
+                khs = v.parse::<f64>().ok();
+            } else if let Some(v) = part.strip_prefix("path=") {
+                path = v.to_string();
+            } else if let Some(v) = part.strip_prefix("step=") {
+                step = v.to_string();
+            }
+        }
+        if let Some(k) = khs {
+            if k > 0.5 {
+                self.status.hashrate_hs = k * 1000.0;
+                self.status.hashrate_khs = k;
+                self.status.mining = true;
+                let kf = k as f32;
+                self.displayed_khs = if self.displayed_khs < 1.0 {
+                    kf
+                } else {
+                    self.displayed_khs * 0.4 + kf * 0.6
+                };
+            }
+        }
+        let msg = if !path.is_empty() && khs.unwrap_or(0.0) > 0.5 {
+            format!(
+                "Bench {step} · {path} · {:.0} kH/s",
+                khs.unwrap_or(0.0)
+            )
+        } else if !step.is_empty() {
+            format!("Bench {step}…")
+        } else {
+            trunc(line, 120)
+        };
+        self.last_ok = msg.clone();
+        self.push_log(LogKind::Usb, msg);
     }
 
     fn spawn_assist_anomaly_llm(&mut self, anomalies: &[String]) {
@@ -2204,7 +2334,8 @@ impl CompanionApp {
             self.assist_jobs_bump_at = Instant::now();
         }
 
-        if !self.assist_watch || self.assist_busy || self.flash_busy() {
+        // Keep continuous watch alive during chat/LLM rounds — only flash pauses it.
+        if !self.assist_watch || self.flash_busy() {
             return;
         }
         let forced = self.assist_watch_force;
@@ -2213,7 +2344,7 @@ impl CompanionApp {
         }
         self.assist_watch_force = false;
         self.last_assist_watch = Instant::now();
-        let report = evaluate_mining_watch(&self.assist_snapshot());
+        let report = evaluate_mining_watch(&self.assist_snapshot(), &self.assist_memory);
         if !forced && report.signature == self.last_assist_watch_sig && report.steps.is_empty() {
             return;
         }
@@ -2365,7 +2496,9 @@ impl CompanionApp {
                 .auto_shrink([false, false])
                 .stick_to_bottom(true)
                 .show(ui, |ui| {
-                    for (role, text) in &self.assist_chat {
+                    let chat: Vec<_> = self.assist_chat.iter().cloned().collect();
+                    let votes: Vec<_> = self.assist_remeasure_votes.iter().cloned().collect();
+                    for (role, text) in &chat {
                         let (who, color) = match role {
                             AssistRole::User => ("You", C_TEXT),
                             AssistRole::Assistant => ("Assist", C_LIME),
@@ -2379,6 +2512,19 @@ impl CompanionApp {
                                 .strong(),
                         );
                         ui.label(RichText::new(text).color(C_TEXT).size(13.0));
+                        if text.starts_with('📏') {
+                            if let Some(label) = votes.iter().rev().find(|l| text.contains(l.as_str())) {
+                                let label = label.clone();
+                                ui.horizontal(|ui| {
+                                    if soft_button(ui, "Helped", 72.0).clicked() {
+                                        self.vote_assist_remeasure(&label, true);
+                                    }
+                                    if soft_button(ui, "Worse", 72.0).clicked() {
+                                        self.vote_assist_remeasure(&label, false);
+                                    }
+                                });
+                            }
+                        }
                         ui.add_space(8.0);
                     }
                     if self.assist_busy {
@@ -2949,10 +3095,10 @@ impl CompanionApp {
         }
         self.bench_busy = true;
         self.last_error.clear();
-        self.last_ok = "Bench: tuning HW / HW+ / HW/SW on each linked board…".into();
+        self.last_ok = "Bench: climbing Mid→HW→HW/SW — live kH updates while tuning…".into();
         self.push_log(
             LogKind::Usb,
-            "D0 auto-tune: each board times HW / HW+ / HW/SW and locks the best path…".into(),
+            "D0 auto-tune: each board climbs SHA paths with stable dual-pass timing…".into(),
         );
         let _ = self.cmd_tx.send(NetCmd::Bench);
     }
@@ -6839,6 +6985,9 @@ impl App for CompanionApp {
                     }
                     self.maybe_auto_connect_usb();
                 }
+                NetMsg::BenchProgress(line) => {
+                    self.absorb_bench_progress(&line);
+                }
                 NetMsg::Action(Ok(s)) => {
                     if matches!(self.wifi_setup_phase, WifiSetupPhase::Pushing) {
                         if let Some(rest) = s.strip_prefix("BOARD_WIFI_SAVED|") {
@@ -9699,7 +9848,7 @@ fn mine_worker(cmd_rx: Receiver<NetCmd>, msg_tx: Sender<NetMsg>) {
         let attempts = soft_attempts.max(1);
         let mut last = String::new();
         for attempt in 0..attempts {
-            match usb_cmd_ex(&mut gw.port, &mut gw.rx, &cmd, pump) {
+            match usb_cmd_ex(&mut gw.port, &mut gw.rx, &cmd, pump, None) {
                 Ok(line) => return Ok(line),
                 Err(e) => {
                     last = e;
@@ -9745,7 +9894,7 @@ fn mine_worker(cmd_rx: Receiver<NetCmd>, msg_tx: Sender<NetMsg>) {
                 else {
                     continue;
                 };
-                usb_cmd_ex(&mut gw.port, &mut gw.rx, "cmp mesh", pump).ok()
+                usb_cmd_ex(&mut gw.port, &mut gw.rx, "cmp mesh", pump, None).ok()
             };
             let Some(line) = reply else { continue };
             if !line.starts_with("CMPMESH ") {
@@ -11203,6 +11352,7 @@ Power a 2nd board nearby with wall/power-bank only (no PC cable)."
                                     &mut || {
                                         let _ = client.poll();
                                     },
+                                    None,
                                 );
                                 let push_res = {
                                     let mut pump = || {
@@ -11304,6 +11454,7 @@ Power a 2nd board nearby with wall/power-bank only (no PC cable)."
                                     &mut b.rx,
                                     stats_cmd,
                                     &mut pump,
+                                    None,
                                 );
                             }
                             let mut legacy = b.legacy_job;
@@ -11514,6 +11665,7 @@ Power a 2nd board nearby with wall/power-bank only (no PC cable)."
                                 &mut b.rx,
                                 "cmp status",
                                 &mut pump,
+                                None,
                             )
                         };
                         match status_reply {
@@ -11856,8 +12008,14 @@ Power a 2nd board nearby with wall/power-bank only (no PC cable)."
                             LogKind::Usb,
                             format!("Tuning {} for max hashrate…", b.name),
                         );
-                        // n≈60k → ~20k hashes/path after firmware split (finishes well under USB wait).
-                        match usb_cmd(&mut b.port, &mut b.rx, "cmp bench tune=1&n=60000") {
+                        // n≈60k → dual-pass per path with live CMPBENCHPROG kH updates.
+                        match usb_bench_cmd(
+                            &mut b.port,
+                            &mut b.rx,
+                            "cmp bench tune=1&n=60000",
+                            &msg_tx,
+                            &mut || {},
+                        ) {
                             Ok(line) => {
                                 lines.push(format!("{} → {line}", b.name));
                                 log_msg(&msg_tx, LogKind::Usb, format!("{} bench OK: {line}", b.name));
@@ -13062,6 +13220,7 @@ fn cmp_reply_line(buf: &str) -> Option<String> {
         for prefix in [
             "CMPSTATUS ",
             "CMPCONFIG ",
+            "CMPBENCHPROG ",
             "CMPBENCH ",
             "CMPMESH ",
             "CMPACK",
@@ -13082,7 +13241,17 @@ fn cmp_reply_line(buf: &str) -> Option<String> {
 
 fn usb_cmd(port: &mut BoardIo, buf: &mut String, cmd: &str) -> Result<String, String> {
     let mut noop = || {};
-    usb_cmd_ex(port, buf, cmd, &mut noop)
+    usb_cmd_ex(port, buf, cmd, &mut noop, None)
+}
+
+fn usb_bench_cmd(
+    port: &mut BoardIo,
+    buf: &mut String,
+    cmd: &str,
+    msg_tx: &Sender<NetMsg>,
+    pump: &mut dyn FnMut(),
+) -> Result<String, String> {
+    usb_cmd_ex(port, buf, cmd, pump, Some(msg_tx))
 }
 
 /// USB command with optional stratum pump so long waits do not starve the pool.
@@ -13091,6 +13260,7 @@ fn usb_cmd_ex(
     buf: &mut String,
     cmd: &str,
     pump: &mut dyn FnMut(),
+    progress: Option<&Sender<NetMsg>>,
 ) -> Result<String, String> {
     let mut last_err = String::new();
     // Bigger writes + single flush cut job-push latency a lot vs per-chunk sleeps.
@@ -13167,6 +13337,12 @@ fn usb_cmd_ex(
                 if reply.starts_with("CMPERR") {
                     return Err(reply);
                 }
+                if reply.starts_with("CMPBENCHPROG") {
+                    if let Some(tx) = progress {
+                        let _ = tx.send(NetMsg::BenchProgress(reply));
+                    }
+                    continue;
+                }
                 return Ok(reply);
             }
             thread::sleep(Duration::from_millis(2));
@@ -13215,7 +13391,7 @@ fn usb_push_job_ex(
     if !*legacy_job {
         let mut split_ok = true;
         for part in encode_job_parts(job) {
-            match usb_cmd_ex(port, buf, &part, pump) {
+            match usb_cmd_ex(port, buf, &part, pump, None) {
                 Ok(reply) if reply.starts_with("CMPACK") || reply.starts_with("CMP ok") => {}
                 Ok(reply) if reply.contains("unknown") || reply.starts_with("CMPERR") => {
                     split_ok = false;
@@ -13254,7 +13430,7 @@ fn usb_push_job_ex(
 
     // Legacy one-shot — works on older boards; long line is less reliable.
     let cmd = encode_job_cmd(job);
-    let reply = usb_cmd_ex(port, buf, &cmd, pump)?;
+    let reply = usb_cmd_ex(port, buf, &cmd, pump, None)?;
     if reply.starts_with("CMPACK") || reply.starts_with("CMP ok") {
         Ok(())
     } else {

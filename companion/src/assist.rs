@@ -211,6 +211,133 @@ pub struct WatchReport {
     pub anomalies: Vec<String>,
 }
 
+/// One remesure outcome — persisted so Built-in Local AI can bias the next watch.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct AssistFixRecord {
+    pub label: String,
+    pub action_kind: String,
+    pub before_khs: f64,
+    pub after_khs: f64,
+    pub delta_khs: f64,
+    pub accept_pct_before: f64,
+    pub accept_pct_after: f64,
+    pub board_mac: String,
+    pub ts_unix: u64,
+    /// User vote: 1 helped, -1 worse, 0 unknown.
+    #[serde(default)]
+    pub user_vote: i8,
+}
+
+impl AssistFixRecord {
+    pub fn helped(&self) -> bool {
+        self.user_vote > 0
+            || (self.user_vote == 0
+                && self.after_khs > self.before_khs * 1.05
+                && self.after_khs + 2.0 >= self.before_khs)
+    }
+
+    pub fn worsened(&self) -> bool {
+        self.user_vote < 0
+            || (self.user_vote == 0 && self.after_khs + 2.0 < self.before_khs * 0.9)
+    }
+}
+
+/// Rolling memory of Assist fixes (persisted in mine_prefs).
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct AssistMemory {
+    #[serde(default)]
+    pub fixes: Vec<AssistFixRecord>,
+    /// Last healthy per-board floor learned from baselines (kH/s).
+    #[serde(default)]
+    pub learned_floor_khs: f64,
+    /// Last stratum URL that cleared hard-diff / auth after a fix (optional).
+    #[serde(default)]
+    pub preferred_stratum: String,
+}
+
+impl AssistMemory {
+    pub fn push_fix(&mut self, rec: AssistFixRecord) {
+        self.fixes.push(rec);
+        while self.fixes.len() > 40 {
+            self.fixes.remove(0);
+        }
+        // Refresh learned floor from successful remesures.
+        let good: Vec<f64> = self
+            .fixes
+            .iter()
+            .filter(|f| f.helped() && f.after_khs > 20.0)
+            .map(|f| f.after_khs)
+            .collect();
+        if good.len() >= 2 {
+            let med = median_f64(&good);
+            // Soft floor = 75% of healthy median, clamped.
+            self.learned_floor_khs = (med * 0.75).clamp(40.0, 400.0);
+        }
+    }
+
+    /// True when this action kind recently worsened rate for this board (or any).
+    pub fn recently_failed(&self, action_kind: &str, board_mac: &str) -> bool {
+        let mac = board_mac.trim().to_ascii_lowercase();
+        let mut fails = 0u32;
+        for f in self.fixes.iter().rev().take(12) {
+            if !f.action_kind.eq_ignore_ascii_case(action_kind) {
+                continue;
+            }
+            if !mac.is_empty()
+                && !f.board_mac.is_empty()
+                && !f.board_mac.eq_ignore_ascii_case(&mac)
+            {
+                continue;
+            }
+            if f.worsened() {
+                fails += 1;
+            }
+            if fails >= 2 {
+                return true;
+            }
+        }
+        false
+    }
+
+    pub fn memory_prompt_line(&self) -> String {
+        if self.fixes.is_empty() && self.learned_floor_khs <= 0.0 {
+            return String::new();
+        }
+        let last = self
+            .fixes
+            .iter()
+            .rev()
+            .take(5)
+            .map(|f| {
+                format!(
+                    "{} {:+.0}kH vote={}",
+                    f.action_kind, f.delta_khs, f.user_vote
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("; ");
+        format!(
+            "MEMORY: floor≈{:.0} kH/s/board · recent fixes: {}",
+            self.learned_floor_khs, last
+        )
+    }
+}
+
+/// Effective soft floor: learned when available, else default 80.
+pub fn assist_target_floor_khs(memory: &AssistMemory, baseline_khs: f64, linked: u32) -> f64 {
+    let mut floor = if memory.learned_floor_khs >= 40.0 {
+        memory.learned_floor_khs
+    } else {
+        80.0
+    };
+    // When baseline is known, don't demand more than ~85% of recent healthy fleet rate / boards.
+    if baseline_khs > 30.0 && linked > 0 {
+        let per = baseline_khs / linked as f64;
+        floor = floor.min((per * 0.85).max(40.0));
+    }
+    floor.clamp(40.0, 400.0)
+}
+
 /// Median of a small f64 slice (empty → 0).
 pub fn median_f64(values: &[f64]) -> f64 {
     if values.is_empty() {
@@ -497,12 +624,16 @@ Current snapshot:\n{}",
 }
 
 /// Continuous-monitoring playbook from live telemetry (no LLM required).
-pub fn evaluate_mining_watch(snap: &AssistSnapshot) -> WatchReport {
+pub fn evaluate_mining_watch(snap: &AssistSnapshot, memory: &AssistMemory) -> WatchReport {
     let mut steps = Vec::new();
     let mut notes = Vec::new();
     let boards = snap.linked_boards.max(1);
     let khs = snap.hashrate_khs;
     let per = khs / boards as f64;
+    let mem_line = memory.memory_prompt_line();
+    if !mem_line.is_empty() {
+        notes.push(mem_line);
+    }
 
     if snap.flash_busy {
         return WatchReport {
@@ -611,17 +742,37 @@ pub fn evaluate_mining_watch(snap: &AssistSnapshot) -> WatchReport {
         }
         let soft = per < snap.target_khs_per_board || snap.boards_below_target_khs > 0;
         let cliff = snap.rate_cliff && snap.baseline_khs > 20.0;
+        let bench_failed = memory.recently_failed("bench", &snap.board_mac)
+            || memory.recently_failed("optimize-bench", &snap.board_mac)
+            || memory.recently_failed("bench-done", &snap.board_mac);
         if snap.stratum_authorized && !snap.bench_busy && (soft || cliff || snap.jobs_stalled) {
+            if bench_failed {
+                notes.push(
+                    "Bench recently hurt rate — skipping auto-bench; try clock/restart first."
+                        .into(),
+                );
+                if snap.target_mhz < 240 {
+                    steps.push(WatchStep {
+                        action: AssistAction::SetClock { mhz: 240 },
+                        reason: "Bench failed recently — ensure 240 MHz instead".into(),
+                    });
+                } else if !snap.jobs_stalled {
+                    steps.push(WatchStep {
+                        action: AssistAction::StartMining,
+                        reason: "Bench failed recently — soft restart mining session".into(),
+                    });
+                }
+            } else {
             let why = if cliff {
                 format!(
-                    "Rate cliff {:.0}→{:.0} kH/s vs baseline — bench HW/HW+/HW-SW",
+                    "Rate cliff {:.0}→{:.0} kH/s vs baseline — bench climb HW+/HW/HW-SW",
                     snap.baseline_khs, khs
                 )
             } else if snap.jobs_stalled {
                 "Jobs stalled / soft hashrate while authorized — bench retune".into()
             } else {
                 format!(
-                    "Rate soft (~{:.0} kH/s/board, floor {:.0}) — bench HW/HW+/HW-SW",
+                    "Rate soft (~{:.0} kH/s/board, floor {:.0}) — bench climb paths",
                     per, snap.target_khs_per_board
                 )
             };
@@ -629,12 +780,15 @@ pub fn evaluate_mining_watch(snap: &AssistSnapshot) -> WatchReport {
                 action: AssistAction::BenchBoards,
                 reason: why,
             });
+            }
         } else if snap.stratum_authorized && khs < 1.0 && snap.stratum_jobs > 0 && !snap.bench_busy
         {
+            if !bench_failed {
             steps.push(WatchStep {
                 action: AssistAction::BenchBoards,
                 reason: "Jobs flowing but hashrate ~0 — retune boards".into(),
             });
+            }
         }
         if snap.baseline_khs > 0.0 {
             notes.push(format!(
@@ -908,7 +1062,7 @@ Try: Watch stratum · Max hashrate · Start mining · Bench.".into(),
     if low.contains("why")
         && (low.contains("reject") || low.contains("accept") || low.contains("share"))
     {
-        let report = evaluate_mining_watch(snap);
+        let report = evaluate_mining_watch(snap, &AssistMemory::default());
         return (
             format!(
                 "Built-in AI · share health\n{}\n\nTip: CYDs need low share difficulty (ESP/IoT pool, e.g. HM :3337).",
@@ -918,7 +1072,7 @@ Try: Watch stratum · Max hashrate · Start mining · Bench.".into(),
         );
     }
 
-    let report = evaluate_mining_watch(snap);
+    let report = evaluate_mining_watch(snap, &AssistMemory::default());
     (
         format!(
             "Built-in Local AI\n{}\n\n{}",
@@ -960,7 +1114,7 @@ pub fn builtin_anomaly_plan(
     anomalies: &[String],
     snap: &AssistSnapshot,
 ) -> (String, Vec<PendingTool>) {
-    let report = evaluate_mining_watch(snap);
+    let report = evaluate_mining_watch(snap, &AssistMemory::default());
     let mut tools: Vec<PendingTool> = report
         .steps
         .into_iter()
@@ -980,7 +1134,7 @@ pub fn builtin_anomaly_plan(
         format!(
             "Built-in AI · anomaly [{}]\n{}",
             anomalies.join(", "),
-            format_watch_report(&evaluate_mining_watch(snap))
+            format_watch_report(&evaluate_mining_watch(snap, &AssistMemory::default()))
         ),
         tools,
     )
