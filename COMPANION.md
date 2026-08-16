@@ -38,4 +38,5 @@ Board SoftAP is **`10.88.88.1`** (open `Njordr-XXXX`). Join from phone → capti
 |---------|---------|----------|
 | Mining jobs | Board `PoolStratum` when STA+pool live | Companion USB/Wi‑Fi jobs while `!mine_indep` |
 | Firmware update | Push app OTA | Flash (BOOT) for blank boards |
+| Wi‑Fi credentials | Companion **Setup** tab (`cmp wifi` over USB/SoftAP) | Phone SoftAP portal `http://10.88.88.1/` |
 | Shares | Board→pool (indep) or Companion harvest (fed) | — |
