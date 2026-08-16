@@ -7042,6 +7042,9 @@ impl App for CompanionApp {
                             || low.contains("bench done")
                             || low.contains("no boards"))
                     {
+                        if low.contains("cmpbench") || low.contains("khs=") {
+                            self.absorb_bench_progress(&s);
+                        }
                         self.bench_busy = false;
                         let before = self.assist_baseline_khs().max(self.displayed_khs as f64);
                         self.schedule_assist_remeasure("bench-done", before);
