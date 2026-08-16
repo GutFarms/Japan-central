@@ -250,8 +250,8 @@ pub fn resolve_ota_app_image(preferred: Option<&Path>) -> Result<FirmwareImage, 
     find_app_firmware_image()
 }
 
-fn ota_wait_line(
-    stream: &mut dyn Read,
+fn ota_wait_line<R: Read + ?Sized>(
+    stream: &mut R,
     rx: &mut String,
     deadline: Instant,
     pred: &dyn Fn(&str) -> bool,
@@ -291,8 +291,8 @@ fn ota_wait_line(
     Err(format!("{label} timed out waiting for board ACK"))
 }
 
-fn push_firmware_ota_stream(
-    stream: &mut dyn ReadWrite,
+fn push_firmware_ota_stream<S: Read + Write + ?Sized>(
+    stream: &mut S,
     label: &str,
     endpoint: &str,
     img: &FirmwareImage,
@@ -395,10 +395,6 @@ fn push_firmware_ota_stream(
     ));
     Ok(())
 }
-
-/// Trait object helper so TCP + USB share the same `cmp ota` upload loop.
-trait ReadWrite: Read + Write {}
-impl<T: Read + Write + ?Sized> ReadWrite for T {}
 
 fn load_ota_app_bytes(image: &Path) -> Result<(FirmwareImage, Vec<u8>), String> {
     let img = resolve_ota_app_image(Some(image))?;
