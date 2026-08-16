@@ -293,12 +293,16 @@ void PoolStratum::handleLine(const String& line) {
       ntimeHex_ = arr[7].as<const char*>();
       bool clean = arr.size() > 8 ? arr[8].as<bool>() : false;
       (void)prev;
-      (void)clean;
       if (!authorized_) return;
       if (!haveDifficulty_) {
         // Hold work until set_difficulty or 3s suggest latch (releaseHeldJobIfReady).
         if (jobWaitSinceMs_ == 0) jobWaitSinceMs_ = millis();
         return;
+      }
+      // clean_jobs: mint a new en2 via emitJob (en2Counter_++) so boards abandon
+      // the previous header generation — same as Companion unique-en2 re-arm.
+      if (clean) {
+        en2Counter_++;
       }
       emitJob();
       return;

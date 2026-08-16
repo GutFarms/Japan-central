@@ -218,6 +218,9 @@ static bool applyConfig(AppConfig& updated, bool& reboot) {
 }
 
 static void onJob(const UsbJob& job) {
+  // Pause lanes first so a mid-hash hit cannot be tagged with the new job/en2
+  // while still using the old midstate (invalid / Low-difficulty rejects).
+  g_mining = false;
   // Emit queued hits for the previous header BEFORE invalidating the ring.
   // serviceCompanion used to poll (apply job → clear Q) then emit — so every
   // notify wiped in-flight CMPSHAREs and pool hashrate lagged the LCD (e.g. 71

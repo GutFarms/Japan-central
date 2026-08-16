@@ -51,8 +51,8 @@ use monitor_api::{
     MonitorSnapshot, MONITOR_PORT,
 };
 use stratum::{
-    encode_job_cmd, encode_job_parts, expected_shares_per_hour, urlenc, ShareOutcome, StratumClient,
-    WorkJob,
+    encode_job_cmd, encode_job_parts, expected_shares_per_hour, target_from_difficulty, urlenc,
+    ShareOutcome, StratumClient, WorkJob,
 };
 use workers::{
     count_usb_uart_ports, cyd_port_score, flashable_ports, is_usb_serial_port, list_serial_ports,
@@ -11566,7 +11566,7 @@ Power a 2nd board nearby with wall/power-bank only (no PC cable)."
                                     }
                                 }
                             }
-                            while recent_jobs.len() > 64 {
+                            while recent_jobs.len() > 96 {
                                 recent_jobs.pop_front();
                             }
                             if armed_pool == 0 {
@@ -12200,10 +12200,33 @@ Power a 2nd board nearby with wall/power-bank only (no PC cable)."
                                 &mut b.rx,
                                 "cmp stats accepted=0&rejected=0",
                             );
-                            let job = remaining.pop_front().unwrap_or_else(warmup_job);
+                            let Some(job) = remaining.pop_front() else {
+                                // Do not arm warmup after bench — warmup shares are discarded
+                                // and look like zero accepts while LCD hashrate recovers.
+                                log_msg(
+                                    &msg_tx,
+                                    LogKind::Usb,
+                                    format!(
+                                        "{} waiting for unique pool en2 after Bench (no warmup)",
+                                        b.name
+                                    ),
+                                );
+                                continue;
+                            };
                             let had_pool = !job.job_id.is_empty()
                                 && !is_warmup_job_id(&job.job_id)
                                 && !job.extranonce2_hex.is_empty();
+                            if !had_pool {
+                                log_msg(
+                                    &msg_tx,
+                                    LogKind::Usb,
+                                    format!(
+                                        "{} skipping non-pool job after Bench — waiting notify",
+                                        b.name
+                                    ),
+                                );
+                                continue;
+                            }
                             match usb_push_job(
                                 &mut b.port,
                                 &mut b.rx,
@@ -12213,25 +12236,14 @@ Power a 2nd board nearby with wall/power-bank only (no PC cable)."
                             ) {
                                 Ok(_) => {
                                     b.legacy_job = legacy;
-                                    if had_pool {
-                                        log_msg(
-                                            &msg_tx,
-                                            LogKind::Usb,
-                                            format!(
-                                                "{} resumed pool job {} (en2 {}) after Bench",
-                                                b.name, job.job_id, job.extranonce2_hex
-                                            ),
-                                        );
-                                    } else {
-                                        log_msg(
-                                            &msg_tx,
-                                            LogKind::Usb,
-                                            format!(
-                                                "{} warmup after Bench — waiting unique pool en2",
-                                                b.name
-                                            ),
-                                        );
-                                    }
+                                    log_msg(
+                                        &msg_tx,
+                                        LogKind::Usb,
+                                        format!(
+                                            "{} resumed pool job {} (en2 {}) after Bench",
+                                            b.name, job.job_id, job.extranonce2_hex
+                                        ),
+                                    );
                                 }
                                 Err(e) => {
                                     b.legacy_job = legacy;
@@ -12749,16 +12761,10 @@ Power a 2nd board nearby with wall/power-bank only (no PC cable)."
                 for ev in client.take_share_events() {
                     let _ = msg_tx.send(NetMsg::Share(ev));
                 }
-                // NerdMiner-style clean_jobs: only drop *superseded* job_ids (prev != new).
-                // Do NOT cmp-stop boards — that blanks LCD H/s and stalls hashing until the
-                // next job lands. Pushing the new header replaces work in-place (onJob).
-                //
-                // Pools often reuse the same job_id with clean_jobs=true. Purging that id from
-                // recent_jobs (0.8.125) dropped every in-flight unique-en2 CMPSHARE as
-                // "not in recent job cache" until the next board hit — and with frequent
-                // same-id cleans, Accept/Reject stayed at 0/0 while boards kept hashing.
-                // Keep prior en2 headers for the active id; only strip is_job_stale ids.
+                // NerdMiner-style clean_jobs: drop superseded job_ids; same-id clean clears
+                // prior en2 *after* harvesting in-flight CMPSHARE against the old cache.
                 let cleaned = client.take_clean_jobs();
+                let active_job = client.job_id().to_string();
                 let before_jobs = recent_jobs.len();
                 recent_jobs.retain(|j| !client.is_job_stale(&j.job_id));
                 held_board_shares.retain(|(job, _, _, _)| !client.is_job_stale(job));
@@ -12768,7 +12774,7 @@ Power a 2nd board nearby with wall/power-bank only (no PC cable)."
                         &msg_tx,
                         LogKind::Stratum,
                         format!(
-                            "Pool clean_jobs — dropped {dropped} superseded job cache entr(y/ies); active en2 kept"
+                            "Pool clean_jobs — dropped {dropped} superseded job cache entr(y/ies); will clear active en2 after share harvest"
                         ),
                     );
                 }
@@ -12830,6 +12836,12 @@ Power a 2nd board nearby with wall/power-bank only (no PC cable)."
                             false,
                         );
                     }
+                }
+                // After harvest: same-id clean drops prior en2 so we don't keep submitting
+                // superseded headers (pool stale/invalid). New take_job_batch re-fills cache.
+                if cleaned && !active_job.is_empty() {
+                    recent_jobs.retain(|j| j.job_id != active_job);
+                    held_board_shares.retain(|(job, _, _, _)| job != &active_job);
                 }
                 let companion_fleet = boards
                     .iter()
@@ -12921,8 +12933,16 @@ Power a 2nd board nearby with wall/power-bank only (no PC cable)."
                             }
                         }
                     }
-                    while recent_jobs.len() > 64 {
+                    while recent_jobs.len() > 96 {
                         recent_jobs.pop_front();
+                    }
+                    // Keep cached targets aligned with live pool difficulty for any
+                    // code paths still reading job.target (boards already re-armed on bump).
+                    if client.authorized() {
+                        let live_t = target_from_difficulty(client.difficulty());
+                        for j in recent_jobs.iter_mut() {
+                            j.target = live_t;
+                        }
                     }
                     if stale_abort {
                         log_msg(
@@ -13004,6 +13024,8 @@ Power a 2nd board nearby with wall/power-bank only (no PC cable)."
                     StratumClient::new(mine_worker_name.clone(), mine_password.clone());
                 match client.connect(&mine_endpoint) {
                     Ok(()) => {
+                        // Pre-reconnect held shares are almost always stale after a new session.
+                        held_board_shares.clear();
                         drain_stratum_log(&msg_tx, &mut client);
                         push_stratum_live(&msg_tx, &client);
                         stratum = Some(client);
@@ -13321,24 +13343,30 @@ fn try_submit_board_share(
     if let Some(wj) = recent_jobs.iter().rev().find(|j| {
         j.job_id == job && j.extranonce2_hex.eq_ignore_ascii_case(en2)
     }) {
-        if let Err(e) = StratumClient::verify_share_against_job(wj, nonce) {
+        // Always check against *live* pool difficulty — cached job.target can be easier
+        // after mining.set_difficulty climbed (Low-difficulty rejects).
+        let live_diff = s.difficulty();
+        if let Err(e) = StratumClient::verify_share_meets_difficulty(wj, nonce, live_diff) {
             log_msg(
                 msg_tx,
                 LogKind::Warn,
-                format!("Dropping bad board share nonce={nonce} job={job}: {e}"),
+                format!(
+                    "Dropping board share nonce={nonce} job={job} (live diff {live_diff}): {e}"
+                ),
             );
             return ShareSubmitResult::Dropped;
         }
     } else {
-        // Cache miss (evicted / mid clean_jobs push): still ask the pool so Accept/Reject
-        // cannot stay silent while boards are hashing valid work for a live job_id.
+        // Unknown en2 (clean_jobs / cache eviction): do not speculative-submit —
+        // that was a major source of stale/invalid rejects while LCD hashrate stayed high.
         log_msg(
             msg_tx,
             LogKind::Warn,
             format!(
-                "Share job={job} en2={en2_l} not in local cache — submitting for pool verdict"
+                "Dropping share job={job} en2={en2_l} — not in job cache (stale/clean)"
             ),
         );
+        return ShareSubmitResult::Dropped;
     }
     match s.submit_share(job, en2, ntime, nonce) {
         Ok(()) => {

@@ -467,7 +467,13 @@ impl StratumClient {
         self.release_held_job_if_ready();
         // Always re-suggest the ESP share difficulty. Echoing the pool's current
         // (often high) difficulty kept vardiff hard → ~1 accept/h @ 200 kH/s.
-        if self.authorized && self.last_tx_at.elapsed() >= Duration::from_secs(35) {
+        // When pool is already hard, nudge more often so vardiff can ease.
+        let suggest_every = if self.difficulty > 0.05 {
+            Duration::from_secs(12)
+        } else {
+            Duration::from_secs(35)
+        };
+        if self.authorized && self.last_tx_at.elapsed() >= suggest_every {
             let _ = self.send_suggest_difficulty(self.suggest_difficulty);
         }
         Ok(())
@@ -548,6 +554,24 @@ impl StratumClient {
 
     /// Local pre-check before pool submit. `nonce_hex` is cgminer stratum form (`%08x`).
     pub fn verify_share_against_job(job: &WorkJob, nonce_hex: &str) -> Result<[u8; 32], String> {
+        Self::verify_share_meets_target(job, nonce_hex, &job.target)
+    }
+
+    /// Verify share meets an explicit target (use live pool difficulty after vardiff climbs).
+    pub fn verify_share_meets_difficulty(
+        job: &WorkJob,
+        nonce_hex: &str,
+        difficulty: f64,
+    ) -> Result<[u8; 32], String> {
+        let target = target_from_difficulty(difficulty);
+        Self::verify_share_meets_target(job, nonce_hex, &target)
+    }
+
+    fn verify_share_meets_target(
+        job: &WorkJob,
+        nonce_hex: &str,
+        target: &[u8; 32],
+    ) -> Result<[u8; 32], String> {
         if nonce_hex.len() != 8 || !nonce_hex.chars().all(|c| c.is_ascii_hexdigit()) {
             return Err(format!("bad nonce hex '{nonce_hex}'"));
         }
@@ -556,7 +580,7 @@ impl StratumClient {
         let mut header = job.header;
         header[76..80].copy_from_slice(&nonce_u.to_le_bytes());
         let hash = dsha256(&header);
-        if !hash_meets_target(&hash, &job.target) {
+        if !hash_meets_target(&hash, target) {
             let disp = {
                 let mut r = hash;
                 r.reverse();
@@ -624,6 +648,7 @@ impl StratumClient {
                     // Public-pool style solo pools use fractional difficulty (e.g. 0.001).
                     let next = if d > 0.0 { d } else { 1e-12 };
                     let changed = !self.have_difficulty || (next - self.difficulty).abs() > 1e-15;
+                    let harder = self.have_difficulty && next > self.difficulty * 1.05;
                     self.difficulty = next;
                     self.have_difficulty = true;
                     self.push_recent(format!("← mining.set_difficulty {next}"));
@@ -633,6 +658,10 @@ impl StratumClient {
                     {
                         self.job_wait_since = None;
                         self.emit_job_from_fields();
+                    }
+                    // Pool climbed vardiff — re-nudge ESP suggest so we don't stay hard forever.
+                    if harder && next > self.suggest_difficulty * 5.0 {
+                        let _ = self.send_suggest_difficulty(self.suggest_difficulty);
                     }
                 } else {
                     self.push_recent(format!(
