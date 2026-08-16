@@ -1,5 +1,4 @@
 #include "companion.hpp"
-#include "mesh_link.hpp"
 #include "sha256_hw.hpp"
 #include <Update.h>
 #include <cstring>
@@ -9,9 +8,9 @@
 extern "C" float cyd_run_bench(uint32_t n, bool tune);
 
 #if CYD_D0_BUILD
-static constexpr const char* kFwTag = "0.8.192-sha256-d0";
+static constexpr const char* kFwTag = "0.8.193-sha256-d0";
 #else
-static constexpr const char* kFwTag = "0.8.192-sha256";
+static constexpr const char* kFwTag = "0.8.193-sha256";
 #endif
 
 void CompanionLink::begin(uint32_t baud) {
@@ -28,7 +27,6 @@ void CompanionLink::begin(uint32_t baud) {
   otaLastRxMs_ = 0;
   out_ = &Serial;
   shareMirror_ = nullptr;
-  shareMirror2_ = nullptr;
   activeLineBuf_ = lineBuf_;
   activeLineLen_ = &lineLen_;
 }
@@ -178,7 +176,6 @@ void CompanionLink::emitShare(const PendingShare& share) {
   };
   writeShare(Serial);
   if (shareMirror_) writeShare(*shareMirror_);
-  if (shareMirror2_ && shareMirror2_ != shareMirror_) writeShare(*shareMirror2_);
 }
 
 void CompanionLink::handleLine(const String& line, AppConfig& cfg, const MinerSnapshot& snap,
@@ -210,23 +207,6 @@ void CompanionLink::handleLine(const String& line, AppConfig& cfg, const MinerSn
   String args = (sp < 0) ? "" : rest.substring(sp + 1);
   verb.toLowerCase();
   args.trim();
-
-  // USB Companion traffic elects this board as the ESP-NOW mesh root/bridge.
-  if (out_ == &Serial) g_mesh.noteUsbActivity();
-
-  if (verb == "mesh") {
-    g_mesh.replyMeshList(*out_);
-    return;
-  }
-  if (verb == "via") {
-    int sp2 = args.indexOf(' ');
-    String mac = (sp2 < 0) ? args : args.substring(0, sp2);
-    String rest = (sp2 < 0) ? "" : args.substring(sp2 + 1);
-    mac.trim();
-    rest.trim();
-    (void)g_mesh.handleVia(mac, rest);
-    return;
-  }
 
   if (verb == "ping") {
     char buf[48];
@@ -503,7 +483,7 @@ void CompanionLink::handleLine(const String& line, AppConfig& cfg, const MinerSn
     if (args.equalsIgnoreCase("clear") || args.indexOf("clear=1") >= 0) {
       cfg.wifiSsid = "";
       cfg.wifiPass = "";
-      // Keep SoftAP alive for setup/mesh after clearing home STA.
+      // Keep SoftAP alive for Setup revisit / phone portal after clearing home STA.
       cfg.wifiEnabled = true;
       if (onWifiPersist_ && !onWifiPersist_()) {
         out_->println("CMPERR wifi nvs");
@@ -601,7 +581,7 @@ void CompanionLink::handleLine(const String& line, AppConfig& cfg, const MinerSn
   }
 
   out_->println(
-      "CMPERR unknown (ping|status|config|wifi|pool|ota|mesh|via|jh|jt|ja|job|stop|stats|bench|clock|reboot|netdata)");
+      "CMPERR unknown (ping|status|config|wifi|pool|ota|jh|jt|ja|job|stop|stats|bench|clock|reboot|netdata)");
 }
 
 static void copyJsonSafe(char* dst, size_t dstLen, const char* src, size_t maxCopy) {
@@ -640,15 +620,13 @@ void CompanionLink::replyStatus(const AppConfig& cfg, const MinerSnapshot& snap)
       "\"link\":\"cmp\",\"difficulty\":0,\"uptime_secs\":%u,\"cpu_mhz\":%u,"
       "\"hash_focus\":true,\"net_ticker\":\"\",\"job\":\"%s\",\"sha_mode\":\"%s\","
       "\"full_v\":true,\"bench_hs\":%.0f,\"nonce\":\"%s\",\"mac\":\"%s\","
-      "\"mesh_root\":%s,\"mesh_bridging\":%s,\"mesh_peers\":%u,"
       "\"mine_indep\":%s,\"pool_ep\":\"%s\",\"pool_phase\":\"%s\"}",
       (double)snap.hashrateHs, (double)(snap.hashrateHs / 1000.0f),
       (unsigned long long)snap.shares, (unsigned long long)snap.totalHashes,
       snap.mining ? "true" : "false", (unsigned)snap.accepted, (unsigned)snap.rejected, pool,
       snap.connected ? "true" : "false", (unsigned)(millis() / 1000),
       (unsigned)(snap.cpuMhz ? snap.cpuMhz : cfg.cpuMhz), job, sha, (double)snap.benchHs, nonceHex,
-      mac, snap.meshRoot ? "true" : "false", snap.meshBridging ? "true" : "false",
-      (unsigned)snap.meshPeers, snap.mineIndep ? "true" : "false", pep, pph);
+      mac, snap.mineIndep ? "true" : "false", pep, pph);
   out_->print("CMPSTATUS ");
   out_->println(buf);
 }

@@ -25,9 +25,6 @@ struct MinerSnapshot {
   String wifiMode;   // off / ap / sta / apsta
   String wifiAp;     // SoftAP SSID
   String wifiIp;     // best client IP for TCP
-  bool meshRoot = false;
-  bool meshBridging = false;
-  uint8_t meshPeers = 0;
   /// Board mines to pool itself (Companion monitors H/s only).
   bool mineIndep = false;
   String poolEndpoint;
@@ -76,9 +73,6 @@ class CompanionLink {
 
   void begin(uint32_t baud = 460800);
   void setShareMirror(Print* mirror) { shareMirror_ = mirror; }
-  /// Second sink (mesh leaf ESP-NOW) — used with TCP mirror so SoftAP clients
-  /// cannot steal shares from the USB root path.
-  void setShareMirror2(Print* mirror) { shareMirror2_ = mirror; }
   void setWifiPersist(WifiPersistFn fn) { onWifiPersist_ = std::move(fn); }
   void setWifiApply(WifiApplyFn fn) { onWifiApply_ = std::move(fn); }
   void setMiningHold(MiningHoldFn fn) { onMiningHold_ = std::move(fn); }
@@ -113,7 +107,6 @@ class CompanionLink {
 
   Print* out_ = &Serial;
   Print* shareMirror_ = nullptr;
-  Print* shareMirror2_ = nullptr;
   WifiPersistFn onWifiPersist_;
   WifiApplyFn onWifiApply_;
   MiningHoldFn onMiningHold_;

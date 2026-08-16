@@ -44,9 +44,6 @@ pub struct WorkerLive {
     pub hashrate_hs: f64,
     pub hashes: u64,
     pub mining: bool,
-    /// USB root currently bridging ESP-NOW mesh peers (hash rate intentionally reduced).
-    pub mesh_bridging: bool,
-    pub mesh_peers: u8,
     /// Board mines to the pool itself; Companion only monitors H/s.
     pub mine_indep: bool,
 }

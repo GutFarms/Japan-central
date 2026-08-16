@@ -6,7 +6,6 @@
 
 mod api_feeds;
 mod app_update;
-mod assist;
 mod desktop_icon;
 mod flash_update;
 mod live_bar;
@@ -27,13 +26,6 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use api_feeds::{
     load_feeds, next_feed_id, pull_feed, save_feeds, ApiContentKind, ApiFeed, ApiPullOutcome,
     ApiSource,
-};
-use assist::{
-    anomaly_system_addon, assist_target_floor_khs, builtin_anomaly_plan, evaluate_mining_watch,
-    format_watch_report, local_assist, max_tool_rounds, median_f64, suggest_chips, system_prompt,
-    AssistAction, AssistBackend, AssistClient, AssistFixRecord, AssistMemory, AssistMessage,
-    AssistRole, AssistSnapshot, LlmRound, PendingTool, DEFAULT_BASE_URL, DEFAULT_MODEL,
-    OLLAMA_BASE_URL, OLLAMA_DEFAULT_MODEL,
 };
 use app_update::{
     check_app_update_ex, running_version, update_companion_app_ex, AppRemoteInfo,
@@ -410,8 +402,6 @@ enum Tab {
     Mine,
     /// SoftAP / USB → push home Wi‑Fi credentials to the board.
     Setup,
-    /// In-app assistant — monitor boards and run Companion actions.
-    Assist,
     Settings,
 }
 
@@ -491,12 +481,6 @@ struct StatusJson {
     sha_mode: String,
     #[serde(default)]
     mac: String,
-    #[serde(default)]
-    mesh_root: bool,
-    #[serde(default)]
-    mesh_bridging: bool,
-    #[serde(default)]
-    mesh_peers: u8,
     #[serde(default)]
     mine_indep: bool,
     #[serde(default)]
@@ -599,30 +583,8 @@ struct PersistedMine {
     /// Symbols shown in the top price header (e.g. BTC, LTC, ETH).
     #[serde(default = "default_header_coins")]
     header_coins: Vec<String>,
-    /// OpenAI-compatible API key for Assist (also reads OPENAI_API_KEY).
-    #[serde(default)]
-    assist_api_key: String,
-    #[serde(default)]
-    assist_base_url: String,
-    #[serde(default)]
-    assist_model: String,
-    /// Continuous stratum/hashrate watch (Assist auto-applies safe fixes).
-    #[serde(default = "default_assist_watch")]
-    assist_watch: bool,
-    /// On anomalies, run Assist escalate (built-in or optional HTTP LLM).
-    #[serde(default = "default_assist_watch")]
-    assist_llm_anomaly: bool,
-    /// built_in (default) | ollama | cloud
-    #[serde(default)]
-    assist_backend: String,
-    /// Persisted Assist remesure outcomes / learned floor.
-    #[serde(default)]
-    assist_memory: AssistMemory,
 }
 
-fn default_assist_watch() -> bool {
-    true
-}
 
 fn default_mhz() -> u8 {
     240
@@ -705,8 +667,6 @@ enum NetMsg {
     ApiFeedResult(ApiPullOutcome),
     WorkersFound(Vec<DiscoveredWorker>),
     WorkersLive(Vec<WorkerLive>),
-    /// One LLM round from the Assist background thread.
-    AssistLlm(Result<LlmRound, String>),
 }
 
 enum NetCmd {
@@ -835,7 +795,7 @@ struct CompanionApp {
     bench_status: String,
     /// Last CMPBENCHPROG / heartbeat — stall detection.
     last_bench_prog_at: Option<Instant>,
-    /// Last Assist/chat "still benching" ping.
+    /// Last bench notifier ping.
     last_bench_notify_at: Option<Instant>,
     update_status: String,
     auto_connect: bool,
@@ -909,44 +869,6 @@ struct CompanionApp {
     monitor_lan_ip_at: Instant,
     /// Coins visible in the top live-price header (order matters).
     header_coins: Vec<String>,
-    /// Assist chat transcript (UI).
-    assist_chat: VecDeque<(AssistRole, String)>,
-    /// LLM conversation (system refreshed each turn).
-    assist_llm: Vec<AssistMessage>,
-    assist_input: String,
-    assist_busy: bool,
-    assist_rounds: u8,
-    assist_api_key: String,
-    assist_base_url: String,
-    assist_model: String,
-    /// Built-in Local AI (default), optional Ollama, or Cloud API.
-    assist_backend: AssistBackend,
-    /// Pending firmware update from Assist awaiting Confirm.
-    assist_fw_confirm: Option<(bool, bool)>,
-    /// Continuous mining watch — stratum health + push hashrate.
-    assist_watch: bool,
-    /// Escalate anomalies via built-in AI (or HTTP LLM if Ollama/Cloud).
-    assist_llm_anomaly: bool,
-    /// Learned remesure outcomes + floor (persisted).
-    assist_memory: AssistMemory,
-    /// Pending remesure chat line index for helped/worse buttons (label key).
-    assist_remeasure_votes: VecDeque<String>,
-    last_assist_watch: Instant,
-    last_assist_bench_at: Instant,
-    last_assist_restart_at: Instant,
-    last_assist_pool_at: Instant,
-    last_assist_watch_sig: String,
-    last_assist_llm_anomaly: Instant,
-    last_assist_anomaly_sig: String,
-    /// Force an immediate watch tick (set by stratum/share/rate events).
-    assist_watch_force: bool,
-    /// Rolling (time, kH/s) samples for baseline / cliff detection.
-    assist_rate_hist: VecDeque<(Instant, f64)>,
-    assist_reject_streak: u32,
-    assist_last_jobs: u32,
-    assist_jobs_bump_at: Instant,
-    /// After bench/restart: (label, before_khs, due_at).
-    assist_remeasure: Option<(String, f64, Instant)>,
 }
 
 impl CompanionApp {
@@ -983,13 +905,6 @@ impl CompanionApp {
         let mut monitor_token = String::new();
         let mut monitor_public_host = String::new();
         let mut header_coins = default_header_coins();
-        let mut assist_api_key = String::new();
-        let mut assist_base_url = String::new();
-        let mut assist_model = String::new();
-        let mut assist_backend = AssistBackend::BuiltIn;
-        let mut assist_watch = true;
-        let mut assist_llm_anomaly = true;
-        let mut assist_memory = AssistMemory::default();
         let mut api_feeds: Vec<ApiFeed> = Vec::new();
         if let Some(storage) = storage {
             if let Some(raw) = storage.get_string("mine_prefs") {
@@ -1018,13 +933,6 @@ impl CompanionApp {
                     monitor_install_id = p.monitor_install_id;
                     monitor_token = p.monitor_token;
                     monitor_public_host = p.monitor_public_host;
-                    assist_api_key = p.assist_api_key;
-                    assist_base_url = p.assist_base_url;
-                    assist_model = p.assist_model;
-                    assist_backend = AssistBackend::parse(&p.assist_backend);
-                    assist_watch = true; // always-on — ignore persisted off
-                    assist_llm_anomaly = true;
-                    assist_memory = p.assist_memory;
                     if !p.header_coins.is_empty() {
                         header_coins = p
                             .header_coins
@@ -1171,36 +1079,6 @@ impl CompanionApp {
             monitor_lan_ip: primary_lan_ipv4().unwrap_or_default(),
             monitor_lan_ip_at: Instant::now(),
             header_coins,
-            assist_chat: VecDeque::from([(
-                AssistRole::Assistant,
-                "Built-in Local AI watches stratum + hashrate inside Companion (no cloud). Continuous watch is always on and auto-fixes pool/connect/clock/bench; optional Ollama/Cloud in Settings.".into(),
-            )]),
-            assist_llm: Vec::new(),
-            assist_input: String::new(),
-            assist_busy: false,
-            assist_rounds: 0,
-            assist_api_key,
-            assist_base_url,
-            assist_model,
-            assist_backend,
-            assist_fw_confirm: None,
-            assist_watch,
-            assist_llm_anomaly,
-            assist_memory,
-            assist_remeasure_votes: VecDeque::new(),
-            last_assist_watch: Instant::now() - Duration::from_secs(30),
-            last_assist_bench_at: Instant::now() - Duration::from_secs(600),
-            last_assist_restart_at: Instant::now() - Duration::from_secs(600),
-            last_assist_pool_at: Instant::now() - Duration::from_secs(600),
-            last_assist_watch_sig: String::new(),
-            last_assist_llm_anomaly: Instant::now() - Duration::from_secs(600),
-            last_assist_anomaly_sig: String::new(),
-            assist_watch_force: false,
-            assist_rate_hist: VecDeque::new(),
-            assist_reject_streak: 0,
-            assist_last_jobs: 0,
-            assist_jobs_bump_at: Instant::now(),
-            assist_remeasure: None,
         };
         match start_monitor_api(app.monitor.clone()) {
             Ok(addr) => {
@@ -1617,1073 +1495,11 @@ impl CompanionApp {
             monitor_token: self.monitor_token.clone(),
             monitor_public_host: self.monitor_public_host.clone(),
             header_coins: self.header_coins.clone(),
-            assist_api_key: self.assist_api_key.clone(),
-            assist_base_url: self.assist_base_url.clone(),
-            assist_model: self.assist_model.clone(),
-            assist_watch: true,
-            assist_llm_anomaly: true,
-            assist_backend: self.assist_backend.as_str().to_string(),
-            assist_memory: self.assist_memory.clone(),
         };
         if let Ok(raw) = serde_json::to_string(&p) {
             storage.set_string("mine_prefs", raw);
         }
         storage.set_string("api_feeds", save_feeds(&self.api_feeds));
-    }
-
-    fn assist_snapshot(&self) -> AssistSnapshot {
-        let hs = if self.status.hashrate_hs > 0.0 {
-            self.status.hashrate_hs
-        } else {
-            self.status.hashrate_khs * 1000.0
-        };
-        let khs = hs / 1000.0;
-        let linked_n = self
-            .connected_workers
-            .len()
-            .max(usize::from(self.usb_open)) as u32;
-        // Soft floor: learned from remesures when available, else ~80 kH/s @ 240.
-        let baseline_pre = self.assist_baseline_khs();
-        let target_khs_per_board =
-            assist_target_floor_khs(&self.assist_memory, baseline_pre, linked_n.max(1));
-        let boards_below = self
-            .connected_workers
-            .iter()
-            .filter(|w| w.hashrate_hs / 1000.0 < target_khs_per_board)
-            .count() as u32;
-        let sess_tot = self.session_accepted + self.session_rejected;
-        let accept_pct = if sess_tot == 0 {
-            100.0
-        } else {
-            100.0 * self.session_accepted as f64 / sess_tot as f64
-        };
-        let baseline = self.assist_baseline_khs();
-        let rate_cliff = baseline > 20.0 && khs < baseline * 0.65 && khs + 5.0 < baseline;
-        let indep_boards = self
-            .connected_workers
-            .iter()
-            .filter(|w| w.mine_indep)
-            .count() as u32;
-        let companion_fed_boards = linked_n.saturating_sub(indep_boards);
-        // Jobs-stalled only applies to Companion-fed boards (PC stratum owns notifies).
-        let jobs_stalled = companion_fed_boards > 0
-            && self.stratum_live.authorized
-            && self.mining
-            && self.assist_jobs_bump_at.elapsed() > Duration::from_secs(90)
-            && khs < target_khs_per_board;
-        AssistSnapshot {
-            companion_version: env!("CARGO_PKG_VERSION").into(),
-            usb_open: self.usb_open,
-            mining: self.mining,
-            com_port: self.com_port.clone(),
-            stratum: self.edit_stratum.clone(),
-            worker: self.edit_worker.clone(),
-            target_mhz: self.target_mhz,
-            fw: self.fw_label.clone(),
-            board_mac: self.board_mac.clone(),
-            hashrate_khs: khs,
-            hashrate_hs: hs,
-            pool_estimated_hs: self.pool_estimated_hs(),
-            accepted: self.accepted,
-            rejected: self.rejected,
-            session_accepted: self.session_accepted,
-            session_rejected: self.session_rejected,
-            accept_rate_pct: accept_pct,
-            expected_shares_per_hour: expected_shares_per_hour(
-                hs,
-                self.stratum_live.difficulty,
-            ),
-            pool_phase: self.pool_phase.clone(),
-            stratum_phase: self.stratum_live.phase.clone(),
-            stratum_connected: self.stratum_live.connected,
-            stratum_authorized: self.stratum_live.authorized,
-            stratum_difficulty: self.stratum_live.difficulty,
-            stratum_jobs: self.stratum_live.jobs,
-            stratum_submits: self.stratum_live.submits,
-            stratum_last_job: self.stratum_live.last_job.clone(),
-            stratum_last_error: self.stratum_live.last_error.clone(),
-            linked_boards: linked_n,
-            boards_below_target_khs: boards_below,
-            target_khs_per_board,
-            bench_busy: self.bench_busy,
-            baseline_khs: baseline,
-            rate_cliff,
-            reject_streak: self.assist_reject_streak,
-            jobs_stalled,
-            ports: self.ports.iter().map(|p| p.name.clone()).collect(),
-            linked: self
-                .connected_workers
-                .iter()
-                .map(|w| {
-                    format!(
-                        "{} · {} · {:.1} kH/s · {}{}",
-                        w.endpoint,
-                        if w.mac.is_empty() { "—" } else { &w.mac },
-                        w.hashrate_hs / 1000.0,
-                        if w.fw.is_empty() { "—" } else { &w.fw },
-                        if w.mine_indep { " · indep" } else { "" }
-                    )
-                })
-                .collect(),
-            discovered: self
-                .discovered_workers
-                .iter()
-                .map(|w| format!("{} · {:?}", w.endpoint, w.kind))
-                .collect(),
-            flash_busy: self.flash_busy(),
-            last_ok: self.last_ok.clone(),
-            last_error: self.last_error.clone(),
-            recent_logs: self
-                .logs
-                .iter()
-                .rev()
-                .take(10)
-                .map(|e| format!("[{}] {}", e.time, e.text))
-                .collect::<Vec<_>>()
-                .into_iter()
-                .rev()
-                .collect(),
-            indep_boards,
-            companion_fed_boards,
-        }
-    }
-
-    fn assist_client(&self) -> AssistClient {
-        AssistClient::from_backend(
-            self.assist_backend,
-            &self.assist_api_key,
-            &self.assist_base_url,
-            &self.assist_model,
-        )
-    }
-
-    fn execute_assist_action(&mut self, action: AssistAction) -> String {
-        match action {
-            AssistAction::GetFleetStatus => {
-                serde_json::to_string_pretty(&self.assist_snapshot()).unwrap_or_else(|e| e.to_string())
-            }
-            AssistAction::WatchStratum => {
-                format_watch_report(&evaluate_mining_watch(&self.assist_snapshot(), &self.assist_memory))
-            }
-            AssistAction::OptimizeHashrate => {
-                let report = evaluate_mining_watch(&self.assist_snapshot(), &self.assist_memory);
-                let mut applied = Vec::new();
-                for step in report.steps {
-                    // Cooldown: don't bench/restart every few seconds.
-                    let skip = match &step.action {
-                        AssistAction::BenchBoards
-                            if self.last_assist_bench_at.elapsed() < Duration::from_secs(180) =>
-                        {
-                            true
-                        }
-                        AssistAction::StartMining
-                            if self.mining
-                                && self.last_assist_restart_at.elapsed()
-                                    < Duration::from_secs(90) =>
-                        {
-                            true
-                        }
-                        _ => false,
-                    };
-                    if skip {
-                        applied.push(format!("(cooldown) {}", step.reason));
-                        continue;
-                    }
-                    match &step.action {
-                        AssistAction::BenchBoards => {
-                            self.last_assist_bench_at = Instant::now();
-                        }
-                        AssistAction::StartMining => {
-                            self.last_assist_restart_at = Instant::now();
-                        }
-                        _ => {}
-                    }
-                    let before = self.assist_snapshot().hashrate_khs;
-                    let r = self.execute_assist_action(step.action.clone());
-                    if matches!(
-                        step.action,
-                        AssistAction::BenchBoards | AssistAction::StartMining
-                    ) {
-                        self.schedule_assist_remeasure(
-                            if matches!(step.action, AssistAction::BenchBoards) {
-                                "optimize-bench"
-                            } else {
-                                "optimize-mine"
-                            },
-                            before,
-                        );
-                    }
-                    applied.push(format!("{} → {}", step.reason, trunc(&r, 120)));
-                }
-                if applied.is_empty() {
-                    format!(
-                        "{}\nNo safe optimize steps right now.",
-                        format_watch_report(&evaluate_mining_watch(&self.assist_snapshot(), &self.assist_memory))
-                    )
-                } else {
-                    format!(
-                        "{}\nApplied:\n· {}",
-                        format_watch_report(&evaluate_mining_watch(&self.assist_snapshot(), &self.assist_memory)),
-                        applied.join("\n· ")
-                    )
-                }
-            }
-            AssistAction::ListPorts => {
-                let _ = self.cmd_tx.send(NetCmd::ListPorts);
-                let names: Vec<_> = self.ports.iter().map(|p| p.name.as_str()).collect();
-                format!(
-                    "Refreshing ports… current: {}",
-                    if names.is_empty() {
-                        "(none yet)".into()
-                    } else {
-                        names.join(", ")
-                    }
-                )
-            }
-            AssistAction::ScanWorkers => {
-                if self.flash_busy() {
-                    return "Cannot scan while flash/update is busy.".into();
-                }
-                self.worker_scan_busy = true;
-                let _ = self.cmd_tx.send(NetCmd::ScanWorkers);
-                "Scan started — results appear on Mine and in the event log.".into()
-            }
-            AssistAction::ConnectBoard { endpoint } => {
-                if let Some(ep) = endpoint {
-                    self.com_port = ep;
-                }
-                if self.com_port.contains(':') && !is_usb_serial_port(&self.com_port) {
-                    let _ = self
-                        .cmd_tx
-                        .send(NetCmd::ConnectWifi(self.com_port.clone()));
-                    format!("Connecting Wi‑Fi board {}…", self.com_port)
-                } else {
-                    self.connect_or_add_usb();
-                    if !self.last_error.is_empty() {
-                        self.last_error.clone()
-                    } else {
-                        self.last_ok.clone()
-                    }
-                }
-            }
-            AssistAction::DisconnectBoard { endpoint } => {
-                if let Some(ep) = endpoint {
-                    if ep.contains(':') {
-                        let _ = self.cmd_tx.send(NetCmd::DisconnectWorker(ep.clone()));
-                        format!("Disconnecting {ep}…")
-                    } else {
-                        let _ = self.cmd_tx.send(NetCmd::DisconnectWorker(ep.clone()));
-                        format!("Disconnecting {ep}…")
-                    }
-                } else {
-                    let _ = self.cmd_tx.send(NetCmd::CloseUsb);
-                    "Closing primary USB…".into()
-                }
-            }
-            AssistAction::SetPoolConfig {
-                stratum,
-                worker,
-                password,
-            } => {
-                let mut parts = Vec::new();
-                let mut changed = false;
-                if let Some(s) = stratum {
-                    if s.trim() != self.edit_stratum.trim() {
-                        changed = true;
-                    }
-                    self.edit_stratum = s;
-                    parts.push(format!("stratum={}", self.edit_stratum));
-                }
-                if let Some(w) = worker {
-                    if w.trim() != self.edit_worker.trim() {
-                        changed = true;
-                    }
-                    self.edit_worker = w;
-                    parts.push(format!("worker={}", self.edit_worker));
-                }
-                if let Some(pw) = password {
-                    if pw != self.edit_password {
-                        changed = true;
-                    }
-                    self.edit_password = pw;
-                    parts.push("password=(set)".into());
-                }
-                if parts.is_empty() {
-                    "No pool fields provided.".into()
-                } else {
-                    // Remember ESP-friendly ports that cleared hard-diff / auth issues.
-                    if self.edit_stratum.contains(":3337") {
-                        self.assist_memory.preferred_stratum = self.edit_stratum.clone();
-                    }
-                    // Only restart when credentials actually changed — otherwise Keep A/R.
-                    if changed && (self.usb_open || !self.connected_workers.is_empty()) {
-                        self.start_mine();
-                        format!(
-                            "Pool config updated: {} — restarting mine",
-                            parts.join(", ")
-                        )
-                    } else if !changed && self.mining && self.stratum_live.authorized {
-                        format!(
-                            "Pool config unchanged ({}) — already mining, counters kept",
-                            parts.join(", ")
-                        )
-                    } else if changed {
-                        format!("Pool config updated: {}", parts.join(", "))
-                    } else {
-                        format!("Pool config unchanged: {}", parts.join(", "))
-                    }
-                }
-            }
-            AssistAction::StartMining => {
-                self.start_mine();
-                if !self.last_error.is_empty() {
-                    self.last_error.clone()
-                } else {
-                    self.last_ok.clone()
-                }
-            }
-            AssistAction::StopMining => {
-                self.stop_mine();
-                self.last_ok.clone()
-            }
-            AssistAction::SetClock { mhz } => {
-                let mhz = normalize_cpu_mhz(mhz);
-                self.target_mhz = mhz;
-                let _ = self.cmd_tx.send(NetCmd::SetClock(mhz));
-                format!("Set clock → {mhz} MHz")
-            }
-            AssistAction::BenchBoards => {
-                self.request_bench();
-                if !self.last_error.is_empty() {
-                    self.last_error.clone()
-                } else {
-                    self.last_ok.clone()
-                }
-            }
-            AssistAction::ConfigureBoardWifi {
-                endpoint,
-                ssid,
-                password,
-            } => {
-                if let Some(ep) = endpoint {
-                    self.wifi_setup_target = ep;
-                } else if self.wifi_setup_target.is_empty() {
-                    if let Some(w) = self.connected_workers.first() {
-                        self.wifi_setup_target = w.endpoint.clone();
-                    } else {
-                        self.wifi_setup_target = self.com_port.clone();
-                    }
-                }
-                self.wifi_setup_ssid = ssid;
-                self.wifi_setup_pass = password;
-                self.begin_wifi_setup_push();
-                if !self.last_error.is_empty() {
-                    self.last_error.clone()
-                } else {
-                    format!(
-                        "Pushing Wi‑Fi “{}” to {}…",
-                        self.wifi_setup_ssid, self.wifi_setup_target
-                    )
-                }
-            }
-            AssistAction::GetEventLog { limit } => {
-                let lines: Vec<_> = self
-                    .logs
-                    .iter()
-                    .rev()
-                    .take(limit)
-                    .map(|e| format!("[{}] {}", e.time, e.text))
-                    .collect::<Vec<_>>()
-                    .into_iter()
-                    .rev()
-                    .collect();
-                if lines.is_empty() {
-                    "(event log empty)".into()
-                } else {
-                    lines.join("\n")
-                }
-            }
-            AssistAction::UpdateBoardFirmware { live_push, wifi } => {
-                self.assist_fw_confirm = Some((live_push, wifi));
-                format!(
-                    "Confirm firmware update in Assist (live_push={live_push}, wifi={wifi})."
-                )
-            }
-            AssistAction::SwitchTab { tab } => {
-                let t = tab.to_ascii_lowercase();
-                self.tab = match t.as_str() {
-                    "mine" => Tab::Mine,
-                    "setup" => Tab::Setup,
-                    "settings" => Tab::Settings,
-                    _ => Tab::Assist,
-                };
-                format!("Switched to {t} tab")
-            }
-        }
-    }
-
-    fn apply_assist_tools(&mut self, pending: Vec<PendingTool>) {
-        for tool in pending {
-            let result = self.execute_assist_action(tool.action);
-            self.assist_chat
-                .push_back((AssistRole::Tool, format!("⚙ {}", trunc(&result, 280))));
-            self.assist_llm
-                .push(AssistMessage::tool(&tool.id, result));
-            if self.assist_chat.len() > 80 {
-                self.assist_chat.pop_front();
-            }
-        }
-    }
-
-    fn spawn_assist_llm(&mut self) {
-        let client = self.assist_client();
-        if !client.uses_http() {
-            self.assist_busy = false;
-            return;
-        }
-        if !client.configured() {
-            self.assist_busy = false;
-            self.assist_chat.push_back((
-                AssistRole::Assistant,
-                "HTTP Assist not configured — using Built-in Local AI (Settings → Assist)."
-                    .into(),
-            ));
-            return;
-        }
-        let snap = self.assist_snapshot();
-        let mut msgs = vec![AssistMessage::system(system_prompt(&snap))];
-        for m in self.assist_llm.iter().filter(|m| m.role != AssistRole::System) {
-            msgs.push(m.clone());
-        }
-        self.assist_llm = msgs.clone();
-        self.assist_busy = true;
-        let tx = self.msg_tx.clone();
-        thread::spawn(move || {
-            let result = client.chat_round(&msgs);
-            let _ = tx.send(NetMsg::AssistLlm(result));
-        });
-    }
-
-    fn submit_assist(&mut self, text: String) {
-        let text = text.trim().to_string();
-        if text.is_empty() || self.assist_busy {
-            return;
-        }
-        self.assist_chat
-            .push_back((AssistRole::User, text.clone()));
-        if self.assist_chat.len() > 80 {
-            self.assist_chat.pop_front();
-        }
-        self.assist_llm.push(AssistMessage::user(&text));
-        self.assist_rounds = 0;
-
-        // Default: Built-in Local AI (ships in Companion). HTTP only if user chose Ollama/Cloud.
-        let client = self.assist_client();
-        if client.uses_http() && client.configured() {
-            self.spawn_assist_llm();
-            return;
-        }
-
-        let snap = self.assist_snapshot();
-        let (say, pending) = local_assist(&text, &snap);
-        self.assist_chat
-            .push_back((AssistRole::Assistant, say));
-        if !pending.is_empty() {
-            self.apply_assist_tools(pending);
-            let snap2 = self.assist_snapshot();
-            self.assist_chat.push_back((
-                AssistRole::Assistant,
-                format!(
-                    "Done. USB={} · mining={} · {:.1} kH/s · A={} R={}.",
-                    if snap2.usb_open { "linked" } else { "idle" },
-                    if snap2.mining { "on" } else { "off" },
-                    snap2.hashrate_khs,
-                    snap2.accepted,
-                    snap2.rejected
-                ),
-            ));
-        }
-    }
-
-    fn handle_assist_llm(&mut self, result: Result<LlmRound, String>) {
-        match result {
-            Err(e) => {
-                self.assist_busy = false;
-                self.assist_chat
-                    .push_back((AssistRole::Assistant, format!("Assist error: {e}")));
-                self.push_log(LogKind::Warn, format!("Assist: {e}"));
-            }
-            Ok(LlmRound::Done { assistant }) => {
-                self.assist_busy = false;
-                self.assist_rounds = 0;
-                let text = if assistant.content.trim().is_empty() {
-                    "(ok)".into()
-                } else {
-                    assistant.content.clone()
-                };
-                self.assist_chat
-                    .push_back((AssistRole::Assistant, text));
-                self.assist_llm.push(assistant);
-            }
-            Ok(LlmRound::Tools {
-                assistant,
-                pending,
-            }) => {
-                self.assist_llm.push(assistant);
-                self.apply_assist_tools(pending);
-                self.assist_rounds = self.assist_rounds.saturating_add(1);
-                if self.assist_rounds >= max_tool_rounds() {
-                    self.assist_busy = false;
-                    self.assist_chat.push_back((
-                        AssistRole::Assistant,
-                        "Stopped after several tool rounds — ask a follow-up if you need more."
-                            .into(),
-                    ));
-                } else {
-                    self.spawn_assist_llm();
-                }
-            }
-        }
-    }
-
-    fn assist_baseline_khs(&self) -> f64 {
-        // Prefer samples older than 30s so a sudden cliff doesn't poison the baseline.
-        let aged: Vec<f64> = self
-            .assist_rate_hist
-            .iter()
-            .filter(|(t, _)| t.elapsed() > Duration::from_secs(30))
-            .map(|(_, k)| *k)
-            .collect();
-        if aged.len() >= 3 {
-            return median_f64(&aged);
-        }
-        let all: Vec<f64> = self.assist_rate_hist.iter().map(|(_, k)| *k).collect();
-        if all.len() >= 3 {
-            median_f64(&all)
-        } else {
-            0.0
-        }
-    }
-
-    fn sample_assist_rate(&mut self) {
-        let khs = if self.displayed_khs > 0.5 {
-            self.displayed_khs as f64
-        } else if self.status.hashrate_hs > 0.0 {
-            self.status.hashrate_hs / 1000.0
-        } else {
-            self.status.hashrate_khs
-        };
-        if khs < 0.0 {
-            return;
-        }
-        // ~1 sample / 3s max
-        if let Some((t, _)) = self.assist_rate_hist.back() {
-            if t.elapsed() < Duration::from_secs(3) {
-                return;
-            }
-        }
-        self.assist_rate_hist.push_back((Instant::now(), khs));
-        while self.assist_rate_hist.len() > 80 {
-            self.assist_rate_hist.pop_front();
-        }
-        // Drop samples older than 10 minutes.
-        while self
-            .assist_rate_hist
-            .front()
-            .map(|(t, _)| t.elapsed() > Duration::from_secs(600))
-            .unwrap_or(false)
-        {
-            self.assist_rate_hist.pop_front();
-        }
-    }
-
-    fn nudge_assist_watch(&mut self, _why: &str) {
-        if self.assist_watch {
-            self.assist_watch_force = true;
-        }
-    }
-
-    fn schedule_assist_remeasure(&mut self, label: impl Into<String>, before_khs: f64) {
-        let label = label.into();
-        // Don't arm a 0→0 remesure at bench *start* — wait for bench-done.
-        if label == "bench" && before_khs < 1.0 {
-            return;
-        }
-        self.assist_remeasure = Some((
-            label,
-            before_khs,
-            Instant::now() + Duration::from_secs(45),
-        ));
-    }
-
-    fn tick_assist_remeasure(&mut self) {
-        let Some((label, before, due)) = self.assist_remeasure.clone() else {
-            return;
-        };
-        if Instant::now() < due {
-            return;
-        }
-        // Still benching — push remesure out until the board finishes.
-        if self.bench_busy {
-            self.assist_remeasure = Some((
-                label,
-                before,
-                Instant::now() + Duration::from_secs(20),
-            ));
-            return;
-        }
-        self.assist_remeasure = None;
-        self.sample_assist_rate();
-        let after = if self.displayed_khs > 0.5 {
-            self.displayed_khs as f64
-        } else {
-            self.status.hashrate_hs / 1000.0
-        };
-        let delta = after - before;
-        let accept_after = {
-            let tot = self.session_accepted + self.session_rejected;
-            if tot == 0 {
-                100.0
-            } else {
-                100.0 * self.session_accepted as f64 / tot as f64
-            }
-        };
-        let action_kind = label
-            .split(|c| c == '-' || c == ' ')
-            .next()
-            .unwrap_or(label.as_str())
-            .to_string();
-        let rec = AssistFixRecord {
-            label: label.clone(),
-            action_kind: if label.contains("bench") {
-                "bench".into()
-            } else {
-                action_kind
-            },
-            before_khs: before,
-            after_khs: after,
-            delta_khs: delta,
-            accept_pct_before: accept_after,
-            accept_pct_after: accept_after,
-            board_mac: self.board_mac.clone(),
-            ts_unix: std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map(|d| d.as_secs())
-                .unwrap_or(0),
-            user_vote: 0,
-        };
-        self.assist_memory.push_fix(rec);
-        let note = if after + 2.0 < before * 0.9 {
-            format!(
-                "Remeasure after {label}: {:.0}→{:.0} kH/s (worse). Watch will retry safe fixes.",
-                before, after
-            )
-        } else if after > before * 1.08 {
-            format!(
-                "Remeasure after {label}: {:.0}→{:.0} kH/s (+{:.0}). Keeping this path.",
-                before, after, delta
-            )
-        } else {
-            format!(
-                "Remeasure after {label}: {:.0}→{:.0} kH/s (flat). Baseline updating.",
-                before, after
-            )
-        };
-        self.assist_chat
-            .push_back((AssistRole::Assistant, format!("📏 {note}")));
-        self.assist_remeasure_votes.push_back(label.clone());
-        while self.assist_remeasure_votes.len() > 12 {
-            self.assist_remeasure_votes.pop_front();
-        }
-        if self.assist_chat.len() > 80 {
-            self.assist_chat.pop_front();
-        }
-        self.push_log(LogKind::Info, format!("Assist: {note}"));
-        if after + 2.0 < before * 0.9 {
-            self.nudge_assist_watch("remeasure_worse");
-        }
-    }
-
-    fn vote_assist_remeasure(&mut self, label: &str, helped: bool) {
-        if let Some(rec) = self
-            .assist_memory
-            .fixes
-            .iter_mut()
-            .rev()
-            .find(|f| f.label == label)
-        {
-            rec.user_vote = if helped { 1 } else { -1 };
-            let msg = if helped {
-                format!("Noted: {label} helped — prefer this again.")
-            } else {
-                format!("Noted: {label} hurt — avoid auto-retrying soon.")
-            };
-            self.assist_chat
-                .push_back((AssistRole::Assistant, format!("👍 {msg}")));
-            self.push_log(LogKind::Info, format!("Assist vote: {msg}"));
-            if !helped {
-                self.nudge_assist_watch("user_vote_worse");
-            }
-        }
-    }
-
-    fn absorb_bench_progress(&mut self, line: &str) {
-        // CMPBENCHPROG step=… path=… mhz=… hs=… khs=…
-        let mut khs = None;
-        let mut path = String::new();
-        let mut step = String::new();
-        for part in line.split_whitespace() {
-            if let Some(v) = part.strip_prefix("khs=") {
-                khs = v.parse::<f64>().ok();
-            } else if let Some(v) = part.strip_prefix("path=") {
-                path = v.to_string();
-            } else if let Some(v) = part.strip_prefix("step=") {
-                step = v.to_string();
-            }
-        }
-        if let Some(k) = khs {
-            if k > 0.5 {
-                self.status.hashrate_hs = k * 1000.0;
-                self.status.hashrate_khs = k;
-                self.status.mining = true;
-                let kf = k as f32;
-                self.displayed_khs = if self.displayed_khs < 1.0 {
-                    kf
-                } else {
-                    self.displayed_khs * 0.4 + kf * 0.6
-                };
-            }
-        }
-        let msg = if step == "wait" {
-            let elapsed = line
-                .split_whitespace()
-                .find_map(|p| p.strip_prefix("elapsed="))
-                .unwrap_or("…");
-            format!("Bench waiting on USB… {elapsed}")
-        } else if !path.is_empty() && khs.unwrap_or(0.0) > 0.5 {
-            format!(
-                "Bench {step} · {path} · {:.0} kH/s",
-                khs.unwrap_or(0.0)
-            )
-        } else if !step.is_empty() {
-            format!("Bench {step}…")
-        } else {
-            trunc(line, 120)
-        };
-        // Heartbeats keep the notifier alive but don't reset stall clock unless real prog.
-        if step != "wait" {
-            self.last_bench_prog_at = Some(Instant::now());
-        } else if self.last_bench_prog_at.is_none() {
-            self.last_bench_prog_at = Some(Instant::now());
-        }
-        self.bench_status = msg.clone();
-        self.last_ok = msg.clone();
-        self.push_log(LogKind::Usb, msg);
-    }
-
-    fn spawn_assist_anomaly_llm(&mut self, anomalies: &[String]) {
-        if !self.assist_llm_anomaly || anomalies.is_empty() {
-            return;
-        }
-        if self.last_assist_llm_anomaly.elapsed() < Duration::from_secs(180) {
-            return;
-        }
-        let sig = anomalies.join("|");
-        if sig == self.last_assist_anomaly_sig {
-            return;
-        }
-        self.last_assist_anomaly_sig = sig;
-        self.last_assist_llm_anomaly = Instant::now();
-
-        let client = self.assist_client();
-        // Built-in path (default): escalate with on-device optimizer — no network.
-        // Do not gate on assist_busy (chat must not block continuous auto-fix).
-        if !client.uses_http() {
-            let snap = self.assist_snapshot();
-            let (say, pending) = builtin_anomaly_plan(anomalies, &snap, &self.assist_memory);
-            self.assist_chat
-                .push_back((AssistRole::Assistant, say));
-            if !pending.is_empty() {
-                let before = snap.hashrate_khs;
-                self.apply_assist_tools(pending);
-                self.schedule_assist_remeasure("builtin-anomaly", before);
-            }
-            return;
-        }
-        if self.assist_busy || !client.configured() {
-            return;
-        }
-        let snap = self.assist_snapshot();
-        let msgs = vec![
-            AssistMessage::system(system_prompt(&snap)),
-            AssistMessage::system(anomaly_system_addon(anomalies)),
-            AssistMessage::user(format!(
-                "Handle mining anomaly now: {}",
-                anomalies.join(", ")
-            )),
-        ];
-        self.assist_llm = msgs.clone();
-        self.assist_busy = true;
-        self.assist_rounds = 0;
-        self.assist_chat.push_back((
-            AssistRole::Assistant,
-            format!("🤖 Escalating anomaly to {}: {}", client.backend.label(), anomalies.join(", ")),
-        ));
-        let tx = self.msg_tx.clone();
-        thread::spawn(move || {
-            let result = client.chat_round(&msgs);
-            let _ = tx.send(NetMsg::AssistLlm(result));
-        });
-    }
-
-    /// Continuous stratum + hashrate watch using the same monitoring playbook.
-    fn tick_assist_watch(&mut self) {
-        self.sample_assist_rate();
-        self.tick_assist_remeasure();
-
-        // Track job id advancement for stall detection.
-        let jobs = self.stratum_live.jobs;
-        if jobs > self.assist_last_jobs {
-            self.assist_last_jobs = jobs;
-            self.assist_jobs_bump_at = Instant::now();
-        }
-
-        // Always-on: Continuous watch cannot be turned off (user request).
-        // Chat/LLM must not pause it — only flash owns the COM.
-        self.assist_watch = true;
-        self.assist_llm_anomaly = true;
-        if self.flash_busy() {
-            return;
-        }
-        let forced = self.assist_watch_force;
-        // Tighter cadence so errors are fixed promptly while mining.
-        if !forced && self.last_assist_watch.elapsed() < Duration::from_secs(12) {
-            return;
-        }
-        self.assist_watch_force = false;
-        self.last_assist_watch = Instant::now();
-        let report = evaluate_mining_watch(&self.assist_snapshot(), &self.assist_memory);
-        if !forced && report.signature == self.last_assist_watch_sig && report.steps.is_empty() {
-            return;
-        }
-        let mut note = format_watch_report(&report);
-        let mut did = false;
-        let before_khs = self.assist_snapshot().hashrate_khs;
-        for step in report.steps {
-            let skip = match &step.action {
-                AssistAction::BenchBoards
-                    if self.last_assist_bench_at.elapsed() < Duration::from_secs(180) =>
-                {
-                    true
-                }
-                // Cooldown even when mining was cleared by auth-fail (prevents reconnect thrash).
-                AssistAction::StartMining
-                    if self.last_assist_restart_at.elapsed() < Duration::from_secs(90) =>
-                {
-                    true
-                }
-                AssistAction::SetPoolConfig { .. }
-                    if self.last_assist_pool_at.elapsed() < Duration::from_secs(120) =>
-                {
-                    true
-                }
-                AssistAction::ConnectBoard { .. } | AssistAction::ScanWorkers
-                    if self.last_assist_restart_at.elapsed() < Duration::from_secs(60) =>
-                {
-                    true
-                }
-                _ => false,
-            };
-            if skip {
-                continue;
-            }
-            match &step.action {
-                AssistAction::BenchBoards => {
-                    self.last_assist_bench_at = Instant::now();
-                    self.schedule_assist_remeasure("bench", before_khs);
-                }
-                AssistAction::StartMining => {
-                    self.last_assist_restart_at = Instant::now();
-                    self.schedule_assist_remeasure("mine-restart", before_khs);
-                }
-                AssistAction::SetPoolConfig { .. } => {
-                    self.last_assist_pool_at = Instant::now();
-                    self.last_assist_restart_at = Instant::now();
-                    self.schedule_assist_remeasure("pool-fix", before_khs);
-                }
-                AssistAction::ConnectBoard { .. } | AssistAction::ScanWorkers => {
-                    self.last_assist_restart_at = Instant::now();
-                }
-                _ => {}
-            }
-            let r = self.execute_assist_action(step.action);
-            note.push_str(&format!("\n· {} → {}", step.reason, trunc(&r, 100)));
-            did = true;
-        }
-        let sig_changed = report.signature != self.last_assist_watch_sig;
-        self.last_assist_watch_sig = report.signature;
-        if did {
-            self.assist_chat
-                .push_back((AssistRole::Assistant, format!("📡 {note}")));
-            if self.assist_chat.len() > 80 {
-                self.assist_chat.pop_front();
-            }
-            self.push_log(LogKind::Info, format!("Assist watch: {}", trunc(&note, 160)));
-        } else if (sig_changed || forced) && self.tab == Tab::Assist {
-            self.assist_chat
-                .push_back((AssistRole::Assistant, format!("📡 {note}")));
-            if self.assist_chat.len() > 80 {
-                self.assist_chat.pop_front();
-            }
-        }
-
-        if !report.anomalies.is_empty() {
-            let anomalies = report.anomalies.clone();
-            self.spawn_assist_anomaly_llm(&anomalies);
-        }
-    }
-
-    fn ui_assist(&mut self, ui: &mut egui::Ui) {
-        soft_panel(ui, "Assist — built-in Local AI", |ui| {
-            let mode = match self.assist_backend {
-                AssistBackend::BuiltIn => {
-                    "Built-in Local AI — runs inside Companion (offline · stratum + hashrate)"
-                }
-                AssistBackend::Ollama => "Ollama on this PC — optional local LLM",
-                AssistBackend::Cloud => "Cloud API — optional remote LLM",
-            };
-            ui.label(
-                RichText::new(mode)
-                    .color(C_MUTED)
-                    .size(13.0),
-            );
-            ui.add_space(6.0);
-            ui.horizontal_wrapped(|ui| {
-                ui.label(
-                    RichText::new("Continuous watch · always on (auto-fixes)")
-                        .color(C_LIME)
-                        .strong()
-                        .size(13.0),
-                );
-                ui.label(
-                    RichText::new("· anomaly escalate on")
-                        .color(C_MUTED)
-                        .size(12.0),
-                );
-                if soft_button(ui, "Watch now", 100.0).clicked() && !self.assist_busy {
-                    self.last_assist_watch = Instant::now() - Duration::from_secs(60);
-                    self.last_assist_watch_sig.clear();
-                    self.assist_watch_force = true;
-                    self.submit_assist("Watch stratum".into());
-                }
-                if soft_button(ui, "Max hashrate", 110.0).clicked() && !self.assist_busy {
-                    self.submit_assist("Max hashrate".into());
-                }
-            });
-            ui.add_space(8.0);
-
-            if let Some((live_push, wifi)) = self.assist_fw_confirm {
-                ui.horizontal_wrapped(|ui| {
-                    ui.label(
-                        RichText::new("Confirm board firmware update?")
-                            .color(C_WARN)
-                            .strong(),
-                    );
-                    if soft_button(ui, "Confirm flash", 120.0).clicked() {
-                        self.assist_fw_confirm = None;
-                        if wifi {
-                            self.begin_board_update_wifi();
-                        } else {
-                            self.begin_board_update(live_push);
-                        }
-                        self.assist_chat.push_back((
-                            AssistRole::Assistant,
-                            "Firmware update started — watch the overlay.".into(),
-                        ));
-                    }
-                    if soft_button(ui, "Cancel", 80.0).clicked() {
-                        self.assist_fw_confirm = None;
-                        self.assist_chat.push_back((
-                            AssistRole::Assistant,
-                            "Firmware update cancelled.".into(),
-                        ));
-                    }
-                });
-                ui.add_space(8.0);
-            }
-
-            ui.horizontal_wrapped(|ui| {
-                for chip in suggest_chips() {
-                    if soft_button(ui, chip, 118.0).clicked() && !self.assist_busy {
-                        self.submit_assist((*chip).to_string());
-                    }
-                }
-            });
-            ui.add_space(10.0);
-
-            ScrollArea::vertical()
-                .id_source("assist_chat_scroll")
-                .max_height(360.0)
-                .auto_shrink([false, false])
-                .stick_to_bottom(true)
-                .show(ui, |ui| {
-                    let chat: Vec<_> = self.assist_chat.iter().cloned().collect();
-                    let votes: Vec<_> = self.assist_remeasure_votes.iter().cloned().collect();
-                    for (role, text) in &chat {
-                        let (who, color) = match role {
-                            AssistRole::User => ("You", C_TEXT),
-                            AssistRole::Assistant => ("Assist", C_LIME),
-                            AssistRole::Tool => ("Tool", C_DIM),
-                            AssistRole::System => ("System", C_MUTED),
-                        };
-                        ui.label(
-                            RichText::new(who)
-                                .color(color)
-                                .font(mono_ui_font(11.0))
-                                .strong(),
-                        );
-                        ui.label(RichText::new(text).color(C_TEXT).size(13.0));
-                        if text.starts_with('📏') {
-                            if let Some(label) = votes.iter().rev().find(|l| text.contains(l.as_str())) {
-                                let label = label.clone();
-                                ui.horizontal(|ui| {
-                                    if soft_button(ui, "Helped", 72.0).clicked() {
-                                        self.vote_assist_remeasure(&label, true);
-                                    }
-                                    if soft_button(ui, "Worse", 72.0).clicked() {
-                                        self.vote_assist_remeasure(&label, false);
-                                    }
-                                });
-                            }
-                        }
-                        ui.add_space(8.0);
-                    }
-                    if self.assist_busy {
-                        ui.label(
-                            RichText::new("Thinking…")
-                                .color(C_MUTED)
-                                .italics()
-                                .size(13.0),
-                        );
-                    }
-                });
-
-            ui.add_space(8.0);
-            ui.horizontal(|ui| {
-                let edit = TextEdit::singleline(&mut self.assist_input)
-                    .hint_text("e.g. watch stratum · max hashrate · why are accepts low?")
-                    .desired_width(ui.available_width() - 100.0);
-                let resp = ui.add(edit);
-                let send = soft_button(ui, if self.assist_busy { "…" } else { "Send" }, 72.0)
-                    .clicked()
-                    || (resp.lost_focus()
-                        && ui.input(|i| i.key_pressed(egui::Key::Enter)));
-                if send && !self.assist_busy {
-                    let msg = std::mem::take(&mut self.assist_input);
-                    self.submit_assist(msg);
-                }
-            });
-        });
     }
 
     fn request_api_pull(&mut self, id: u64) {
@@ -3172,7 +1988,7 @@ impl CompanionApp {
         let pool_pass = stratum_password(&self.edit_password);
         let stratum = self.edit_stratum.trim().to_string();
         // Same pool session already running — do not reconnect / wipe Accept·Reject.
-        // Assist watch + SetPoolConfig were double-firing Start and resetting A/R to 0.
+        // Duplicate StartMine was wiping counters every few seconds.
         if self.mining
             && self.stratum_live.authorized
             && stratum_endpoints_match(&self.stratum_live.endpoint, &stratum)
@@ -3201,7 +2017,7 @@ impl CompanionApp {
         self.push_log(
             LogKind::Info,
             format!(
-                "Start mining → {stratum} as {pool_user} · linked USB/Wi‑Fi={} · mesh peers from gateways",
+                "Start mining → {stratum} as {pool_user} · linked USB/Wi‑Fi={}",
                 self.connected_workers.len().max(usize::from(self.usb_open)),
             ),
         );
@@ -3277,13 +2093,6 @@ impl CompanionApp {
             LogKind::Usb,
             "D0 auto-tune: each board climbs SHA paths with stable dual-pass timing…".into(),
         );
-        self.assist_chat.push_back((
-            AssistRole::Assistant,
-            "📡 Bench started — notifier stays up until paths lock (Cancel if stuck).".into(),
-        ));
-        if self.assist_chat.len() > 80 {
-            self.assist_chat.pop_front();
-        }
         let _ = self.cmd_tx.send(NetCmd::Bench);
     }
 
@@ -3306,9 +2115,6 @@ impl CompanionApp {
                 "Bench watchdog: still busy after {elapsed}s — cleared. Retry Bench or Push firmware if it hangs again."
             ));
             self.last_error = self.last_ok.clone();
-            self.assist_memory
-                .record_bench_timeout(&self.board_mac, self.displayed_khs as f64);
-            self.nudge_assist_watch("bench_timeout");
             return;
         }
         // No CMPBENCHPROG for a long stretch after start → treat as hung.
@@ -3318,9 +2124,6 @@ impl CompanionApp {
                 "Bench stuck — no progress for {last_prog}s (elapsed {elapsed}s). Cancelled; update board FW if this repeats."
             ));
             self.last_error = self.last_ok.clone();
-            self.assist_memory
-                .record_bench_timeout(&self.board_mac, self.displayed_khs as f64);
-            self.nudge_assist_watch("bench_timeout");
             return;
         }
 
@@ -3339,11 +2142,6 @@ impl CompanionApp {
             let msg = format!("Still benching… {status} · {elapsed}s");
             self.last_ok = msg.clone();
             self.push_log(LogKind::Usb, msg.clone());
-            self.assist_chat
-                .push_back((AssistRole::Assistant, format!("📡 {msg}")));
-            if self.assist_chat.len() > 80 {
-                self.assist_chat.pop_front();
-            }
         }
     }
 
@@ -3353,8 +2151,62 @@ impl CompanionApp {
         }
         USB_BENCH_CANCEL.store(true, Ordering::SeqCst);
         self.clear_bench_busy("Bench cancelled — waiting for USB wait to abort…");
-        self.nudge_assist_watch("bench_cancel");
     }
+
+    fn absorb_bench_progress(&mut self, line: &str) {
+        // CMPBENCHPROG step=… path=… mhz=… hs=… khs=…
+        let mut khs = None;
+        let mut path = String::new();
+        let mut step = String::new();
+        for part in line.split_whitespace() {
+            if let Some(v) = part.strip_prefix("khs=") {
+                khs = v.parse::<f64>().ok();
+            } else if let Some(v) = part.strip_prefix("path=") {
+                path = v.to_string();
+            } else if let Some(v) = part.strip_prefix("step=") {
+                step = v.to_string();
+            }
+        }
+        if let Some(k) = khs {
+            if k > 0.5 {
+                self.status.hashrate_hs = k * 1000.0;
+                self.status.hashrate_khs = k;
+                self.status.mining = true;
+                let kf = k as f32;
+                self.displayed_khs = if self.displayed_khs < 1.0 {
+                    kf
+                } else {
+                    self.displayed_khs * 0.4 + kf * 0.6
+                };
+            }
+        }
+        let msg = if step == "wait" {
+            let elapsed = line
+                .split_whitespace()
+                .find_map(|p| p.strip_prefix("elapsed="))
+                .unwrap_or("…");
+            format!("Bench waiting on USB… {elapsed}")
+        } else if !path.is_empty() && khs.unwrap_or(0.0) > 0.5 {
+            format!(
+                "Bench {step} · {path} · {:.0} kH/s",
+                khs.unwrap_or(0.0)
+            )
+        } else if !step.is_empty() {
+            format!("Bench {step}…")
+        } else {
+            trunc(line, 120)
+        };
+        // Heartbeats keep the notifier alive but don't reset stall clock unless real prog.
+        if step != "wait" {
+            self.last_bench_prog_at = Some(Instant::now());
+        } else if self.last_bench_prog_at.is_none() {
+            self.last_bench_prog_at = Some(Instant::now());
+        }
+        self.bench_status = msg.clone();
+        self.last_ok = msg.clone();
+        self.push_log(LogKind::Usb, msg);
+    }
+
 
     fn session_elapsed_label(&self) -> String {
         match self.session_started {
@@ -3975,7 +2827,7 @@ impl CompanionApp {
         // Honor the user's Push choice even if detection is uncertain (old fw / not linked).
         // USB OTA first (no hold); flash_update falls back to ROM auto-reset, then Ready.
         let live_push = prefer_live_push && !wifi_ota;
-        // Abort any in-flight mesh via / USB wait BEFORE queuing UpdateFirmware —
+        // Abort any in-flight USB wait BEFORE queuing UpdateFirmware —
         // otherwise Push sits on "auto-reset…" until via timeouts finish (tens of seconds).
         USB_FLASH_PREEMPT.store(true, Ordering::SeqCst);
         if self.mining {
@@ -4650,146 +3502,6 @@ impl CompanionApp {
         });
 
         ui.add_space(14.0);
-        soft_panel(ui, "Assist — Local AI", |ui| {
-            ui.label(
-                RichText::new(
-                    "AI is built into Companion by default (offline). Continuous watch is always on and auto-fixes connect, pool port (:3335→:3337), clock, and bench. Optional: Ollama on this PC, or a cloud API.",
-                )
-                .color(C_MUTED)
-                .size(13.0),
-            );
-            ui.add_space(10.0);
-            ui.horizontal_wrapped(|ui| {
-                for (b, tip) in [
-                    (AssistBackend::BuiltIn, "Built-in (local)"),
-                    (AssistBackend::Ollama, "Ollama (this PC)"),
-                    (AssistBackend::Cloud, "Cloud API"),
-                ] {
-                    let selected = self.assist_backend == b;
-                    if ui
-                        .selectable_label(selected, tip)
-                        .on_hover_text(match b {
-                            AssistBackend::BuiltIn => "No install · works offline",
-                            AssistBackend::Ollama => "Requires Ollama running locally",
-                            AssistBackend::Cloud => "Requires API key",
-                        })
-                        .clicked()
-                    {
-                        self.assist_backend = b;
-                        if b == AssistBackend::Ollama {
-                            if self.assist_base_url.trim().is_empty()
-                                || self.assist_base_url.contains("openai.com")
-                            {
-                                self.assist_base_url = OLLAMA_BASE_URL.into();
-                            }
-                            if self.assist_model.trim().is_empty()
-                                || self.assist_model == DEFAULT_MODEL
-                            {
-                                self.assist_model = OLLAMA_DEFAULT_MODEL.into();
-                            }
-                        }
-                    }
-                }
-            });
-            ui.add_space(8.0);
-            if self.assist_backend != AssistBackend::BuiltIn {
-                if self.assist_backend == AssistBackend::Cloud {
-                    ui.label(RichText::new("API key").color(C_DIM).size(12.0));
-                    ui.add(
-                        TextEdit::singleline(&mut self.assist_api_key)
-                            .password(true)
-                            .hint_text("sk-…")
-                            .desired_width(ui.available_width()),
-                    );
-                    ui.add_space(6.0);
-                }
-                ui.label(RichText::new("Base URL").color(C_DIM).size(12.0));
-                ui.add(
-                    TextEdit::singleline(&mut self.assist_base_url)
-                        .hint_text(if self.assist_backend == AssistBackend::Ollama {
-                            OLLAMA_BASE_URL
-                        } else {
-                            DEFAULT_BASE_URL
-                        })
-                        .desired_width(ui.available_width()),
-                );
-                ui.add_space(6.0);
-                ui.label(RichText::new("Model").color(C_DIM).size(12.0));
-                ui.add(
-                    TextEdit::singleline(&mut self.assist_model)
-                        .hint_text(if self.assist_backend == AssistBackend::Ollama {
-                            OLLAMA_DEFAULT_MODEL
-                        } else {
-                            DEFAULT_MODEL
-                        })
-                        .desired_width(ui.available_width()),
-                );
-                ui.add_space(8.0);
-            }
-            ui.horizontal_wrapped(|ui| {
-                if soft_button(ui, "Open Assist tab", 140.0).clicked() {
-                    self.tab = Tab::Assist;
-                }
-                if self.assist_backend == AssistBackend::BuiltIn {
-                    if soft_button(ui, "Test built-in AI", 140.0).clicked() {
-                        self.tab = Tab::Assist;
-                        self.submit_assist("Help".into());
-                        self.last_ok = "Built-in Local AI is active on the Assist tab.".into();
-                    }
-                } else if soft_button(ui, "Test Assist API", 140.0).clicked() {
-                    let client = self.assist_client();
-                    if !client.configured() {
-                        self.last_error = "Configure Ollama URL/model or Cloud API key first.".into();
-                    } else {
-                        let tx = self.msg_tx.clone();
-                        self.last_ok = format!("Testing {}…", client.backend.label());
-                        thread::spawn(move || {
-                            let url = format!("{}/chat/completions", client.base_url);
-                            let body = serde_json::json!({
-                                "model": client.model,
-                                "messages": [
-                                    {"role":"system","content":"Reply with exactly: ok"},
-                                    {"role":"user","content":"ping"}
-                                ],
-                                "temperature": 0.0,
-                                "max_tokens": 16
-                            });
-                            let result = match ureq::post(&url)
-                                .set("Authorization", &format!("Bearer {}", client.api_key))
-                                .set("Content-Type", "application/json")
-                                .timeout(Duration::from_secs(30))
-                                .send_json(body)
-                            {
-                                Ok(resp) => {
-                                    let status = resp.status();
-                                    match resp.into_string() {
-                                        Ok(t) if (200..300).contains(&status) => Ok(format!(
-                                            "Assist API OK (HTTP {status}) · {}",
-                                            trunc(&t, 80)
-                                        )),
-                                        Ok(t) => Err(format!(
-                                            "Assist API HTTP {status}: {}",
-                                            trunc(&t, 160)
-                                        )),
-                                        Err(e) => Err(format!("Assist API read: {e}")),
-                                    }
-                                }
-                                Err(e) => Err(format!("Assist API: {e}")),
-                            };
-                            let _ = tx.send(NetMsg::Action(result));
-                        });
-                    }
-                }
-            });
-            ui.label(
-                RichText::new(
-                    "Anomaly escalate · always on (built-in optimizer; Ollama/Cloud if selected above)",
-                )
-                .color(C_LIME)
-                .size(12.0),
-            );
-        });
-
         ui.add_space(14.0);
         soft_panel(ui, "Phone monitor", |ui| {
             ui.label(
@@ -5425,7 +4137,7 @@ impl CompanionApp {
             );
             ui.label(
                 RichText::new(
-                    "One data cable to the PC is enough (USB‑C typical). Extra boards only need power nearby — they join over mesh, not a second PC cable.",
+                    "One data cable per board to the PC (USB‑C typical). Plug each CYD into its own USB port — they appear in Find workers within a few seconds.",
                 )
                 .color(C_MUTED)
                 .size(11.0),
@@ -5612,32 +4324,12 @@ impl CompanionApp {
                     .size(12.0),
                 );
             } else if count_usb_uart_ports(&self.ports) <= 1 {
-                let mesh_n = self
-                    .connected_workers
-                    .iter()
-                    .filter(|w| w.endpoint.starts_with("mesh:"))
-                    .count();
-                let root_peers = self
-                    .connected_workers
-                    .iter()
-                    .filter(|w| !w.endpoint.starts_with("mesh:"))
-                    .map(|w| w.mesh_peers as usize)
-                    .max()
-                    .unwrap_or(0);
-                if self.usb_open && mesh_n == 0 {
+                if self.usb_open {
                     ui.label(
                         RichText::new(
-                            "Only one PC USB COM so far. Plug a 2nd CYD data cable into another USB port — it should appear above within a few seconds (or click Refresh). Or power a 2nd CYD nearby for mesh:… (no PC cable).",
+                            "Only one PC USB COM so far. Plug a 2nd CYD data cable into another USB port — it should appear above within a few seconds (or click Refresh).",
                         )
                         .color(C_WARN)
-                        .size(12.0),
-                    );
-                } else if self.usb_open {
-                    ui.label(
-                        RichText::new(format!(
-                            "PC USB root + {mesh_n} mesh board(s) · root reports {root_peers} peer(s)."
-                        ))
-                        .color(C_LIME)
                         .size(12.0),
                     );
                 }
@@ -5695,7 +4387,6 @@ impl CompanionApp {
                 );
                 ui.separator();
                 ui.label(RichText::new("Clock").color(C_MUTED).size(12.0));
-                // ESP32 only locks discrete MHz — step through them with − / + and chips.
                 if soft_button(ui, "−", 28.0).clicked() {
                     let mhz = cpu_mhz_nudge(self.target_mhz, false);
                     self.target_mhz = mhz;
@@ -5703,7 +4394,6 @@ impl CompanionApp {
                     self.push_log(LogKind::Usb, format!("Clock request {mhz} MHz"));
                 }
                 for &mhz in CPU_MHZ_STEPS {
-                    // Skip ultra-low for the chip row; still reachable via −.
                     if mhz < 40 {
                         continue;
                     }
@@ -5770,20 +4460,10 @@ impl CompanionApp {
         });
         if self.connected_workers.len() <= 1 {
             ui.add_space(4.0);
-            let has_usb = self
-                .connected_workers
-                .iter()
-                .any(|w| !w.endpoint.starts_with("mesh:"));
-            let has_mesh = self
-                .connected_workers
-                .iter()
-                .any(|w| w.endpoint.starts_with("mesh:"));
             ui.label(
-                RichText::new(if has_usb && !has_mesh {
-                    "One USB root is enough. Mesh peers need a 2nd CYD on power only (no PC cable) within Wi‑Fi range — they show as mesh:…. SoftAP of this board is the same device, not a peer. Same eFuse MAC boards cannot mesh — use a 2nd data cable instead."
-                } else {
-                    "USB root keeps hashing (throttled) while bridging mesh peers. Extra CYDs only need power nearby."
-                })
+                RichText::new(
+                    "Link each CYD with its own USB data cable (or Wi‑Fi after Setup). SoftAP on a board is for phone Setup — not a second worker.",
+                )
                 .color(C_MUTED)
                 .size(11.0),
             );
@@ -5800,19 +4480,11 @@ impl CompanionApp {
                     } else {
                         w.mac.clone()
                     };
-                    let mesh_tag = if w.mesh_bridging {
-                        format!(" · mesh-root×{}", w.mesh_peers)
-                    } else if w.endpoint.starts_with("mesh:") {
-                        " · mesh-leaf".to_string()
-                    } else {
-                        String::new()
-                    };
                     ui.label(
                         RichText::new(format!(
-                            "● {}  {rate}  · {mac} · {}{}",
+                            "● {}  {rate}  · {mac} · {}",
                             w.endpoint,
                             if w.fw.is_empty() { "fw?" } else { &w.fw },
-                            mesh_tag
                         ))
                         .color(C_LIME)
                         .font(mono_ui_font(12.0)),
@@ -5828,7 +4500,7 @@ impl CompanionApp {
             if dup_mac {
                 ui.label(
                     RichText::new(
-                        "Shared eFuse MAC on two links — boards are tracked by COM / mesh endpoint; rates above are per board.",
+                        "Shared eFuse MAC on two links — boards are tracked by COM endpoint; rates above are per board.",
                     )
                     .color(C_WARN)
                     .size(11.0),
@@ -6082,7 +4754,7 @@ phone opens Board Setup automatically (captive Sign-in), or use Setup / USB here
         ui.add_space(6.0);
         ui.label(
             RichText::new(
-                "Connect the board to your router so it can mine on the LAN / mesh.",
+                "Connect the board to your router so it can mine on the LAN.",
             )
             .color(C_MUTED)
             .size(13.0),
@@ -6146,9 +4818,6 @@ Or open http://10.88.88.1/ (SoftAP). After save, board prefers 192.168.1.88 on h
     fn wifi_setup_target_choices(&self) -> Vec<(String, String)> {
         let mut out: Vec<(String, String)> = Vec::new();
         for w in &self.connected_workers {
-            if w.endpoint.starts_with("mesh:") {
-                continue;
-            }
             let label = if w.mac.is_empty() {
                 format!("{} · linked", w.endpoint)
             } else {
@@ -6238,13 +4907,13 @@ Or open http://10.88.88.1/ (SoftAP). After save, board prefers 192.168.1.88 on h
                         ssid: home_ssid.clone(),
                     };
                     self.last_ok = format!(
-                        "{msg} — Wi‑Fi “{home_ssid}” saved over USB ({endpoint}). Board joins home Wi‑Fi; SoftAP may stay up for mesh."
+                        "{msg} — Wi‑Fi “{home_ssid}” saved over USB ({endpoint}). Board joins home Wi‑Fi; SoftAP may stay for Setup revisit."
                     );
                     self.push_log(LogKind::Usb, self.last_ok.clone());
                     self.push_log(
                         LogKind::Usb,
                         format!(
-                            "  · NVS write confirmed · path=USB · endpoint={endpoint} · SSID “{home_ssid}” · SoftAP may stay for mesh"
+                            "  · NVS write confirmed · path=USB · endpoint={endpoint} · SSID “{home_ssid}” · SoftAP may stay for Setup"
                         ),
                     );
                     return;
@@ -6516,7 +5185,7 @@ Phone: join SoftAP — Board Setup opens automatically to set home Wi‑Fi.",
             });
             ui.add_space(4.0);
             let status = match &self.wifi_setup_phase {
-                WifiSetupPhase::Idle => "Idle — SoftAP stays on after save for mesh.".to_string(),
+                WifiSetupPhase::Idle => "Idle — SoftAP stays on after save for Setup revisit.".to_string(),
                 WifiSetupPhase::Pushing => "Saving to board NVS…".into(),
                 WifiSetupPhase::WaitingSta { home_ssid, .. } => format!(
                     "Waiting for board on “{home_ssid}”… switch this PC back to home Wi‑Fi, then Find workers."
@@ -6938,10 +5607,6 @@ Phone: join SoftAP — Board Setup opens automatically to set home Wi‑Fi.",
                     self.tab = Tab::Setup;
                 }
                 ui.add_space(6.0);
-                if nav_button(ui, "Assist", self.tab == Tab::Assist).clicked() {
-                    self.tab = Tab::Assist;
-                }
-                ui.add_space(6.0);
                 if nav_button(ui, "Settings", self.tab == Tab::Settings).clicked() {
                     self.tab = Tab::Settings;
                 }
@@ -7005,9 +5670,6 @@ Phone: join SoftAP — Board Setup opens automatically to set home Wi‑Fi.",
                 }
                 if nav_button(ui, "Setup", self.tab == Tab::Setup).clicked() {
                     self.tab = Tab::Setup;
-                }
-                if nav_button(ui, "Assist", self.tab == Tab::Assist).clicked() {
-                    self.tab = Tab::Assist;
                 }
                 if nav_button(ui, "Settings", self.tab == Tab::Settings).clicked() {
                     self.tab = Tab::Settings;
@@ -7130,21 +5792,10 @@ impl App for CompanionApp {
                         if low.contains("cmpbench") || low.contains("khs=") {
                             self.absorb_bench_progress(&s);
                         }
-                        let before = self.assist_baseline_khs().max(self.displayed_khs as f64);
                         self.clear_bench_busy(&format!("Bench finished · {}", trunc(&s, 100)));
-                        self.schedule_assist_remeasure("bench-done", before);
-                        self.nudge_assist_watch("bench_done");
                     }
                     if low.contains("bench failed") && low.contains("timeout") {
-                        let before = self.assist_baseline_khs().max(self.displayed_khs as f64);
-                        self.assist_memory
-                            .record_bench_timeout(&self.board_mac, before);
                         self.clear_bench_busy(&format!("Bench timed out · {}", trunc(&s, 100)));
-                        self.push_log(
-                            LogKind::Info,
-                            "Assist: bench timed out — cooling auto-bench ~15 min".into(),
-                        );
-                        self.nudge_assist_watch("bench_timeout");
                     }
                     let kind = if low.contains("job") || low.contains("share") || low.contains("pool")
                     {
@@ -7210,12 +5861,6 @@ impl App for CompanionApp {
                 }
                 NetMsg::Status(Ok(s)) => {
                     self.absorb_status(s);
-                    self.sample_assist_rate();
-                    let baseline = self.assist_baseline_khs();
-                    let khs = self.displayed_khs as f64;
-                    if baseline > 20.0 && khs < baseline * 0.65 {
-                        self.nudge_assist_watch("rate_cliff");
-                    }
                 }
                 NetMsg::Status(Err(e)) => {
                     self.last_error = e.clone();
@@ -7275,8 +5920,6 @@ impl App for CompanionApp {
                     let prev_jobs = self.stratum_live.jobs;
                     self.stratum_live = live;
                     if self.stratum_live.jobs > prev_jobs {
-                        self.assist_last_jobs = self.stratum_live.jobs;
-                        self.assist_jobs_bump_at = Instant::now();
                     }
                     if self.stratum_live.authorized {
                         self.pool_auth_hold_until =
@@ -7290,7 +5933,6 @@ impl App for CompanionApp {
                                 LogKind::Stratum,
                                 "Authorized — counting shares after warmup".into(),
                             );
-                            self.nudge_assist_watch("authorized");
                         }
                     }
                     if self.stratum_live.phase == "auth-fail"
@@ -7307,7 +5949,6 @@ impl App for CompanionApp {
                                 trunc(&self.stratum_live.last_error, 120)
                             );
                         }
-                        self.nudge_assist_watch("auth_fail");
                     }
                     if self.stratum_live.authorized {
                         self.accepted = self.stratum_live.accepted;
@@ -7324,10 +5965,8 @@ impl App for CompanionApp {
                     }
                     self.pool_phase = self.stratum_live.phase.clone();
                     if was_authed && !self.stratum_live.authorized {
-                        self.nudge_assist_watch("auth_lost");
                     }
                     if was_connected && !self.stratum_live.connected && self.mining {
-                        self.nudge_assist_watch("stratum_drop");
                     }
                 }
                 NetMsg::Log { kind, text } => self.push_log(kind, text),
@@ -7373,15 +6012,9 @@ impl App for CompanionApp {
                     if ev.accepted {
                         self.session_accepted = self.session_accepted.saturating_add(1);
                         self.accepted = self.accepted.saturating_add(1);
-                        self.assist_reject_streak = 0;
                     } else {
                         self.session_rejected = self.session_rejected.saturating_add(1);
                         self.rejected = self.rejected.saturating_add(1);
-                        self.assist_reject_streak =
-                            self.assist_reject_streak.saturating_add(1);
-                        if self.assist_reject_streak >= 3 {
-                            self.nudge_assist_watch("reject_streak");
-                        }
                     }
                     if let Some(ms) = ev.latency_ms {
                         self.last_share_latency_ms = Some(ms);
@@ -7520,9 +6153,6 @@ impl App for CompanionApp {
                 }
                 NetMsg::ApiFeedResult(outcome) => {
                     self.apply_api_pull(outcome);
-                }
-                NetMsg::AssistLlm(result) => {
-                    self.handle_assist_llm(result);
                 }
                 NetMsg::WorkersFound(found) => {
                     self.worker_scan_busy = false;
@@ -7663,7 +6293,7 @@ impl App for CompanionApp {
                                 self.push_log(
                                     LogKind::Usb,
                                     format!(
-                                        "Skip Wi‑Fi {endpoint} — same board as USB root (SoftAP ≠ mesh peer)"
+                                        "Skip Wi‑Fi {endpoint} — same board as USB root (SoftAP is this device)"
                                     ),
                                 );
                                 continue;
@@ -8703,7 +7333,6 @@ or Flash (BOOT) with BOOT held + Ready."
                         match self.tab {
                             Tab::Mine => self.ui_mine(ui),
                             Tab::Setup => self.ui_setup(ui),
-                            Tab::Assist => self.ui_assist(ui),
                             Tab::Settings => self.ui_settings(ui),
                         }
                         ui.add_space(28.0);
@@ -8714,7 +7343,6 @@ or Flash (BOOT) with BOOT held + Ready."
         ctx.request_repaint_after(Duration::from_millis(16));
         self.refresh_monitor_lan_ip();
         self.publish_phone_monitor();
-        self.tick_assist_watch();
         self.tick_bench_notifier();
     }
 }
@@ -9454,29 +8082,12 @@ fn mine_worker(cmd_rx: Receiver<NetCmd>, msg_tx: Sender<NetMsg>) {
         status_fails: u8,
         /// ROM download mode (BOOT held / blank) — no cmp; flash via Update board.
         download_mode: bool,
-        /// Root is bridging ESP-NOW leaves (hash intentionally reduced on this board).
-        mesh_bridging: bool,
-        mesh_peers: u8,
         /// Board owns its own stratum session — Companion monitors H/s only.
         mine_indep: bool,
     }
 
-    /// Board reached only through a USB/Wi‑Fi root via ESP-NOW (`cmp via`).
-    struct MeshBoard {
-        name: String,
-        gateway: String,
-        mac: String,
-        legacy_job: bool,
-        fw: String,
-        hashrate_hs: f64,
-        hashes: u64,
-        mining: bool,
-        status_fails: u8,
-        mine_indep: bool,
-    }
-
-    fn live_from(boards: &[UsbBoard], mesh: &[MeshBoard]) -> Vec<WorkerLive> {
-        let mut out: Vec<WorkerLive> = boards
+    fn live_from(boards: &[UsbBoard]) -> Vec<WorkerLive> {
+        boards
             .iter()
             .map(|b| WorkerLive {
                 endpoint: b.name.clone(),
@@ -9490,34 +8101,13 @@ fn mine_worker(cmd_rx: Receiver<NetCmd>, msg_tx: Sender<NetMsg>) {
                 hashrate_hs: b.hashrate_hs,
                 hashes: b.hashes,
                 mining: b.mining,
-                mesh_bridging: b.mesh_bridging,
-                mesh_peers: b.mesh_peers,
                 mine_indep: b.mine_indep,
             })
-            .collect();
-        for m in mesh {
-            out.push(WorkerLive {
-                endpoint: m.name.clone(),
-                mac: m.mac.clone(),
-                fw: if m.fw.is_empty() {
-                    "mesh".into()
-                } else {
-                    m.fw.clone()
-                },
-                connected: true,
-                hashrate_hs: m.hashrate_hs,
-                hashes: m.hashes,
-                mining: m.mining,
-                mesh_bridging: false,
-                mesh_peers: 0,
-                mine_indep: m.mine_indep,
-            });
-        }
-        out
+            .collect()
     }
 
-    fn publish_live(tx: &Sender<NetMsg>, boards: &[UsbBoard], mesh: &[MeshBoard]) {
-        let _ = tx.send(NetMsg::WorkersLive(live_from(boards, mesh)));
+    fn publish_live(tx: &Sender<NetMsg>, boards: &[UsbBoard]) {
+        let _ = tx.send(NetMsg::WorkersLive(live_from(boards)));
     }
 
     fn usb_err_looks_unplugged(err: &str) -> bool {
@@ -9542,7 +8132,6 @@ fn mine_worker(cmd_rx: Receiver<NetCmd>, msg_tx: Sender<NetMsg>) {
     /// Drop USB boards whose COM vanished from the OS (unplug). Updates UI immediately.
     fn prune_unplugged_boards(
         boards: &mut Vec<UsbBoard>,
-        mesh: &mut Vec<MeshBoard>,
         msg_tx: &Sender<NetMsg>,
         mining: &mut bool,
         stratum: &mut Option<StratumClient>,
@@ -9559,7 +8148,6 @@ fn mine_worker(cmd_rx: Receiver<NetCmd>, msg_tx: Sender<NetMsg>) {
             if matches!(b.port, BoardIo::Tcp(_)) {
                 return true;
             }
-            // Don't prune the COM Update board currently owns (port can bounce mid-flash).
             if let Some((p, flag)) = flash_hold {
                 if flag.load(Ordering::SeqCst)
                     && (port_names_match(p, &b.name) || *p == b.name)
@@ -9579,18 +8167,15 @@ fn mine_worker(cmd_rx: Receiver<NetCmd>, msg_tx: Sender<NetMsg>) {
             return false;
         }
         for name in &removed {
-            mesh.retain(|m| !(port_names_match(&m.gateway, name) || m.gateway == *name));
             log_msg(
                 msg_tx,
                 LogKind::Warn,
                 format!("USB {name} unplugged — removed from fleet"),
             );
         }
-        // Refresh COM list so the UI combo drops the dead port immediately.
         let _ = msg_tx.send(NetMsg::Ports(listed));
-        publish_live(msg_tx, boards, mesh);
+        publish_live(msg_tx, boards);
         if boards.is_empty() {
-            mesh.clear();
             *mining = false;
             *reconnect_at = None;
             *last_fleet_status = StatusJson::default();
@@ -9610,343 +8195,6 @@ fn mine_worker(cmd_rx: Receiver<NetCmd>, msg_tx: Sender<NetMsg>) {
             ))));
         }
         true
-    }
-
-    fn parse_mesh_peers(line: &str) -> Vec<String> {
-        let t = line.trim();
-        let rest = t.strip_prefix("CMPMESH ").unwrap_or(t);
-        let mut peers = String::new();
-        for part in rest.split_whitespace() {
-            if let Some(v) = part.strip_prefix("peers=") {
-                peers = v.to_string();
-            }
-        }
-        if peers.is_empty() || peers == "-" {
-            return Vec::new();
-        }
-        peers
-            .split(',')
-            .filter_map(|p| {
-                let mac = normalize_mac(p.trim());
-                if mac_is_stable(&mac) {
-                    Some(mac)
-                } else {
-                    None
-                }
-            })
-            .collect()
-    }
-
-    fn usb_stable_macs(boards: &[UsbBoard]) -> Vec<String> {
-        boards
-            .iter()
-            .filter(|b| mac_is_stable(&b.mac))
-            .map(|b| normalize_mac(&b.mac))
-            .collect()
-    }
-
-    fn mesh_via_cmd(
-        boards: &mut [UsbBoard],
-        gateway: &str,
-        mac: &str,
-        cmp_rest: &str,
-    ) -> Result<String, String> {
-        let mut noop = || {};
-        mesh_via_cmd_ex(boards, gateway, mac, cmp_rest, &mut noop, 2)
-    }
-
-    /// `soft_attempts`: ESP-NOW flake retries. Keep at 1 while mining so the pool
-    /// always keeps the CPU — never stack 3×8.5s via waits on a live stratum session.
-    fn mesh_via_cmd_ex(
-        boards: &mut [UsbBoard],
-        gateway: &str,
-        mac: &str,
-        cmp_rest: &str,
-        pump: &mut dyn FnMut(),
-        soft_attempts: u32,
-    ) -> Result<String, String> {
-        let gw = boards
-            .iter_mut()
-            .find(|b| port_names_match(&b.name, gateway) || b.name == gateway)
-            .ok_or_else(|| format!("mesh gateway {gateway} gone"))?;
-        let hex: String = normalize_mac(mac)
-            .chars()
-            .filter(|c| c.is_ascii_hexdigit())
-            .collect();
-        let cmd = format!("cmp via {hex} {cmp_rest}");
-        let attempts = soft_attempts.max(1);
-        let mut last = String::new();
-        for attempt in 0..attempts {
-            match usb_cmd_ex(&mut gw.port, &mut gw.rx, &cmd, pump, None) {
-                Ok(line) => return Ok(line),
-                Err(e) => {
-                    last = e;
-                    let soft = last.contains("via timeout")
-                        || last.contains("via send failed")
-                        || last.contains("USB timeout");
-                    if last.contains("aborted for board update") {
-                        return Err(last);
-                    }
-                    if !soft || attempt + 1 >= attempts {
-                        return Err(last);
-                    }
-                    pump();
-                    thread::sleep(Duration::from_millis(25 + attempt as u64 * 40));
-                }
-            }
-        }
-        Err(last)
-    }
-
-    fn sync_mesh_peers(
-        boards: &mut [UsbBoard],
-        mesh: &mut Vec<MeshBoard>,
-        msg_tx: &Sender<NetMsg>,
-        mining: bool,
-        pump: &mut dyn FnMut(),
-        // When true, only refresh the peer list — no via config/status/arm.
-        list_only: bool,
-    ) {
-        let gateways: Vec<(String, String)> = boards
-            .iter()
-            .filter(|b| !b.download_mode)
-            .map(|b| (b.name.clone(), b.mac.clone()))
-            .collect();
-        let usb_macs = usb_stable_macs(boards);
-        let mut seen: Vec<(String, String)> = Vec::new(); // (gateway, mac)
-        for (gname, gmac) in &gateways {
-            pump();
-            let reply = {
-                let Some(gw) = boards
-                    .iter_mut()
-                    .find(|b| port_names_match(&b.name, gname) || b.name == *gname)
-                else {
-                    continue;
-                };
-                usb_cmd_ex(&mut gw.port, &mut gw.rx, "cmp mesh", pump, None).ok()
-            };
-            let Some(line) = reply else { continue };
-            if !line.starts_with("CMPMESH ") {
-                continue;
-            }
-            let peers = parse_mesh_peers(&line);
-            if peers.is_empty() {
-                // Solo USB root with peers=- is normal — not a self-link. Don't spam.
-                static LAST_EMPTY: std::sync::Mutex<Option<Instant>> =
-                    std::sync::Mutex::new(None);
-                let mut due = true;
-                if let Ok(mut g) = LAST_EMPTY.lock() {
-                    if let Some(t) = *g {
-                        if t.elapsed() < Duration::from_secs(90) {
-                            due = false;
-                        }
-                    }
-                    if due {
-                        *g = Some(Instant::now());
-                    }
-                }
-                if due {
-                    log_msg(
-                        msg_tx,
-                        LogKind::Usb,
-                        format!(
-                            "{gname}: USB root listening — no other CYD in ESP-NOW range yet \
-(peers=- is normal; SoftAP of this board is not a mesh peer). \
-Power a 2nd board nearby with wall/power-bank only (no PC cable)."
-                        ),
-                    );
-                }
-            } else if !list_only {
-                // Rate-limit identical peer-list lines (CMPMESH polls every few seconds).
-                static LAST_MESH_LOG: std::sync::Mutex<Option<(String, Instant)>> =
-                    std::sync::Mutex::new(None);
-                let summary = format!("{gname}: mesh peers {} · {line}", peers.join(","));
-                let mut due = true;
-                if let Ok(mut g) = LAST_MESH_LOG.lock() {
-                    if let Some((prev, t)) = g.as_ref() {
-                        if prev == &summary && t.elapsed() < Duration::from_secs(20) {
-                            due = false;
-                        }
-                    }
-                    if due {
-                        *g = Some((summary.clone(), Instant::now()));
-                    }
-                }
-                if due {
-                    log_msg(msg_tx, LogKind::Usb, summary);
-                }
-            }
-            for mac in peers {
-                // Never mesh-proxy a board that already has USB/Wi‑Fi cmp (incl. gateway).
-                if mac_is_stable(gmac) && normalize_mac(gmac) == mac {
-                    continue;
-                }
-                if usb_macs.iter().any(|u| u == &mac) {
-                    continue;
-                }
-                seen.push((gname.clone(), mac));
-            }
-        }
-        // Drop stale mesh peers (not advertised, gateway gone, or same MAC as USB).
-        mesh.retain(|m| {
-            if usb_macs.iter().any(|u| u == &m.mac) {
-                log_msg(
-                    msg_tx,
-                    LogKind::Usb,
-                    format!(
-                        "Mesh peer {} dropped (same board as linked USB/Wi‑Fi — not a mesh leaf)",
-                        m.mac
-                    ),
-                );
-                return false;
-            }
-            let keep = seen
-                .iter()
-                .any(|(g, mac)| (port_names_match(g, &m.gateway) || g == &m.gateway) && *mac == m.mac)
-                && boards
-                    .iter()
-                    .any(|b| port_names_match(&b.name, &m.gateway) || b.name == m.gateway);
-            if !keep {
-                log_msg(
-                    msg_tx,
-                    LogKind::Usb,
-                    format!("Mesh peer {} dropped (left range / gateway)", m.mac),
-                );
-            }
-            keep
-        });
-        // Always register new peers so the mine loop can give unique-en2 jobs.
-        // list_only skips via config/status chrome (those starve stratum).
-        // Peers still in CMPMESH: clear via-status fail counters (hello ≠ unicast).
-        for (_, mac) in &seen {
-            if let Some(m) = mesh.iter_mut().find(|m| m.mac == *mac) {
-                m.status_fails = 0;
-            }
-        }
-        for (gname, mac) in seen {
-            if mesh.iter().any(|m| m.mac == mac) {
-                continue;
-            }
-            if usb_macs.iter().any(|u| u == &mac) {
-                continue;
-            }
-            pump();
-            let name = format!("mesh:{mac}");
-            let mut mb = MeshBoard {
-                name: name.clone(),
-                gateway: gname.clone(),
-                mac: mac.clone(),
-                legacy_job: false,
-                fw: String::new(),
-                hashrate_hs: 0.0,
-                hashes: 0,
-                mining: false,
-                status_fails: 0,
-                mine_indep: false,
-            };
-            if !list_only {
-                // Discovery via — one attempt so stratum stays in charge.
-                if let Ok(line) = mesh_via_cmd_ex(boards, &gname, &mac, "config", pump, 1) {
-                    if let Ok(cfg) = parse_cmp_config(&line) {
-                        mb.legacy_job = !fw_supports_split_jobs(&cfg.fw);
-                        mb.fw = cfg.fw;
-                    }
-                }
-                pump();
-                if let Ok(line) = mesh_via_cmd_ex(boards, &gname, &mac, "status", pump, 1) {
-                    if let Ok(st) = parse_cmp_status(&line) {
-                        mb.hashrate_hs = st.hashrate_hs;
-                        mb.hashes = st.hashes;
-                        mb.mining = st.mining;
-                    }
-                }
-            }
-            log_msg(
-                msg_tx,
-                LogKind::Usb,
-                format!(
-                    "Mesh peer {mac} via {gname} · fw={} · {:.0} H/s · mining={} · ({})",
-                    if mb.fw.is_empty() { "?" } else { mb.fw.as_str() },
-                    mb.hashrate_hs,
-                    mb.mining,
-                    if list_only {
-                        "list — jobs next"
-                    } else {
-                        "connectivity"
-                    }
-                ),
-            );
-            // Warmup only when we have time for via; hot loop arms unique-en2 otherwise.
-            if mining && !list_only {
-                let _ = arm_mesh_job(boards, &mut mb, msg_tx, pump);
-            }
-            mesh.push(mb);
-        }
-    }
-
-    fn arm_mesh_job(
-        boards: &mut [UsbBoard],
-        mb: &mut MeshBoard,
-        msg_tx: &Sender<NetMsg>,
-        pump: &mut dyn FnMut(),
-    ) -> Result<(), String> {
-        let _ = mesh_via_cmd_ex(
-            boards,
-            &mb.gateway,
-            &mb.mac,
-            "stats accepted=0&rejected=0",
-            pump,
-            1,
-        );
-        if mb.legacy_job {
-            return Err("mesh peer needs split-job firmware (0.6.2+)".into());
-        }
-        let job = warmup_job();
-        for part in encode_job_parts(&job) {
-            let rest = part.strip_prefix("cmp ").unwrap_or(part.as_str());
-            let reply = mesh_via_cmd_ex(boards, &mb.gateway, &mb.mac, rest, pump, 1)?;
-            if !(reply.starts_with("CMPACK") || reply.starts_with("CMP ok")) {
-                return Err(format!("mesh job reply: {reply}"));
-            }
-            pump();
-        }
-        mb.mining = true;
-        log_msg(
-            msg_tx,
-            LogKind::Usb,
-            format!("Mesh {} hashing (warmup)…", mb.mac),
-        );
-        Ok(())
-    }
-
-    fn push_mesh_job(
-        boards: &mut [UsbBoard],
-        mb: &mut MeshBoard,
-        job: &stratum::WorkJob,
-        msg_tx: &Sender<NetMsg>,
-        pump: &mut dyn FnMut(),
-    ) -> Result<(), String> {
-        if mb.legacy_job {
-            return Err("mesh peer needs split-job firmware".into());
-        }
-        for part in encode_job_parts(job) {
-            let rest = part.strip_prefix("cmp ").unwrap_or(part.as_str());
-            // Soft retries: ESP-NOW is lossy under hash load; USB timeout used to
-            // fire when the root TWDT'd mid-via with no CMPERR on the wire.
-            let reply = mesh_via_cmd_ex(boards, &mb.gateway, &mb.mac, rest, pump, 3)?;
-            if !(reply.starts_with("CMPACK") || reply.starts_with("CMP ok")) {
-                log_msg(
-                    msg_tx,
-                    LogKind::Warn,
-                    format!("mesh {} job part failed: {reply}", mb.mac),
-                );
-                return Err(reply);
-            }
-            // Between via parts, keep the pool alive and leave CMPSHARE in gw.rx.
-            pump();
-        }
-        mb.mining = true;
-        Ok(())
     }
 
     fn open_board(name: &str) -> Result<(UsbBoard, bool), String> {
@@ -9997,8 +8245,6 @@ Power a 2nd board nearby with wall/power-bank only (no PC cable)."
                 status_fails: 0,
                 mine_indep: false,
                 download_mode: false,
-                mesh_bridging: false,
-                mesh_peers: 0,
             },
             true,
         ))
@@ -10038,7 +8284,7 @@ Power a 2nd board nearby with wall/power-bank only (no PC cable)."
         }
         let looks_tcp = ep.contains(':')
             && !ep.to_ascii_uppercase().starts_with("COM")
-            && !ep.starts_with("mesh:");
+            ;
         if !looks_tcp {
             return Err(format!(
                 "Board {endpoint} not linked — join open SoftAP Njordr-XXXX or Link USB first"
@@ -10108,8 +8354,6 @@ Power a 2nd board nearby with wall/power-bank only (no PC cable)."
                             status_fails: 0,
                             mine_indep: false,
                             download_mode: true,
-                            mesh_bridging: false,
-                            mesh_peers: 0,
                         },
                         false,
                     ));
@@ -10133,8 +8377,6 @@ Power a 2nd board nearby with wall/power-bank only (no PC cable)."
                 status_fails: 0,
                 mine_indep: false,
                 download_mode: false,
-                mesh_bridging: false,
-                mesh_peers: 0,
             },
             true,
         ))
@@ -10201,8 +8443,6 @@ Power a 2nd board nearby with wall/power-bank only (no PC cable)."
                     if !st.mac.is_empty() {
                         board.mac = normalize_mac(&st.mac);
                     }
-                    board.mesh_bridging = st.mesh_bridging;
-                    board.mesh_peers = st.mesh_peers;
                     let _ = msg_tx.send(NetMsg::Status(Ok(st)));
                 } else {
                     log_msg(
@@ -10299,7 +8539,7 @@ Power a 2nd board nearby with wall/power-bank only (no PC cable)."
         ep.starts_with("10.88.88.") || ep.contains("@10.88.88.")
     }
 
-    /// Keep the pool socket drained during long USB / mesh work so we do not
+    /// Keep the pool socket drained during long USB work so we do not
     /// bounce AUTHORIZED → SUBSCRIBE from a starved TCP session.
     fn pump_stratum_keepalive(
         stratum: &mut Option<StratumClient>,
@@ -10323,7 +8563,7 @@ Power a 2nd board nearby with wall/power-bank only (no PC cable)."
         err
     }
 
-    /// Stratum always wins: handshake, pending jobs, and reconnect windows defer mesh/USB chrome.
+    /// Stratum always wins: handshake, pending jobs, and reconnect windows defer USB chrome.
     fn pool_has_presidency(
         stratum: &Option<StratumClient>,
         reconnect_at: Option<Instant>,
@@ -10340,10 +8580,7 @@ Power a 2nd board nearby with wall/power-bank only (no PC cable)."
     }
 
     let mut boards: Vec<UsbBoard> = Vec::new();
-    let mut mesh: Vec<MeshBoard> = Vec::new();
     let mut stratum: Option<StratumClient> = None;
-    let mut last_mesh_sync = Instant::now() - Duration::from_secs(30);
-    let mut last_mesh_via_status = Instant::now() - Duration::from_secs(30);
     let mut last_ports_enum = Instant::now() - Duration::from_secs(30);
     let mut recent_jobs: VecDeque<WorkJob> = VecDeque::new();
     // Board shares held while the pool socket is down (submit on reconnect).
@@ -10464,9 +8701,6 @@ Power a 2nd board nearby with wall/power-bank only (no PC cable)."
                         .position(|b| port_names_match(&b.name, &name))
                     {
                         let mut old = boards.remove(idx);
-                        mesh.retain(|m| {
-                            !(port_names_match(&m.gateway, &old.name) || m.gateway == old.name)
-                        });
                         let _ = usb_cmd(&mut old.port, &mut old.rx, "cmp stop");
                     }
                     log_msg(&msg_tx, LogKind::Usb, format!("Opening {name} (460800→115200)"));
@@ -10508,37 +8742,22 @@ Power a 2nd board nearby with wall/power-bank only (no PC cable)."
                                 board.fw.clone()
                             };
                             boards.push(board);
-                            {
-                                let mut noop = || {};
-                                let list_only = pool_has_presidency(&stratum, reconnect_at);
-                                sync_mesh_peers(
-                                    &mut boards,
-                                    &mut mesh,
-                                    &msg_tx,
-                                    mining,
-                                    &mut noop,
-                                    list_only,
-                                );
-                            }
-                            last_mesh_sync = Instant::now();
-                            publish_live(&msg_tx, &boards, &mesh);
+                            publish_live(&msg_tx, &boards);
                             let _ = msg_tx.send(NetMsg::Action(Ok(if dl {
                                 format!(
-                                    "USB open {name} (download mode / BOOT) · mac={mac} · fw={fw} · flash with Update board · {} board(s)+mesh {}",
-                                    boards.len(),
-                                    mesh.len()
+                                    "USB open {name} (download mode / BOOT) · mac={mac} · fw={fw} · flash with Update board · {} board(s)",
+                                    boards.len()
                                 )
                             } else {
                                 format!(
-                                    "USB open {name}{} · mac={mac} · fw={fw} · {} board(s)+mesh {}",
+                                    "USB open {name}{} · mac={mac} · fw={fw} · {} board(s)",
                                     if saw { " (pong)" } else { "" },
-                                    boards.len(),
-                                    mesh.len()
+                                    boards.len()
                                 )
                             })));
                         }
                         Err(e) => {
-                            publish_live(&msg_tx, &boards, &mesh);
+                            publish_live(&msg_tx, &boards);
                             let _ = msg_tx.send(NetMsg::Action(Err(format!(
                                 "USB open {name} failed: {e}"
                             ))));
@@ -10557,7 +8776,7 @@ Power a 2nd board nearby with wall/power-bank only (no PC cable)."
                         let _ = msg_tx.send(NetMsg::Action(Ok(format!(
                             "Worker {name} already linked"
                         ))));
-                        publish_live(&msg_tx, &boards, &mesh);
+                        publish_live(&msg_tx, &boards);
                         continue;
                     }
                     // Keep already-linked boards hashing. Stopping them for hub
@@ -10623,37 +8842,22 @@ Power a 2nd board nearby with wall/power-bank only (no PC cable)."
                                 board.fw.clone()
                             };
                             boards.push(board);
-                            {
-                                let mut noop = || {};
-                                let list_only = pool_has_presidency(&stratum, reconnect_at);
-                                sync_mesh_peers(
-                                    &mut boards,
-                                    &mut mesh,
-                                    &msg_tx,
-                                    resume_mine || mining,
-                                    &mut noop,
-                                    list_only,
-                                );
-                            }
-                            last_mesh_sync = Instant::now();
-                            publish_live(&msg_tx, &boards, &mesh);
+                            publish_live(&msg_tx, &boards);
                             let _ = msg_tx.send(NetMsg::Action(Ok(if dl {
                                 format!(
-                                    "Worker linked {name} (download mode / BOOT) · mac={mac} · fw={fw} · Update board to flash · {} total+mesh {}",
-                                    boards.len(),
-                                    mesh.len()
+                                    "Worker linked {name} (download mode / BOOT) · mac={mac} · fw={fw} · Update board to flash · {} total",
+                                    boards.len()
                                 )
                             } else {
                                 format!(
-                                    "Worker linked {name}{} · mac={mac} · fw={fw} · {} total+mesh {}",
+                                    "Worker linked {name}{} · mac={mac} · fw={fw} · {} total",
                                     if saw { " (pong)" } else { "" },
-                                    boards.len(),
-                                    mesh.len()
+                                    boards.len()
                                 )
                             })));
                         }
                         Err(e) => {
-                            publish_live(&msg_tx, &boards, &mesh);
+                            publish_live(&msg_tx, &boards);
                             let _ = msg_tx.send(NetMsg::Action(Err(format!(
                                 "Link {name} failed: {e}"
                             ))));
@@ -10665,7 +8869,7 @@ Power a 2nd board nearby with wall/power-bank only (no PC cable)."
                         let _ = msg_tx.send(NetMsg::Action(Ok(format!(
                             "Wi‑Fi worker {endpoint} already linked"
                         ))));
-                        publish_live(&msg_tx, &boards, &mesh);
+                        publish_live(&msg_tx, &boards);
                         continue;
                     }
                     log_msg(
@@ -10687,7 +8891,7 @@ Power a 2nd board nearby with wall/power-bank only (no PC cable)."
                                         "Skip Wi‑Fi {endpoint} — already linked as {} (same MAC {})",
                                         existing.name, board.mac
                                     ))));
-                                    publish_live(&msg_tx, &boards, &mesh);
+                                    publish_live(&msg_tx, &boards);
                                     continue;
                                 }
                             }
@@ -10708,25 +8912,11 @@ Power a 2nd board nearby with wall/power-bank only (no PC cable)."
                                 board.fw.clone()
                             };
                             boards.push(board);
-                            {
-                                let mut noop = || {};
-                                let list_only = pool_has_presidency(&stratum, reconnect_at);
-                                sync_mesh_peers(
-                                    &mut boards,
-                                    &mut mesh,
-                                    &msg_tx,
-                                    mining,
-                                    &mut noop,
-                                    list_only,
-                                );
-                            }
-                            last_mesh_sync = Instant::now();
-                            publish_live(&msg_tx, &boards, &mesh);
+                            publish_live(&msg_tx, &boards);
                             let _ = msg_tx.send(NetMsg::Action(Ok(format!(
-                                "Wi‑Fi worker linked {endpoint}{} · mac={mac} · fw={fw} · {} total+mesh {}",
+                                "Wi‑Fi worker linked {endpoint}{} · mac={mac} · fw={fw} · {} total",
                                 if saw { " (pong)" } else { "" },
-                                boards.len(),
-                                mesh.len()
+                                boards.len()
                             ))));
                         }
                         Err(e) => {
@@ -10865,34 +9055,18 @@ Power a 2nd board nearby with wall/power-bank only (no PC cable)."
                     }
                 }
                 NetCmd::DisconnectWorker(name) => {
-                    if let Some(idx) = mesh.iter().position(|m| m.name == name || m.mac == name) {
-                        let m = mesh.remove(idx);
-                        let _ = mesh_via_cmd(&mut boards, &m.gateway, &m.mac, "stop");
-                        publish_live(&msg_tx, &boards, &mesh);
-                        let _ = msg_tx.send(NetMsg::Action(Ok(format!(
-                            "Mesh peer dropped {} · {} mesh remain",
-                            m.mac,
-                            mesh.len()
-                        ))));
-                        continue;
-                    }
                     if let Some(idx) = boards
                         .iter()
                         .position(|b| port_names_match(&b.name, &name))
                     {
                         let mut b = boards.remove(idx);
-                        mesh.retain(|m| {
-                            !(port_names_match(&m.gateway, &b.name) || m.gateway == b.name)
-                        });
                         let _ = usb_cmd(&mut b.port, &mut b.rx, "cmp stop");
-                        publish_live(&msg_tx, &boards, &mesh);
+                        publish_live(&msg_tx, &boards);
                         let _ = msg_tx.send(NetMsg::Action(Ok(format!(
-                            "Worker dropped {name} · {} remain+mesh {}",
-                            boards.len(),
-                            mesh.len()
+                            "Worker dropped {name} · {} remain",
+                            boards.len()
                         ))));
                         if boards.is_empty() {
-                            mesh.clear();
                             mining = false;
                             if let Some(mut s) = stratum.take() {
                                 s.disconnect();
@@ -10915,14 +9089,8 @@ Power a 2nd board nearby with wall/power-bank only (no PC cable)."
                         b.mining = false;
                         b.hashrate_hs = 0.0;
                     }
-                    for m in mesh.iter_mut() {
-                        let _ = mesh_via_cmd(&mut boards, &m.gateway, &m.mac, "stop");
-                        m.mining = false;
-                        m.hashrate_hs = 0.0;
-                    }
                     boards.clear();
-                    mesh.clear();
-                    publish_live(&msg_tx, &boards, &mesh);
+                    publish_live(&msg_tx, &boards);
                     let _ = msg_tx.send(NetMsg::Status(Ok(StatusJson::default())));
                     let _ = msg_tx.send(NetMsg::Action(Ok("USB closed".into())));
                 }
@@ -10964,12 +9132,7 @@ Power a 2nd board nearby with wall/power-bank only (no PC cable)."
                         }
                     });
                     if boards.len() < before {
-                        mesh.retain(|m| {
-                            boards.iter().any(|b| {
-                                port_names_match(&b.name, &m.gateway) || b.name == m.gateway
-                            })
-                        });
-                        publish_live(&msg_tx, &boards, &mesh);
+                        publish_live(&msg_tx, &boards);
                     }
                     if boards.is_empty() {
                         let _ = msg_tx.send(NetMsg::Action(Err(
@@ -10984,7 +9147,7 @@ Power a 2nd board nearby with wall/power-bank only (no PC cable)."
                     // shows one worker whether Companion or the board submits.
                     let pool_worker = stratum_worker_for_companion(&worker);
                     // Already authorized on this pool — skip reconnect (keeps Accept/Reject).
-                    // Duplicate StartMine (Assist + UI) was wiping counters every few seconds.
+                    // Duplicate StartMine was wiping counters every few seconds.
                     if mining
                         && stratum
                             .as_ref()
@@ -11008,15 +9171,14 @@ Power a 2nd board nearby with wall/power-bank only (no PC cable)."
                     mine_password = stratum_password(&password);
                     reconnect_backoff = Duration::from_secs(1);
                     reconnect_at = None;
-                    // Connect the pool FIRST so authorize is not starved by mesh via /
+                    // Connect the pool FIRST so authorize is not starved by USB
                     // USB warmup. Boards keep hashing once jobs arrive.
                     log_msg(
                         &msg_tx,
                         LogKind::Stratum,
                         format!(
-                            "Connecting pool {endpoint} as {pool_worker} · {} USB/Wi‑Fi + {} mesh",
-                            boards.len(),
-                            mesh.len()
+                            "Connecting pool {endpoint} as {pool_worker} · {} USB/Wi‑Fi",
+                            boards.len()
                         ),
                     );
                     let mut client = StratumClient::new(pool_worker.clone(), mine_password.clone());
@@ -11161,32 +9323,11 @@ Power a 2nd board nearby with wall/power-bank only (no PC cable)."
                         }
                         drain_stratum_log(&msg_tx, client);
                         push_stratum_live(&msg_tx, client);
-                        // Discover mesh peers before sizing the fleet so leaves get unique en2.
-                        let can_mesh = client.authorized()
-                            && reconnect_at.is_none()
-                            && !(client.stream_connected()
-                                && !client.authorized()
-                                && !client.auth_give_up)
-                            && !client.has_pending_job();
-                        if can_mesh {
-                            let mut pump = || {
-                                let _ = client.poll();
-                            };
-                            sync_mesh_peers(
-                                &mut boards,
-                                &mut mesh,
-                                &msg_tx,
-                                false,
-                                &mut pump,
-                                false,
-                            );
-                            last_mesh_sync = Instant::now();
-                        }
                         let fleet_n = boards
                             .iter()
                             .filter(|b| !b.mine_indep)
                             .count()
-                            .saturating_add(mesh.iter().filter(|m| !m.mine_indep).count())
+                            
                             .max(1);
                         let jobs = client.take_job_batch(fleet_n);
                         if !jobs.is_empty() {
@@ -11243,40 +9384,6 @@ Power a 2nd board nearby with wall/power-bank only (no PC cable)."
                                 if client.has_pending_job() {
                                     remaining.clear();
                                     break;
-                                }
-                            }
-                            // Mesh leaves get the same unique-en2 treatment as USB/Wi‑Fi.
-                            for m in mesh.iter_mut() {
-                                if m.mine_indep {
-                                    continue;
-                                }
-                                if reconnect_at.is_some() || client.has_pending_job() {
-                                    break;
-                                }
-                                let Some(job) = remaining.pop_front() else { break };
-                                let push_res = {
-                                    let mut pump = || {
-                                        let _ = client.poll();
-                                    };
-                                    push_mesh_job(&mut boards, m, &job, &msg_tx, &mut pump)
-                                };
-                                match push_res {
-                                    Ok(()) => {
-                                        armed_pool += 1;
-                                        recent_jobs.push_back(job);
-                                        let _ = msg_tx.send(NetMsg::Action(Ok(format!(
-                                            "Mesh {} ← pool job (unique en2)",
-                                            m.mac
-                                        ))));
-                                    }
-                                    Err(e) => {
-                                        remaining.push_front(job);
-                                        log_msg(
-                                            &msg_tx,
-                                            LogKind::Warn,
-                                            format!("Mesh pool job {}: {e}", m.mac),
-                                        );
-                                    }
                                 }
                             }
                             while recent_jobs.len() > 96 {
@@ -11340,30 +9447,6 @@ Power a 2nd board nearby with wall/power-bank only (no PC cable)."
                                 }
                             }
                         }
-                        for m in mesh.iter_mut() {
-                            if m.mine_indep {
-                                continue;
-                            }
-                            if pool_has_presidency(&stratum, reconnect_at) {
-                                break;
-                            }
-                            let arm_res = {
-                                let mut pump = || {
-                                    let _ = pump_stratum_keepalive(&mut stratum, &msg_tx);
-                                };
-                                arm_mesh_job(&mut boards, m, &msg_tx, &mut pump)
-                            };
-                            match arm_res {
-                                Ok(()) => {}
-                                Err(e) => {
-                                    log_msg(
-                                        &msg_tx,
-                                        LogKind::Warn,
-                                        format!("Mesh warmup {}: {e}", m.mac),
-                                    );
-                                }
-                            }
-                        }
                     }
                 }
                 NetCmd::StopMine => {
@@ -11379,12 +9462,7 @@ Power a 2nd board nearby with wall/power-bank only (no PC cable)."
                         b.mining = false;
                         b.hashrate_hs = 0.0;
                     }
-                    for m in mesh.iter_mut() {
-                        let _ = mesh_via_cmd(&mut boards, &m.gateway, &m.mac, "stop");
-                        m.mining = false;
-                        m.hashrate_hs = 0.0;
-                    }
-                    publish_live(&msg_tx, &boards, &mesh);
+                    publish_live(&msg_tx, &boards);
                     let _ = msg_tx.send(NetMsg::Status(Ok(StatusJson {
                         mining: false,
                         connected: false,
@@ -11412,16 +9490,9 @@ Power a 2nd board nearby with wall/power-bank only (no PC cable)."
                             any = true;
                         }
                     }
-                    let mesh_n = mesh.len();
-                    for m in mesh.iter() {
-                        let cmd = format!("clock cpu_mhz={mhz}");
-                        if mesh_via_cmd(&mut boards, &m.gateway, &m.mac, &cmd).is_ok() {
-                            any = true;
-                        }
-                    }
                     let _ = msg_tx.send(NetMsg::Action(if any {
                         Ok(format!(
-                            "Clock {mhz} MHz queued on {} board(s)+mesh {mesh_n}",
+                            "Clock {mhz} MHz queued on {} board(s)",
                             boards.len()
                         ))
                     } else {
@@ -11437,7 +9508,6 @@ Power a 2nd board nearby with wall/power-bank only (no PC cable)."
                     // Unplug detection first — UI must update even if pool owns the thread.
                     if prune_unplugged_boards(
                         &mut boards,
-                        &mut mesh,
                         &msg_tx,
                         &mut mining,
                         &mut stratum,
@@ -11448,7 +9518,7 @@ Power a 2nd board nearby with wall/power-bank only (no PC cable)."
                     {
                         continue;
                     }
-                    // Drain pool first — USB/mesh work below can take seconds.
+                    // Drain pool first — USB work below can take seconds.
                     if let Some(e) = pump_stratum_keepalive(&mut stratum, &msg_tx) {
                         let give_up = stratum
                             .as_ref()
@@ -11482,7 +9552,7 @@ Power a 2nd board nearby with wall/power-bank only (no PC cable)."
                     // If the pool is linking / has a job / reconnecting, skip USB status
                     // this tick so the hot loop can push work immediately.
                     if pool_has_presidency(&stratum, reconnect_at) {
-                        publish_live(&msg_tx, &boards, &mesh);
+                        publish_live(&msg_tx, &boards);
                         let _ = msg_tx.send(NetMsg::Status(Ok(last_fleet_status.clone())));
                         continue;
                     }
@@ -11541,8 +9611,6 @@ Power a 2nd board nearby with wall/power-bank only (no PC cable)."
                                     if !st.mac.is_empty() {
                                         b.mac = normalize_mac(&st.mac);
                                     }
-                                    b.mesh_bridging = st.mesh_bridging;
-                                    b.mesh_peers = st.mesh_peers;
                                     let indep_live = board_indep_live(&st);
                                     if indep_live && !b.mine_indep {
                                         log_msg(
@@ -11631,154 +9699,10 @@ Power a 2nd board nearby with wall/power-bank only (no PC cable)."
                         }
                         let _ = pump_stratum_keepalive(&mut stratum, &msg_tx);
                     }
-                    if last_mesh_sync.elapsed()
-                        >= if mining {
-                            // Mesh discovery is background while hashing — keep pool snappy.
-                            Duration::from_secs(10)
-                        } else if boards.len() <= 1 && mesh.is_empty() {
-                            Duration::from_secs(2)
-                        } else {
-                            Duration::from_secs(4)
-                        }
-                    {
-                        // Stratum presidency: skip mesh entirely while linking / job pending / reconnect.
-                        if !pool_has_presidency(&stratum, reconnect_at) {
-                            // While mining (even if pool briefly down), never via config/status —
-                            // that stole the USB root from jobs and dropped fake mesh:self peers.
-                            let list_only = mining
-                                || reconnect_at.is_some()
-                                || stratum.as_ref().map(|s| s.authorized()).unwrap_or(false);
-                            let mut pump = || {
-                                let _ = pump_stratum_keepalive(&mut stratum, &msg_tx);
-                            };
-                            sync_mesh_peers(
-                                &mut boards,
-                                &mut mesh,
-                                &msg_tx,
-                                mining,
-                                &mut pump,
-                                list_only,
-                            );
-                            last_mesh_sync = Instant::now();
-                            let _ = pump_stratum_keepalive(&mut stratum, &msg_tx);
-                        }
-                    }
                     // Via status is chrome — never while mining (jobs/shares own the USB root).
-                    let via_due = last_mesh_via_status.elapsed()
-                        >= if mining {
-                            Duration::from_secs(45)
-                        } else {
-                            Duration::from_secs(4)
-                        };
-                    if via_due
-                        && !mining
-                        && !pool_has_presidency(&stratum, reconnect_at)
-                    {
-                        last_mesh_via_status = Instant::now();
-                        for m in mesh.iter_mut() {
-                            if pool_has_presidency(&stratum, reconnect_at) {
-                                break;
-                            }
-                            let status_line = {
-                                let mut pump = || {
-                                    let _ = pump_stratum_keepalive(&mut stratum, &msg_tx);
-                                };
-                                mesh_via_cmd_ex(
-                                    &mut boards,
-                                    &m.gateway,
-                                    &m.mac,
-                                    "status",
-                                    &mut pump,
-                                    1,
-                                )
-                            };
-                            match status_line {
-                                Ok(line) => match parse_cmp_status(&line) {
-                                    Ok(st) => {
-                                        m.status_fails = 0;
-                                        if st.hashrate_hs > 0.0 {
-                                            m.hashrate_hs = st.hashrate_hs;
-                                        } else if !(mining || m.mining) {
-                                            m.hashrate_hs = 0.0;
-                                        }
-                                        if mining {
-                                            m.hashes = m.hashes.max(st.hashes);
-                                        } else if st.hashes > 0 || !m.mining {
-                                            m.hashes = st.hashes;
-                                        }
-                                        m.mining = st.mining || (mining && m.hashrate_hs > 0.0);
-                                        let indep_live = board_indep_live(&st);
-                                        if indep_live && !m.mine_indep {
-                                            log_msg(
-                                                &msg_tx,
-                                                LogKind::Usb,
-                                                format!(
-                                                    "Mesh {} independent pool live (phase={}) — Companion stops job push",
-                                                    m.mac,
-                                                    if st.pool_phase.is_empty() {
-                                                        "ok"
-                                                    } else {
-                                                        st.pool_phase.as_str()
-                                                    }
-                                                ),
-                                            );
-                                        }
-                                        m.mine_indep = indep_live;
-                                        total_hs += m.hashrate_hs;
-                                        total_hashes = total_hashes.saturating_add(m.hashes);
-                                        any_mining |= m.mining;
-                                        last_status = Some(st);
-                                    }
-                                    Err(_) => {
-                                        // Via unicast can fail while ESP-NOW hellos still work.
-                                        // Do not drop — sync_mesh_peers removes peers that leave CMPMESH.
-                                        m.status_fails = m.status_fails.saturating_add(1);
-                                        total_hs += m.hashrate_hs;
-                                        total_hashes = total_hashes.saturating_add(m.hashes);
-                                        any_mining |= m.mining || mining;
-                                        if m.status_fails == 1 || m.status_fails % 8 == 0 {
-                                            log_msg(
-                                                &msg_tx,
-                                                LogKind::Warn,
-                                                format!(
-                                                    "Mesh {} via status parse failed (kept; still in CMPMESH?)",
-                                                    m.mac
-                                                ),
-                                            );
-                                        }
-                                    }
-                                },
-                                Err(e) => {
-                                    m.status_fails = m.status_fails.saturating_add(1);
-                                    total_hs += m.hashrate_hs;
-                                    total_hashes = total_hashes.saturating_add(m.hashes);
-                                    any_mining |= m.mining || mining;
-                                    if m.status_fails == 1 || m.status_fails % 8 == 0 {
-                                        log_msg(
-                                            &msg_tx,
-                                            LogKind::Warn,
-                                            format!(
-                                                "Mesh {} via status: {e} (kept while listed in CMPMESH)",
-                                                m.mac
-                                            ),
-                                        );
-                                    }
-                                }
-                            }
-                        }
-                    } else {
-                        for m in &mesh {
-                            total_hs += m.hashrate_hs;
-                            total_hashes = total_hashes.saturating_add(m.hashes);
-                            any_mining |= m.mining || mining;
-                        }
-                    }
                     for name in drop_names {
                         if let Some(idx) = boards.iter().position(|b| b.name == name) {
                             let dead = boards.remove(idx);
-                            mesh.retain(|m| {
-                                !(port_names_match(&m.gateway, &dead.name) || m.gateway == dead.name)
-                            });
                             // Don't usb_cmd stop — port is often already gone (hangs the UI).
                             drop(dead);
                             log_msg(
@@ -11795,18 +9719,17 @@ Power a 2nd board nearby with wall/power-bank only (no PC cable)."
                         let _ = msg_tx.send(NetMsg::Ports(list_serial_ports()));
                     }
                     if boards.is_empty() {
-                        mesh.clear();
                         mining = false;
                         reconnect_at = None;
                         last_fleet_status = StatusJson::default();
                         if let Some(mut s) = stratum.take() {
                             s.disconnect();
                         }
-                        publish_live(&msg_tx, &boards, &mesh);
+                        publish_live(&msg_tx, &boards);
                         let _ = msg_tx.send(NetMsg::Status(Ok(StatusJson::default())));
                         continue;
                     }
-                    publish_live(&msg_tx, &boards, &mesh);
+                    publish_live(&msg_tx, &boards);
                     let mut st = last_status.unwrap_or_else(|| last_fleet_status.clone());
                     st.hashrate_hs = total_hs;
                     st.hashrate_khs = total_hs / 1000.0;
@@ -11974,7 +9897,7 @@ Power a 2nd board nearby with wall/power-bank only (no PC cable)."
                             }
                         }
                     }
-                    publish_live(&msg_tx, &boards, &mesh);
+                    publish_live(&msg_tx, &boards);
                     let summary = if lines.is_empty() {
                         "Bench done".into()
                     } else {
@@ -12091,10 +10014,7 @@ Power a 2nd board nearby with wall/power-bank only (no PC cable)."
                                 s.disconnect();
                             }
                         }
-                        mesh.retain(|m| {
-                            !(port_names_match(&m.gateway, &port) || m.gateway == port)
-                        });
-                        publish_live(&msg_tx, &boards, &mesh);
+                        publish_live(&msg_tx, &boards);
                         hold.store(false, Ordering::SeqCst);
                         USB_FLASH_PREEMPT.store(false, Ordering::SeqCst);
                         let reopen_port = if reopen && result.is_ok() {
@@ -12118,13 +10038,8 @@ Power a 2nd board nearby with wall/power-bank only (no PC cable)."
                         for b in boards.iter_mut() {
                             let _ = usb_cmd(&mut b.port, &mut b.rx, "cmp stop");
                         }
-                        for m in mesh.iter_mut() {
-                            let _ = mesh_via_cmd(&mut boards, &m.gateway, &m.mac, "stop");
-                        }
                     }
-                    // Drop mesh peers that used the released COM as gateway.
-                    mesh.retain(|m| !(port_names_match(&m.gateway, &port) || m.gateway == port));
-                    publish_live(&msg_tx, &boards, &mesh);
+                    publish_live(&msg_tx, &boards);
                     let mode_label = if wifi_ota {
                         "Wi‑Fi OTA"
                     } else if live_push {
@@ -12366,7 +10281,7 @@ Blank boards need Flash (BOOT)."
             }
         }
 
-        // Update board clicked — skip mesh/jobs until flash owns the COM (preempt
+        // Update board clicked — skip jobs until flash owns the COM (preempt
         // also aborts in-flight usb_cmd_ex via waits).
         if USB_FLASH_PREEMPT.load(Ordering::SeqCst) {
             thread::sleep(Duration::from_millis(if flash_any_held(&flash_hold) {
@@ -12381,8 +10296,7 @@ Blank boards need Flash (BOOT)."
         if !boards.is_empty() && last_unplug_check.elapsed() >= Duration::from_millis(400) {
             last_unplug_check = Instant::now();
             let _ = prune_unplugged_boards(
-                &mut boards,
-                &mut mesh,
+                        &mut boards,
                 &msg_tx,
                 &mut mining,
                 &mut stratum,
@@ -12392,7 +10306,7 @@ Blank boards need Flash (BOOT)."
             );
         }
 
-        // Prefer pool I/O before USB drain while authorizing — mesh/USB can starve the handshake.
+        // Prefer pool I/O before USB drain while authorizing — USB can starve the handshake.
         let pool_needs_handshake = stratum
             .as_ref()
             .map(|s| s.stream_connected() && !s.authorized() && !s.auth_give_up)
@@ -12432,7 +10346,7 @@ Blank boards need Flash (BOOT)."
             }
         }
 
-        // STRATUM PRESIDENCY: drain/push pool work before board share harvest or mesh chrome.
+        // STRATUM PRESIDENCY: drain/push pool work before board share harvest or USB chrome.
         if stratum.is_some() {
             let was_authorized = stratum.as_ref().map(|c| c.authorized()).unwrap_or(false);
             let mut poll_err: Option<String> = None;
@@ -12533,13 +10447,6 @@ Blank boards need Flash (BOOT)."
                         let _ = usb_cmd(&mut b.port, &mut b.rx, "cmp stop");
                         b.mining = false;
                     }
-                    for m in mesh.iter_mut() {
-                        if m.mine_indep {
-                            continue;
-                        }
-                        let _ = mesh_via_cmd(&mut boards, &m.gateway, &m.mac, "stop");
-                        m.mining = false;
-                    }
                 }
                 // SoftAP setup net has no pool uplink — don't keep pushing work that can't submit.
                 let softap_blocked = softap_setup_client_ipv4()
@@ -12610,7 +10517,7 @@ Blank boards need Flash (BOOT)."
                     .iter()
                     .filter(|b| !b.mine_indep)
                     .count()
-                    .saturating_add(mesh.iter().filter(|m| !m.mine_indep).count());
+                    ;
                 // When every board is indep, do not take_job_batch(.max(1)) — that consumed
                 // pool notifies on the PC and dropped them (PC stratum fighting board pool).
                 let jobs = if softap_blocked || companion_fleet == 0 {
@@ -12692,42 +10599,6 @@ Blank boards need Flash (BOOT)."
                             break;
                         }
                     }
-                    if !stale_abort {
-                        for m in mesh.iter_mut() {
-                            if m.mine_indep {
-                                continue;
-                            }
-                            if client.has_pending_job() {
-                                stale_abort = true;
-                                remaining.clear();
-                                break;
-                            }
-                            let Some(job) = remaining.pop_front() else { break };
-                            let _ = mesh_via_cmd(&mut boards, &m.gateway, &m.mac, "stop");
-                            m.mining = false;
-                            let mesh_res = {
-                                let mut pump = || {
-                                    let _ = client.poll();
-                                };
-                                push_mesh_job(&mut boards, m, &job, &msg_tx, &mut pump)
-                            };
-                            match mesh_res {
-                                Ok(()) => {
-                                    pushed += 1;
-                                    pushed_en2.insert(job.extranonce2_hex.to_ascii_lowercase());
-                                    recent_jobs.push_back(job);
-                                }
-                                Err(e) => {
-                                    remaining.push_front(job);
-                                    let _ = msg_tx.send(NetMsg::Action(Err(format!(
-                                        "mesh {} job push: {e}",
-                                        m.mac
-                                    ))));
-                                    break;
-                                }
-                            }
-                        }
-                    }
                     // Now drop superseded same-id en2 (and held shares) that were not re-armed.
                     if cleaned && !active_job.is_empty() && !pushed_en2.is_empty() {
                         recent_jobs.retain(|j| {
@@ -12769,7 +10640,7 @@ Blank boards need Flash (BOOT)."
                             .map(|j| j.extranonce2_hex.as_str())
                             .unwrap_or("?");
                         let _ = msg_tx.send(NetMsg::Action(Ok(format!(
-                            "USB ← job → {pushed} board(s)/mesh · job={job_id} · en2={en2} · unique en2"
+                            "USB ← job → {pushed} board(s) · job={job_id} · en2={en2} · unique en2"
                         ))));
                     } else if let Some(job) = remaining.pop_front() {
                         // Total failure — restore so the next loop retries (pre-0.8.121 behavior).
@@ -12821,9 +10692,8 @@ Blank boards need Flash (BOOT)."
                     &msg_tx,
                     LogKind::Stratum,
                     format!(
-                        "Reconnecting pool {mine_endpoint} as {mine_worker_name} · {} board(s)+mesh {}",
-                        boards.len(),
-                        mesh.len()
+                        "Reconnecting pool {mine_endpoint} as {mine_worker_name} · {} board(s)",
+                        boards.len()
                     ),
                 );
                 let mut client =
@@ -12841,7 +10711,7 @@ Blank boards need Flash (BOOT)."
                         ))));
                         // Keep hashrate across the gap — re-push unique cached en2 jobs only
                         // (never broadcast one en2 to the whole fleet).
-                        let fleet_n = boards.len().saturating_add(mesh.len());
+                        let fleet_n = boards.len();
                         let mut chosen: Vec<WorkJob> = Vec::new();
                         for j in recent_jobs.iter().rev() {
                             if chosen
@@ -12878,20 +10748,6 @@ Blank boards need Flash (BOOT)."
                             if push_res.is_ok() {
                                 b.legacy_job = legacy;
                                 b.mining = true;
-                            }
-                        }
-                        for m in mesh.iter_mut() {
-                            let Some(job) = it.next() else { break };
-                            let ok = {
-                                let mut pump = || {
-                                    if let Some(c) = stratum.as_mut() {
-                                        let _ = c.poll();
-                                    }
-                                };
-                                push_mesh_job(&mut boards, m, &job, &msg_tx, &mut pump).is_ok()
-                            };
-                            if ok {
-                                m.mining = true;
                             }
                         }
                     }

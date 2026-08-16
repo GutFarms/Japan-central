@@ -61,7 +61,7 @@ IPAddress WifiLink::softApIpForMode(bool wantSta) const {
     // Initial setup SoftAP — fixed portal off the home 192.168.1.x LAN.
     return IPAddress(CYD_SOFTAP_IP0, CYD_SOFTAP_IP1, CYD_SOFTAP_IP2, CYD_SOFTAP_IP3);
   }
-  // After home Wi‑Fi is saved, SoftAP stays for mesh on a unique 10.x subnet.
+  // After home Wi‑Fi is saved, SoftAP stays for Setup revisit / phone portal.
   uint8_t b4 = 1, b5 = 1;
   String hex;
   for (size_t i = 0; i < mac_.length(); i++) {
@@ -544,11 +544,11 @@ void WifiLink::beacon() {
   IPAddress advertise = (WiFi.status() == WL_CONNECTED) ? sta : ap;
   char msg[220];
 #if CYD_D0_BUILD
-  static constexpr const char* kFwTag = "0.8.192-sha256-d0";
-  static constexpr const char* kFwShort = "0.8.192-d0";
+  static constexpr const char* kFwTag = "0.8.193-sha256-d0";
+  static constexpr const char* kFwShort = "0.8.193-d0";
 #else
-  static constexpr const char* kFwTag = "0.8.192-sha256";
-  static constexpr const char* kFwShort = "0.8.192";
+  static constexpr const char* kFwTag = "0.8.193-sha256";
+  static constexpr const char* kFwShort = "0.8.193";
 #endif
   snprintf(msg, sizeof(msg),
            "%s|v=%s|mac=%s|fw=%s|tcp=%u|ip=%u.%u.%u.%u|ap=%s|mode=%s",
@@ -588,7 +588,6 @@ void WifiLink::poll(CompanionLink& cmp, AppConfig& cfg, const MinerSnapshot& sna
                     CompanionLink::ApplyFn onApply, NetFeed* net, CompanionLink::JobFn onJob,
                     CompanionLink::StopFn onStop, CompanionLink::StatsFn onStats) {
   if (!cfg.wifiEnabled) {
-    // Do not clear shareMirror — mesh leaf path is owned by serviceCompanion.
     return;
   }
   if (!started_) begin(mac_.c_str(), cfg);
@@ -617,6 +616,5 @@ void WifiLink::poll(CompanionLink& cmp, AppConfig& cfg, const MinerSnapshot& sna
     }
     cmp.pollTcp(client_, client_, cfg, snap, onApply, net, onJob, onStop, onStats);
   }
-  // When TCP drops, leave mirror alone — serviceCompanion restores mesh leaf mirror.
   beacon();
 }

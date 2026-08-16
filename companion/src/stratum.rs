@@ -177,7 +177,7 @@ impl StratumClient {
             .set_write_timeout(Some(Duration::from_millis(1500)))
             .ok();
         stream.set_nodelay(true).ok();
-        // OS TCP keepalive keeps NAT/firewall mappings warm during USB/mesh stalls.
+        // OS TCP keepalive keeps NAT/firewall mappings warm during USB stalls.
         {
             let sock = SockRef::from(&stream);
             let mut ka = TcpKeepalive::new().with_time(Duration::from_secs(10));

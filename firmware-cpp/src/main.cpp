@@ -1,7 +1,6 @@
 #include "companion.hpp"
 #include "config.hpp"
 #include "display_ui.hpp"
-#include "mesh_link.hpp"
 #include "pool_stratum.hpp"
 #include "sha256_hw.hpp"
 #include "sha256_miner.hpp"
@@ -195,9 +194,6 @@ static void fillSnap() {
   } else {
     g_snap.wifiIp = g_wifi.softApIp().toString();
   }
-  g_snap.meshRoot = g_mesh.isRoot();
-  g_snap.meshBridging = g_mesh.isBridging();
-  g_snap.meshPeers = (uint8_t)g_mesh.leafCount();
   // Ticker disabled while hashing — net pushes are ACK'd but not painted.
   if (!g_mining) g_snap.netTicker = g_net.ticker;
 }
@@ -369,10 +365,10 @@ static void flushShareQueue() {
 
 static void serviceCompanion() {
   // During USB/Wi‑Fi OTA binary receive, only drain companion streams.
-  // Pool connect / mesh / snap work can stall RX long enough to fail right
+  // Pool connect / snap work can stall RX long enough to fail right
   // after "Board ready" (UI ~15%) before the first upload tick.
   if (g_cmp.otaBusy()) {
-    // USB/TCP OTA binary only — skip Wi‑Fi/mesh/pool (NVS + radio work races
+    // USB/TCP OTA binary only — skip Wi‑Fi/pool (NVS + radio work races
     // Update.write → CMPERR ota write mid-upload after Board ready).
     auto onApply = applyConfig;
     auto job = onJobFromCompanion;
@@ -405,24 +401,12 @@ static void serviceCompanion() {
   // Independent pool mining (STA + pool URL) — each board owns its own stratum.
   g_pool.poll(g_cfg);
   refreshLabels();
-  // Mesh leaf: always keep ESP-NOW mirror2 so SoftAP/TCP clients cannot steal shares.
-  if (!g_mesh.isRoot() && g_mesh.hasRootPeer()) {
-    g_cmp.setShareMirror2(&g_mesh.leafOut());
-  } else {
-    g_cmp.setShareMirror2(nullptr);
-  }
   // Primary mirror: Companion TCP when linked; else cleared (USB Serial still emits).
   if (!g_wifi.tcpConnected()) {
     g_cmp.setShareMirror(nullptr);
   }
   g_cmp.poll(g_cfg, g_snap, onApply, &g_net, job, stop, stats);
   g_wifi.poll(g_cmp, g_cfg, g_snap, onApply, &g_net, job, stop, stats);
-  g_mesh.poll(g_cmp, g_cfg, g_snap, onApply, &g_net, job, stop, stats);
-  // Re-assert leaf mirror2 after polls (TCP may have briefly owned primary mirror).
-  if (!g_mesh.isRoot() && g_mesh.hasRootPeer()) {
-    g_cmp.setShareMirror2(&g_mesh.leafOut());
-  }
-  // Re-balance core-0 when leaf peers appear/disappear on a hashing root.
   syncMinePriorities();
   if (g_net.fresh) {
     g_net.fresh = false;
@@ -433,12 +417,10 @@ static void serviceCompanion() {
 
 static void syncMinePriorities() {
   if (!g_mineTaskB || !g_usbTask) return;
-  const bool bridging = g_mesh.isBridging();
   if (g_mining && g_jobLoaded) {
-    // Bridging root: USB/mesh slightly above SW assist; keep B live for H/s.
-    // Solo root: equal slice so SW assist still adds H/s.
-    vTaskPrioritySet(g_usbTask, bridging ? 4 : 3);
-    vTaskPrioritySet(g_mineTaskB, bridging ? 2 : 3);
+    // USB slightly above SW assist; equal slice when idle.
+    vTaskPrioritySet(g_usbTask, 3);
+    vTaskPrioritySet(g_mineTaskB, 3);
   } else {
     vTaskPrioritySet(g_usbTask, 3);
     vTaskPrioritySet(g_mineTaskB, 2);
@@ -466,22 +448,14 @@ static void mineTaskA(void*) {
       vTaskDelay(pdMS_TO_TICKS(2));
       continue;
     }
-    // Keep HW lane hashing during via — only mild yield. Parking core1 for
-    // mesh chrome was the main reason roots fell far below D0 peak.
-    const bool bridging = g_mesh.isBridging();
-    if (g_mesh.viaBusy() && (loops & 15u) == 0u) {
-      vTaskDelay(1);
-      esp_task_wdt_reset();
-    }
     if (g_hwSha) {
-      mineLane(g_minerA, 1, bridging ? 57344 : 65536);
-      const uint32_t mask = bridging ? 95u : 127u;
-      if ((++loops & mask) == 0u) {
+      mineLane(g_minerA, 1, 65536);
+      if ((++loops & 127u) == 0u) {
         vTaskDelay(1);
         esp_task_wdt_reset();
       }
     } else {
-      mineLane(g_minerA, 2, bridging ? 10240 : 12288);
+      mineLane(g_minerA, 2, 12288);
       if ((++loops & 31u) == 0u) {
         vTaskDelay(1);
         esp_task_wdt_reset();
@@ -500,24 +474,15 @@ static void mineTaskB(void*) {
       vTaskDelay(pdMS_TO_TICKS(2));
       continue;
     }
-    // Root mid `cmp via`: step aside so ESP-NOW RX/TX + USB get core-0.
-    if (g_mesh.viaBusy()) {
-      vTaskDelay(pdMS_TO_TICKS(5));
-      esp_task_wdt_reset();
-      continue;
-    }
-    // Bridging root: keep SW assist alive at a smaller batch so fleet H/s stays
-    // high; yield more often so USB + ESP-NOW via still get core-0 time.
-    const bool bridging = g_mesh.isBridging();
-    mineLane(g_minerB, 1, bridging ? (g_hwSha ? 6144 : 3072) : (g_hwSha ? 12288 : 4096));
+    mineLane(g_minerB, 1, g_hwSha ? 12288 : 4096);
     // Pending USB or SoftAP TCP bytes only — idle TCP must not starve SW assist.
     if (Serial.available() > 0 || g_wifi.tcpRxPending()) {
       vTaskDelay(1);
       esp_task_wdt_reset();
       continue;
     }
-    if (bridging || (++loops & 31u) == 0u) {
-      vTaskDelay(bridging ? 2 : 1);
+    if ((++loops & 31u) == 0u) {
+      vTaskDelay(1);
       esp_task_wdt_reset();
     }
   }
@@ -529,9 +494,8 @@ static void usbTask(void*) {
     serviceCompanion();
     const bool ota = g_cmp.otaBusy();
     const bool talk = ota || Serial.available() > 0;
-    const bool bridging = g_mesh.isBridging();
     // During OTA binary, spin tight so Update.write keeps up with the host.
-    const uint32_t ms = ota ? 0u : (talk ? 1u : (bridging ? 2u : (g_mining ? 4u : 3u)));
+    const uint32_t ms = ota ? 0u : (talk ? 1u : (g_mining ? 4u : 3u));
     if (ms == 0) {
       esp_task_wdt_reset();
     } else {
@@ -632,7 +596,6 @@ void setup() {
   applyCpu(g_cfg.cpuMhz);
   cyd_sha_hw::set_preferred_mode(g_cfg.shaPath);
   g_wifi.begin(g_macStr, g_cfg);
-  g_mesh.begin(mac);
   g_cmp.setWifiPersist([]() -> bool { return g_store.save(g_cfg); });
   g_cmp.setWifiApply([]() { g_wifi.applyConfig(g_cfg); });
   g_cmp.setMiningHold([](bool hold) {
