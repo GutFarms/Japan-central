@@ -1,0 +1,67 @@
+#pragma once
+#include "companion.hpp"
+#include <Arduino.h>
+#include <DNSServer.h>
+#include <WebServer.h>
+#include <WiFi.h>
+#include <WiFiUdp.h>
+#include <functional>
+
+// SoftAP (+ optional STA) so Companion can find boards on Wi‑Fi and speak `cmp` over TCP.
+// SoftAP also hosts a phone-friendly HTTP setup portal (port 80) for home Wi‑Fi credentials.
+static constexpr uint16_t CYD_WIFI_TCP_PORT = 19284;
+static constexpr uint16_t CYD_WIFI_UDP_PORT = 19284;
+static constexpr uint16_t CYD_WIFI_HTTP_PORT = 80;
+static constexpr uint16_t CYD_WIFI_DNS_PORT = 53;
+static constexpr const char* CYD_WIFI_MAGIC = "CYDBOARD";
+// Initial SoftAP is open (no password) so first-time Setup is one tap in Windows / phone Wi‑Fi.
+static constexpr const char* CYD_SOFTAP_PASS = nullptr;
+
+class WifiLink {
+ public:
+  using PersistFn = std::function<void()>;  // save NVS + re-apply SoftAP/STA
+
+  void begin(const char* macStr, const AppConfig& cfg);
+  void applyConfig(const AppConfig& cfg);
+  void setPersist(PersistFn fn) { persist_ = std::move(fn); }
+  // Drive SoftAP/STA, UDP beacon, TCP cmp, and phone HTTP setup portal.
+  void poll(CompanionLink& cmp, AppConfig& cfg, const MinerSnapshot& snap,
+            CompanionLink::ApplyFn onApply, NetFeed* net, CompanionLink::JobFn onJob,
+            CompanionLink::StopFn onStop, CompanionLink::StatsFn onStats);
+
+  bool tcpConnected() { return client_.connected() != 0; }
+  IPAddress softApIp() const { return WiFi.softAPIP(); }
+  IPAddress staIp() const { return WiFi.localIP(); }
+  String softApSsid() const { return apSsid_; }
+  const char* modeLabel() const;
+
+ private:
+  WiFiServer server_{CYD_WIFI_TCP_PORT};
+  WiFiClient client_;
+  WiFiUDP udp_;
+  WebServer http_{CYD_WIFI_HTTP_PORT};
+  DNSServer dns_;
+  PersistFn persist_;
+  AppConfig* portalCfg_ = nullptr;
+  String apSsid_;
+  String mac_;
+  String lastStaSsid_;
+  String lastStaPass_;
+  uint32_t lastBeaconMs_ = 0;
+  uint32_t lastWifiCheckMs_ = 0;
+  bool started_ = false;
+  bool staWanted_ = false;
+  bool softApUp_ = false;
+  bool portalUp_ = false;
+
+  void ensureWifi(const AppConfig& cfg);
+  void beacon();
+  void acceptClient();
+  void startPortal();
+  void stopPortal();
+  void pollPortal(AppConfig& cfg);
+  void handlePortalRoot();
+  void handlePortalSave();
+  void handlePortalCaptive();
+  String portalPageHtml(bool saved) const;
+};

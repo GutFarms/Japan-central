@@ -1,1 +1,30 @@
-target/
+*.bin
+*.elf
+*.exe
+/dist/
+!flash/SHA256SUMS.txt
+# Fetch-latest / web install need these on GitHub (raw.githubusercontent.com).
+!flash/downloads/esp32-2432s028-sha256-miner.bin
+!flash/downloads/esp32-2432s028-sha256-miner-merged.bin
+!flash/downloads/esp32-2432s028-sha256-miner-d0.bin
+!flash/downloads/esp32-2432s028-sha256-miner-d0-merged.bin
+# Windows Companion downloads (installer + standalone app + flasher).
+!flash/downloads/CYD-Miner-Setup.exe
+!flash/downloads/CYD-Companion-Setup.exe
+!flash/downloads/cyd-companion.exe
+!flash/downloads/espflash.exe
+.idea/
+.vscode/
+**/firmware-cpp/.pio/
+**/companion/build/
+**/companion/target/
+*.rs.bk
+# API feed File downloads (runtime)
+ApiDownloads/
+**/ApiDownloads/
+# Expo / mobile
+mobile/node_modules/
+mobile/.expo/
+mobile/dist/
+hardware/esp32-asic-controller/firmware-stub/target/
+packaging/cyd-miner-build.nsi
