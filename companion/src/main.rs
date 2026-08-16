@@ -75,6 +75,8 @@ use serialport::SerialPort;
 /// Set when Update board / Push is clicked — mine-worker aborts blocking USB/`via`
 /// waits so flash can take the COM immediately (avoids stuck "auto-reset…" UI).
 static USB_FLASH_PREEMPT: AtomicBool = AtomicBool::new(false);
+/// UI Cancel / watchdog — abort a hung `cmp bench` wait without killing the process.
+static USB_BENCH_CANCEL: AtomicBool = AtomicBool::new(false);
 
 fn load_app_icon() -> Option<IconData> {
     // Prefer multi-size logo; taskbar/title-bar use this runtime icon (PE ICO is separate).
@@ -836,6 +838,14 @@ struct CompanionApp {
     flash_phase: String,
     /// Manual / UI "Bench boards" in flight (mine-worker retune).
     bench_busy: bool,
+    /// When the current bench started (for elapsed + watchdog).
+    bench_busy_since: Option<Instant>,
+    /// Live status line shown on the bench notifier ("Mid · HW · 180 kH/s").
+    bench_status: String,
+    /// Last CMPBENCHPROG / heartbeat — stall detection.
+    last_bench_prog_at: Option<Instant>,
+    /// Last Assist/chat "still benching" ping.
+    last_bench_notify_at: Option<Instant>,
     update_status: String,
     auto_connect: bool,
     auto_connect_attempted: bool,
@@ -1118,6 +1128,10 @@ impl CompanionApp {
             flash_progress: 0.0,
             flash_phase: String::new(),
             bench_busy: false,
+            bench_busy_since: None,
+            bench_status: String::new(),
+            last_bench_prog_at: None,
+            last_bench_notify_at: None,
             update_status: String::new(),
             auto_connect,
             auto_connect_attempted: false,
@@ -2327,7 +2341,13 @@ impl CompanionApp {
                 };
             }
         }
-        let msg = if !path.is_empty() && khs.unwrap_or(0.0) > 0.5 {
+        let msg = if step == "wait" {
+            let elapsed = line
+                .split_whitespace()
+                .find_map(|p| p.strip_prefix("elapsed="))
+                .unwrap_or("…");
+            format!("Bench waiting on USB… {elapsed}")
+        } else if !path.is_empty() && khs.unwrap_or(0.0) > 0.5 {
             format!(
                 "Bench {step} · {path} · {:.0} kH/s",
                 khs.unwrap_or(0.0)
@@ -2337,6 +2357,13 @@ impl CompanionApp {
         } else {
             trunc(line, 120)
         };
+        // Heartbeats keep the notifier alive but don't reset stall clock unless real prog.
+        if step != "wait" {
+            self.last_bench_prog_at = Some(Instant::now());
+        } else if self.last_bench_prog_at.is_none() {
+            self.last_bench_prog_at = Some(Instant::now());
+        }
+        self.bench_status = msg.clone();
         self.last_ok = msg.clone();
         self.push_log(LogKind::Usb, msg);
     }
@@ -3184,6 +3211,20 @@ impl CompanionApp {
         );
     }
 
+    fn clear_bench_busy(&mut self, reason: &str) {
+        if !self.bench_busy && self.bench_busy_since.is_none() {
+            return;
+        }
+        self.bench_busy = false;
+        self.bench_busy_since = None;
+        USB_BENCH_CANCEL.store(false, Ordering::SeqCst);
+        if !reason.is_empty() {
+            self.bench_status = reason.to_string();
+            self.last_ok = reason.to_string();
+            self.push_log(LogKind::Usb, reason.to_string());
+        }
+    }
+
     fn request_bench(&mut self) {
         if self.bench_busy {
             return;
@@ -3193,14 +3234,95 @@ impl CompanionApp {
             self.push_log(LogKind::Warn, self.last_error.clone());
             return;
         }
+        USB_BENCH_CANCEL.store(false, Ordering::SeqCst);
         self.bench_busy = true;
+        self.bench_busy_since = Some(Instant::now());
+        self.last_bench_prog_at = Some(Instant::now());
+        self.last_bench_notify_at = Some(Instant::now());
+        self.bench_status = "Starting Mid→HW→HW/SW climb…".into();
         self.last_error.clear();
         self.last_ok = "Bench: climbing Mid→HW→HW/SW — live kH updates while tuning…".into();
         self.push_log(
             LogKind::Usb,
             "D0 auto-tune: each board climbs SHA paths with stable dual-pass timing…".into(),
         );
+        self.assist_chat.push_back((
+            AssistRole::Assistant,
+            "📡 Bench started — notifier stays up until paths lock (Cancel if stuck).".into(),
+        ));
+        if self.assist_chat.len() > 80 {
+            self.assist_chat.pop_front();
+        }
         let _ = self.cmd_tx.send(NetCmd::Bench);
+    }
+
+    /// Live banner + stuck watchdog while Bench owns the boards.
+    fn tick_bench_notifier(&mut self) {
+        if !self.bench_busy {
+            return;
+        }
+        let since = self.bench_busy_since.unwrap_or_else(Instant::now);
+        let elapsed = since.elapsed().as_secs();
+        let last_prog = self
+            .last_bench_prog_at
+            .unwrap_or(since)
+            .elapsed()
+            .as_secs();
+
+        // Hard watchdog — never leave the UI on "Benching…" forever.
+        if elapsed >= 210 {
+            self.clear_bench_busy(&format!(
+                "Bench watchdog: still busy after {elapsed}s — cleared. Retry Bench or Push firmware if it hangs again."
+            ));
+            self.last_error = self.last_ok.clone();
+            self.assist_memory
+                .record_bench_timeout(&self.board_mac, self.displayed_khs as f64);
+            self.nudge_assist_watch("bench_timeout");
+            return;
+        }
+        // No CMPBENCHPROG for a long stretch after start → treat as hung.
+        if elapsed >= 50 && last_prog >= 45 {
+            USB_BENCH_CANCEL.store(true, Ordering::SeqCst);
+            self.clear_bench_busy(&format!(
+                "Bench stuck — no progress for {last_prog}s (elapsed {elapsed}s). Cancelled; update board FW if this repeats."
+            ));
+            self.last_error = self.last_ok.clone();
+            self.assist_memory
+                .record_bench_timeout(&self.board_mac, self.displayed_khs as f64);
+            self.nudge_assist_watch("bench_timeout");
+            return;
+        }
+
+        // Periodic "still benching" notifier so it never looks frozen.
+        let due = self
+            .last_bench_notify_at
+            .map(|t| t.elapsed() >= Duration::from_secs(8))
+            .unwrap_or(true);
+        if due {
+            self.last_bench_notify_at = Some(Instant::now());
+            let status = if self.bench_status.is_empty() {
+                "tuning SHA paths".into()
+            } else {
+                self.bench_status.clone()
+            };
+            let msg = format!("Still benching… {status} · {elapsed}s");
+            self.last_ok = msg.clone();
+            self.push_log(LogKind::Usb, msg.clone());
+            self.assist_chat
+                .push_back((AssistRole::Assistant, format!("📡 {msg}")));
+            if self.assist_chat.len() > 80 {
+                self.assist_chat.pop_front();
+            }
+        }
+    }
+
+    fn cancel_bench(&mut self) {
+        if !self.bench_busy {
+            return;
+        }
+        USB_BENCH_CANCEL.store(true, Ordering::SeqCst);
+        self.clear_bench_busy("Bench cancelled — waiting for USB wait to abort…");
+        self.nudge_assist_watch("bench_cancel");
     }
 
     fn push_board_ticker(&mut self, force: bool) {
@@ -7214,8 +7336,8 @@ impl App for CompanionApp {
                         if low.contains("cmpbench") || low.contains("khs=") {
                             self.absorb_bench_progress(&s);
                         }
-                        self.bench_busy = false;
                         let before = self.assist_baseline_khs().max(self.displayed_khs as f64);
+                        self.clear_bench_busy(&format!("Bench finished · {}", trunc(&s, 100)));
                         self.schedule_assist_remeasure("bench-done", before);
                         self.nudge_assist_watch("bench_done");
                     }
@@ -7223,11 +7345,12 @@ impl App for CompanionApp {
                         let before = self.assist_baseline_khs().max(self.displayed_khs as f64);
                         self.assist_memory
                             .record_bench_timeout(&self.board_mac, before);
-                        self.bench_busy = false;
+                        self.clear_bench_busy(&format!("Bench timed out · {}", trunc(&s, 100)));
                         self.push_log(
                             LogKind::Info,
                             "Assist: bench timed out — cooling auto-bench ~15 min".into(),
                         );
+                        self.nudge_assist_watch("bench_timeout");
                     }
                     let kind = if low.contains("job") || low.contains("share") || low.contains("pool")
                     {
@@ -7259,7 +7382,7 @@ impl App for CompanionApp {
                     }
                     self.usb_connect_pending = false;
                     if self.bench_busy {
-                        self.bench_busy = false;
+                        self.clear_bench_busy(&format!("Bench aborted · {}", trunc(&e, 100)));
                     }
                     let low = e.to_lowercase();
                     if low.contains("authorize failed") || low.contains("auth failed") {
@@ -8508,6 +8631,57 @@ or Flash (BOOT) with BOOT held + Ready."
                 });
         }
 
+        // Bench notifier — always visible while retuning so "Benching…" never looks stuck.
+        if self.bench_busy {
+            ctx.request_repaint_after(Duration::from_millis(200));
+            let elapsed = self
+                .bench_busy_since
+                .map(|t| t.elapsed().as_secs())
+                .unwrap_or(0);
+            let status = if self.bench_status.is_empty() {
+                "Climbing Mid→HW→HW/SW…".to_string()
+            } else {
+                self.bench_status.clone()
+            };
+            egui::Window::new("Benching boards")
+                .collapsible(false)
+                .resizable(false)
+                .anchor(egui::Align2::CENTER_TOP, [0.0, 48.0])
+                .show(ctx, |ui| {
+                    ui.set_min_width(420.0);
+                    ui.vertical_centered(|ui| {
+                        ui.add_space(6.0);
+                        ui.add(egui::Spinner::new().size(28.0).color(C_LIME));
+                        ui.add_space(8.0);
+                        ui.label(
+                            RichText::new("Auto-tune in progress")
+                                .color(C_LIME)
+                                .strong()
+                                .size(16.0),
+                        );
+                        ui.add_space(6.0);
+                        ui.label(
+                            RichText::new(&status)
+                                .color(C_TEXT)
+                                .font(mono_ui_font(12.0)),
+                        );
+                        ui.add_space(4.0);
+                        ui.label(
+                            RichText::new(format!(
+                                "Elapsed {elapsed}s · live CMPBENCHPROG updates · Cancel if hung"
+                            ))
+                            .color(C_MUTED)
+                            .size(11.0),
+                        );
+                        ui.add_space(10.0);
+                        if soft_button(ui, "Cancel bench", 140.0).clicked() {
+                            self.cancel_bench();
+                        }
+                        ui.add_space(6.0);
+                    });
+                });
+        }
+
         // Board update: loading overlay with live progress bar.
         if self.update_busy {
             let awaiting_boot = self
@@ -8760,6 +8934,7 @@ or Flash (BOOT) with BOOT held + Ready."
         self.refresh_monitor_lan_ip();
         self.publish_phone_monitor();
         self.tick_assist_watch();
+        self.tick_bench_notifier();
     }
 }
 
@@ -12202,12 +12377,17 @@ Power a 2nd board nearby with wall/power-bank only (no PC cable)."
                             format!("Tuning {} for max hashrate…", b.name),
                         );
                         // n≈60k → dual-pass per path with live CMPBENCHPROG kH updates.
+                        // Keep stratum alive during the long USB wait (empty pump starved the pool).
                         match usb_bench_cmd(
                             &mut b.port,
                             &mut b.rx,
                             "cmp bench tune=1&n=60000",
                             &msg_tx,
-                            &mut || {},
+                            &mut || {
+                                if let Some(client) = stratum.as_mut() {
+                                    let _ = client.poll();
+                                }
+                            },
                         ) {
                             Ok(line) => {
                                 lines.push(format!("{} → {line}", b.name));
@@ -13554,7 +13734,9 @@ fn usb_cmd_ex(
         }
         let _ = port.flush();
         let deadline = Instant::now() + Duration::from_millis(wait_ms);
+        let wait_started = Instant::now();
         let mut last_pump = Instant::now() - Duration::from_millis(200);
+        let mut last_bench_hb = Instant::now() - Duration::from_secs(5);
         let mut saw_bench_prog = false;
         let bench_fail_fast = Instant::now() + Duration::from_secs(35);
         while Instant::now() < deadline {
@@ -13565,6 +13747,19 @@ fn usb_cmd_ex(
                 && !cmd.contains("pool")
             {
                 return Err("aborted for board update".into());
+            }
+            if cmd.contains("bench") && USB_BENCH_CANCEL.load(Ordering::SeqCst) {
+                return Err("bench cancelled".into());
+            }
+            // Heartbeat so the UI notifier keeps moving even between CMPBENCHPROG lines.
+            if cmd.contains("bench") && last_bench_hb.elapsed() >= Duration::from_secs(5) {
+                last_bench_hb = Instant::now();
+                if let Some(tx) = progress {
+                    let waited = wait_started.elapsed().as_secs();
+                    let _ = tx.send(NetMsg::BenchProgress(format!(
+                        "CMPBENCHPROG step=wait path=usb elapsed={waited}s"
+                    )));
+                }
             }
             // Pump often — stratum presidency means the pool is polled during every USB wait.
             if last_pump.elapsed() >= Duration::from_millis(40) {
