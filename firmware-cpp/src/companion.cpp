@@ -10,9 +10,9 @@
 extern "C" float cyd_run_bench(uint32_t n, bool tune);
 
 #if CYD_D0_BUILD
-static constexpr const char* kFwTag = "0.8.184-sha256-d0";
+static constexpr const char* kFwTag = "0.8.185-sha256-d0";
 #else
-static constexpr const char* kFwTag = "0.8.184-sha256";
+static constexpr const char* kFwTag = "0.8.185-sha256";
 #endif
 
 void CompanionLink::begin(uint32_t baud) {
@@ -26,6 +26,7 @@ void CompanionLink::begin(uint32_t baud) {
   haveTarget_ = false;
   otaRemain_ = 0;
   otaActive_ = false;
+  otaLastRxMs_ = 0;
   out_ = &Serial;
   shareMirror_ = nullptr;
   shareMirror2_ = nullptr;
@@ -52,7 +53,19 @@ bool CompanionLink::pollTcp(Stream& in, Print& out, AppConfig& cfg, const MinerS
 }
 
 bool CompanionLink::pollOtaBinary(Stream& in, Print& out) {
-  if (!otaActive_ || otaRemain_ == 0) return false;
+  if (!otaActive_) return false;
+  // Incomplete transfer / host abort: leave binary mode so the next `cmp ota`
+  // can start clean (otherwise retry bytes are eaten as image data).
+  if (otaRemain_ > 0 && (millis() - otaLastRxMs_) > 8000u) {
+    Update.abort();
+    otaActive_ = false;
+    otaRemain_ = 0;
+    if (onMiningHold_) onMiningHold_(false);
+    out.println("CMPERR ota timeout");
+    out.flush();
+    return true;
+  }
+  if (otaRemain_ == 0) return false;
   uint8_t buf[1024];
   // Drain aggressively — host can outrun Update.write and overflow the 16 KiB RX
   // buffer (looks like a disconnect / fail at ~82% after host upload 100%).
@@ -64,10 +77,12 @@ bool CompanionLink::pollOtaBinary(Stream& in, Print& out) {
     if ((size_t)n < want) want = (size_t)n;
     size_t got = in.readBytes(buf, want);
     if (got == 0) break;
+    otaLastRxMs_ = millis();
     if (Update.write(buf, got) != got) {
       Update.abort();
       otaActive_ = false;
       otaRemain_ = 0;
+      if (onMiningHold_) onMiningHold_(false);
       out.println("CMPERR ota write");
       out.flush();
       return true;
@@ -77,6 +92,7 @@ bool CompanionLink::pollOtaBinary(Stream& in, Print& out) {
   if (otaRemain_ == 0) {
     otaActive_ = false;
     if (!Update.end(true)) {
+      if (onMiningHold_) onMiningHold_(false);
       out.println("CMPERR ota end");
       out.flush();
       return true;
@@ -586,13 +602,19 @@ void CompanionLink::handleLine(const String& line, AppConfig& cfg, const MinerSn
       otaActive_ = false;
       otaRemain_ = 0;
     }
+    // Force-pause hashing (incl. indep pool) so Update.write is not starved /
+    // RX overflowed mid-transfer — host then sees ~82% UI with no ACK.
+    if (onMiningHold_) onMiningHold_(true);
+    if (onStop) onStop();
     if (!Update.begin(size, U_FLASH)) {
+      if (onMiningHold_) onMiningHold_(false);
       out_->println("CMPERR ota begin");
       out_->flush();
       return;
     }
     otaRemain_ = size;
     otaActive_ = true;
+    otaLastRxMs_ = millis();
     out_->println("CMPACK ota ready");
     out_->flush();
     return;

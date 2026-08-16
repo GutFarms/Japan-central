@@ -35,6 +35,7 @@ static UsbJob g_job;
 static portMUX_TYPE g_mux = portMUX_INITIALIZER_UNLOCKED;
 static volatile bool g_jobLoaded = false;
 static volatile bool g_mining = false;
+static volatile bool g_otaHoldMining = false;
 static std::atomic<uint64_t> g_hashCounter{0};
 static volatile uint64_t g_shareCounter = 0;
 // Ring so dual-lane hits survive USB/ESP-NOW latency and mid-job flushes.
@@ -236,7 +237,7 @@ static void onJob(const UsbJob& job) {
   g_minerA.setJob(job.header, job.target, start);
   g_minerB.setJob(job.header, job.target, start ^ 0x80000000u);
   g_jobLoaded = true;
-  g_mining = true;
+  g_mining = !g_otaHoldMining;
   syncMinePriorities();
   refreshLabels();
   // Keep EMA across job switches so the LCD does not flash 0 H/s on every notify.
@@ -272,7 +273,8 @@ static void onStop() {
 }
 
 static void onStopFromCompanion() {
-  if (g_pool.authorized()) return;
+  // Always honor Companion stop — OTA/Push must pause hashing even while the
+  // onboard indep pool is authorized (guard used to ignore stop → RX overflow).
   onStop();
 }
 
@@ -597,6 +599,10 @@ void setup() {
   g_mesh.begin(mac);
   g_cmp.setWifiPersist([]() -> bool { return g_store.save(g_cfg); });
   g_cmp.setWifiApply([]() { g_wifi.applyConfig(g_cfg); });
+  g_cmp.setMiningHold([](bool hold) {
+    g_otaHoldMining = hold;
+    if (hold) onStop();
+  });
   // Phone SoftAP portal uses the same NVS + SoftAP/STA apply path.
   g_wifi.setPersist([]() {
     g_store.save(g_cfg);

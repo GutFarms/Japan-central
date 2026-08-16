@@ -40,8 +40,9 @@ use app_update::{
 use flash_update::{
     board_fw_is_d0, ensure_firmware_image, fetch_latest_firmware, find_firmware_image,
     firmware_is_custom, flash_merged_bin, load_firmware_bin, nudge_usb_reboot_for_push,
-    push_firmware_ota_ex, push_firmware_ota_on_port_ex, push_firmware_ota_usb_ex,
+    push_firmware_ota_ex, push_firmware_ota_on_port_recover_ex, push_firmware_ota_usb_ex,
     resolve_ota_app_image, resolve_ota_app_image_ex, update_needed, FirmwareImage, FlashControl,
+    OtaReopen,
 };
 use live_bar::{
     default_header_coins, format_change, format_usd, COIN_CATALOG, LiveFeed,
@@ -12576,19 +12577,21 @@ Power a 2nd board nearby with wall/power-bank only (no PC cable)."
                                     let _ = progress_tx.send(NetMsg::FlashProgress(line));
                                 };
                                 let ota = match &mut b.port {
-                                    BoardIo::Serial(p) => push_firmware_ota_on_port_ex(
+                                    BoardIo::Serial(p) => push_firmware_ota_on_port_recover_ex(
                                         &mut **p,
                                         &app.path,
                                         prefer_d0,
                                         &progress,
                                         &cancel,
+                                        Some(OtaReopen::Usb(&port)),
                                     ),
-                                    BoardIo::Tcp(s) => push_firmware_ota_on_port_ex(
+                                    BoardIo::Tcp(s) => push_firmware_ota_on_port_recover_ex(
                                         s,
                                         &app.path,
                                         prefer_d0,
                                         &progress,
                                         &cancel,
+                                        Some(OtaReopen::Tcp(&port)),
                                     ),
                                 };
                                 match ota {

@@ -424,11 +424,13 @@ fn push_firmware_ota_stream<S: Read + Write + ?Sized>(
         // Pace so the board can drain flash writes; slower near the end (commit phase).
         let pct_now = ((sent as u64 * 100) / total as u64) as u32;
         let pace_ms = if pct_now >= 90 {
-            12u64
+            18u64
+        } else if pct_now >= 80 {
+            12
         } else if pct_now >= 70 {
-            6
+            8
         } else {
-            2
+            3
         };
         if chunks % 4 == 0 {
             let _ = stream.flush();
@@ -545,6 +547,33 @@ fn load_ota_app_bytes_ex(image: &Path, prefer_d0: bool) -> Result<(FirmwareImage
     Ok((img, bytes))
 }
 
+fn ota_line_is_ping_ack(t: &str) -> bool {
+    t.starts_with("CMP ok") || t.eq_ignore_ascii_case("CMPACK ping")
+}
+
+fn ota_err_is_ack_miss(err: &str) -> bool {
+    let low = err.to_ascii_lowercase();
+    low.contains("no cmpack ota ok")
+}
+
+fn connect_wifi_ota_stream(endpoint: &str) -> Result<TcpStream, String> {
+    let addr = endpoint
+        .to_socket_addrs()
+        .map_err(|e| format!("resolve {endpoint}: {e}"))?
+        .next()
+        .ok_or_else(|| format!("no address for {endpoint}"))?;
+    let mut stream = TcpStream::connect_timeout(&addr, Duration::from_secs(5))
+        .map_err(|e| format!("connect {endpoint}: {e}"))?;
+    stream
+        .set_read_timeout(Some(Duration::from_millis(500)))
+        .ok();
+    stream
+        .set_write_timeout(Some(Duration::from_secs(30)))
+        .ok();
+    stream.set_nodelay(true).ok();
+    Ok(stream)
+}
+
 /// Push app firmware over TCP `cmp ota size=N` (wireless Update board path).
 pub fn push_firmware_ota(
     endpoint: &str,
@@ -576,21 +605,8 @@ pub fn push_firmware_ota_ex(
         },
         bytes.len() / 1024
     ));
-    let addr = endpoint
-        .to_socket_addrs()
-        .map_err(|e| format!("resolve {endpoint}: {e}"))?
-        .next()
-        .ok_or_else(|| format!("no address for {endpoint}"))?;
-    let mut stream = TcpStream::connect_timeout(&addr, Duration::from_secs(5))
-        .map_err(|e| format!("connect {endpoint}: {e}"))?;
-    stream
-        .set_read_timeout(Some(Duration::from_millis(500)))
-        .ok();
-    stream
-        .set_write_timeout(Some(Duration::from_secs(30)))
-        .ok();
-    stream.set_nodelay(true).ok();
-    push_firmware_ota_stream(
+    let mut stream = connect_wifi_ota_stream(endpoint)?;
+    match push_firmware_ota_stream(
         &mut stream,
         "Wi‑Fi OTA",
         endpoint,
@@ -598,7 +614,73 @@ pub fn push_firmware_ota_ex(
         &bytes,
         progress,
         cancel,
-    )
+    ) {
+        Ok(()) => Ok(()),
+        Err(e) if ota_err_is_ack_miss(&e) => {
+            drop(stream);
+            progress(
+                "No Wi‑Fi OTA ACK — waiting for reboot, then soft-verify / one retry…".into(),
+            );
+            std::thread::sleep(Duration::from_secs(4));
+            if cancel.load(Ordering::SeqCst) {
+                return Err("Wi‑Fi OTA cancelled".into());
+            }
+            if wifi_ota_soft_verify(endpoint, &img.version, progress) {
+                progress(format!(
+                    "Wi‑Fi OTA soft-verified — board answers with {}",
+                    if img.version.is_empty() {
+                        "new firmware".into()
+                    } else {
+                        img.version.clone()
+                    }
+                ));
+                return Ok(());
+            }
+            progress("Board still reachable / old tag — retrying full Wi‑Fi OTA once…".into());
+            // Give stuck binary-mode boards time to idle-timeout before retry.
+            std::thread::sleep(Duration::from_secs(9));
+            if cancel.load(Ordering::SeqCst) {
+                return Err("Wi‑Fi OTA cancelled".into());
+            }
+            let mut stream2 = connect_wifi_ota_stream(endpoint)?;
+            let mut rx = String::new();
+            let _ = stream2.write_all(b"\r\ncmp ping\r\n");
+            let _ = stream2.flush();
+            if ota_wait_line(
+                &mut stream2,
+                &mut rx,
+                Instant::now() + Duration::from_secs(3),
+                &ota_line_is_ping_ack,
+                "Wi‑Fi OTA",
+            )
+            .is_err()
+            {
+                return Err(e);
+            }
+            match push_firmware_ota_stream(
+                &mut stream2,
+                "Wi‑Fi OTA",
+                endpoint,
+                &img,
+                &bytes,
+                progress,
+                cancel,
+            ) {
+                Ok(()) => Ok(()),
+                Err(e2) if ota_err_is_ack_miss(&e2) => {
+                    drop(stream2);
+                    std::thread::sleep(Duration::from_secs(4));
+                    if wifi_ota_soft_verify(endpoint, &img.version, progress) {
+                        Ok(())
+                    } else {
+                        Err(e2)
+                    }
+                }
+                Err(e2) => Err(e2),
+            }
+        }
+        Err(e) => Err(e),
+    }
 }
 
 /// Push app firmware over an already-open serial/TCP stream (`cmp ota`).
@@ -619,6 +701,20 @@ pub fn push_firmware_ota_on_port_ex<S: Read + Write + ?Sized>(
     progress: &dyn Fn(String),
     cancel: &AtomicBool,
 ) -> Result<(), String> {
+    push_firmware_ota_on_port_recover_ex(stream, image, prefer_d0, progress, cancel, None)
+}
+
+/// Like [`push_firmware_ota_on_port_ex`], but after a lost `CMPACK ota ok` can
+/// soft-verify / retry via USB reopen (`usb_reopen`) or Wi‑Fi TCP reconnect
+/// (`tcp_reopen`).
+pub fn push_firmware_ota_on_port_recover_ex<S: Read + Write + ?Sized>(
+    stream: &mut S,
+    image: &Path,
+    prefer_d0: bool,
+    progress: &dyn Fn(String),
+    cancel: &AtomicBool,
+    reopen: Option<OtaReopen<'_>>,
+) -> Result<(), String> {
     let (img, bytes) = load_ota_app_bytes_ex(image, prefer_d0)?;
     progress(format!(
         "OTA image · {} · {} · {} KB",
@@ -633,7 +729,7 @@ pub fn push_firmware_ota_on_port_ex<S: Read + Write + ?Sized>(
         },
         bytes.len() / 1024
     ));
-    push_firmware_ota_stream(
+    match push_firmware_ota_stream(
         stream,
         "USB OTA",
         "open-link",
@@ -641,7 +737,57 @@ pub fn push_firmware_ota_on_port_ex<S: Read + Write + ?Sized>(
         &bytes,
         progress,
         cancel,
-    )
+    ) {
+        Ok(()) => Ok(()),
+        Err(e) if ota_err_is_ack_miss(&e) => {
+            progress(
+                "No OTA ACK on open link — waiting for reboot, then soft-verify / one retry…"
+                    .into(),
+            );
+            std::thread::sleep(Duration::from_secs(3));
+            if cancel.load(Ordering::SeqCst) {
+                return Err("USB OTA cancelled".into());
+            }
+            // Prefer soft-verify on the still-open stream first (ACK lost but no reboot yet).
+            if usb_ota_soft_verify_on(stream, &img.version, progress) {
+                return Ok(());
+            }
+            match reopen {
+                Some(OtaReopen::Usb(port)) => {
+                    if usb_ota_soft_verify_any_baud(port, &img.version, progress) {
+                        progress(format!(
+                            "USB OTA soft-verified — board answers with {}",
+                            if img.version.is_empty() {
+                                "new firmware".into()
+                            } else {
+                                img.version.clone()
+                            }
+                        ));
+                        return Ok(());
+                    }
+                    progress(
+                        "Board still reachable / old tag — leaving open-link; reopen path will retry…"
+                            .into(),
+                    );
+                    Err(e)
+                }
+                Some(OtaReopen::Tcp(endpoint)) => {
+                    if wifi_ota_soft_verify(endpoint, &img.version, progress) {
+                        return Ok(());
+                    }
+                    Err(e)
+                }
+                None => Err(e),
+            }
+        }
+        Err(e) => Err(e),
+    }
+}
+
+/// How to re-check the board after an open-link OTA ACK miss.
+pub enum OtaReopen<'a> {
+    Usb(&'a str),
+    Tcp(&'a str),
 }
 
 /// Push app firmware over USB serial `cmp ota size=N` — live board, no BOOT hold.
@@ -708,11 +854,7 @@ pub fn push_firmware_ota_usb_ex(
             &mut *stream,
             &mut rx,
             Instant::now() + Duration::from_millis(if baud > 115_200 { 1_200 } else { 2_000 }),
-            &|t| {
-                t.starts_with("CMP ok")
-                    || t.eq_ignore_ascii_case("CMPACK ping")
-                    || t.starts_with("CMPACK")
-            },
+            &ota_line_is_ping_ack,
             "USB OTA",
         );
         match ping_ok {
@@ -742,7 +884,7 @@ pub fn push_firmware_ota_usb_ex(
                 }
                 // Post-upload: board may have rebooted before we saw CMPACK ota ok.
                 // Wait, re-ping, and either soft-verify the new tag or retry once.
-                if low.contains("no cmpack ota ok") || low.contains("uploaded") {
+                if ota_err_is_ack_miss(&e) {
                     drop(stream);
                     progress(
                         "No OTA ACK (common at ~82% after upload) — waiting for reboot, then re-check…"
@@ -752,7 +894,7 @@ pub fn push_firmware_ota_usb_ex(
                     if cancel.load(Ordering::SeqCst) {
                         return Err("USB OTA cancelled".into());
                     }
-                    if usb_ota_soft_verify(port, baud, &img.version, progress) {
+                    if usb_ota_soft_verify_any_baud(port, &img.version, progress) {
                         progress(format!(
                             "USB OTA soft-verified — board answers with {}",
                             if img.version.is_empty() {
@@ -765,9 +907,16 @@ pub fn push_firmware_ota_usb_ex(
                     }
                     if ack_retry_left > 0 {
                         ack_retry_left -= 1;
-                        progress("Board still reachable / old tag — retrying full USB OTA once…".into());
-                        // Stay on this baud; restart the baud loop attempt.
-                        // Re-open by continuing same baud via a labeled redo.
+                        progress(
+                            "Board still reachable / old tag — reboot nudge, then one full USB OTA retry…"
+                                .into(),
+                        );
+                        let _ = nudge_usb_reboot_for_push(port, progress, cancel);
+                        // Wait for firmware OTA idle-timeout (8s) + reboot settle.
+                        std::thread::sleep(Duration::from_secs(10));
+                        if cancel.load(Ordering::SeqCst) {
+                            return Err("USB OTA cancelled".into());
+                        }
                         let mut stream2 =
                             match open_usb_serial(port, baud, Duration::from_millis(2_000)) {
                                 Ok(s) => s,
@@ -782,12 +931,13 @@ pub fn push_firmware_ota_usb_ex(
                         if ota_wait_line(
                             &mut *stream2,
                             &mut rx2,
-                            Instant::now() + Duration::from_secs(2),
-                            &|t| t.starts_with("CMP ok") || t.starts_with("CMPACK"),
+                            Instant::now() + Duration::from_secs(3),
+                            &ota_line_is_ping_ack,
                             "USB OTA",
                         )
                         .is_err()
                         {
+                            // Baud may have changed after reboot — try next.
                             progress("No ping after ACK miss — trying next baud…".into());
                             drop(stream2);
                             continue;
@@ -804,11 +954,11 @@ pub fn push_firmware_ota_usb_ex(
                             Ok(()) => return Ok(()),
                             Err(e2) => {
                                 last = e2;
-                                let low2 = last.to_ascii_lowercase();
                                 drop(stream2);
-                                if low2.contains("no cmpack ota ok") || low2.contains("uploaded") {
+                                if ota_err_is_ack_miss(&last) {
                                     std::thread::sleep(Duration::from_secs(3));
-                                    if usb_ota_soft_verify(port, baud, &img.version, progress) {
+                                    if usb_ota_soft_verify_any_baud(port, &img.version, progress)
+                                    {
                                         return Ok(());
                                     }
                                 }
@@ -837,6 +987,20 @@ pub fn push_firmware_ota_usb_ex(
     })
 }
 
+/// Soft-verify after lost ACK — try both companion bauds (reboot may re-enumerate).
+fn usb_ota_soft_verify_any_baud(
+    port: &str,
+    expected_ver: &str,
+    progress: &dyn Fn(String),
+) -> bool {
+    for baud in [460_800u32, 115_200] {
+        if usb_ota_soft_verify(port, baud, expected_ver, progress) {
+            return true;
+        }
+    }
+    false
+}
+
 /// After a lost OTA ACK, reopen and check whether the board already runs the target tag.
 fn usb_ota_soft_verify(
     port: &str,
@@ -854,6 +1018,21 @@ fn usb_ota_soft_verify(
         return usb_ota_soft_verify_on(&mut *s, expected_ver, progress);
     };
     usb_ota_soft_verify_on(&mut *stream, expected_ver, progress)
+}
+
+fn wifi_ota_soft_verify(
+    endpoint: &str,
+    expected_ver: &str,
+    progress: &dyn Fn(String),
+) -> bool {
+    let Ok(mut stream) = connect_wifi_ota_stream(endpoint) else {
+        std::thread::sleep(Duration::from_secs(2));
+        let Ok(mut s) = connect_wifi_ota_stream(endpoint) else {
+            return false;
+        };
+        return usb_ota_soft_verify_on(&mut s, expected_ver, progress);
+    };
+    usb_ota_soft_verify_on(&mut stream, expected_ver, progress)
 }
 
 fn usb_ota_soft_verify_on<S: Read + Write + ?Sized>(
@@ -879,7 +1058,7 @@ fn usb_ota_soft_verify_on<S: Read + Write + ?Sized>(
                 stream,
                 &mut rx,
                 Instant::now() + Duration::from_secs(2),
-                &|t| t.starts_with("CMP ok") || t.starts_with("CMPACK"),
+                &ota_line_is_ping_ack,
                 "USB OTA verify",
             ) {
                 Ok(l) => l,
@@ -897,7 +1076,7 @@ fn usb_ota_soft_verify_on<S: Read + Write + ?Sized>(
     if hay.contains(&want) || hay.contains(&expected_ver.to_ascii_lowercase()) {
         return true;
     }
-    // CMPCONFIG often embeds fw=0.8.180-sha256-d0
+    // CMPCONFIG often embeds fw=0.8.185-sha256-d0
     if let Some(fw) = line
         .split([' ', '&', ',', '{', '}', '"', ':'])
         .find(|p| p.contains("-sha256"))
@@ -938,7 +1117,7 @@ pub fn nudge_usb_reboot_for_push(
             &mut *stream,
             &mut rx,
             Instant::now() + Duration::from_millis(1_000),
-            &|t| t.starts_with("CMP ok") || t.starts_with("CMPACK"),
+            &ota_line_is_ping_ack,
             "reboot nudge",
         )
         .is_err()

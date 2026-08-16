@@ -71,6 +71,8 @@ class CompanionLink {
   using WifiPersistFn = std::function<bool()>;
   /// Apply SoftAP/STA after credentials are ACK'd on the wire.
   using WifiApplyFn = std::function<void()>;
+  /// Hold/release hashing for USB/Wi‑Fi OTA (indep pool must not resume mid-transfer).
+  using MiningHoldFn = std::function<void(bool hold)>;
 
   void begin(uint32_t baud = 460800);
   void setShareMirror(Print* mirror) { shareMirror_ = mirror; }
@@ -79,6 +81,7 @@ class CompanionLink {
   void setShareMirror2(Print* mirror) { shareMirror2_ = mirror; }
   void setWifiPersist(WifiPersistFn fn) { onWifiPersist_ = std::move(fn); }
   void setWifiApply(WifiApplyFn fn) { onWifiApply_ = std::move(fn); }
+  void setMiningHold(MiningHoldFn fn) { onMiningHold_ = std::move(fn); }
 
   bool poll(AppConfig& cfg, const MinerSnapshot& snap, ApplyFn onApply, NetFeed* net, JobFn onJob,
             StopFn onStop, StatsFn onStats);
@@ -104,12 +107,14 @@ class CompanionLink {
   /// After `cmp ota size=N` — next bytes are raw app image for Update.write.
   size_t otaRemain_ = 0;
   bool otaActive_ = false;
+  uint32_t otaLastRxMs_ = 0;
 
   Print* out_ = &Serial;
   Print* shareMirror_ = nullptr;
   Print* shareMirror2_ = nullptr;
   WifiPersistFn onWifiPersist_;
   WifiApplyFn onWifiApply_;
+  MiningHoldFn onMiningHold_;
 
   char* activeLineBuf_ = lineBuf_;
   size_t* activeLineLen_ = &lineLen_;
