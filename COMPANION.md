@@ -1,0 +1,185 @@
+# Njörðr Seas' CYD miner (Windows)
+
+USB mining control for the ESP32-2432S028. The **PC** talks to a Bitcoin stratum pool; the **board** only SHA-256 hashes work received over USB-C.
+
+## Recommended download (all-in-one)
+
+**[`CYD-Miner-Setup.exe`](flash/downloads/CYD-Miner-Setup.exe)** — Windows setup wizard with:
+
+- Njörðr Seas' CYD miner app
+- Firmware `esp32-2432s028-sha256-miner-merged.bin`
+- `Flash-Firmware.bat` helper + flash docs
+- Start Menu / Desktop shortcuts
+
+Also available:
+
+| Package | Contents |
+|---------|----------|
+| [`cyd-companion.exe`](flash/downloads/cyd-companion.exe) | App binary (Update board auto-fetches Firmware + espflash) |
+| `CYD-Miner-Portable.zip` | Same kit, no installer |
+| `CYD-Companion-App-Only.zip` | App + `Firmware\` + `Tools\espflash.exe` |
+| `CYD-Companion-Setup.exe` | Alias of the full miner setup |
+
+See [`flash/downloads/README.md`](flash/downloads/README.md) for checksums.
+
+## Build
+
+```bash
+./scripts/build-flash-images.sh
+./scripts/build-companion-windows.sh
+```
+
+## Use
+
+1. Run **CYD-Miner-Setup.exe** (or unpack the portable kit)
+2. Open **Njörðr Seas' CYD miner** → select COM → **Update board** → choose **Push update** (linked, auto-reset) or **Flash (BOOT)** (blank / full rewrite)  
+   — or `Flash-Firmware.bat`
+3. **Connect** USB → enter stratum / **Bitcoin address** / password → **Start mining**
+
+**Push update** (linked companion firmware): stops mining briefly, auto-resets into download mode, writes `Firmware\esp32-2432s028-sha256-miner-merged.bin`, reconnects. **BOOT Ready** only if auto-reset fails. **Flash (BOOT)** always uses hold **BOOT** → tap **RESET** → Ready.
+
+In **Settings**:
+- **Update app** — download the latest Companion Windows build and restart
+- **Fetch latest FW** — pull the newest board `merged.bin` into `Firmware\`
+- **Update board** — choose **Push update** (linked) or **Flash (BOOT)** to write that image over USB
+
+## Companion extras (0.8.5+)
+- First-run setup wizard
+- Version-aware **Update board** + **Fetch latest FW**
+- Pool auto-reconnect, share dedupe, accept/reject latency
+- Session luck (expected vs accepted) + SHA path (HW / HW+ / HW/SW)
+- LCD ticker, pool presets, COM auto-connect, copy logs
+- **Find CYD workers** — USB scan for companion firmwares + LAN Companion peer discovery; connect multiple USB boards and fan-out jobs
+- Custom **API feeds** (Settings) to pull external HTTPS data into the app
+- Stable board hashrate (EMA + longer sample window; no zero-on-job flicker)
+- **Hash-focus firmware** — strip LCD animations/ticker, one-time HW calibrate, dedicated core-0 mine task, lean USB
+- **0.8.17** — fix start/stop reboot loop (mine task must `vTaskDelay` so the watchdog idle task can run)
+- **0.8.18** — Update board auto-downloads firmware + espflash when missing; waits for COM release; retries 115200
+- **0.8.21** — Check/Update Companion app + Fetch latest board FW from repo downloads
+- **0.8.22** — fix Windows self-update bat (retry while `.new` remains; do not relaunch a locked old exe)
+- **0.8.23** — fetch updates via GitHub API / commit-pinned raw (branch raw CDN can serve stale VERSION/bins)
+- **0.8.24** — fix Update board: espflash reject `ESPFLASH_SKIP_UPDATE_CHECK=1` (needs true/false); skip Windows Store python stubs
+- **0.8.113** — Stop AUTHORIZED↔SUBSCRIBE flicker: keep pool drained during USB/mesh, soft transport fails, sticky auth UI
+- **0.8.112** — One PC USB root is enough; mesh peers list all nearby boards; clearer single Type‑C guidance
+- **0.8.111** — Stratum authorize first; surface AUTH FAILED; no silent reconnect on bad worker
+- **0.8.110** — COM-first multi-board identity + per-board hashrate; Find Workers uses registry COM list
+- **0.8.109** — Hide COM1/PCI from Update/Connect; prefer linked CYD for soft Push
+- **0.8.108** — Update board: don't call old/unlinked companion firmware “blank”; always offer Push + Flash unless ROM download-mode
+- **0.8.107** — Fix Check/Update stuck at 0.8.102: tip mirrors use mesh branch; probe all REPO_REFS
+- **0.8.106** — Update board dialog: choose Push update (linked) or Flash with BOOT
+- **0.8.105** — Project clean: dead mesh code removed, version tags synced, `scripts/clean-project.sh`
+- **0.8.104** — USB mesh root keeps hashing while bridging (throttled); any data USB serial works for the root
+- **0.8.103** — ESP-NOW connectivity mesh: USB-linked root bridges nearby boards (not a hashrate multiplier)
+- **0.8.102** — Push update for linked boards (auto-reset, no BOOT Ready); blank boards still use Ready
+- **0.8.101** — Multi-USB: merge Windows registry COM list; warn when only 1 USB-UART (COM1 PCI is not a board)
+- **0.8.100** — Multi-USB: prefer unlinked COM after Refresh, Link all USB, don’t eject live board on same-MAC, pause mine while linking 2nd
+- **0.8.99** — Faster flash: esptool stub first (Terminator), fail MAC-stall in ~32s, no-stub uses --no-compress
+- **0.8.98** — Blank-board flash fix: no pre-SYNC port steal after Ready; escalate to esptool immediately; keep BOOT until Writing %
+- **0.8.97** — Terminator-style flash: Ready CTA (BOOT held), ROM sync loop, patient idle after MAC
+- **0.8.96** — Connect while BOOT held (ESP download mode); document no voltage overclock — stay 240 MHz + Full HW + more boards
+- **0.8.95** — Full-program debug: COM selection/boot race, flash BOOT+no-erase-on-busy, job restore, SoftAP flap, Wi-Fi yield
+- **0.8.94** — Refresh only rescans COM list (no USB reconnect)
+- **0.8.93** — Blank-board flash: --no-stub first, real BOOT countdown, esptool --no-stub / no_reset
+- **0.8.92** — Board & pool Refresh: UI-thread COM rescan + wrap so button stays clickable
+- **0.8.91** — Board & pool USB-C COM dropdown: sea-blue tab (match SoftBtn; theme widgets.open/weak_bg_fill)
+- **0.8.90** — Default COM: prefer CH340/CP210x USB over PCI, keep linked port selected (no jump to COM1), delayed port re-scan, auto-connect on for new installs
+- **0.8.89** — Flash safety: skip erase on MAC-stall, longer post-connect idle, BOOT/no-reset first after wipe, auto-pip-install esptool into Tools/
+- **0.8.88** — Multi-board: always show Add board, Find workers USB-only (no second UDP bind), prefer USB over Wi‑Fi same-MAC, unique SoftAP subnet per board, flash releases only target COM
+- **0.8.87** — Restore share rate: default Full HW (no fragile auto path), hold jobs until pool difficulty, re-push pool job after Bench, queue shares across pool blips
+- **0.8.86** — Remove connect auto-bench (USB/Wi‑Fi link only; use Bench boards manually)
+- **0.8.85** — Post-flash: no Close+Open bounce / skip auto-bench on verify; UNDER DEVELOPMENT behind UI and more faded
+- **0.8.84** — UX rework: brand-first Mine hero, Board & pool / telemetry / events only; tips+feeds+updates in Settings; lighter panels; UNDER DEVELOPMENT watermarks kept
+- **0.8.83** — Project-wide clean/debug: sync firmware tags, dynamic UA, COM10+ bat fix, Wi‑Fi docs, unified Desktop shortcut, verify embedded fw tag
+- **0.8.82** — Diagonal “UNDER DEVELOPMENT” watermarks (top-left → bottom-right)
+- **0.8.81** — Failed-flash safety (ESP Terminator / esptool-style): grace wait, \r progress, erase-once + rewrite retries, blank-chip SAFETY tip + force reset
+- **0.8.80** — Coin picker closed label shows “Coin selection” (not BTC·LTC·…)
+- **0.8.79** — Harden Companion self-update (GitHub API-first VERSION/SUMS; newest checksum set; raw packages)
+- **0.8.78** — Prefer tip mirrors for Check/Update; stop early-exit on stale CDN VERSION
+- **0.8.77** — Auto Desktop shortcut with brand logo (first launch + Setup always)
+- **0.8.76** — Taskbar / window icon from brand logo (runtime IconData + PE ICO)
+- **0.8.75** — Fresh D0 firmware + Companion rebuild (new merged.bin)
+- **0.8.74** — In-app “best path on this board” tips (D0 Bench · 240 MHz · more boards; SHA-256d only)
+- **0.8.73** — Fix overlapping Mine/Settings tabs on resize (responsive nav + wrapping ticker)
+- **0.8.72** — Flash overlay progress bar (live % from espflash)
+- **0.8.71** — Fix flash hang after chip MAC: close stdin, idle abort, taskkill tree, Cancel kills espflash
+- **0.8.70** — Post-flash USB verify; redesigned setup wizard with brand icon; Setup + Desktop icons
+- **0.8.69** — Flash timeouts: kill stuck espflash/esptool; Update board UI watchdog + Cancel
+- **0.8.68** — Header prices: LTC + coin dropdown (BTC/LTC/ETH/SOL/BNB/XRP/DOGE/ADA/XMR/BCH)
+- **0.8.67** — Fix flash COM6 serial_not_found; faster Check for app update; phone QR LAN IP cache + legacy USB telemetry
+- **0.8.66** — Harden Update board flash: USB-only port, \\.\COMx, 115200-first, no-reset retry, last-flash.log, Flash-Firmware.bat uses espflash
+- **0.8.65** — Fix Update board flash: write first, then hard-reset erase+write (no soft_reset-after-wipe)
+- **0.8.64** — Windows verified downloads: PE VERSIONINFO, download SHA256SUMS, update hash check, optional Authenticode, NSIS version keys
+- **0.8.63** — Clean verify/debug rebuild · fresh downloadable Companion + firmware
+- **0.8.62** — Clean verify rebuild · fresh downloadable Companion exe
+- **0.8.61** — Fix Check for app update: pick newest VERSION across fresh mirrors (no stale CDN miss)
+- **0.8.60** — Mine UI: Total Hash, SHA path legend, hide worker blurb, Live stratum under Board telemetry
+- **0.8.59** — Fix mass share rejects: rebuild job on set_difficulty; default HM Pool :3337 (ESP32)
+- **0.8.58** — Clear Update available after flash: treat board `-d0` fw tag as same kit version
+- **0.8.57** — Fetch board FW: spawn off mine-worker (never stuck behind auto-bench); faster raw URLs + timeouts
+- **0.8.56** — Bench boards: immediate busy UI + shorter D0 tune window (no silent USB timeout / dead click)
+- **0.8.55** — Fix USB connect + update fetch: link immediately, defer auto-bench; run update HTTP off mine-worker thread
+- **0.8.54** — Auto-bench each board on USB/Wi‑Fi connect (D0 path pick + NVS lock)
+- **0.8.53** — ESP32-D0 build (`*-d0.bin`); Bench auto-times HW/HW+/HW/SW and locks the fastest path in NVS
+- **0.8.52** — Neon-blue lightning splashes (Companion storm, logo halo, phone monitor + web UI)
+- **0.8.51** — Personal phone QR per Companion install (token-gated :19285); optional remote host for travel; Expo Scan QR
+- **0.8.50** — Phone monitor: Companion LAN HTTP API on :19285 (`/api/status` + mobile web UI); Expo iOS/Android app in `mobile/`
+- **0.8.49** — CYD LCD: full-screen logo; status strip shows link + hashrate + Wi‑Fi IP only
+- **0.8.48** — API feeds pull JSON/text/CSV/files from multiple sources (saves under ApiDownloads\\)
+- **0.8.47** — Mine tab Data flow indicator (Pool ↔ Companion ↔ Board; animated jobs/shares)
+- **0.8.46** — stabilize Board telemetry (hold rate/hashes/job/nonce across status soft-fails; no blink to zero)
+- **0.8.45** — multi-USB: skip hanging PCI COM; serial probe + timed open; require pong; USB cmp answers during SoftAP boot; Event log shows per-port miss/ok
+- **0.8.44** — Companion self-update clean-sweeps the install dir (drops stale kit files) before promoting the new build
+- **0.8.43** — fix stratum accept/reject counting; hero logo 3× + **Seas'** brand; Bench boards retunes HW path for max H/s
+- **0.8.42** — board SoftAP/STA Wi‑Fi + TCP `cmp`; Find workers scans USB + Bluetooth + Wi‑Fi beacons (parallel COM probe)
+- **0.8.41** — default stratum `stratum+tcp://btc.hmpool.io:3335` (HM Pool preset)
+- **0.8.40** — stabilize hashrate display (hold on missed polls; heavier board EMA; no slow bleed to 0)
+- **0.8.39** — multi-board: auto-link every CYD found by scan; Add board while one is connected; do not merge mac=unknown boards
+- **0.8.38** — fix `cmp status` USB timeouts while mining (mineB yields on RX; USB/mineB equal priority; longer Companion waits)
+- **0.8.37** — fix Find CYD workers: open probes without DTR reset, settle/retry after boot, longer timeouts, background scan + per-port Event log
+- **0.8.36** — push board H/s toward ~1020 kH/s (real hashes); rename product to **Njörðr Seas' CYD miner**; skip LCD SPI while mining
+- **0.8.35** — brand logo replaces large CYD title; workers identified by board MAC; COM list shows every OS serial port with USB chip details
+- **0.8.34** — fix phantom hashrate when USB disconnected; drop dead boards; report real mining flag; OpenUsb no longer wipes multi-board fleet (SHA256d verify scripts PASS)
+- **0.8.33** — Njörðr theme (deep blues + lightning); hide Windows console windows for flash/update exes
+- **0.8.32** — restore Event log on Mine; Debug/Terminal tab stays hidden
+- **0.8.31** — hide Debug/Terminal tab from the Companion UI
+- **0.8.30** — fix hashrate dropping to 0 (keep sample window across jobs; Companion holds last rate on empty polls)
+- **0.8.29** — after Update board: wait 1s, disconnect, reconnect USB
+- **0.8.28** — loading spinner overlay during board update (no terminal spam); live bar °F
+- **0.8.27** — Update board erases flash (`erase-flash`) before writing new firmware
+- **0.8.26** — lower pool share latency (tight loop, flush, harvest-first) + faster USB (460800, bigger drains)
+- **0.8.25** — fix fake 70 MH/s spike (count only real hashes); tighten HW pace; honest ~200–800 kH/s CYD ceiling
+
+## Recommended pool (ESP32-friendly)
+
+| Field | Value |
+|-------|--------|
+| Stratum | `stratum+tcp://btc.hmpool.io:3337` |
+| Worker | Your **Bitcoin** address |
+| Password | `x` |
+
+Low share difficulty solo pool (NerdMiner-compatible). Finding a BTC block is a lottery.
+
+Alternates: `public-pool.io:21496`, `pool.nerdminer.io:3333`, `pool.nerdminers.org:3333`
+
+## Tabs
+
+- **Mine** — USB, pool, live hashrate (kH/s), stratum status, event log
+- **Settings** — preferences, API feeds, update app/board
+
+## USB protocol
+
+```text
+cmp ping / status / config / clock / reboot / stop / bench / wifi
+cmp jh <160hex> / jt <64hex> / ja job=&en2=&ntime=
+cmp stats accepted=N&rejected=N
+board → CMPSHARE nonce=…&job=…&en2=…&ntime=…
+```
+
+Same line protocol also runs over **Wi‑Fi TCP :19284**.
+
+## Wi‑Fi workers (0.8.42+)
+
+- Board SoftAP: `Njordr-XXXX` open / no password (XXXX from MAC); phone captive portal auto-opens Board Setup at http://10.x.x.1
+- Optional STA: `cmp wifi ssid=…&pass=…` (saved in NVS)
+- UDP beacon `CYDBOARD|…` on port **19284**; Companion **Find CYD workers** listens and auto-links
+- Join the SoftAP from the PC **or** put the board on your LAN via STA, then scan
