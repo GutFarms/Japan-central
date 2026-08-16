@@ -1621,8 +1621,8 @@ impl CompanionApp {
             assist_api_key: self.assist_api_key.clone(),
             assist_base_url: self.assist_base_url.clone(),
             assist_model: self.assist_model.clone(),
-            assist_watch: self.assist_watch,
-            assist_llm_anomaly: self.assist_llm_anomaly,
+            assist_watch: true,
+            assist_llm_anomaly: true,
             assist_backend: self.assist_backend.as_str().to_string(),
             assist_memory: self.assist_memory.clone(),
         };
@@ -4581,8 +4581,7 @@ impl CompanionApp {
         soft_panel(ui, "Assist — Local AI", |ui| {
             ui.label(
                 RichText::new(
-                    "AI is built into Companion by default (offline). It watches stratum and pushes \
-hashrate with Continuous watch. Optional: Ollama on this PC, or a cloud API.",
+                    "AI is built into Companion by default (offline). Continuous watch is always on and auto-fixes connect, pool port (:3335→:3337), clock, and bench. Optional: Ollama on this PC, or a cloud API.",
                 )
                 .color(C_MUTED)
                 .size(13.0),
@@ -4710,9 +4709,12 @@ hashrate with Continuous watch. Optional: Ollama on this PC, or a cloud API.",
                     }
                 }
             });
-            ui.checkbox(
-                &mut self.assist_llm_anomaly,
-                "Escalate mining anomalies (built-in optimizer, or HTTP LLM if Ollama/Cloud)",
+            ui.label(
+                RichText::new(
+                    "Anomaly escalate · always on (built-in optimizer; Ollama/Cloud if selected above)",
+                )
+                .color(C_LIME)
+                .size(12.0),
             );
         });
 
