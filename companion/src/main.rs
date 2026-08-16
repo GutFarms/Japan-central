@@ -737,7 +737,7 @@ enum NetCmd {
         boot_ready: Arc<AtomicBool>,
         /// True while flash tools own the COM — UI Cancel clears this too.
         hold: Arc<AtomicBool>,
-        /// Board was answering cmp — USB OTA first (no BOOT), then silent ROM push.
+        /// Board was answering cmp — USB app OTA only (no BOOT / no silent ROM).
         live_push: bool,
         /// Stream app.bin over TCP `cmp ota` (Wi‑Fi-linked board).
         wifi_ota: bool,
@@ -12320,15 +12320,20 @@ Blank boards need Flash (BOOT)."
                                 need_boot,
                                 boot_ready,
                             };
-                            flash_merged_bin(&port, &img.path, &progress, &ctrl, live_push)?;
+                            if live_push {
+                                return Err(
+                                    "Push update is USB OTA only (no silent ROM). Retry Push after unplug/replug."
+                                        .into(),
+                                );
+                            }
+                            flash_merged_bin(&port, &img.path, &progress, &ctrl, false)?;
                             Ok(format!(
-                                "Firmware {} {} on {port}",
+                                "Firmware {} flashed on {port}",
                                 if img.version.is_empty() {
                                     "image".into()
                                 } else {
                                     img.version
                                 },
-                                if live_push { "pushed" } else { "flashed" }
                             ))
                             }),
                         ) {

@@ -360,6 +360,20 @@ fn push_firmware_ota_stream<S: Read + Write + ?Sized>(
     progress: &dyn Fn(String),
     cancel: &AtomicBool,
 ) -> Result<(), String> {
+    push_firmware_ota_stream_ex(stream, label, endpoint, img, bytes, progress, cancel, false)
+}
+
+/// `slow`: safer pace for boards still on older firmware (no miner suspend during OTA).
+fn push_firmware_ota_stream_ex<S: Read + Write + ?Sized>(
+    stream: &mut S,
+    label: &str,
+    endpoint: &str,
+    img: &FirmwareImage,
+    bytes: &[u8],
+    progress: &dyn Fn(String),
+    cancel: &AtomicBool,
+    slow: bool,
+) -> Result<(), String> {
     if cancel.load(Ordering::SeqCst) {
         return Err(format!("{label} cancelled"));
     }
@@ -405,7 +419,8 @@ fn push_firmware_ota_stream<S: Read + Write + ?Sized>(
     progress(format!("Board ready · {ready}"));
     // Let the board leave the command path, suspend miners, and enter binary
     // drain before the first chunk — racing Update.write caused CMPERR ota write.
-    std::thread::sleep(Duration::from_millis(220));
+    // Older boards (pre-0.8.191) need a longer settle because miners stay live.
+    std::thread::sleep(Duration::from_millis(if slow { 450 } else { 220 }));
     let mut drain = [0u8; 512];
     while let Ok(n) = stream.read(&mut drain) {
         if n == 0 {
@@ -422,11 +437,15 @@ fn push_firmware_ota_stream<S: Read + Write + ?Sized>(
             crate::utf8_safe::keep_last(&mut rx, 512);
         }
     }
-    progress(format!("{label} streaming app image…"));
+    progress(format!(
+        "{label} streaming app image{}…",
+        if slow { " (safe pace)" } else { "" }
+    ));
 
     // Match firmware pollOtaBinary buf[512]. Unpaced blasts fill the 16 KiB
     // USB RX buffer while flash sector erase stalls → CMPERR ota write.
-    const CHUNK: usize = 512;
+    // 256 B + higher floor works against boards that still hash during OTA.
+    let chunk: usize = if slow { 256 } else { 512 };
     let total = bytes.len();
     let mut sent = 0usize;
     let mut last_pct = 0u32;
@@ -435,7 +454,7 @@ fn push_firmware_ota_stream<S: Read + Write + ?Sized>(
         if cancel.load(Ordering::SeqCst) {
             return Err(format!("{label} cancelled"));
         }
-        let end = (sent + CHUNK).min(total);
+        let end = (sent + chunk).min(total);
         stream
             .write_all(&bytes[sent..end])
             .map_err(|e| format!("ota write @{sent}: {e}"))?;
@@ -445,7 +464,19 @@ fn push_firmware_ota_stream<S: Read + Write + ?Sized>(
         // and near the end (commit phase). Keep a floor so sector erase cannot
         // overflow the CH340 RX FIFO.
         let pct_now = ((sent as u64 * 100) / total as u64) as u32;
-        let pace_ms = if pct_now < 20 {
+        let pace_ms = if slow {
+            if pct_now < 20 {
+                28u64
+            } else if pct_now >= 90 {
+                40
+            } else if pct_now >= 80 {
+                32
+            } else if pct_now >= 70 {
+                26
+            } else {
+                20
+            }
+        } else if pct_now < 20 {
             14u64
         } else if pct_now >= 90 {
             22
@@ -475,7 +506,15 @@ fn push_firmware_ota_stream<S: Read + Write + ?Sized>(
             }
         }
         // Extra breather every few chunks so erase windows catch up.
-        let extra = if chunks % 8 == 0 { 6 } else { 0 };
+        let extra = if chunks % 8 == 0 {
+            if slow {
+                12
+            } else {
+                6
+            }
+        } else {
+            0
+        };
         std::thread::sleep(Duration::from_millis(pace_ms + extra));
         if pct_now >= last_pct + 5 || sent == total {
             last_pct = pct_now;
@@ -753,7 +792,7 @@ pub fn push_firmware_ota_on_port_recover_ex<S: Read + Write + ?Sized>(
         },
         bytes.len() / 1024
     ));
-    match push_firmware_ota_stream(
+    match push_firmware_ota_stream_ex(
         stream,
         "USB OTA",
         "open-link",
@@ -761,6 +800,7 @@ pub fn push_firmware_ota_on_port_recover_ex<S: Read + Write + ?Sized>(
         &bytes,
         progress,
         cancel,
+        true,
     ) {
         Ok(()) => Ok(()),
         Err(e) if ota_err_is_ack_miss(&e) => {
@@ -856,7 +896,9 @@ pub fn push_firmware_ota_usb_ex(
     let mut last = String::new();
     // One automatic full retry after a post-upload ACK miss (board often reboots mid-ACK).
     let mut ack_retry_left = 1u8;
-    for baud in [460_800u32, 115_200] {
+    // Prefer 115200 for the binary stream — 460800 floods older boards that still
+    // hash during OTA (CMPERR ota write). Ping may still answer at either baud.
+    for baud in [115_200u32, 460_800] {
         if cancel.load(Ordering::SeqCst) {
             return Err("USB OTA cancelled".into());
         }
@@ -890,7 +932,9 @@ pub fn push_firmware_ota_usb_ex(
                 continue;
             }
         }
-        match push_firmware_ota_stream(
+        // Always safe-pace on USB — first Push must succeed against pre-0.8.191 boards
+        // that do not yet suspend miners during Update.write.
+        match push_firmware_ota_stream_ex(
             &mut *stream,
             "USB OTA",
             port,
@@ -898,6 +942,7 @@ pub fn push_firmware_ota_usb_ex(
             &bytes,
             progress,
             cancel,
+            true,
         ) {
             Ok(()) => return Ok(()),
             Err(e) => {
@@ -966,7 +1011,7 @@ pub fn push_firmware_ota_usb_ex(
                             drop(stream2);
                             continue;
                         }
-                        match push_firmware_ota_stream(
+                        match push_firmware_ota_stream_ex(
                             &mut *stream2,
                             "USB OTA",
                             port,
@@ -974,6 +1019,7 @@ pub fn push_firmware_ota_usb_ex(
                             &bytes,
                             progress,
                             cancel,
+                            true,
                         ) {
                             Ok(()) => return Ok(()),
                             Err(e2) => {
@@ -1037,7 +1083,7 @@ pub fn push_firmware_ota_usb_ex(
                             drop(stream2);
                             continue;
                         }
-                        match push_firmware_ota_stream(
+                        match push_firmware_ota_stream_ex(
                             &mut *stream2,
                             "USB OTA",
                             port,
@@ -1045,6 +1091,7 @@ pub fn push_firmware_ota_usb_ex(
                             &bytes,
                             progress,
                             cancel,
+                            true,
                         ) {
                             Ok(()) => return Ok(()),
                             Err(e2) => {
@@ -1085,7 +1132,7 @@ pub fn push_firmware_ota_usb_ex(
         if cancel.load(Ordering::SeqCst) {
             return Err("USB OTA cancelled".into());
         }
-        for baud in [460_800u32, 115_200] {
+        for baud in [115_200u32, 460_800] {
             if cancel.load(Ordering::SeqCst) {
                 return Err("USB OTA cancelled".into());
             }
@@ -1111,7 +1158,7 @@ pub fn push_firmware_ota_usb_ex(
                 drop(stream);
                 continue;
             }
-            match push_firmware_ota_stream(
+            match push_firmware_ota_stream_ex(
                 &mut *stream,
                 "USB OTA",
                 port,
@@ -1119,6 +1166,7 @@ pub fn push_firmware_ota_usb_ex(
                 &bytes,
                 progress,
                 cancel,
+                true,
             ) {
                 Ok(()) => return Ok(()),
                 Err(e) => {
@@ -1246,7 +1294,8 @@ fn trunc_flash_line(s: &str, max: usize) -> String {
     crate::utf8_safe::trunc(s, max)
 }
 
-/// Soft reboot a live USB board so the next silent ROM auto-reset has a clean edge.
+/// Soft reboot a live USB board so a stuck `cmp ota` binary session clears
+/// before the next Push OTA retry (no BOOT / no ROM).
 pub fn nudge_usb_reboot_for_push(
     port: &str,
     progress: &dyn Fn(String),
@@ -1280,7 +1329,9 @@ pub fn nudge_usb_reboot_for_push(
         }
         let _ = stream.write_all(b"cmp reboot\r\n");
         let _ = stream.flush();
-        progress(format!("Reboot nudged @ {baud} — settling before silent ROM push…"));
+        progress(format!(
+            "Reboot nudged @ {baud} — settling before Push OTA retry (no BOOT)…"
+        ));
         drop(stream);
         std::thread::sleep(Duration::from_millis(1800));
         return true;
@@ -1653,6 +1704,7 @@ pub const REPO_NAME: &str = "Japan-central";
 /// Tip first — apps still on older builds may only hit the legacy CYD branch.
 pub const REPO_REFS: &[&str] = &[
     // Tip agent branches first — newest VERSION wins for Fetch firmware / app update.
+    "cursor/ota-write-safe-e801",
     "cursor/ota-write-fail-e801",
     "cursor/share-counter-reset-e801",
     "cursor/project-cleanup-e801",
@@ -2591,26 +2643,25 @@ Available: {hint}. Unplug/replug the CYD, pick the COM again, then Update board.
             ));
         }
     }
+    // Live Push must never enter ROM auto-reset — that path is Flash (BOOT) only.
+    if live_push {
+        return Err(
+            "Push update uses USB app OTA only (no silent ROM). Retry Push, or use Flash (BOOT) for blank boards."
+                .into(),
+        );
+    }
     progress(format!(
-        "{} {} ({} bytes) → {port} ({port_arg}) @ 0x0",
-        if live_push { "Push update" } else { "Flash" },
+        "Flash {} ({} bytes) → {port} ({port_arg}) @ 0x0",
         image
             .file_name()
             .and_then(|s| s.to_str())
             .unwrap_or("firmware.bin"),
         std::fs::metadata(image).map(|m| m.len()).unwrap_or(0),
     ));
-    if live_push {
-        progress(
-            "Live board — USB OTA / silent auto-reset (no BOOT). Ready only if those fail."
-                .into(),
-        );
-    } else {
-        progress(
-            "Blank-board flash: Ready with BOOT held, then keep BOOT until Writing %."
-                .into(),
-        );
-    }
+    progress(
+        "Blank-board flash: Ready with BOOT held, then keep BOOT until Writing %."
+            .into(),
+    );
     append_flash_log(&format!(
         "begin port={port} arg={port_arg} live_push={live_push} baud={FLASH_SAFE_BAUD} image={}",
         image.display()
