@@ -251,10 +251,11 @@ pub fn resolve_ota_app_image(preferred: Option<&Path>) -> Result<FirmwareImage, 
 }
 
 fn ota_wait_line(
-    stream: &mut TcpStream,
+    stream: &mut dyn Read,
     rx: &mut String,
     deadline: Instant,
     pred: &dyn Fn(&str) -> bool,
+    label: &str,
 ) -> Result<String, String> {
     let mut tmp = [0u8; 2048];
     while Instant::now() < deadline {
@@ -268,7 +269,7 @@ fn ota_wait_line(
             }
             Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {}
             Err(e) if e.kind() == std::io::ErrorKind::TimedOut => {}
-            Err(e) => return Err(format!("Wi‑Fi OTA read: {e}")),
+            Err(e) => return Err(format!("{label} read: {e}")),
         }
         for line in rx.lines() {
             let t = line.trim();
@@ -287,29 +288,23 @@ fn ota_wait_line(
         }
         std::thread::sleep(Duration::from_millis(20));
     }
-    Err("Wi‑Fi OTA timed out waiting for board ACK".into())
+    Err(format!("{label} timed out waiting for board ACK"))
 }
 
-/// Push app firmware over TCP `cmp ota size=N` (wireless Update board path).
-pub fn push_firmware_ota(
+fn push_firmware_ota_stream(
+    stream: &mut dyn ReadWrite,
+    label: &str,
     endpoint: &str,
-    image: &Path,
+    img: &FirmwareImage,
+    bytes: &[u8],
     progress: &dyn Fn(String),
     cancel: &AtomicBool,
 ) -> Result<(), String> {
-    let img = resolve_ota_app_image(Some(image))?;
-    let bytes = std::fs::read(&img.path).map_err(|e| format!("read {}: {e}", img.path.display()))?;
-    if bytes.len() < 64_000 || bytes[0] != 0xE9 {
-        return Err(format!(
-            "{} is not an ESP app image (need 0xE9 magic, >64 KB)",
-            img.path.display()
-        ));
-    }
     if cancel.load(Ordering::SeqCst) {
-        return Err("Wi‑Fi OTA cancelled".into());
+        return Err(format!("{label} cancelled"));
     }
     progress(format!(
-        "Wi‑Fi OTA → {endpoint} · {} · {} KB",
+        "{label} → {endpoint} · {} · {} KB",
         img.path
             .file_name()
             .and_then(|n| n.to_str())
@@ -317,35 +312,21 @@ pub fn push_firmware_ota(
         bytes.len() / 1024
     ));
 
-    let addr = endpoint
-        .to_socket_addrs()
-        .map_err(|e| format!("resolve {endpoint}: {e}"))?
-        .next()
-        .ok_or_else(|| format!("no address for {endpoint}"))?;
-    let mut stream = TcpStream::connect_timeout(&addr, Duration::from_secs(5))
-        .map_err(|e| format!("connect {endpoint}: {e}"))?;
-    stream
-        .set_read_timeout(Some(Duration::from_millis(500)))
-        .ok();
-    stream
-        .set_write_timeout(Some(Duration::from_secs(30)))
-        .ok();
-    stream.set_nodelay(true).ok();
-
     let mut rx = String::new();
     let _ = stream.write_all(b"\r\ncmp stop\r\n");
     let _ = stream.flush();
     std::thread::sleep(Duration::from_millis(200));
     // Drain any stop ACK noise.
     let _ = ota_wait_line(
-        &mut stream,
+        stream,
         &mut rx,
         Instant::now() + Duration::from_millis(800),
         &|t| t.starts_with("CMPACK"),
+        label,
     );
 
     if cancel.load(Ordering::SeqCst) {
-        return Err("Wi‑Fi OTA cancelled".into());
+        return Err(format!("{label} cancelled"));
     }
 
     let cmd = format!("cmp ota size={}\r\n", bytes.len());
@@ -355,10 +336,11 @@ pub fn push_firmware_ota(
     stream.flush().map_err(|e| format!("ota flush: {e}"))?;
 
     let ready = ota_wait_line(
-        &mut stream,
+        stream,
         &mut rx,
         Instant::now() + Duration::from_secs(8),
         &|t| t.starts_with("CMPACK ota ready") || t.eq_ignore_ascii_case("CMPACK ota ready"),
+        label,
     )?;
     progress(format!("Board ready · {ready}"));
 
@@ -368,7 +350,7 @@ pub fn push_firmware_ota(
     let mut last_pct = 0u32;
     while sent < total {
         if cancel.load(Ordering::SeqCst) {
-            return Err("Wi‑Fi OTA cancelled".into());
+            return Err(format!("{label} cancelled"));
         }
         let end = (sent + CHUNK).min(total);
         stream
@@ -378,17 +360,18 @@ pub fn push_firmware_ota(
         let pct = ((sent as u64 * 100) / total as u64) as u32;
         if pct >= last_pct + 5 || sent == total {
             last_pct = pct;
-            progress(format!("Wi‑Fi OTA upload {pct}% ({sent}/{total})"));
+            progress(format!("{label} upload {pct}% ({sent}/{total})"));
         }
     }
     stream.flush().map_err(|e| format!("ota final flush: {e}"))?;
 
     // Board replies CMPACK ota ok then reboots (connection often drops).
     match ota_wait_line(
-        &mut stream,
+        stream,
         &mut rx,
         Instant::now() + Duration::from_secs(45),
         &|t| t.starts_with("CMPACK ota ok") || t.starts_with("CMPACK ota"),
+        label,
     ) {
         Ok(line) => progress(format!("Board · {line}")),
         Err(e) => {
@@ -403,14 +386,94 @@ pub fn push_firmware_ota(
         }
     }
     progress(format!(
-        "Wi‑Fi OTA pushed {} to {endpoint}",
+        "{label} pushed {} to {endpoint}",
         if img.version.is_empty() {
             "app image".into()
         } else {
-            img.version
+            img.version.clone()
         }
     ));
     Ok(())
+}
+
+/// Trait object helper so TCP + USB share the same `cmp ota` upload loop.
+trait ReadWrite: Read + Write {}
+impl<T: Read + Write + ?Sized> ReadWrite for T {}
+
+fn load_ota_app_bytes(image: &Path) -> Result<(FirmwareImage, Vec<u8>), String> {
+    let img = resolve_ota_app_image(Some(image))?;
+    let bytes = std::fs::read(&img.path).map_err(|e| format!("read {}: {e}", img.path.display()))?;
+    if bytes.len() < 64_000 || bytes[0] != 0xE9 {
+        return Err(format!(
+            "{} is not an ESP app image (need 0xE9 magic, >64 KB)",
+            img.path.display()
+        ));
+    }
+    Ok((img, bytes))
+}
+
+/// Push app firmware over TCP `cmp ota size=N` (wireless Update board path).
+pub fn push_firmware_ota(
+    endpoint: &str,
+    image: &Path,
+    progress: &dyn Fn(String),
+    cancel: &AtomicBool,
+) -> Result<(), String> {
+    let (img, bytes) = load_ota_app_bytes(image)?;
+    let addr = endpoint
+        .to_socket_addrs()
+        .map_err(|e| format!("resolve {endpoint}: {e}"))?
+        .next()
+        .ok_or_else(|| format!("no address for {endpoint}"))?;
+    let mut stream = TcpStream::connect_timeout(&addr, Duration::from_secs(5))
+        .map_err(|e| format!("connect {endpoint}: {e}"))?;
+    stream
+        .set_read_timeout(Some(Duration::from_millis(500)))
+        .ok();
+    stream
+        .set_write_timeout(Some(Duration::from_secs(30)))
+        .ok();
+    stream.set_nodelay(true).ok();
+    push_firmware_ota_stream(
+        &mut stream,
+        "Wi‑Fi OTA",
+        endpoint,
+        &img,
+        &bytes,
+        progress,
+        cancel,
+    )
+}
+
+/// Push app firmware over USB serial `cmp ota size=N` — live board, no BOOT hold.
+pub fn push_firmware_ota_usb(
+    port: &str,
+    image: &Path,
+    progress: &dyn Fn(String),
+    cancel: &AtomicBool,
+) -> Result<(), String> {
+    use crate::workers::{is_usb_serial_port, open_usb_serial};
+
+    if !is_usb_serial_port(port) {
+        return Err(format!(
+            "USB OTA needs a COM port (got '{port}'). Use Push update (Wi‑Fi) for host:19284."
+        ));
+    }
+    let (img, bytes) = load_ota_app_bytes(image)?;
+    if cancel.load(Ordering::SeqCst) {
+        return Err("USB OTA cancelled".into());
+    }
+    progress(format!("Opening {port} for USB OTA (no BOOT)…"));
+    let mut stream = open_usb_serial(port, 115_200, Duration::from_millis(400))?;
+    push_firmware_ota_stream(
+        &mut *stream,
+        "USB OTA",
+        port,
+        &img,
+        &bytes,
+        progress,
+        cancel,
+    )
 }
 
 pub fn normalize_fw_version(raw: &str) -> String {
@@ -1766,7 +1829,7 @@ Available: {hint}. Unplug/replug the CYD, pick the COM again, then Update board.
     ));
     if live_push {
         progress(
-            "Live board — silent auto-reset push (no BOOT). Ready only if that fails."
+            "Live board — USB OTA / silent auto-reset (no BOOT). Ready only if those fail."
                 .into(),
         );
     } else {

@@ -37,7 +37,8 @@ use app_update::{
 };
 use flash_update::{
     ensure_firmware_image, fetch_latest_firmware, find_firmware_image, firmware_is_custom,
-    flash_merged_bin, load_firmware_bin, push_firmware_ota, resolve_ota_app_image, update_needed,
+    flash_merged_bin, load_firmware_bin, push_firmware_ota, push_firmware_ota_usb,
+    resolve_ota_app_image, update_needed,
     FirmwareImage, FlashControl,
 };
 use live_bar::{
@@ -701,7 +702,7 @@ enum NetCmd {
         boot_ready: Arc<AtomicBool>,
         /// True while flash tools own the COM — UI Cancel clears this too.
         hold: Arc<AtomicBool>,
-        /// Board was answering cmp — try auto-reset push without BOOT Ready first.
+        /// Board was answering cmp — USB OTA first (no BOOT), then silent ROM push.
         live_push: bool,
         /// Stream app.bin over TCP `cmp ota` (Wi‑Fi-linked board).
         wifi_ota: bool,
@@ -3607,7 +3608,7 @@ impl CompanionApp {
             return;
         }
         // Honor the user's Push choice even if detection is uncertain (old fw / not linked).
-        // flash_update falls back to BOOT Ready if auto-reset fails.
+        // USB OTA first (no hold); flash_update falls back to ROM auto-reset, then Ready.
         let live_push = prefer_live_push && !wifi_ota;
         // Abort any in-flight mesh via / USB wait BEFORE queuing UpdateFirmware —
         // otherwise Push sits on "auto-reset…" until via timeouts finish (tens of seconds).
@@ -3655,7 +3656,7 @@ impl CompanionApp {
         self.update_status = if wifi_ota {
             format!("Pushing firmware over Wi‑Fi to {port}…")
         } else if live_push {
-            format!("Releasing {port} for push (auto-reset)…")
+            format!("Releasing {port} for push (USB OTA, no BOOT)…")
         } else {
             format!("Flashing board via {port}…")
         };
@@ -3678,7 +3679,7 @@ impl CompanionApp {
             if wifi_ota {
                 format!("Push update (Wi‑Fi) → {port} · {img_note}")
             } else if live_push {
-                format!("Push update → {port} · {img_note} · no BOOT (auto-reset)")
+                format!("Push update → {port} · {img_note} · no BOOT (USB OTA)")
             } else if image.is_empty() {
                 format!("Flash (BOOT) → {port} · {img_note}")
             } else {
@@ -3802,10 +3803,19 @@ impl CompanionApp {
         } else if lower.contains("wifi ota") || lower.contains("wi‑fi ota") || lower.contains("wi-fi ota")
         {
             ("Wi‑Fi OTA", 0.12)
+        } else if lower.contains("usb ota")
+            || lower.contains("live push — usb")
+            || lower.contains("no boot, no hold")
+        {
+            ("USB OTA (no hold)", 0.12)
         } else if lower.contains("board ready") {
             ("Board ready for OTA", 0.15)
-        } else if lower.contains("upload complete") || lower.contains("pushed over wi") {
-            ("Wi‑Fi push complete", 0.88)
+        } else if lower.contains("upload complete")
+            || lower.contains("pushed over wi")
+            || lower.contains("pushed over usb")
+            || lower.contains("usb ota pushed")
+        {
+            ("OTA push complete", 0.88)
         } else if lower.contains("cancelled") {
             ("Cancelled", self.flash_progress)
         } else if lower.contains("verif")
@@ -4576,7 +4586,7 @@ hashrate with Continuous watch. Optional: Ollama on this PC, or a cloud API.",
         soft_panel(ui, "Board firmware", |ui| {
             ui.label(
                 RichText::new(
-                    "Fetch the latest board image, then Update board — Push update (USB), Push update (Wi‑Fi), or Flash with BOOT (blank).",
+                    "Fetch the latest board image, then Update board — Push update (USB, no hold), Push update (Wi‑Fi), or Flash with BOOT (blank).",
                 )
                 .color(C_MUTED)
                 .size(13.0),
@@ -4804,7 +4814,7 @@ hashrate with Continuous watch. Optional: Ollama on this PC, or a cloud API.",
             );
             ui.add_space(8.0);
             ui.label(
-                RichText::new("Tip: Push (USB) tries silent update first, then Ready if needed. Flash (BOOT) asks Ready first. Keep BOOT held until Writing %.")
+                RichText::new("Tip: Push (USB) streams app OTA with no buttons; Ready only if that fails. Flash (BOOT) asks Ready first. Keep BOOT held until Writing %.")
                     .color(C_DIM)
                     .size(12.0),
             );
@@ -8092,7 +8102,7 @@ or Flash (BOOT) with BOOT held + Ready."
                         ui.add_space(6.0);
                         ui.label(
                             RichText::new(
-                                "· Push update — USB auto-reset, no BOOT (usual for live boards)\n· Push update (Wi‑Fi) — if a Wi‑Fi worker is linked/scanned\n· Flash (BOOT) — full rewrite; hold BOOT → tap RESET → Ready when asked",
+                                "· Push update — USB app OTA, no BOOT / no hold (usual for live boards)\n· Push update (Wi‑Fi) — if a Wi‑Fi worker is linked/scanned\n· Flash (BOOT) — full rewrite; hold BOOT → tap RESET → Ready when asked",
                             )
                             .color(C_MUTED)
                             .size(12.0),
@@ -8268,6 +8278,7 @@ or Flash (BOOT) with BOOT held + Ready."
                                             "Ready — keep BOOT held until Writing % appears…".into();
                                     }
                                 } else if self.flash_phase.to_ascii_lowercase().contains("push")
+                                    || self.update_status.to_ascii_lowercase().contains("usb ota")
                                     || self.update_status.to_ascii_lowercase().contains("auto-reset")
                                     || self
                                         .update_status
@@ -8276,7 +8287,7 @@ or Flash (BOOT) with BOOT held + Ready."
                                 {
                                     ui.label(
                                         RichText::new(
-                                            "Silent Push — no BOOT yet. Ready appears only if auto-reset stalls.",
+                                            "Push — no buttons. Hands free unless Ready appears.",
                                         )
                                         .color(C_DIM)
                                         .size(12.0),
@@ -12000,7 +12011,7 @@ Power a 2nd board nearby with wall/power-bank only (no PC cable)."
                     let mode_label = if wifi_ota {
                         "Wi‑Fi OTA"
                     } else if live_push {
-                        "push update"
+                        "USB OTA push"
                     } else {
                         "flash"
                     };
@@ -12078,6 +12089,46 @@ Power a 2nd board nearby with wall/power-bank only (no PC cable)."
                                 }
                             };
                             let _ = done_tx.send(NetMsg::FirmwareFetched(Ok(img.clone())));
+                            // Live Push: stream app.bin over USB `cmp ota` first — no BOOT hold,
+                            // no espflash. Fall back to silent ROM auto-reset, then Ready.
+                            if live_push {
+                                progress(
+                                    "Live Push — USB app OTA (no BOOT, no hold)…".into(),
+                                );
+                                match resolve_ota_app_image(Some(img.path.as_path()))
+                                    .or_else(|_| resolve_ota_app_image(None))
+                                {
+                                    Ok(app) => {
+                                        match push_firmware_ota_usb(
+                                            &port,
+                                            &app.path,
+                                            &progress,
+                                            &cancel,
+                                        ) {
+                                            Ok(()) => {
+                                                return Ok(format!(
+                                                    "Firmware {} pushed over USB OTA to {port}",
+                                                    if app.version.is_empty() {
+                                                        "image".into()
+                                                    } else {
+                                                        app.version
+                                                    }
+                                                ));
+                                            }
+                                            Err(e) => {
+                                                progress(format!(
+                                                    "USB OTA unavailable ({e}) — trying silent ROM auto-reset…"
+                                                ));
+                                            }
+                                        }
+                                    }
+                                    Err(e) => {
+                                        progress(format!(
+                                            "No app image for USB OTA ({e}) — silent ROM push…"
+                                        ));
+                                    }
+                                }
+                            }
                             let ctrl = FlashControl {
                                 cancel,
                                 need_boot,
