@@ -2105,7 +2105,6 @@ Hold BOOT, tap RESET, keep BOOT held, click Ready. Use a short data USB cable \
             cancel,
         ) {
             Ok(()) => {
-                let _ = run_espflash_reset(&espflash, &port_arg, progress, budget_left(), cancel);
                 append_flash_log("success write");
                 ctrl.need_boot.store(false, Ordering::SeqCst);
                 return Ok(());
