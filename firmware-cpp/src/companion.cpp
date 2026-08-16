@@ -10,9 +10,9 @@
 extern "C" float cyd_run_bench(uint32_t n, bool tune);
 
 #if CYD_D0_BUILD
-static constexpr const char* kFwTag = "0.8.186-sha256-d0";
+static constexpr const char* kFwTag = "0.8.187-sha256-d0";
 #else
-static constexpr const char* kFwTag = "0.8.186-sha256";
+static constexpr const char* kFwTag = "0.8.187-sha256";
 #endif
 
 void CompanionLink::begin(uint32_t baud) {
@@ -69,7 +69,7 @@ bool CompanionLink::pollOtaBinary(Stream& in, Print& out) {
   uint8_t buf[1024];
   // Drain aggressively — host can outrun Update.write and overflow the 16 KiB RX
   // buffer (looks like a disconnect / fail at ~82% after host upload 100%).
-  int budget = 256;
+  int budget = 512;
   while (budget-- > 0 && otaRemain_ > 0 && in.available() > 0) {
     size_t want = otaRemain_ < sizeof(buf) ? otaRemain_ : sizeof(buf);
     int n = in.available();

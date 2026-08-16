@@ -229,8 +229,11 @@ static void onJob(const UsbJob& job) {
   flushShareQueue();
   // Core-1 HW lane may still be inside mineBatch — give it a slice to exit and
   // noteShare against the *old* g_job, then flush again before we swap midstate.
-  delay(3);
-  flushShareQueue();
+  // Skip the settle during OTA hold so pool notify cannot stall binary RX.
+  if (!g_otaHoldMining) {
+    delay(3);
+    flushShareQueue();
+  }
   portENTER_CRITICAL(&g_mux);
   for (size_t i = 0; i < kShareQ; i++) g_shareQ[i].used = false;
   portEXIT_CRITICAL(&g_mux);
@@ -365,6 +368,21 @@ static void flushShareQueue() {
 }
 
 static void serviceCompanion() {
+  // During USB/Wi‑Fi OTA binary receive, only drain companion streams.
+  // Pool connect / mesh / snap work can stall RX long enough to fail right
+  // after "Board ready" (UI ~15%) before the first upload tick.
+  if (g_cmp.otaBusy()) {
+    auto onApply = applyConfig;
+    auto job = onJobFromCompanion;
+    auto stop = onStopFromCompanion;
+    auto stats = onStats;
+    for (int i = 0; i < 8; i++) {
+      g_cmp.poll(g_cfg, g_snap, onApply, &g_net, job, stop, stats);
+      g_wifi.poll(g_cmp, g_cfg, g_snap, onApply, &g_net, job, stop, stats);
+      if (!g_cmp.otaBusy()) break;
+    }
+    return;
+  }
   // Snapshot often enough for live H/s without starving USB replies.
   uint32_t now = millis();
   const uint32_t snapMs = g_mining ? 320u : 220u;
@@ -504,11 +522,17 @@ static void mineTaskB(void*) {
 static void usbTask(void*) {
   for (;;) {
     serviceCompanion();
-    const bool talk = Serial.available() > 0;
+    const bool ota = g_cmp.otaBusy();
+    const bool talk = ota || Serial.available() > 0;
     const bool bridging = g_mesh.isBridging();
-    const uint32_t ms = talk ? 1u : (bridging ? 2u : (g_mining ? 4u : 3u));
-    vTaskDelay(pdMS_TO_TICKS(ms));
-    esp_task_wdt_reset();
+    // During OTA binary, spin tight so Update.write keeps up with the host.
+    const uint32_t ms = ota ? 0u : (talk ? 1u : (bridging ? 2u : (g_mining ? 4u : 3u)));
+    if (ms == 0) {
+      esp_task_wdt_reset();
+    } else {
+      vTaskDelay(pdMS_TO_TICKS(ms));
+      esp_task_wdt_reset();
+    }
   }
 }
 

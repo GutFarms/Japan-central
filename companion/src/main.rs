@@ -4115,8 +4115,17 @@ impl CompanionApp {
         self.update_status = trunc(line, 140);
         let lower = line.to_ascii_lowercase();
 
-        // Prefer explicit percent from espflash ("12%", "12.5 %", "[====] 45%").
+        // Prefer explicit percent from OTA upload / espflash.
         if let Some(pct) = parse_flash_percent(line) {
+            if lower.contains("upload") && (lower.contains("usb ota") || lower.contains("wi‑fi ota") || lower.contains("wi-fi ota") || lower.contains("ota")) {
+                // OTA upload band: 15% (ready) → 85% (complete).
+                let mapped = 0.15 + (pct / 100.0) * 0.70;
+                if mapped > self.flash_progress {
+                    self.flash_progress = mapped.clamp(0.0, 0.88);
+                }
+                self.flash_phase = format!("USB OTA upload · {pct:.0}%");
+                return;
+            }
             // Map tool-local 0..=100 into the write band of the overall bar.
             let mapped = 0.12 + (pct / 100.0) * 0.70;
             if mapped > self.flash_progress {
@@ -12761,7 +12770,8 @@ Power a 2nd board nearby with wall/power-bank only (no PC cable)."
                             };
                             let _ = done_tx.send(NetMsg::FirmwareFetched(Ok(img.clone())));
                             // Live Push: stream app.bin over USB `cmp ota` first — no BOOT hold,
-                            // no espflash. Fall back to silent ROM auto-reset, then Ready.
+                            // no espflash. Fall back to silent ROM only if the companion link
+                            // never answered (blank / download-mode boards).
                             if live_push {
                                 progress(
                                     "Live Push — USB app OTA (no BOOT, no hold)…".into(),
@@ -12790,6 +12800,55 @@ Power a 2nd board nearby with wall/power-bank only (no PC cable)."
                                                 ));
                                             }
                                             Err(e) => {
+                                                let low = e.to_ascii_lowercase();
+                                                // Reached binary mode / mid-upload: ROM auto-reset
+                                                // almost always dies at Chip connected (~14/15%).
+                                                // Clear the stuck OTA session and retry Push OTA once;
+                                                // do not fall through to espflash.
+                                                let ota_started = low.contains("board ready")
+                                                    || low.contains("streaming")
+                                                    || low.contains("upload")
+                                                    || low.contains("mid-upload")
+                                                    || low.contains("ota write")
+                                                    || low.contains("no cmpack ota ok")
+                                                    || low.contains("rejected");
+                                                if ota_started {
+                                                    progress(format!(
+                                                        "USB OTA stalled after board ready ({e}) — reboot nudge + one more OTA (no ROM)…"
+                                                    ));
+                                                    let _ = nudge_usb_reboot_for_push(
+                                                        &port, &progress, &cancel,
+                                                    );
+                                                    std::thread::sleep(Duration::from_secs(10));
+                                                    if cancel.load(Ordering::SeqCst) {
+                                                        return Err("flash cancelled".into());
+                                                    }
+                                                    match push_firmware_ota_usb_ex(
+                                                        &port,
+                                                        &app.path,
+                                                        prefer_d0,
+                                                        &progress,
+                                                        &cancel,
+                                                    ) {
+                                                        Ok(()) => {
+                                                            return Ok(format!(
+                                                                "Firmware {} pushed over USB OTA to {port}",
+                                                                if app.version.is_empty() {
+                                                                    "image".into()
+                                                                } else {
+                                                                    app.version
+                                                                }
+                                                            ));
+                                                        }
+                                                        Err(e2) => {
+                                                            return Err(format!(
+                                                                "USB OTA failed after board ready ({e2}). \
+Retry Push update — do not use Flash (BOOT) unless the board is blank. \
+If this keeps failing, unplug/replug USB then Push again."
+                                                            ));
+                                                        }
+                                                    }
+                                                }
                                                 progress(format!(
                                                     "USB OTA unavailable ({e}) — nudging reboot, then silent ROM…"
                                                 ));

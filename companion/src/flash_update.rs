@@ -403,6 +403,27 @@ fn push_firmware_ota_stream<S: Read + Write + ?Sized>(
         label,
     )?;
     progress(format!("Board ready · {ready}"));
+    // Let the board leave the command path and enter pollOtaBinary before the
+    // first chunk — starting immediately was a common fail-at-~15% (UI maps
+    // "Board ready" to 15% and never reached the first upload tick).
+    std::thread::sleep(Duration::from_millis(80));
+    let mut drain = [0u8; 512];
+    while let Ok(n) = stream.read(&mut drain) {
+        if n == 0 {
+            break;
+        }
+        rx.push_str(&String::from_utf8_lossy(&drain[..n]));
+        for line in rx.lines() {
+            let t = line.trim();
+            if t.to_ascii_lowercase().starts_with("cmperr ota") {
+                return Err(format!("{label} board rejected before upload: {t}"));
+            }
+        }
+        if rx.len() > 2048 {
+            crate::utf8_safe::keep_last(&mut rx, 512);
+        }
+    }
+    progress(format!("{label} streaming app image…"));
 
     // Match firmware pollOtaBinary buf[1024]. Unpaced 4 KiB blasts fill the 16 KiB
     // USB RX buffer while Update.write stalls → host hits 100% (UI ~82%) with no ACK.
@@ -421,10 +442,13 @@ fn push_firmware_ota_stream<S: Read + Write + ?Sized>(
             .map_err(|e| format!("ota write @{sent}: {e}"))?;
         sent = end;
         chunks = chunks.wrapping_add(1);
-        // Pace so the board can drain flash writes; slower near the end (commit phase).
+        // Pace so the board can drain flash writes; slower at start (board settling)
+        // and near the end (commit phase).
         let pct_now = ((sent as u64 * 100) / total as u64) as u32;
-        let pace_ms = if pct_now >= 90 {
-            18u64
+        let pace_ms = if pct_now < 15 {
+            10u64
+        } else if pct_now >= 90 {
+            18
         } else if pct_now >= 80 {
             12
         } else if pct_now >= 70 {
@@ -969,6 +993,75 @@ pub fn push_firmware_ota_usb_ex(
                     }
                     return Err(e);
                 }
+                // Early mid-upload fail (UI often stuck at ~15% Board ready): clear binary
+                // mode via reboot, wait for firmware idle-timeout, retry once on this baud.
+                if low.contains("ota write")
+                    || low.contains("mid-upload")
+                    || low.contains("rejected before upload")
+                    || low.contains("rejected mid-upload")
+                {
+                    drop(stream);
+                    if ack_retry_left > 0 {
+                        ack_retry_left -= 1;
+                        progress(format!(
+                            "USB OTA died early ({e}) — reboot nudge, wait for idle clear, retry…"
+                        ));
+                        let _ = nudge_usb_reboot_for_push(port, progress, cancel);
+                        std::thread::sleep(Duration::from_secs(10));
+                        if cancel.load(Ordering::SeqCst) {
+                            return Err("USB OTA cancelled".into());
+                        }
+                        // Re-enter baud loop from the top by continuing after forcing
+                        // another attempt at this baud via a nested open.
+                        let mut stream2 =
+                            match open_usb_serial(port, baud, Duration::from_millis(2_000)) {
+                                Ok(s) => s,
+                                Err(e2) => {
+                                    last = e2;
+                                    continue;
+                                }
+                            };
+                        let mut rx2 = String::new();
+                        let _ = stream2.write_all(b"\r\ncmp ping\r\n");
+                        let _ = stream2.flush();
+                        if ota_wait_line(
+                            &mut *stream2,
+                            &mut rx2,
+                            Instant::now() + Duration::from_secs(3),
+                            &ota_line_is_ping_ack,
+                            "USB OTA",
+                        )
+                        .is_err()
+                        {
+                            progress("No ping after early OTA fail — trying next baud…".into());
+                            drop(stream2);
+                            continue;
+                        }
+                        match push_firmware_ota_stream(
+                            &mut *stream2,
+                            "USB OTA",
+                            port,
+                            &img,
+                            &bytes,
+                            progress,
+                            cancel,
+                        ) {
+                            Ok(()) => return Ok(()),
+                            Err(e2) => {
+                                last = e2;
+                                drop(stream2);
+                                if ota_err_is_ack_miss(&last) {
+                                    std::thread::sleep(Duration::from_secs(3));
+                                    if usb_ota_soft_verify_any_baud(port, &img.version, progress) {
+                                        return Ok(());
+                                    }
+                                }
+                                return Err(last);
+                            }
+                        }
+                    }
+                    return Err(e);
+                }
                 // If ota ready never came, try the other baud (rare: ping false-positive).
                 if low.contains("timed out") || low.contains("ota ready") || low.contains("unknown")
                 {
@@ -977,6 +1070,67 @@ pub fn push_firmware_ota_usb_ex(
                     continue;
                 }
                 return Err(e);
+            }
+        }
+    }
+    // Open-link may have left the board stuck in binary OTA mode — no ping on either baud.
+    // Reboot + wait for the 8s idle timeout, then one more full attempt.
+    if last.to_ascii_lowercase().contains("no cmp ping") {
+        progress(
+            "No companion ping (possible stuck OTA binary mode) — reboot + clear, then retry once…"
+                .into(),
+        );
+        let _ = nudge_usb_reboot_for_push(port, progress, cancel);
+        std::thread::sleep(Duration::from_secs(10));
+        if cancel.load(Ordering::SeqCst) {
+            return Err("USB OTA cancelled".into());
+        }
+        for baud in [460_800u32, 115_200] {
+            if cancel.load(Ordering::SeqCst) {
+                return Err("USB OTA cancelled".into());
+            }
+            let mut stream = match open_usb_serial(port, baud, Duration::from_millis(2_000)) {
+                Ok(s) => s,
+                Err(e) => {
+                    last = e;
+                    continue;
+                }
+            };
+            let mut rx = String::new();
+            let _ = stream.write_all(b"\r\ncmp ping\r\n");
+            let _ = stream.flush();
+            if ota_wait_line(
+                &mut *stream,
+                &mut rx,
+                Instant::now() + Duration::from_secs(2),
+                &ota_line_is_ping_ack,
+                "USB OTA",
+            )
+            .is_err()
+            {
+                drop(stream);
+                continue;
+            }
+            match push_firmware_ota_stream(
+                &mut *stream,
+                "USB OTA",
+                port,
+                &img,
+                &bytes,
+                progress,
+                cancel,
+            ) {
+                Ok(()) => return Ok(()),
+                Err(e) => {
+                    last = e;
+                    drop(stream);
+                    if ota_err_is_ack_miss(&last)
+                        && usb_ota_soft_verify_any_baud(port, &img.version, progress)
+                    {
+                        return Ok(());
+                    }
+                    break;
+                }
             }
         }
     }

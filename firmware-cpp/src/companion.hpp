@@ -82,6 +82,8 @@ class CompanionLink {
   void setWifiPersist(WifiPersistFn fn) { onWifiPersist_ = std::move(fn); }
   void setWifiApply(WifiApplyFn fn) { onWifiApply_ = std::move(fn); }
   void setMiningHold(MiningHoldFn fn) { onMiningHold_ = std::move(fn); }
+  /// True while `cmp ota` binary receive is active — USB/TCP must not be starved.
+  bool otaBusy() const { return otaActive_; }
 
   bool poll(AppConfig& cfg, const MinerSnapshot& snap, ApplyFn onApply, NetFeed* net, JobFn onJob,
             StopFn onStop, StatsFn onStats);
