@@ -10,9 +10,9 @@
 extern "C" float cyd_run_bench(uint32_t n, bool tune);
 
 #if CYD_D0_BUILD
-static constexpr const char* kFwTag = "0.8.179-sha256-d0";
+static constexpr const char* kFwTag = "0.8.180-sha256-d0";
 #else
-static constexpr const char* kFwTag = "0.8.179-sha256";
+static constexpr const char* kFwTag = "0.8.180-sha256";
 #endif
 
 void CompanionLink::begin(uint32_t baud) {
@@ -54,7 +54,9 @@ bool CompanionLink::pollTcp(Stream& in, Print& out, AppConfig& cfg, const MinerS
 bool CompanionLink::pollOtaBinary(Stream& in, Print& out) {
   if (!otaActive_ || otaRemain_ == 0) return false;
   uint8_t buf[1024];
-  int budget = 64;
+  // Drain aggressively — host can outrun Update.write and overflow the 16 KiB RX
+  // buffer (looks like a disconnect / fail at ~82% after host upload 100%).
+  int budget = 256;
   while (budget-- > 0 && otaRemain_ > 0 && in.available() > 0) {
     size_t want = otaRemain_ < sizeof(buf) ? otaRemain_ : sizeof(buf);
     int n = in.available();
@@ -79,9 +81,11 @@ bool CompanionLink::pollOtaBinary(Stream& in, Print& out) {
       out.flush();
       return true;
     }
+    // ACK first and hold the USB link long enough for the host to read it
+    // before ESP.restart() drops the CH340 (classic fail-at-~82% after 100%).
     out.println("CMPACK ota ok");
     out.flush();
-    delay(250);
+    delay(800);
     ESP.restart();
   }
   return true;

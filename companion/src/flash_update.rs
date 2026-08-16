@@ -404,10 +404,13 @@ fn push_firmware_ota_stream<S: Read + Write + ?Sized>(
     )?;
     progress(format!("Board ready · {ready}"));
 
-    const CHUNK: usize = 4096;
+    // Match firmware pollOtaBinary buf[1024]. Unpaced 4 KiB blasts fill the 16 KiB
+    // USB RX buffer while Update.write stalls → host hits 100% (UI ~82%) with no ACK.
+    const CHUNK: usize = 1024;
     let total = bytes.len();
     let mut sent = 0usize;
     let mut last_pct = 0u32;
+    let mut chunks = 0u32;
     while sent < total {
         if cancel.load(Ordering::SeqCst) {
             return Err(format!("{label} cancelled"));
@@ -417,34 +420,84 @@ fn push_firmware_ota_stream<S: Read + Write + ?Sized>(
             .write_all(&bytes[sent..end])
             .map_err(|e| format!("ota write @{sent}: {e}"))?;
         sent = end;
-        let pct = ((sent as u64 * 100) / total as u64) as u32;
-        if pct >= last_pct + 5 || sent == total {
-            last_pct = pct;
-            progress(format!("{label} upload {pct}% ({sent}/{total})"));
+        chunks = chunks.wrapping_add(1);
+        // Pace so the board can drain flash writes; slower near the end (commit phase).
+        let pct_now = ((sent as u64 * 100) / total as u64) as u32;
+        let pace_ms = if pct_now >= 90 {
+            12u64
+        } else if pct_now >= 70 {
+            6
+        } else {
+            2
+        };
+        if chunks % 4 == 0 {
+            let _ = stream.flush();
+            // Abort early on CMPERR ota write instead of blasting the rest blind.
+            let mut tmp = [0u8; 512];
+            if let Ok(n) = stream.read(&mut tmp) {
+                if n > 0 {
+                    rx.push_str(&String::from_utf8_lossy(&tmp[..n]));
+                    for line in rx.lines() {
+                        let t = line.trim();
+                        let low = t.to_ascii_lowercase();
+                        if low.starts_with("cmperr ota") {
+                            return Err(format!("{label} board rejected mid-upload: {t}"));
+                        }
+                    }
+                    if rx.len() > 4096 {
+                        rx = rx[rx.len() - 1024..].to_string();
+                    }
+                }
+            }
+        }
+        std::thread::sleep(Duration::from_millis(pace_ms));
+        if pct_now >= last_pct + 5 || sent == total {
+            last_pct = pct_now;
+            progress(format!("{label} upload {pct_now}% ({sent}/{total})"));
         }
     }
     stream.flush().map_err(|e| format!("ota final flush: {e}"))?;
 
     // Drop leftover lines (esp. CMPACK ota ready) so we never treat ready/begin as success.
     rx.clear();
+    progress(format!(
+        "{label} upload complete — waiting for board ACK (flash commit / reboot)…"
+    ));
 
     // Board must reply CMPACK ota ok then reboots. Do NOT match bare "CMPACK ota"
     // (that falsely accepted "CMPACK ota ready" left in the buffer).
+    // Update.end + partition switch can take well over 45s on worn flash.
     match ota_wait_line(
         stream,
         &mut rx,
-        Instant::now() + Duration::from_secs(45),
+        Instant::now() + Duration::from_secs(90),
         &|t| {
             let low = t.to_ascii_lowercase();
+            if low.starts_with("cmperr ota") {
+                return false; // still wait; handled below via buffer scan
+            }
             low.starts_with("cmpack ota ok")
         },
         label,
     ) {
         Ok(line) => progress(format!("Board · {line}")),
         Err(e) => {
+            let low_rx = rx.to_ascii_lowercase();
+            if let Some(err_line) = rx.lines().find(|l| {
+                l.trim()
+                    .to_ascii_lowercase()
+                    .starts_with("cmperr ota")
+            }) {
+                return Err(format!(
+                    "{label} board rejected after upload: {}",
+                    err_line.trim()
+                ));
+            }
             // Full send without ok is a FAILED push — board may still be on the old image.
+            // Callers may reopen + retry once; avoid jumping straight to BOOT.
+            let _ = low_rx;
             return Err(format!(
-                "{label} uploaded {sent}/{total} B but no CMPACK ota ok ({e}). Retry Push; use Flash (BOOT) if it keeps failing."
+                "{label} uploaded {sent}/{total} B but no CMPACK ota ok ({e}). Retry Push (no BOOT); use Flash (BOOT) only if Push keeps failing."
             ));
         }
     }
@@ -631,12 +684,15 @@ pub fn push_firmware_ota_usb_ex(
         bytes.len() / 1024
     ));
     let mut last = String::new();
+    // One automatic full retry after a post-upload ACK miss (board often reboots mid-ACK).
+    let mut ack_retry_left = 1u8;
     for baud in [460_800u32, 115_200] {
         if cancel.load(Ordering::SeqCst) {
             return Err("USB OTA cancelled".into());
         }
         progress(format!("Opening {port} @ {baud} for USB OTA (no BOOT)…"));
-        let mut stream = match open_usb_serial(port, baud, Duration::from_millis(400)) {
+        // Longer I/O timeout during bulk OTA — 400ms was tight if Update.write stalls.
+        let mut stream = match open_usb_serial(port, baud, Duration::from_millis(2_000)) {
             Ok(s) => s,
             Err(e) => {
                 last = e;
@@ -679,11 +735,88 @@ pub fn push_firmware_ota_usb_ex(
         ) {
             Ok(()) => return Ok(()),
             Err(e) => {
-                // Wrong baud already filtered by ping. Real OTA failure — don't thrash bauds
-                // after a partial binary transfer; surface the error.
                 let low = e.to_ascii_lowercase();
                 last = e.clone();
                 if low.contains("cancelled") {
+                    return Err(e);
+                }
+                // Post-upload: board may have rebooted before we saw CMPACK ota ok.
+                // Wait, re-ping, and either soft-verify the new tag or retry once.
+                if low.contains("no cmpack ota ok") || low.contains("uploaded") {
+                    drop(stream);
+                    progress(
+                        "No OTA ACK (common at ~82% after upload) — waiting for reboot, then re-check…"
+                            .into(),
+                    );
+                    std::thread::sleep(Duration::from_secs(3));
+                    if cancel.load(Ordering::SeqCst) {
+                        return Err("USB OTA cancelled".into());
+                    }
+                    if usb_ota_soft_verify(port, baud, &img.version, progress) {
+                        progress(format!(
+                            "USB OTA soft-verified — board answers with {}",
+                            if img.version.is_empty() {
+                                "new firmware".into()
+                            } else {
+                                img.version.clone()
+                            }
+                        ));
+                        return Ok(());
+                    }
+                    if ack_retry_left > 0 {
+                        ack_retry_left -= 1;
+                        progress("Board still reachable / old tag — retrying full USB OTA once…".into());
+                        // Stay on this baud; restart the baud loop attempt.
+                        // Re-open by continuing same baud via a labeled redo.
+                        let mut stream2 =
+                            match open_usb_serial(port, baud, Duration::from_millis(2_000)) {
+                                Ok(s) => s,
+                                Err(e2) => {
+                                    last = e2;
+                                    continue;
+                                }
+                            };
+                        let mut rx2 = String::new();
+                        let _ = stream2.write_all(b"\r\ncmp ping\r\n");
+                        let _ = stream2.flush();
+                        if ota_wait_line(
+                            &mut *stream2,
+                            &mut rx2,
+                            Instant::now() + Duration::from_secs(2),
+                            &|t| t.starts_with("CMP ok") || t.starts_with("CMPACK"),
+                            "USB OTA",
+                        )
+                        .is_err()
+                        {
+                            progress("No ping after ACK miss — trying next baud…".into());
+                            drop(stream2);
+                            continue;
+                        }
+                        match push_firmware_ota_stream(
+                            &mut *stream2,
+                            "USB OTA",
+                            port,
+                            &img,
+                            &bytes,
+                            progress,
+                            cancel,
+                        ) {
+                            Ok(()) => return Ok(()),
+                            Err(e2) => {
+                                last = e2;
+                                let low2 = last.to_ascii_lowercase();
+                                drop(stream2);
+                                if low2.contains("no cmpack ota ok") || low2.contains("uploaded") {
+                                    std::thread::sleep(Duration::from_secs(3));
+                                    if usb_ota_soft_verify(port, baud, &img.version, progress) {
+                                        return Ok(());
+                                    }
+                                }
+                                // Don't thrash further bauds after two full binary attempts.
+                                return Err(last);
+                            }
+                        }
+                    }
                     return Err(e);
                 }
                 // If ota ready never came, try the other baud (rare: ping false-positive).
@@ -702,6 +835,86 @@ pub fn push_firmware_ota_usb_ex(
     } else {
         last
     })
+}
+
+/// After a lost OTA ACK, reopen and check whether the board already runs the target tag.
+fn usb_ota_soft_verify(
+    port: &str,
+    baud: u32,
+    expected_ver: &str,
+    progress: &dyn Fn(String),
+) -> bool {
+    use crate::workers::open_usb_serial;
+    let Ok(mut stream) = open_usb_serial(port, baud, Duration::from_millis(800)) else {
+        // Port may still be re-enumerating — try once more shortly.
+        std::thread::sleep(Duration::from_secs(2));
+        let Ok(mut s) = open_usb_serial(port, baud, Duration::from_millis(800)) else {
+            return false;
+        };
+        return usb_ota_soft_verify_on(&mut *s, expected_ver, progress);
+    };
+    usb_ota_soft_verify_on(&mut *stream, expected_ver, progress)
+}
+
+fn usb_ota_soft_verify_on<S: Read + Write + ?Sized>(
+    stream: &mut S,
+    expected_ver: &str,
+    progress: &dyn Fn(String),
+) -> bool {
+    let mut rx = String::new();
+    let _ = stream.write_all(b"\r\ncmp config\r\n");
+    let _ = stream.flush();
+    let line = match ota_wait_line(
+        stream,
+        &mut rx,
+        Instant::now() + Duration::from_secs(3),
+        &|t| t.starts_with("CMPCONFIG ") || t.starts_with('{'),
+        "USB OTA verify",
+    ) {
+        Ok(l) => l,
+        Err(_) => {
+            let _ = stream.write_all(b"\r\ncmp ping\r\n");
+            let _ = stream.flush();
+            match ota_wait_line(
+                stream,
+                &mut rx,
+                Instant::now() + Duration::from_secs(2),
+                &|t| t.starts_with("CMP ok") || t.starts_with("CMPACK"),
+                "USB OTA verify",
+            ) {
+                Ok(l) => l,
+                Err(_) => return false,
+            }
+        }
+    };
+    progress(format!("Post-OTA board says · {}", trunc_flash_line(&line, 120)));
+    if expected_ver.is_empty() {
+        // Any companion answer after reboot is enough when we have no tag to match.
+        return line.starts_with("CMP") || line.starts_with('{');
+    }
+    let want = fw_version_key(expected_ver);
+    let hay = line.to_ascii_lowercase();
+    if hay.contains(&want) || hay.contains(&expected_ver.to_ascii_lowercase()) {
+        return true;
+    }
+    // CMPCONFIG often embeds fw=0.8.180-sha256-d0
+    if let Some(fw) = line
+        .split([' ', '&', ',', '{', '}', '"', ':'])
+        .find(|p| p.contains("-sha256"))
+    {
+        if fw_version_key(fw) == want {
+            return true;
+        }
+    }
+    false
+}
+
+fn trunc_flash_line(s: &str, max: usize) -> String {
+    if s.len() <= max {
+        s.to_string()
+    } else {
+        format!("{}…", &s[..max])
+    }
 }
 
 /// Soft reboot a live USB board so the next silent ROM auto-reset has a clean edge.

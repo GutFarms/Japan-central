@@ -4018,10 +4018,16 @@ impl CompanionApp {
             ("USB OTA (no hold)", 0.12)
         } else if lower.contains("board ready") {
             ("Board ready for OTA", 0.15)
-        } else if lower.contains("upload complete")
-            || lower.contains("pushed over wi")
+        } else if lower.contains("waiting for board ack")
+            || (lower.contains("upload complete") && lower.contains("waiting"))
+            || (lower.contains("no ota ack") && lower.contains("82%"))
+        {
+            ("Waiting for board ACK", 0.85)
+        } else if lower.contains("pushed over wi")
             || lower.contains("pushed over usb")
             || lower.contains("usb ota pushed")
+            || lower.contains("ota push complete")
+            || lower.contains("soft-verified")
         {
             ("OTA push complete", 0.88)
         } else if lower.contains("cancelled") {
