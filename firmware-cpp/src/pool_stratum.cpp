@@ -16,6 +16,7 @@ void PoolStratum::disconnect() {
   haveDifficulty_ = false;
   wantReconnect_ = false;
   pendingShareId_ = 0;
+  jobWaitSinceMs_ = 0;
   lineBuf_ = "";
   snprintf(phase_, sizeof(phase_), "off");
 }
@@ -82,6 +83,7 @@ bool PoolStratum::connectPool(const AppConfig& cfg) {
   difficulty_ = 0.001f;
   wantReconnect_ = false;
   pendingShareId_ = 0;
+  jobWaitSinceMs_ = 0;
   lineBuf_ = "";
   msgId_ = 1;
   en2Counter_ = 1;
@@ -153,7 +155,26 @@ void PoolStratum::onAuthorized() {
     onTune_();
   }
   (void)sendSuggestDifficulty();
-  if (!jobId_.isEmpty() && haveDifficulty_) emitJob();
+  if (!jobId_.isEmpty() && haveDifficulty_) {
+    emitJob();
+  } else if (!jobId_.isEmpty() && !haveDifficulty_) {
+    // Notify may have arrived during subscribe — wait briefly for set_difficulty.
+    if (jobWaitSinceMs_ == 0) jobWaitSinceMs_ = millis();
+  }
+}
+
+void PoolStratum::releaseHeldJobIfReady() {
+  if (!authorized_ || haveDifficulty_ || jobId_.isEmpty()) return;
+  if (jobWaitSinceMs_ == 0) {
+    jobWaitSinceMs_ = millis();
+    return;
+  }
+  // Pools that omit set_difficulty: emit at ESP suggest 0.001 (not stuck forever).
+  if (millis() - jobWaitSinceMs_ < 3000) return;
+  haveDifficulty_ = true;
+  difficulty_ = 0.001f;
+  jobWaitSinceMs_ = 0;
+  emitJob();
 }
 
 void PoolStratum::poll(const AppConfig& cfg) {
@@ -200,6 +221,8 @@ void PoolStratum::poll(const AppConfig& cfg) {
     if (lineBuf_.length() < 2048) lineBuf_ += c;
     else lineBuf_ = "";  // overrun — drop
   }
+
+  releaseHeldJobIfReady();
 }
 
 bool PoolStratum::submitShare(const PendingShare& share) {
@@ -246,6 +269,7 @@ void PoolStratum::handleLine(const String& line) {
       if (d > 0) {
         difficulty_ = d;
         haveDifficulty_ = true;
+        jobWaitSinceMs_ = 0;
         if (authorized_ && !jobId_.isEmpty()) emitJob();
       }
       return;
@@ -270,7 +294,12 @@ void PoolStratum::handleLine(const String& line) {
       bool clean = arr.size() > 8 ? arr[8].as<bool>() : false;
       (void)prev;
       (void)clean;
-      if (!authorized_ || !haveDifficulty_) return;
+      if (!authorized_) return;
+      if (!haveDifficulty_) {
+        // Hold work until set_difficulty or 3s suggest latch (releaseHeldJobIfReady).
+        if (jobWaitSinceMs_ == 0) jobWaitSinceMs_ = millis();
+        return;
+      }
       emitJob();
       return;
     }
@@ -340,6 +369,12 @@ void PoolStratum::handleLine(const String& line) {
     else {
       snprintf(phase_, sizeof(phase_), "auth-fail");
       authorized_ = false;
+      // Drop the socket and reconnect with backoff — do not sit forever on a
+      // live TCP with authorized_=false (Companion would keep feeding jobs).
+      client_.stop();
+      wantReconnect_ = true;
+      if (reconnectBackoffMs_ < 10000) reconnectBackoffMs_ = 10000;
+      reconnectBackoffMs_ = min(reconnectBackoffMs_ * 2, 60000u);
     }
     return;
   }

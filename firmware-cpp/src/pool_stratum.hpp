@@ -83,6 +83,8 @@ class PoolStratum {
   uint32_t lastConnectAttemptMs_ = 0;
   uint32_t reconnectBackoffMs_ = 2000;
   uint32_t lastSuggestMs_ = 0;
+  /// When notify arrived before set_difficulty — emit after 3s with suggest 0.001.
+  uint32_t jobWaitSinceMs_ = 0;
 
   bool parseEndpoint(const String& raw, String& host, uint16_t& port) const;
   bool connectPool(const AppConfig& cfg);
@@ -93,6 +95,7 @@ class PoolStratum {
   void handleLine(const String& line);
   void onAuthorized();
   void emitJob();
+  void releaseHeldJobIfReady();
   bool buildHeader(uint8_t outHeader[80], uint8_t outTarget[32]);
   void targetFromDifficulty(float diff, uint8_t out[32]) const;
   static bool hexDecode(const String& hex, uint8_t* out, size_t need);

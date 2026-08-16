@@ -203,6 +203,7 @@ impl StratumClient {
         self.pending_job = None;
         self.stale_job_ids.clear();
         self.clean_jobs_pending = false;
+        self.abandon_pending_shares("cleared on reconnect");
         self.pending_shares.clear();
         self.pending_share_meta.clear();
         self.reject_grace_until = None;
@@ -227,6 +228,7 @@ impl StratumClient {
         self.subscribed = false;
         self.authorized = false;
         self.pending_job = None;
+        self.abandon_pending_shares("cleared on disconnect");
         self.pending_shares.clear();
         self.pending_share_meta.clear();
         self.reject_grace_until = None;
@@ -316,6 +318,33 @@ impl StratumClient {
         self.pending_shares.len() as u32
     }
 
+    /// Mark in-flight mining.submit ids as rejects before dropping the socket.
+    fn abandon_pending_shares(&mut self, why: &str) {
+        let expired: Vec<u64> = self.pending_shares.keys().copied().collect();
+        for id in expired {
+            let Some(started) = self.pending_shares.remove(&id) else {
+                continue;
+            };
+            let latency_ms = Some(started.elapsed().as_millis() as u64);
+            let (job_id, nonce) = self
+                .pending_share_meta
+                .remove(&id)
+                .map(|(k, n)| {
+                    let job = k.split('|').next().unwrap_or("").to_string();
+                    (job, n)
+                })
+                .unwrap_or_default();
+            self.record_share_outcome(
+                false,
+                id,
+                why.into(),
+                latency_ms,
+                nonce,
+                job_id,
+            );
+        }
+    }
+
     /// Align Submits with Accept/Reject after soft reconnect / re-auth.
     fn reset_share_counters(&mut self, why: &str) {
         self.accepted = 0;
@@ -365,12 +394,12 @@ impl StratumClient {
                 let mut line = String::new();
                 match reader.read_line(&mut line) {
                     Ok(0) => {
-                        // Real EOF — but require a couple of hits while authorized so a
-                        // brief Windows/stack glitch does not bounce SUBSCRIBE↔AUTHORIZED.
+                        // Real TCP EOF — do not soft-spin for long while still "authorized"
+                        // (submits would fail silently). One confirm hit, then reconnect.
                         self.transport_fails = self.transport_fails.saturating_add(1);
-                        if self.authorized && self.transport_fails < 5 {
+                        if self.authorized && self.transport_fails < 2 {
                             self.push_recent(format!(
-                                "← stratum read EOF soft-fail #{}",
+                                "← stratum read EOF confirm #{}",
                                 self.transport_fails
                             ));
                             break;
@@ -849,6 +878,7 @@ impl StratumClient {
         self.authorized = true;
         self.auth_give_up = false;
         self.last_error.clear();
+        self.abandon_pending_shares("cleared on authorize");
         self.pending_shares.clear();
         self.pending_share_meta.clear();
         self.reset_share_counters("authorize");
