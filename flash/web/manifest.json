@@ -1,0 +1,16 @@
+{
+  "name": "ESP32-2432S028 SHA-256 Miner",
+  "version": "0.8.118",
+  "new_install_prompt_erase": false,
+  "builds": [
+    {
+      "chipFamily": "ESP32",
+      "parts": [
+        {
+          "path": "../esp32-2432s028-sha256-miner-merged.bin",
+          "offset": 0
+        }
+      ]
+    }
+  ]
+}
