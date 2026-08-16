@@ -3648,7 +3648,7 @@ impl CompanionApp {
         } else if live_push {
             "Pushing update".into()
         } else {
-            "Starting flash".into()
+            "Preparing — Ready next".into()
         };
         self.pending_post_flash_reconnect = None;
         self.post_flash_verify = None;
@@ -3756,8 +3756,14 @@ impl CompanionApp {
         } else if lower.contains("waiting for ready")
             || lower.contains("hold boot")
             || lower.contains("click ready")
+            || lower.contains("silent push stalled")
         {
             ("Hold BOOT — click Ready", 0.08)
+        } else if lower.contains("ready — writing")
+            || lower.contains("writing now")
+            || lower.contains("keep boot held until writing")
+        {
+            ("Writing after Ready", 0.12)
         } else if lower.contains("rom sync") || lower.contains("syncing esp rom") {
             ("Syncing download mode", 0.10)
         } else if lower.contains("verif")
@@ -3813,7 +3819,7 @@ impl CompanionApp {
         {
             ("Downloading firmware", 0.06)
         } else if lower.contains("flash budget") {
-            ("Starting flash", 0.09)
+            ("Preparing flash", 0.09)
         } else if lower.contains("wifi ota") || lower.contains("wi‑fi ota") || lower.contains("wi-fi ota")
         {
             ("Wi‑Fi OTA", 0.12)
