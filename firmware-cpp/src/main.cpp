@@ -39,7 +39,7 @@ static volatile bool g_otaHoldMining = false;
 static std::atomic<uint64_t> g_hashCounter{0};
 static volatile uint64_t g_shareCounter = 0;
 // Ring so dual-lane hits survive USB/ESP-NOW latency and mid-job flushes.
-static constexpr size_t kShareQ = 16;
+static constexpr size_t kShareQ = 32;
 struct ShareSlot {
   uint32_t nonce = 0;
   char job[48]{};
@@ -227,6 +227,10 @@ static void onJob(const UsbJob& job) {
   // notify wiped in-flight CMPSHAREs and pool hashrate lagged the LCD (e.g. 71
   // vs 206 kH/s) while boards kept hashing.
   flushShareQueue();
+  // Core-1 HW lane may still be inside mineBatch — give it a slice to exit and
+  // noteShare against the *old* g_job, then flush again before we swap midstate.
+  delay(3);
+  flushShareQueue();
   portENTER_CRITICAL(&g_mux);
   for (size_t i = 0; i < kShareQ; i++) g_shareQ[i].used = false;
   portEXIT_CRITICAL(&g_mux);
@@ -262,12 +266,15 @@ static void onJobFromCompanion(const UsbJob& job) {
 
 static void onStop() {
   flushShareQueue();
+  delay(2);
+  flushShareQueue();
   portENTER_CRITICAL(&g_mux);
   for (size_t i = 0; i < kShareQ; i++) g_shareQ[i].used = false;
   portEXIT_CRITICAL(&g_mux);
   g_jobLoaded = false;
   g_mining = false;
-  g_hashrate = 0;
+  // Keep EMA visible across brief Companion stop→re-arm windows so LCD/Companion
+  // don't flash 0 H/s while the pool is between unique-en2 jobs.
   syncMinePriorities();
   refreshLabels();
 }

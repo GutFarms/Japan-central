@@ -13019,7 +13019,8 @@ Power a 2nd board nearby with wall/power-bank only (no PC cable)."
                     let _ = msg_tx.send(NetMsg::Share(ev));
                 }
                 // NerdMiner-style clean_jobs: drop superseded job_ids; same-id clean clears
-                // prior en2 *after* harvesting in-flight CMPSHARE against the old cache.
+                // prior en2 *after* re-arming boards (purging before push caused unknown-en2
+                // drops while boards still hashed the old header → pool ≪ LCD H/s).
                 let cleaned = client.take_clean_jobs();
                 let active_job = client.job_id().to_string();
                 let before_jobs = recent_jobs.len();
@@ -13031,9 +13032,25 @@ Power a 2nd board nearby with wall/power-bank only (no PC cable)."
                         &msg_tx,
                         LogKind::Stratum,
                         format!(
-                            "Pool clean_jobs — dropped {dropped} superseded job cache entr(y/ies); will clear active en2 after share harvest"
+                            "Pool clean_jobs — dropped {dropped} superseded job cache entr(y/ies); pausing boards before unique-en2 re-arm"
                         ),
                     );
+                    // Stop companion-fed boards so they don't keep hashing abandoned work
+                    // (LCD would stay high while pool rejects/ignores those shares).
+                    for b in boards.iter_mut() {
+                        if b.mine_indep {
+                            continue;
+                        }
+                        let _ = usb_cmd(&mut b.port, &mut b.rx, "cmp stop");
+                        b.mining = false;
+                    }
+                    for m in mesh.iter_mut() {
+                        if m.mine_indep {
+                            continue;
+                        }
+                        let _ = mesh_via_cmd(&mut boards, &m.gateway, &m.mac, "stop");
+                        m.mining = false;
+                    }
                 }
                 // SoftAP setup net has no pool uplink — don't keep pushing work that can't submit.
                 let softap_blocked = softap_setup_client_ipv4()
@@ -13094,12 +13111,8 @@ Power a 2nd board nearby with wall/power-bank only (no PC cable)."
                         );
                     }
                 }
-                // After harvest: same-id clean drops prior en2 so we don't keep submitting
-                // superseded headers (pool stale/invalid). New take_job_batch re-fills cache.
-                if cleaned && !active_job.is_empty() {
-                    recent_jobs.retain(|j| j.job_id != active_job);
-                    held_board_shares.retain(|(job, _, _, _)| job != &active_job);
-                }
+                // Same-id clean: keep prior en2 in cache through harvest + push so mid-switch
+                // CMPSHAREs still resolve. Purge only after new unique en2 are armed.
                 let companion_fleet = boards
                     .iter()
                     .filter(|b| !b.mine_indep)
@@ -13112,7 +13125,33 @@ Power a 2nd board nearby with wall/power-bank only (no PC cable)."
                     client.take_job_batch(companion_fleet)
                 };
                 if !jobs.is_empty() {
+                    // Pause each board immediately before its new en2 so we don't mine
+                    // abandoned headers during set_difficulty / clean re-arm (LCD≫pool).
+                    for b in boards.iter_mut() {
+                        if b.mine_indep {
+                            continue;
+                        }
+                        let _ = usb_cmd(&mut b.port, &mut b.rx, "cmp stop");
+                        b.mining = false;
+                    }
+                    // Catch CMPSHARE flushed by stop before we swap headers.
+                    for b in boards.iter_mut() {
+                        if b.mine_indep {
+                            continue;
+                        }
+                        harvest_shares(
+                            &mut b.port,
+                            &mut b.rx,
+                            Some(client),
+                            &recent_jobs,
+                            &mut held_board_shares,
+                            &msg_tx,
+                            false,
+                        );
+                    }
                     let mut pushed = 0usize;
+                    let mut pushed_en2: std::collections::HashSet<String> =
+                        std::collections::HashSet::new();
                     let mut stale_abort = false;
                     let mut remaining: VecDeque<WorkJob> = jobs.into();
                     for b in boards.iter_mut() {
@@ -13137,7 +13176,9 @@ Power a 2nd board nearby with wall/power-bank only (no PC cable)."
                         match push_res {
                             Ok(_) => {
                                 b.legacy_job = legacy;
+                                b.mining = true;
                                 pushed += 1;
+                                pushed_en2.insert(job.extranonce2_hex.to_ascii_lowercase());
                                 recent_jobs.push_back(job);
                             }
                             Err(e) => {
@@ -13168,6 +13209,8 @@ Power a 2nd board nearby with wall/power-bank only (no PC cable)."
                                 break;
                             }
                             let Some(job) = remaining.pop_front() else { break };
+                            let _ = mesh_via_cmd(&mut boards, &m.gateway, &m.mac, "stop");
+                            m.mining = false;
                             let mesh_res = {
                                 let mut pump = || {
                                     let _ = client.poll();
@@ -13177,6 +13220,7 @@ Power a 2nd board nearby with wall/power-bank only (no PC cable)."
                             match mesh_res {
                                 Ok(()) => {
                                     pushed += 1;
+                                    pushed_en2.insert(job.extranonce2_hex.to_ascii_lowercase());
                                     recent_jobs.push_back(job);
                                 }
                                 Err(e) => {
@@ -13189,6 +13233,17 @@ Power a 2nd board nearby with wall/power-bank only (no PC cable)."
                                 }
                             }
                         }
+                    }
+                    // Now drop superseded same-id en2 (and held shares) that were not re-armed.
+                    if cleaned && !active_job.is_empty() && !pushed_en2.is_empty() {
+                        recent_jobs.retain(|j| {
+                            j.job_id != active_job
+                                || pushed_en2.contains(&j.extranonce2_hex.to_ascii_lowercase())
+                        });
+                        held_board_shares.retain(|(job, en2, _, _)| {
+                            job != &active_job
+                                || pushed_en2.contains(&en2.to_ascii_lowercase())
+                        });
                     }
                     while recent_jobs.len() > 96 {
                         recent_jobs.pop_front();
@@ -13604,6 +13659,19 @@ fn try_submit_board_share(
         // after mining.set_difficulty climbed (Low-difficulty rejects).
         let live_diff = s.difficulty();
         if let Err(e) = StratumClient::verify_share_meets_difficulty(wj, nonce, live_diff) {
+            // Board may still be on the previous easier target for a few ms after a
+            // vardiff bump; if the share meets the *cached* job target, hold briefly
+            // instead of dropping — re-arm will make live==job or the share ages out.
+            if StratumClient::verify_share_against_job(wj, nonce).is_ok() {
+                log_msg(
+                    msg_tx,
+                    LogKind::Info,
+                    format!(
+                        "Holding board share nonce={nonce} job={job} (meets job target, live diff {live_diff} pending re-arm): {e}"
+                    ),
+                );
+                return ShareSubmitResult::Hold;
+            }
             log_msg(
                 msg_tx,
                 LogKind::Warn,
