@@ -1,0 +1,9 @@
+CYD Miner Kit
+=============
+
+This installer provides the Njörðr seas CYD miner app and ESP32-2432S028 firmware
+for USB Bitcoin SHA-256 mining. Pool traffic runs on your PC; the board
+only hashes work received over USB-C.
+
+No warranty. Solo Bitcoin mining on ESP32 is educational / lottery odds.
+Use at your own risk. You are responsible for pool credentials and funds.
