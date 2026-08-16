@@ -400,15 +400,17 @@ fn format_hashrate_parts(hs: f64) -> (String, &'static str) {
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Tab {
     Mine,
-    /// SoftAP / USB → push home Wi‑Fi credentials to the board.
-    Setup,
-    /// Push / flash board firmware (USB OTA, Wi‑Fi OTA, or BOOT flash).
-    Flash,
-    /// Full-chip erase via USB (espflash).
-    Erase,
-    /// Soft reboot (`cmp reboot`) on a linked board.
-    Reset,
     Settings,
+}
+
+/// Sub-pages under Settings (board tools + general).
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum SettingsSection {
+    General,
+    Setup,
+    Flash,
+    Erase,
+    Reset,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -745,6 +747,8 @@ enum NetCmd {
 
 struct CompanionApp {
     tab: Tab,
+    /// When `tab == Settings` — which Settings sub-page is shown.
+    settings_section: SettingsSection,
     com_port: String,
     ports: Vec<PortChoice>,
     usb_open: bool,
@@ -995,6 +999,7 @@ impl CompanionApp {
 
         let mut app = Self {
             tab: Tab::Mine,
+            settings_section: SettingsSection::General,
             com_port,
             ports: Vec::new(),
             usb_open: false,
@@ -2558,7 +2563,7 @@ impl CompanionApp {
                 self.com_port = port;
             }
         }
-        self.tab = Tab::Flash;
+        self.open_settings(SettingsSection::Flash);
     }
 
     fn request_board_update(&mut self) {
@@ -2566,7 +2571,7 @@ impl CompanionApp {
         if self.firmware.is_none() {
             self.push_log(
                 LogKind::Info,
-                "No local firmware yet — Fetch latest FW on Flash tab, or drop a .bin.".into(),
+                "No local firmware yet — Fetch latest FW under Settings → Flash, or drop a .bin.".into(),
             );
         }
     }
@@ -4025,6 +4030,42 @@ impl CompanionApp {
         }
     }
 
+    fn open_settings(&mut self, section: SettingsSection) {
+        self.tab = Tab::Settings;
+        self.settings_section = section;
+    }
+
+    fn ui_settings_shell(&mut self, ui: &mut egui::Ui) {
+        ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = 4.0;
+            for (sec, label) in [
+                (SettingsSection::General, "General"),
+                (SettingsSection::Setup, "Setup"),
+                (SettingsSection::Flash, "Flash"),
+                (SettingsSection::Erase, "Erase"),
+                (SettingsSection::Reset, "Reset"),
+            ] {
+                let selected = self.settings_section == sec;
+                if ui
+                    .add(egui::SelectableLabel::new(selected, label))
+                    .clicked()
+                {
+                    self.settings_section = sec;
+                }
+            }
+        });
+        ui.add_space(8.0);
+        ui.separator();
+        ui.add_space(6.0);
+        match self.settings_section {
+            SettingsSection::General => self.ui_settings(ui),
+            SettingsSection::Setup => self.ui_setup(ui),
+            SettingsSection::Flash => self.ui_flash(ui),
+            SettingsSection::Erase => self.ui_erase(ui),
+            SettingsSection::Reset => self.ui_reset(ui),
+        }
+    }
+
     fn ui_settings(&mut self, ui: &mut egui::Ui) {
         soft_panel(ui, "Companion app", |ui| {
             ui.label(
@@ -4273,7 +4314,7 @@ impl CompanionApp {
                 if soft_button(ui, fetch_label, 150.0).clicked() && !self.fetch_busy {
                     self.start_firmware_fetch();
                 }
-                if soft_button(ui, "Open Flash tab", 140.0).clicked() {
+                if soft_button(ui, "Open Flash", 140.0).clicked() {
                     self.go_flash_tab();
                 }
             });
@@ -5103,14 +5144,14 @@ impl CompanionApp {
             WifiSetupPhase::Pushing | WifiSetupPhase::WaitingSta { .. }
         ) {
             // Don't yank the user mid-push.
-            self.tab = Tab::Setup;
+            self.open_settings(SettingsSection::Setup);
             return;
         }
         if let Some(ep) = endpoint {
             self.wifi_setup_target = ep.clone();
             self.softap_setup_routed_ep = ep;
         }
-        self.tab = Tab::Setup;
+        self.open_settings(SettingsSection::Setup);
         if announce {
             self.last_ok =
                 "Board SoftAP connected — enter home Wi‑Fi SSID/password, then Push & save."
@@ -5164,7 +5205,7 @@ phone opens Board Setup automatically (captive Sign-in), or use Setup / USB here
                 );
                 ui.add_space(6.0);
                 if soft_button(ui, "Open Setup", 120.0).clicked() {
-                    self.tab = Tab::Setup;
+                    self.open_settings(SettingsSection::Setup);
                 }
             }
         });
@@ -6033,22 +6074,6 @@ Phone: join SoftAP — Board Setup opens automatically to set home Wi‑Fi.",
                     self.tab = Tab::Mine;
                 }
                 ui.add_space(6.0);
-                if nav_button(ui, "Setup", self.tab == Tab::Setup).clicked() {
-                    self.tab = Tab::Setup;
-                }
-                ui.add_space(6.0);
-                if nav_button(ui, "Flash", self.tab == Tab::Flash).clicked() {
-                    self.tab = Tab::Flash;
-                }
-                ui.add_space(6.0);
-                if nav_button(ui, "Erase", self.tab == Tab::Erase).clicked() {
-                    self.tab = Tab::Erase;
-                }
-                ui.add_space(6.0);
-                if nav_button(ui, "Reset", self.tab == Tab::Reset).clicked() {
-                    self.tab = Tab::Reset;
-                }
-                ui.add_space(6.0);
                 if nav_button(ui, "Settings", self.tab == Tab::Settings).clicked() {
                     self.tab = Tab::Settings;
                 }
@@ -6110,18 +6135,7 @@ Phone: join SoftAP — Board Setup opens automatically to set home Wi‑Fi.",
                 if nav_button(ui, "Mine", self.tab == Tab::Mine).clicked() {
                     self.tab = Tab::Mine;
                 }
-                if nav_button(ui, "Setup", self.tab == Tab::Setup).clicked() {
-                    self.tab = Tab::Setup;
-                }
-                if nav_button(ui, "Flash", self.tab == Tab::Flash).clicked() {
-                    self.tab = Tab::Flash;
-                }
-                if nav_button(ui, "Erase", self.tab == Tab::Erase).clicked() {
-                    self.tab = Tab::Erase;
-                }
-                if nav_button(ui, "Reset", self.tab == Tab::Reset).clicked() {
-                    self.tab = Tab::Reset;
-                }
+                ui.add_space(6.0);
                 if nav_button(ui, "Settings", self.tab == Tab::Settings).clicked() {
                     self.tab = Tab::Settings;
                 }
@@ -7201,14 +7215,14 @@ or Flash (BOOT) with BOOT held + Ready."
                             ui.add_space(8.0);
                             ui.label(
                                 RichText::new(
-                                    "Open the Flash tab for Push (USB), Push (Wi‑Fi), or Flash with BOOT (blank / full rewrite).",
+                                    "Open Settings → Flash for Push (USB), Push (Wi‑Fi), or Flash with BOOT (blank / full rewrite).",
                                 )
                                 .color(C_MUTED)
                                 .size(13.0),
                             );
                             ui.add_space(8.0);
                             ui.horizontal(|ui| {
-                                if soft_button(ui, "Open Flash tab", 130.0).clicked() {
+                                if soft_button(ui, "Open Flash", 130.0).clicked() {
                                     self.go_flash_tab();
                                 }
                                 if soft_button(ui, "Fetch latest FW", 140.0).clicked() {
@@ -7578,11 +7592,7 @@ or Flash (BOOT) with BOOT held + Ready."
                         ui.set_min_width(ui.available_width());
                         match self.tab {
                             Tab::Mine => self.ui_mine(ui),
-                            Tab::Setup => self.ui_setup(ui),
-                            Tab::Flash => self.ui_flash(ui),
-                            Tab::Erase => self.ui_erase(ui),
-                            Tab::Reset => self.ui_reset(ui),
-                            Tab::Settings => self.ui_settings(ui),
+                            Tab::Settings => self.ui_settings_shell(ui),
                         }
                         ui.add_space(28.0);
                     });
@@ -9371,7 +9381,7 @@ fn mine_worker(cmd_rx: Receiver<NetCmd>, msg_tx: Sender<NetMsg>) {
                                 &msg_tx,
                                 LogKind::Warn,
                                 format!(
-                                    "Skip SoftAP setup board {} for Mine — use Setup tab / home Wi‑Fi",
+                                    "Skip SoftAP setup board {} for Mine — use Settings → Setup / home Wi‑Fi",
                                     b.name
                                 ),
                             );

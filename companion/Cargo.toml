@@ -1,6 +1,6 @@
 [package]
 name = "cyd-companion"
-version = "0.8.194"
+version = "0.8.195"
 edition = "2021"
 description = "Njörðr Seas' CYD miner — USB/Wi‑Fi SHA-256 mining (boards can mine independently; Companion monitors)"
 authors = ["GutFarms <https://github.com/GutFarms>"]
