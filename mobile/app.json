@@ -1,0 +1,46 @@
+{
+  "expo": {
+    "name": "Njörðr Seas' Monitor",
+    "slug": "njordr-seas-cyd-monitor",
+    "version": "0.8.149",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "userInterfaceStyle": "dark",
+    "scheme": "njordrseas",
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "com.njordrseas.cydmonitor",
+      "infoPlist": {
+        "NSCameraUsageDescription": "Scan the personal QR code from your Njörðr Seas' Companion PC to pair this phone.",
+        "NSLocalNetworkUsageDescription": "Reach your Njörðr Seas' Companion PC on Wi‑Fi / VPN to show miner status.",
+        "NSAppTransportSecurity": {
+          "NSAllowsLocalNetworking": true,
+          "NSAllowsArbitraryLoads": true
+        }
+      }
+    },
+    "android": {
+      "package": "com.njordrseas.cydmonitor",
+      "usesCleartextTraffic": true,
+      "permissions": ["CAMERA", "android.permission.CAMERA"],
+      "adaptiveIcon": {
+        "backgroundColor": "#020A16",
+        "foregroundImage": "./assets/android-icon-foreground.png",
+        "backgroundImage": "./assets/android-icon-background.png",
+        "monochromeImage": "./assets/android-icon-monochrome.png"
+      },
+      "predictiveBackGestureEnabled": false
+    },
+    "plugins": [
+      [
+        "expo-camera",
+        {
+          "cameraPermission": "Allow Njörðr Seas' Monitor to scan your personal Companion QR."
+        }
+      ]
+    ],
+    "web": {
+      "favicon": "./assets/favicon.png"
+    }
+  }
+}
