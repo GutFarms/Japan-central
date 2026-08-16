@@ -441,7 +441,28 @@ pub fn push_firmware_ota(
     )
 }
 
+/// Push app firmware over an already-open serial/TCP stream (`cmp ota`).
+/// Used when the mine-worker still holds the live link at the correct baud.
+pub fn push_firmware_ota_on_port<S: Read + Write + ?Sized>(
+    stream: &mut S,
+    image: &Path,
+    progress: &dyn Fn(String),
+    cancel: &AtomicBool,
+) -> Result<(), String> {
+    let (img, bytes) = load_ota_app_bytes(image)?;
+    push_firmware_ota_stream(
+        stream,
+        "USB OTA",
+        "open-link",
+        &img,
+        &bytes,
+        progress,
+        cancel,
+    )
+}
+
 /// Push app firmware over USB serial `cmp ota size=N` — live board, no BOOT hold.
+/// Tries 460800 first (current companion default), then 115200 (older boards).
 pub fn push_firmware_ota_usb(
     port: &str,
     image: &Path,
@@ -456,20 +477,120 @@ pub fn push_firmware_ota_usb(
         ));
     }
     let (img, bytes) = load_ota_app_bytes(image)?;
-    if cancel.load(Ordering::SeqCst) {
-        return Err("USB OTA cancelled".into());
+    let mut last = String::new();
+    for baud in [460_800u32, 115_200] {
+        if cancel.load(Ordering::SeqCst) {
+            return Err("USB OTA cancelled".into());
+        }
+        progress(format!("Opening {port} @ {baud} for USB OTA (no BOOT)…"));
+        let mut stream = match open_usb_serial(port, baud, Duration::from_millis(400)) {
+            Ok(s) => s,
+            Err(e) => {
+                last = e;
+                progress(format!("USB open @ {baud} failed — trying next baud…"));
+                continue;
+            }
+        };
+        // Confirm baud with ping before committing to binary OTA.
+        let mut rx = String::new();
+        let _ = stream.write_all(b"\r\ncmp ping\r\n");
+        let _ = stream.flush();
+        let ping_ok = ota_wait_line(
+            &mut *stream,
+            &mut rx,
+            Instant::now() + Duration::from_millis(if baud > 115_200 { 1_200 } else { 2_000 }),
+            &|t| {
+                t.starts_with("CMP ok")
+                    || t.eq_ignore_ascii_case("CMPACK ping")
+                    || t.starts_with("CMPACK")
+            },
+            "USB OTA",
+        );
+        match ping_ok {
+            Ok(line) => progress(format!("USB OTA link @ {baud} · {line}")),
+            Err(e) => {
+                last = format!("no cmp ping @ {baud}: {e}");
+                progress(format!("No ping @ {baud} — trying next baud…"));
+                drop(stream);
+                continue;
+            }
+        }
+        match push_firmware_ota_stream(
+            &mut *stream,
+            "USB OTA",
+            port,
+            &img,
+            &bytes,
+            progress,
+            cancel,
+        ) {
+            Ok(()) => return Ok(()),
+            Err(e) => {
+                // Wrong baud already filtered by ping. Real OTA failure — don't thrash bauds
+                // after a partial binary transfer; surface the error.
+                let low = e.to_ascii_lowercase();
+                last = e.clone();
+                if low.contains("cancelled") {
+                    return Err(e);
+                }
+                // If ota ready never came, try the other baud (rare: ping false-positive).
+                if low.contains("timed out") || low.contains("ota ready") || low.contains("unknown")
+                {
+                    progress(format!("USB OTA @ {baud} failed ({e}) — retrying…"));
+                    drop(stream);
+                    continue;
+                }
+                return Err(e);
+            }
+        }
     }
-    progress(format!("Opening {port} for USB OTA (no BOOT)…"));
-    let mut stream = open_usb_serial(port, 115_200, Duration::from_millis(400))?;
-    push_firmware_ota_stream(
-        &mut *stream,
-        "USB OTA",
-        port,
-        &img,
-        &bytes,
-        progress,
-        cancel,
-    )
+    Err(if last.is_empty() {
+        "USB OTA failed at 460800 and 115200".into()
+    } else {
+        last
+    })
+}
+
+/// Soft reboot a live USB board so the next silent ROM auto-reset has a clean edge.
+pub fn nudge_usb_reboot_for_push(
+    port: &str,
+    progress: &dyn Fn(String),
+    cancel: &AtomicBool,
+) -> bool {
+    use crate::workers::{is_usb_serial_port, open_usb_serial};
+
+    if !is_usb_serial_port(port) || cancel.load(Ordering::SeqCst) {
+        return false;
+    }
+    for baud in [460_800u32, 115_200] {
+        if cancel.load(Ordering::SeqCst) {
+            return false;
+        }
+        let Ok(mut stream) = open_usb_serial(port, baud, Duration::from_millis(350)) else {
+            continue;
+        };
+        let mut rx = String::new();
+        let _ = stream.write_all(b"\r\ncmp ping\r\n");
+        let _ = stream.flush();
+        if ota_wait_line(
+            &mut *stream,
+            &mut rx,
+            Instant::now() + Duration::from_millis(1_000),
+            &|t| t.starts_with("CMP ok") || t.starts_with("CMPACK"),
+            "reboot nudge",
+        )
+        .is_err()
+        {
+            continue;
+        }
+        let _ = stream.write_all(b"cmp reboot\r\n");
+        let _ = stream.flush();
+        progress(format!("Reboot nudged @ {baud} — settling before silent ROM push…"));
+        drop(stream);
+        std::thread::sleep(Duration::from_millis(1800));
+        return true;
+    }
+    false
 }
 
 pub fn normalize_fw_version(raw: &str) -> String {

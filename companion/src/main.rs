@@ -37,8 +37,8 @@ use app_update::{
 };
 use flash_update::{
     ensure_firmware_image, fetch_latest_firmware, find_firmware_image, firmware_is_custom,
-    flash_merged_bin, load_firmware_bin, push_firmware_ota, push_firmware_ota_usb,
-    resolve_ota_app_image, update_needed,
+    flash_merged_bin, load_firmware_bin, nudge_usb_reboot_for_push, push_firmware_ota,
+    push_firmware_ota_usb, resolve_ota_app_image, update_needed,
     FirmwareImage, FlashControl,
 };
 use live_bar::{
@@ -11984,12 +11984,109 @@ Power a 2nd board nearby with wall/power-bank only (no PC cable)."
                     // cmp stop below is not immediately cancelled (that froze UI at 2%).
                     USB_FLASH_PREEMPT.store(false, Ordering::SeqCst);
                     // Only release the flash target — keep other linked boards.
-                    if let Some(idx) = boards
+                    // Prefer USB OTA on the *already-open* link (correct baud) before drop.
+                    let mut live_ota_done: Option<Result<String, String>> = None;
+                    if live_push && !wifi_ota {
+                        if let Some(idx) = boards
+                            .iter()
+                            .position(|b| port_names_match(&b.name, &port))
+                        {
+                            let mut b = boards.remove(idx);
+                            let _ = usb_cmd(&mut b.port, &mut b.rx, "cmp stop");
+                            b.port.clear();
+                            b.rx.clear();
+                            let app = {
+                                let local = std::path::PathBuf::from(&image);
+                                let preferred = if !image.is_empty() && local.is_file() {
+                                    Some(local.as_path())
+                                } else {
+                                    None
+                                };
+                                resolve_ota_app_image(preferred).or_else(|_| {
+                                    resolve_ota_app_image(None)
+                                })
+                            };
+                            if let Ok(app) = app {
+                                log_msg(
+                                    &msg_tx,
+                                    LogKind::Usb,
+                                    format!(
+                                        "Live Push — USB OTA on open link {port} (no BOOT)…"
+                                    ),
+                                );
+                                let progress_tx = msg_tx.clone();
+                                let progress = |line: String| {
+                                    let _ = progress_tx.send(NetMsg::FlashProgress(line));
+                                };
+                                let ota = match &mut b.port {
+                                    BoardIo::Serial(p) => flash_update::push_firmware_ota_on_port(
+                                        &mut **p,
+                                        &app.path,
+                                        &progress,
+                                        &cancel,
+                                    ),
+                                    BoardIo::Tcp(s) => flash_update::push_firmware_ota_on_port(
+                                        s,
+                                        &app.path,
+                                        &progress,
+                                        &cancel,
+                                    ),
+                                };
+                                match ota {
+                                    Ok(()) => {
+                                        live_ota_done = Some(Ok(format!(
+                                            "Firmware {} pushed over USB OTA to {port}",
+                                            if app.version.is_empty() {
+                                                "image".into()
+                                            } else {
+                                                app.version
+                                            }
+                                        )));
+                                    }
+                                    Err(e) => {
+                                        log_msg(
+                                            &msg_tx,
+                                            LogKind::Warn,
+                                            format!(
+                                                "Open-link USB OTA failed ({e}) — will reopen + retry / ROM"
+                                            ),
+                                        );
+                                    }
+                                }
+                            }
+                            // Drop the handle so reopen / ROM flash can own the COM.
+                            drop(b);
+                        }
+                    } else if let Some(idx) = boards
                         .iter()
                         .position(|b| port_names_match(&b.name, &port))
                     {
                         let mut b = boards.remove(idx);
                         let _ = usb_cmd(&mut b.port, &mut b.rx, "cmp stop");
+                    }
+                    if let Some(result) = live_ota_done {
+                        if boards.is_empty() {
+                            mining = false;
+                            if let Some(mut s) = stratum.take() {
+                                s.disconnect();
+                            }
+                        }
+                        mesh.retain(|m| {
+                            !(port_names_match(&m.gateway, &port) || m.gateway == port)
+                        });
+                        publish_live(&msg_tx, &boards, &mesh);
+                        hold.store(false, Ordering::SeqCst);
+                        USB_FLASH_PREEMPT.store(false, Ordering::SeqCst);
+                        let reopen_port = if reopen && result.is_ok() {
+                            Some(port.clone())
+                        } else {
+                            None
+                        };
+                        let _ = msg_tx.send(NetMsg::FlashDone {
+                            result,
+                            reopen: reopen_port,
+                        });
+                        continue;
                     }
                     if boards.is_empty() {
                         mining = false;
@@ -12117,8 +12214,11 @@ Power a 2nd board nearby with wall/power-bank only (no PC cable)."
                                             }
                                             Err(e) => {
                                                 progress(format!(
-                                                    "USB OTA unavailable ({e}) — trying silent ROM auto-reset…"
+                                                    "USB OTA unavailable ({e}) — nudging reboot, then silent ROM…"
                                                 ));
+                                                let _ = nudge_usb_reboot_for_push(
+                                                    &port, &progress, &cancel,
+                                                );
                                             }
                                         }
                                     }
@@ -12126,6 +12226,9 @@ Power a 2nd board nearby with wall/power-bank only (no PC cable)."
                                         progress(format!(
                                             "No app image for USB OTA ({e}) — silent ROM push…"
                                         ));
+                                        let _ = nudge_usb_reboot_for_push(
+                                            &port, &progress, &cancel,
+                                        );
                                     }
                                 }
                             }
