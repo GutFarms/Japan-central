@@ -1339,6 +1339,121 @@ pub fn nudge_usb_reboot_for_push(
     false
 }
 
+/// Send `cmp reboot` over USB serial or Wi‑Fi TCP (opens a one-shot link if needed).
+pub fn send_cmp_reboot(endpoint: &str) -> Result<(), String> {
+    use crate::workers::{is_usb_serial_port, open_usb_serial};
+
+    let ep = endpoint.trim();
+    if ep.is_empty() {
+        return Err("No board endpoint.".into());
+    }
+    if is_usb_serial_port(ep) {
+        for baud in [460_800u32, 115_200] {
+            if let Ok(mut stream) = open_usb_serial(ep, baud, Duration::from_millis(500)) {
+                let _ = stream.write_all(b"\r\ncmp reboot\r\n");
+                let _ = stream.flush();
+                drop(stream);
+                return Ok(());
+            }
+        }
+        return Err(format!("Could not open USB {ep} for reboot"));
+    }
+    if ep.contains(':') {
+        let mut stream = connect_wifi_ota_stream(ep)?;
+        let _ = stream.write_all(b"cmp reboot\r\n");
+        let _ = stream.flush();
+        return Ok(());
+    }
+    Err(format!("Invalid reboot target: {ep}"))
+}
+
+/// Full-chip erase via espflash (BOOT Ready required — same handshake as Flash (BOOT)).
+pub fn erase_flash_bin(
+    port: &str,
+    progress: &dyn Fn(String),
+    ctrl: &FlashControl,
+) -> Result<(), String> {
+    use crate::workers::{flash_port_arg, is_usb_serial_port};
+
+    let cancel = Some(ctrl.cancel.as_ref());
+
+    if port.trim().is_empty() {
+        return Err("Select a USB COM port before erasing.".into());
+    }
+    if !is_usb_serial_port(port) {
+        return Err(format!(
+            "Cannot erase over '{port}' — pick a USB COM port (Wi‑Fi cannot erase flash)."
+        ));
+    }
+
+    let port_arg = flash_port_arg(port);
+    {
+        let listed: Vec<String> = serialport::available_ports()
+            .unwrap_or_default()
+            .into_iter()
+            .map(|p| p.port_name)
+            .collect();
+        let want = crate::workers::normalize_port_name(&port_arg);
+        let found = listed
+            .iter()
+            .any(|n| crate::workers::normalize_port_name(n) == want);
+        if !found {
+            let hint = if listed.is_empty() {
+                "no serial ports listed".into()
+            } else {
+                listed.join(", ")
+            };
+            return Err(format!(
+                "USB port '{port}' not found right now (looked for '{port_arg}'). \
+Available: {hint}. Unplug/replug the CYD, pick the COM again, then Erase flash."
+            ));
+        }
+    }
+
+    progress(format!("Full-chip erase → {port} ({port_arg})"));
+    progress(
+        "Erase wipes all firmware. Hold BOOT, tap RESET, click Ready when prompted — keep BOOT until erase starts."
+            .into(),
+    );
+    append_flash_log(&format!("erase begin port={port} arg={port_arg}"));
+
+    if flash_cancelled(cancel) {
+        return Err("erase cancelled".into());
+    }
+
+    let espflash = ensure_espflash(progress)?;
+    wait_for_boot_ready(ctrl, progress, "erase flash")?;
+
+    if flash_cancelled(cancel) {
+        ctrl.need_boot.store(false, Ordering::SeqCst);
+        return Err("erase cancelled".into());
+    }
+
+    match run_espflash_erase(
+        &espflash,
+        &port_arg,
+        FLASH_SAFE_BAUD,
+        progress,
+        ERASE_TIMEOUT,
+        cancel,
+    ) {
+        Ok(()) => {
+            ctrl.need_boot.store(false, Ordering::SeqCst);
+            append_flash_log("erase ok — chip wiped");
+            progress(
+                "Erase complete — board is blank. Open Flash tab → Flash (BOOT) to install firmware."
+                    .into(),
+            );
+            Ok(())
+        }
+        Err(e) => {
+            ctrl.need_boot.store(false, Ordering::SeqCst);
+            append_flash_log(&format!("erase failed: {e}"));
+            Err(e)
+        }
+    }
+}
+
 pub fn normalize_fw_version(raw: &str) -> String {
     raw.trim()
         .trim_start_matches('v')
@@ -1704,6 +1819,7 @@ pub const REPO_NAME: &str = "Japan-central";
 /// Tip first — apps still on older builds may only hit the legacy CYD branch.
 pub const REPO_REFS: &[&str] = &[
     // Tip agent branches first — newest VERSION wins for Fetch firmware / app update.
+    "cursor/flash-erase-reset-tabs-e801",
     "cursor/no-assist-no-mesh-e801",
     "cursor/ota-write-safe-e801",
     "cursor/ota-write-fail-e801",

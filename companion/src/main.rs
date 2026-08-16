@@ -31,11 +31,11 @@ use app_update::{
     check_app_update_ex, running_version, update_companion_app_ex, AppRemoteInfo,
 };
 use flash_update::{
-    board_fw_is_d0, ensure_firmware_image, fetch_latest_firmware, find_firmware_image,
+    board_fw_is_d0, ensure_firmware_image, erase_flash_bin, fetch_latest_firmware, find_firmware_image,
     firmware_is_custom, flash_merged_bin, load_firmware_bin, nudge_usb_reboot_for_push,
     push_firmware_ota_ex, push_firmware_ota_on_port_recover_ex, push_firmware_ota_usb_ex,
-    resolve_ota_app_image, resolve_ota_app_image_ex, update_needed, FirmwareImage, FlashControl,
-    OtaReopen,
+    resolve_ota_app_image_ex, send_cmp_reboot, update_needed,
+    FirmwareImage, FlashControl, OtaReopen,
 };
 use live_bar::{
     default_header_coins, format_change, format_usd, COIN_CATALOG, LiveFeed,
@@ -402,6 +402,12 @@ enum Tab {
     Mine,
     /// SoftAP / USB → push home Wi‑Fi credentials to the board.
     Setup,
+    /// Push / flash board firmware (USB OTA, Wi‑Fi OTA, or BOOT flash).
+    Flash,
+    /// Full-chip erase via USB (espflash).
+    Erase,
+    /// Soft reboot (`cmp reboot`) on a linked board.
+    Reset,
     Settings,
 }
 
@@ -723,6 +729,18 @@ enum NetCmd {
     },
     /// Drop one connected USB worker by COM port name.
     DisconnectWorker(String),
+    /// Full-chip erase via espflash (USB only; BOOT Ready handshake).
+    EraseFlash {
+        port: String,
+        cancel: Arc<AtomicBool>,
+        need_boot: Arc<AtomicBool>,
+        boot_ready: Arc<AtomicBool>,
+        hold: Arc<AtomicBool>,
+    },
+    /// Soft reboot companion firmware (`cmp reboot`).
+    RebootBoard {
+        endpoint: String,
+    },
 }
 
 struct CompanionApp {
@@ -765,7 +783,8 @@ struct CompanionApp {
     pool_auth_hold_until: Option<Instant>,
     live: LiveFeed,
     firmware: Option<FirmwareImage>,
-    update_confirm: bool,
+    /// After successful flash verify: send `cmp reboot` once the board is linked again.
+    pending_post_flash_reboot: Option<(Instant, String)>,
     /// After a successful board flash: wait until Instant, then OpenUsb (no Close bounce).
     pending_post_flash_reconnect: Option<(Instant, String)>,
     /// After reconnect: confirm board answers `cmp config` with kit firmware.
@@ -1010,7 +1029,7 @@ impl CompanionApp {
             pool_auth_hold_until: None,
             live: LiveFeed::start(),
             firmware: find_firmware_image().ok(),
-            update_confirm: false,
+            pending_post_flash_reboot: None,
             pending_post_flash_reconnect: None,
             post_flash_verify: None,
             update_busy: false,
@@ -2525,8 +2544,7 @@ impl CompanionApp {
         )
     }
 
-    fn request_board_update(&mut self) {
-        // Keep a user-dropped / custom .bin — do not clobber with the bundled merged image.
+    fn go_flash_tab(&mut self) {
         if !self
             .firmware
             .as_ref()
@@ -2535,36 +2553,22 @@ impl CompanionApp {
         {
             self.firmware = find_firmware_image().ok().or_else(|| self.firmware.clone());
         }
-        match self.resolve_flash_target() {
-            Ok(port) => {
-                if !port_names_match(&port, &self.com_port) {
-                    self.push_log(
-                        LogKind::Info,
-                        format!(
-                            "Update board target → {port} (was {} — not a flashable target)",
-                            if self.com_port.is_empty() {
-                                "empty".into()
-                            } else {
-                                self.com_port.clone()
-                            }
-                        ),
-                    );
-                    self.com_port = port;
-                }
-            }
-            Err(e) => {
-                self.last_error = e;
-                return;
+        if let Ok(port) = self.resolve_flash_target() {
+            if !port_names_match(&port, &self.com_port) {
+                self.com_port = port;
             }
         }
-        // Missing local image is OK — worker will fetch Firmware\\ + Tools\\espflash.
+        self.tab = Tab::Flash;
+    }
+
+    fn request_board_update(&mut self) {
+        self.go_flash_tab();
         if self.firmware.is_none() {
             self.push_log(
                 LogKind::Info,
-                "No local firmware yet — Update will download image + espflash.".into(),
+                "No local firmware yet — Fetch latest FW on Flash tab, or drop a .bin.".into(),
             );
         }
-        self.update_confirm = true;
     }
 
     fn absorb_firmware_path(&mut self, path: std::path::PathBuf) {
@@ -2795,7 +2799,6 @@ impl CompanionApp {
     }
 
     fn begin_board_update_ex(&mut self, prefer_live_push: bool, wifi_ota: bool) {
-        self.update_confirm = false;
         let port = match self.resolve_flash_target() {
             Ok(p) => p,
             Err(e) => {
@@ -2926,6 +2929,578 @@ impl CompanionApp {
             hold,
             live_push,
             wifi_ota,
+        });
+    }
+
+    fn begin_board_erase(&mut self) {
+        let port = match self.resolve_usb_erase_target() {
+            Ok(p) => p,
+            Err(e) => {
+                self.last_error = e;
+                return;
+            }
+        };
+        self.com_port = port.clone();
+        if self.mining {
+            self.stop_mine();
+        }
+        USB_FLASH_PREEMPT.store(true, Ordering::SeqCst);
+        self.update_busy = true;
+        self.update_busy_since = Some(Instant::now());
+        self.flash_cooldown_until = None;
+        let cancel = Arc::new(AtomicBool::new(false));
+        let need_boot = Arc::new(AtomicBool::new(false));
+        let boot_ready = Arc::new(AtomicBool::new(false));
+        let hold = Arc::new(AtomicBool::new(true));
+        self.flash_cancel = Some(cancel.clone());
+        self.flash_hold = Some(hold.clone());
+        self.flash_need_boot = Some(need_boot.clone());
+        self.flash_boot_ready = Some(boot_ready.clone());
+        self.flash_progress = 0.02;
+        self.flash_phase = "Erasing flash".into();
+        self.pending_post_flash_reconnect = None;
+        self.post_flash_verify = None;
+        self.update_status = format!("Erasing flash on {port}…");
+        self.last_ok = self.update_status.clone();
+        self.last_error.clear();
+        self.push_log(LogKind::Usb, format!("Erase flash → {port} (full chip)"));
+        self.usb_open = false;
+        self.mining = false;
+        let _ = self.cmd_tx.send(NetCmd::EraseFlash {
+            port,
+            cancel,
+            need_boot,
+            boot_ready,
+            hold,
+        });
+    }
+
+    fn begin_board_reset(&mut self) {
+        let endpoint = match self.resolve_reset_target() {
+            Ok(e) => e,
+            Err(e) => {
+                self.last_error = e;
+                return;
+            }
+        };
+        self.com_port = endpoint.clone();
+        self.last_error.clear();
+        self.last_ok = format!("Reset command queued for {endpoint}");
+        self.push_log(LogKind::Usb, format!("Reset board → {endpoint} (cmp reboot)"));
+        let _ = self.cmd_tx.send(NetCmd::RebootBoard { endpoint });
+    }
+
+    /// USB COM only — erase needs espflash / ROM, not Wi‑Fi.
+    fn resolve_usb_erase_target(&self) -> Result<String, String> {
+        if self.port_is_flashable_name(&self.com_port) {
+            return Ok(self.com_port.clone());
+        }
+        for w in &self.connected_workers {
+            if self.port_is_flashable_name(&w.endpoint) {
+                return Ok(w.endpoint.clone());
+            }
+        }
+        for p in flashable_ports(&self.ports) {
+            return Ok(p.name.clone());
+        }
+        Err("Select a USB COM port for erase (Wi‑Fi cannot erase flash).".into())
+    }
+
+    /// USB or Wi‑Fi board that should answer `cmp`.
+    fn resolve_reset_target(&self) -> Result<String, String> {
+        if self.port_is_flashable_name(&self.com_port) || Self::is_wifi_ota_endpoint(&self.com_port)
+        {
+            return Ok(self.com_port.clone());
+        }
+        for w in &self.connected_workers {
+            let usb = self.port_is_flashable_name(&w.endpoint);
+            let wifi = Self::is_wifi_ota_endpoint(&w.endpoint);
+            if (usb || wifi) && !Self::fw_looks_download_mode(&w.fw) {
+                return Ok(w.endpoint.clone());
+            }
+        }
+        for w in &self.connected_workers {
+            if self.port_is_flashable_name(&w.endpoint) || Self::is_wifi_ota_endpoint(&w.endpoint)
+            {
+                return Ok(w.endpoint.clone());
+            }
+        }
+        Err("Select a linked USB or Wi‑Fi board for reset.".into())
+    }
+
+    fn usb_erase_target_choices(&self) -> Vec<(String, String)> {
+        self.flash_target_choices()
+            .into_iter()
+            .filter(|(ep, _)| self.port_is_flashable_name(ep))
+            .collect()
+    }
+
+    fn reset_target_choices(&self) -> Vec<(String, String)> {
+        let mut out: Vec<(String, String)> = Vec::new();
+        for w in &self.connected_workers {
+            let usb = self.port_is_flashable_name(&w.endpoint);
+            let wifi = Self::is_wifi_ota_endpoint(&w.endpoint);
+            if !usb && !wifi {
+                continue;
+            }
+            let mac = if w.mac.is_empty() {
+                "mac?".to_string()
+            } else {
+                w.mac.clone()
+            };
+            let fw = if w.fw.is_empty() {
+                "fw?".to_string()
+            } else {
+                w.fw.clone()
+            };
+            let tag = if Self::fw_looks_download_mode(&w.fw) {
+                "download-mode"
+            } else if wifi {
+                "Wi‑Fi"
+            } else {
+                "USB"
+            };
+            out.push((
+                w.endpoint.clone(),
+                format!("{} · {mac} · {fw} · {tag}", w.endpoint),
+            ));
+        }
+        for p in flashable_ports(&self.ports) {
+            if out.iter().any(|(e, _)| port_names_match(e, &p.name)) {
+                continue;
+            }
+            out.push((p.name.clone(), format!("{} · not linked", p.label)));
+        }
+        for w in &self.discovered_workers {
+            if w.kind != WorkerKind::Wifi {
+                continue;
+            }
+            if out.iter().any(|(e, _)| port_names_match(e, &w.endpoint)) {
+                continue;
+            }
+            if !Self::is_wifi_ota_endpoint(&w.endpoint) {
+                continue;
+            }
+            let mac = if w.mac.is_empty() {
+                "mac?".to_string()
+            } else {
+                w.mac.clone()
+            };
+            let fw = if w.fw.is_empty() {
+                "fw?".to_string()
+            } else {
+                w.fw.clone()
+            };
+            out.push((
+                w.endpoint.clone(),
+                format!("{} · {mac} · {fw} · Wi‑Fi (scan)", w.endpoint),
+            ));
+        }
+        out
+    }
+
+    fn ui_flash_target_combo(&mut self, ui: &mut egui::Ui, id: &str) {
+        let choices = self.flash_target_choices();
+        ui.label(
+            RichText::new("Board to update")
+                .color(C_MUTED)
+                .font(mono_ui_font(11.0)),
+        );
+        let combo_w = (ui.available_width() - 8.0).clamp(160.0, 420.0);
+        let selected = if self.com_port.is_empty() {
+            "— select linked worker / COM / Wi‑Fi —".to_string()
+        } else {
+            choices
+                .iter()
+                .find(|(e, _)| port_names_match(e, &self.com_port))
+                .map(|(_, l)| l.clone())
+                .unwrap_or_else(|| self.com_port.clone())
+        };
+        egui::ComboBox::from_id_source(id)
+            .width(combo_w)
+            .selected_text(RichText::new(selected).color(C_TEXT).size(12.0))
+            .show_ui(ui, |ui| {
+                if choices.is_empty() {
+                    ui.label(
+                        RichText::new("No targets — Link USB or Wi‑Fi on Mine, or pick a COM.")
+                            .color(C_WARN)
+                            .size(12.0),
+                    );
+                }
+                for (ep, label) in &choices {
+                    if ui
+                        .selectable_label(port_names_match(ep, &self.com_port), label)
+                        .clicked()
+                    {
+                        self.com_port = ep.clone();
+                        if let Some(w) = self
+                            .connected_workers
+                            .iter()
+                            .find(|w| port_names_match(&w.endpoint, ep))
+                        {
+                            if !w.fw.is_empty() {
+                                self.fw_label = w.fw.clone();
+                            }
+                            if !w.mac.is_empty() {
+                                self.board_mac = w.mac.clone();
+                            }
+                        }
+                    }
+                }
+            });
+    }
+
+    fn ui_firmware_drop_zone(&mut self, ui: &mut egui::Ui) {
+        let hovering = ui.ctx().input(|i| !i.raw.hovered_files.is_empty());
+        let fill = if hovering {
+            Color32::from_rgb(20, 60, 90)
+        } else {
+            C_PANEL_SOFT
+        };
+        Frame::none()
+            .fill(fill)
+            .stroke(Stroke::new(
+                1.0,
+                if hovering { C_LIME } else { C_STROKE },
+            ))
+            .rounding(Rounding::same(6.0))
+            .inner_margin(Margin::symmetric(12.0, 10.0))
+            .show(ui, |ui| {
+                ui.set_min_width(ui.available_width());
+                ui.label(
+                    RichText::new(if hovering {
+                        "Release to use this .bin for flash"
+                    } else {
+                        "Drop any .bin here to flash (merged @ 0x0 preferred)"
+                    })
+                    .color(if hovering { C_LIME } else { C_MUTED })
+                    .size(12.0),
+                );
+                ui.label(
+                    RichText::new(
+                        "Kit images or any ESP32 .bin — then pick target and Push or Flash (BOOT)",
+                    )
+                    .color(C_DIM)
+                    .size(11.0),
+                );
+                ui.add_space(4.0);
+                ui.horizontal(|ui| {
+                    if soft_button(ui, "Use bundled image", 150.0).clicked() {
+                        match find_firmware_image() {
+                            Ok(img) => {
+                                self.firmware = Some(img);
+                                self.update_status = "Bundled merged.bin selected.".into();
+                                self.last_ok = self.update_status.clone();
+                            }
+                            Err(e) => {
+                                self.last_error = e;
+                            }
+                        }
+                    }
+                    if self.firmware.as_ref().map(firmware_is_custom).unwrap_or(false)
+                        && soft_button(ui, "Clear custom", 120.0).clicked()
+                    {
+                        self.firmware = find_firmware_image().ok();
+                        self.update_status = "Custom .bin cleared.".into();
+                    }
+                });
+            });
+    }
+
+    fn ui_flash(&mut self, ui: &mut egui::Ui) {
+        ui.label(
+            RichText::new("Flash board firmware")
+                .color(C_LIME)
+                .font(display_font(24.0)),
+        );
+        ui.add_space(6.0);
+        ui.label(
+            RichText::new(
+                "Push (USB) — app OTA, no BOOT. Push (Wi‑Fi) — TCP OTA. Flash (BOOT) — full rewrite for blank chips.",
+            )
+            .color(C_MUTED)
+            .size(13.0),
+        );
+        ui.add_space(14.0);
+        soft_panel(ui, "Firmware", |ui| {
+            let (fw_status, fw_color) = self.firmware_status_label();
+            ui.label(
+                RichText::new(fw_status)
+                    .color(fw_color)
+                    .font(mono_ui_font(12.0)),
+            );
+            ui.add_space(8.0);
+            ui.horizontal_wrapped(|ui| {
+                let fetch_label = if self.fetch_busy {
+                    "Fetching FW…"
+                } else {
+                    "Fetch latest FW"
+                };
+                if soft_button(ui, fetch_label, 150.0).clicked() && !self.fetch_busy {
+                    self.start_firmware_fetch();
+                }
+            });
+            if let Some(fw) = &self.firmware {
+                ui.add_space(8.0);
+                ui.label(
+                    RichText::new(format!(
+                        "Board image · {} · {} KB{}",
+                        if fw.version.is_empty() {
+                            "unknown"
+                        } else {
+                            &fw.version
+                        },
+                        fw.bytes / 1024,
+                        if firmware_is_custom(fw) {
+                            " · custom"
+                        } else {
+                            ""
+                        }
+                    ))
+                    .color(C_DIM)
+                    .font(mono_ui_font(10.0)),
+                );
+                ui.label(
+                    RichText::new(fw.path.display().to_string())
+                        .color(C_DIM)
+                        .font(mono_ui_font(10.0)),
+                );
+            }
+            ui.add_space(8.0);
+            self.ui_firmware_drop_zone(ui);
+            if !self.update_status.is_empty() {
+                ui.add_space(6.0);
+                ui.label(
+                    RichText::new(&self.update_status)
+                        .color(if self.update_busy || self.fetch_busy {
+                            C_WARN
+                        } else {
+                            C_MUTED
+                        })
+                        .font(mono_ui_font(11.0)),
+                );
+            }
+        });
+        ui.add_space(14.0);
+        soft_panel(ui, "Target & actions", |ui| {
+            ui.horizontal(|ui| {
+                self.ui_flash_target_combo(ui, "flash_tab_target");
+            });
+            ui.add_space(6.0);
+            ui.label(
+                RichText::new(format!(
+                    "Board fw · {}  ·  Target · {}",
+                    if self.fw_label.is_empty() {
+                        "—"
+                    } else {
+                        &self.fw_label
+                    },
+                    if self.com_port.is_empty() {
+                        "—"
+                    } else {
+                        &self.com_port
+                    },
+                ))
+                .color(C_MUTED)
+                .font(mono_ui_font(11.0)),
+            );
+            ui.add_space(10.0);
+            let wifi_target = Self::is_wifi_ota_endpoint(&self.com_port);
+            let download_only =
+                !wifi_target && self.board_is_download_mode(&self.com_port);
+            let can_wifi = self.board_supports_wifi_ota(&self.com_port) || wifi_target;
+            let show_push = !download_only && !wifi_target;
+            let show_wifi = wifi_target || can_wifi;
+            if download_only {
+                ui.label(
+                    RichText::new(
+                        "Download mode — use Flash (BOOT): hold BOOT, tap RESET, click Ready when asked.",
+                    )
+                    .color(C_WARN)
+                    .size(12.0),
+                );
+            } else if show_push {
+                ui.label(
+                    RichText::new(
+                        "Push (USB) is the usual path on live boards. Flash (BOOT) for blank / full rewrite.",
+                    )
+                    .color(C_DIM)
+                    .size(12.0),
+                );
+            }
+            ui.add_space(10.0);
+            ui.horizontal_wrapped(|ui| {
+                if show_push {
+                    let push_label = if self.update_busy {
+                        "Pushing…"
+                    } else {
+                        "Push (USB)"
+                    };
+                    if soft_button(ui, push_label, 120.0).clicked() && !self.update_busy {
+                        self.begin_board_update(true);
+                    }
+                }
+                if show_wifi {
+                    let wifi_label = if self.update_busy {
+                        "Pushing…"
+                    } else {
+                        "Push (Wi‑Fi)"
+                    };
+                    if soft_button(ui, wifi_label, 120.0).clicked() && !self.update_busy {
+                        self.begin_board_update_wifi();
+                    }
+                }
+                if !wifi_target {
+                    let flash_label = if self.update_busy {
+                        "Flashing…"
+                    } else {
+                        "Flash (BOOT)"
+                    };
+                    if soft_button(ui, flash_label, 130.0).clicked() && !self.update_busy {
+                        self.begin_board_update(false);
+                    }
+                }
+            });
+        });
+    }
+
+    fn ui_erase(&mut self, ui: &mut egui::Ui) {
+        ui.label(
+            RichText::new("Erase board flash")
+                .color(C_LIME)
+                .font(display_font(24.0)),
+        );
+        ui.add_space(6.0);
+        ui.label(
+            RichText::new(
+                "Full-chip erase wipes all firmware. After erase you must Flash (BOOT) to install again. USB only — needs espflash / ROM.",
+            )
+            .color(C_MUTED)
+            .size(13.0),
+        );
+        ui.add_space(14.0);
+        soft_panel(ui, "USB target", |ui| {
+            let choices = self.usb_erase_target_choices();
+            ui.label(
+                RichText::new("COM port")
+                    .color(C_MUTED)
+                    .font(mono_ui_font(11.0)),
+            );
+            let combo_w = (ui.available_width() - 8.0).clamp(160.0, 420.0);
+            let selected = if self.com_port.is_empty() {
+                "— select USB COM —".to_string()
+            } else {
+                choices
+                    .iter()
+                    .find(|(e, _)| port_names_match(e, &self.com_port))
+                    .map(|(_, l)| l.clone())
+                    .unwrap_or_else(|| self.com_port.clone())
+            };
+            egui::ComboBox::from_id_source("erase_tab_target")
+                .width(combo_w)
+                .selected_text(RichText::new(selected).color(C_TEXT).size(12.0))
+                .show_ui(ui, |ui| {
+                    if choices.is_empty() {
+                        ui.label(
+                            RichText::new("No USB COM — plug in the CYD and Refresh on Mine.")
+                                .color(C_WARN)
+                                .size(12.0),
+                        );
+                    }
+                    for (ep, label) in &choices {
+                        if ui
+                            .selectable_label(port_names_match(ep, &self.com_port), label)
+                            .clicked()
+                        {
+                            self.com_port = ep.clone();
+                        }
+                    }
+                });
+            ui.add_space(10.0);
+            ui.label(
+                RichText::new(
+                    "SAFETY: erase is irreversible until you re-flash. Hold BOOT → RESET → Ready when prompted.",
+                )
+                .color(C_WARN)
+                .size(12.0),
+            );
+            ui.add_space(10.0);
+            let erase_label = if self.update_busy {
+                "Erasing…"
+            } else {
+                "Erase flash"
+            };
+            if soft_button(ui, erase_label, 140.0).clicked() && !self.update_busy {
+                self.begin_board_erase();
+            }
+        });
+    }
+
+    fn ui_reset(&mut self, ui: &mut egui::Ui) {
+        ui.label(
+            RichText::new("Reset board")
+                .color(C_LIME)
+                .font(display_font(24.0)),
+        );
+        ui.add_space(6.0);
+        ui.label(
+            RichText::new(
+                "Soft reboot of companion firmware (`cmp reboot`). Does not enter download mode.",
+            )
+            .color(C_MUTED)
+            .size(13.0),
+        );
+        ui.add_space(14.0);
+        soft_panel(ui, "Target", |ui| {
+            let choices = self.reset_target_choices();
+            ui.label(
+                RichText::new("USB or Wi‑Fi board")
+                    .color(C_MUTED)
+                    .font(mono_ui_font(11.0)),
+            );
+            let combo_w = (ui.available_width() - 8.0).clamp(160.0, 420.0);
+            let selected = if self.com_port.is_empty() {
+                "— select board —".to_string()
+            } else {
+                choices
+                    .iter()
+                    .find(|(e, _)| port_names_match(e, &self.com_port))
+                    .map(|(_, l)| l.clone())
+                    .unwrap_or_else(|| self.com_port.clone())
+            };
+            egui::ComboBox::from_id_source("reset_tab_target")
+                .width(combo_w)
+                .selected_text(RichText::new(selected).color(C_TEXT).size(12.0))
+                .show_ui(ui, |ui| {
+                    if choices.is_empty() {
+                        ui.label(
+                            RichText::new("No boards — Link USB or Wi‑Fi on Mine first.")
+                                .color(C_WARN)
+                                .size(12.0),
+                        );
+                    }
+                    for (ep, label) in &choices {
+                        if ui
+                            .selectable_label(port_names_match(ep, &self.com_port), label)
+                            .clicked()
+                        {
+                            self.com_port = ep.clone();
+                            if let Some(w) = self
+                                .connected_workers
+                                .iter()
+                                .find(|w| port_names_match(&w.endpoint, ep))
+                            {
+                                if !w.fw.is_empty() {
+                                    self.fw_label = w.fw.clone();
+                                }
+                            }
+                        }
+                    }
+                });
+            ui.add_space(10.0);
+            if soft_button(ui, "Reset board", 140.0).clicked() {
+                self.begin_board_reset();
+            }
         });
     }
 
@@ -3117,6 +3692,12 @@ impl CompanionApp {
     }
 
     fn finish_post_flash_ok(&mut self, board_fw: &str) {
+        let reboot_port = self
+            .post_flash_verify
+            .as_ref()
+            .map(|v| v.port.clone())
+            .filter(|p| !p.trim().is_empty())
+            .unwrap_or_else(|| self.com_port.clone());
         let msg = if board_fw.is_empty() {
             "Update verified — board responded.".to_string()
         } else {
@@ -3129,6 +3710,10 @@ impl CompanionApp {
         self.flash_progress = 1.0;
         self.push_log(LogKind::Usb, msg);
         self.clear_flash_overlay();
+        if !reboot_port.trim().is_empty() {
+            self.pending_post_flash_reboot =
+                Some((Instant::now() + Duration::from_secs(1), reboot_port));
+        }
     }
 
     fn fail_post_flash_verify(&mut self, reason: String) {
@@ -3646,7 +4231,7 @@ impl CompanionApp {
         soft_panel(ui, "Board firmware", |ui| {
             ui.label(
                 RichText::new(
-                    "Fetch the latest board image, then Update board — Push update (USB, no hold), Push update (Wi‑Fi), or Flash with BOOT (blank).",
+                    "Flash, erase, and reset live on their own tabs. Bench and fetch shortcuts stay here.",
                 )
                 .color(C_MUTED)
                 .size(13.0),
@@ -3661,8 +4246,7 @@ impl CompanionApp {
                 RichText::new(
                     "· Bench boards (D0) → lock fastest SHA path (often HW/SW)  ·  Clock 240 MHz  ·  More CYDs for more rate
 · Algorithm stays Bitcoin SHA-256d only
-· Do NOT raise board voltage — CYD is fixed ~3.3V; overvolting can kill flash/USB/ESP
-· SAFETY: blank / BOOT — hold BOOT, Update board, click Ready while BOOT held",
+· Do NOT raise board voltage — CYD is fixed ~3.3V; overvolting can kill flash/USB/ESP",
                 )
                 .color(C_MUTED)
                 .font(mono_ui_font(11.0)),
@@ -3689,13 +4273,8 @@ impl CompanionApp {
                 if soft_button(ui, fetch_label, 150.0).clicked() && !self.fetch_busy {
                     self.start_firmware_fetch();
                 }
-                let update_label = if self.update_busy {
-                    "Updating…"
-                } else {
-                    "Update board"
-                };
-                if soft_button(ui, update_label, 140.0).clicked() && !self.update_busy {
-                    self.request_board_update();
+                if soft_button(ui, "Open Flash tab", 140.0).clicked() {
+                    self.go_flash_tab();
                 }
             });
             ui.add_space(10.0);
@@ -3721,167 +4300,18 @@ impl CompanionApp {
                 ui.add_space(8.0);
                 ui.label(
                     RichText::new(format!(
-                        "Board image · {} · {} KB{}",
+                        "Board image · {} · {} KB",
                         if fw.version.is_empty() {
                             "unknown"
                         } else {
                             &fw.version
                         },
                         fw.bytes / 1024,
-                        if firmware_is_custom(fw) {
-                            " · custom"
-                        } else {
-                            ""
-                        }
                     ))
                     .color(C_DIM)
                     .font(mono_ui_font(10.0)),
                 );
-                ui.label(
-                    RichText::new(fw.path.display().to_string())
-                        .color(C_DIM)
-                        .font(mono_ui_font(10.0)),
-                );
             }
-            ui.add_space(8.0);
-            // Drop any .bin for flash (merged @ 0x0 preferred).
-            {
-                let hovering = ui.ctx().input(|i| !i.raw.hovered_files.is_empty());
-                let fill = if hovering {
-                    Color32::from_rgb(20, 60, 90)
-                } else {
-                    C_PANEL_SOFT
-                };
-                Frame::none()
-                    .fill(fill)
-                    .stroke(Stroke::new(
-                        1.0,
-                        if hovering { C_LIME } else { C_STROKE },
-                    ))
-                    .rounding(Rounding::same(6.0))
-                    .inner_margin(Margin::symmetric(12.0, 10.0))
-                    .show(ui, |ui| {
-                        ui.set_min_width(ui.available_width());
-                        ui.label(
-                            RichText::new(if hovering {
-                                "Release to use this .bin for Update board"
-                            } else {
-                                "Drop any .bin here to flash (merged @ 0x0 preferred)"
-                            })
-                            .color(if hovering { C_LIME } else { C_MUTED })
-                            .size(12.0),
-                        );
-                        ui.label(
-                            RichText::new(
-                                "Works with kit images or any ESP32 .bin · then pick Board to update → Update board",
-                            )
-                            .color(C_DIM)
-                            .size(11.0),
-                        );
-                        ui.add_space(4.0);
-                        ui.horizontal(|ui| {
-                            if soft_button(ui, "Use bundled image", 150.0).clicked() {
-                                match find_firmware_image() {
-                                    Ok(img) => {
-                                        self.firmware = Some(img);
-                                        self.update_status =
-                                            "Bundled merged.bin selected.".into();
-                                        self.last_ok = self.update_status.clone();
-                                    }
-                                    Err(e) => {
-                                        self.last_error = e;
-                                    }
-                                }
-                            }
-                            if self.firmware.as_ref().map(firmware_is_custom).unwrap_or(false)
-                                && soft_button(ui, "Clear custom", 120.0).clicked()
-                            {
-                                self.firmware = find_firmware_image().ok();
-                                self.update_status = "Custom .bin cleared.".into();
-                            }
-                        });
-                    });
-            }
-            ui.add_space(8.0);
-            {
-                let choices = self.flash_target_choices();
-                ui.horizontal(|ui| {
-                    ui.label(
-                        RichText::new("Board to update")
-                            .color(C_MUTED)
-                            .font(mono_ui_font(11.0)),
-                    );
-                    let combo_w = (ui.available_width() - 8.0).clamp(160.0, 420.0);
-                    let selected = if self.com_port.is_empty() {
-                        "— select linked worker / COM —".to_string()
-                    } else {
-                        choices
-                            .iter()
-                            .find(|(e, _)| port_names_match(e, &self.com_port))
-                            .map(|(_, l)| l.clone())
-                            .unwrap_or_else(|| self.com_port.clone())
-                    };
-                    egui::ComboBox::from_id_source("settings_flash_target")
-                        .width(combo_w)
-                        .selected_text(RichText::new(selected).color(C_TEXT).size(12.0))
-                        .show_ui(ui, |ui| {
-                            if choices.is_empty() {
-                                ui.label(
-                                    RichText::new("No USB board yet — Link a worker on Mine first.")
-                                        .color(C_WARN)
-                                        .size(12.0),
-                                );
-                            }
-                            for (ep, label) in &choices {
-                                if ui
-                                    .selectable_label(
-                                        port_names_match(ep, &self.com_port),
-                                        label,
-                                    )
-                                    .clicked()
-                                {
-                                    self.com_port = ep.clone();
-                                    if let Some(w) = self
-                                        .connected_workers
-                                        .iter()
-                                        .find(|w| port_names_match(&w.endpoint, ep))
-                                    {
-                                        if !w.fw.is_empty() {
-                                            self.fw_label = w.fw.clone();
-                                        }
-                                        if !w.mac.is_empty() {
-                                            self.board_mac = w.mac.clone();
-                                        }
-                                    }
-                                }
-                            }
-                        });
-                });
-            }
-            ui.add_space(6.0);
-            ui.label(
-                RichText::new(format!(
-                    "Port · {}  ·  board fw {}",
-                    if self.com_port.is_empty() {
-                        "—"
-                    } else {
-                        &self.com_port
-                    },
-                    if self.fw_label.is_empty() {
-                        "—"
-                    } else {
-                        &self.fw_label
-                    }
-                ))
-                .color(C_MUTED)
-                .font(mono_ui_font(11.0)),
-            );
-            ui.add_space(8.0);
-            ui.label(
-                RichText::new("Tip: Push (USB) streams app OTA with no buttons; Ready only if that fails. Flash (BOOT) asks Ready first. Keep BOOT held until Writing %.")
-                    .color(C_DIM)
-                    .size(12.0),
-            );
         });
 
         ui.add_space(14.0);
@@ -5607,6 +6037,18 @@ Phone: join SoftAP — Board Setup opens automatically to set home Wi‑Fi.",
                     self.tab = Tab::Setup;
                 }
                 ui.add_space(6.0);
+                if nav_button(ui, "Flash", self.tab == Tab::Flash).clicked() {
+                    self.tab = Tab::Flash;
+                }
+                ui.add_space(6.0);
+                if nav_button(ui, "Erase", self.tab == Tab::Erase).clicked() {
+                    self.tab = Tab::Erase;
+                }
+                ui.add_space(6.0);
+                if nav_button(ui, "Reset", self.tab == Tab::Reset).clicked() {
+                    self.tab = Tab::Reset;
+                }
+                ui.add_space(6.0);
                 if nav_button(ui, "Settings", self.tab == Tab::Settings).clicked() {
                     self.tab = Tab::Settings;
                 }
@@ -5670,6 +6112,15 @@ Phone: join SoftAP — Board Setup opens automatically to set home Wi‑Fi.",
                 }
                 if nav_button(ui, "Setup", self.tab == Tab::Setup).clicked() {
                     self.tab = Tab::Setup;
+                }
+                if nav_button(ui, "Flash", self.tab == Tab::Flash).clicked() {
+                    self.tab = Tab::Flash;
+                }
+                if nav_button(ui, "Erase", self.tab == Tab::Erase).clicked() {
+                    self.tab = Tab::Erase;
+                }
+                if nav_button(ui, "Reset", self.tab == Tab::Reset).clicked() {
+                    self.tab = Tab::Reset;
                 }
                 if nav_button(ui, "Settings", self.tab == Tab::Settings).clicked() {
                     self.tab = Tab::Settings;
@@ -5979,15 +6430,12 @@ impl App for CompanionApp {
                             self.last_ok = s.clone();
                             self.last_error.clear();
                             self.push_log(LogKind::Usb, s.clone());
-                            let port = reopen
-                                .filter(|p| !p.trim().is_empty())
-                                .unwrap_or_else(|| self.com_port.clone());
-                            if port.trim().is_empty() {
-                                self.clear_flash_overlay();
-                                self.update_status = s;
-                            } else {
+                            if let Some(port) = reopen.filter(|p| !p.trim().is_empty()) {
                                 // Keep spinner: reconnect, then verify via cmp ping/config.
                                 self.begin_post_flash_verify(port);
+                            } else {
+                                self.clear_flash_overlay();
+                                self.update_status = s;
                             }
                         }
                         Err(e) => {
@@ -6591,6 +7039,32 @@ or Flash (BOOT) with BOOT held + Ready."
             }
         }
 
+        if let Some((when, port)) = self.pending_post_flash_reboot.clone() {
+            if Instant::now() >= when {
+                let linked = self
+                    .connected_workers
+                    .iter()
+                    .any(|w| port_names_match(&w.endpoint, &port))
+                    || (self.usb_open && port_names_match(&self.com_port, &port));
+                if linked {
+                    self.pending_post_flash_reboot = None;
+                    let _ = self.cmd_tx.send(NetCmd::RebootBoard {
+                        endpoint: port.clone(),
+                    });
+                    self.push_log(
+                        LogKind::Usb,
+                        format!("Flash OK — reset command sent to {port}"),
+                    );
+                } else if Instant::now() > when + Duration::from_secs(30) {
+                    self.pending_post_flash_reboot = None;
+                } else {
+                    ctx.request_repaint_after(Duration::from_millis(200));
+                }
+            } else {
+                ctx.request_repaint_after(Duration::from_millis(50));
+            }
+        }
+
         if let Some(step) = self.wizard_step {
             egui::Window::new("Njörðr seas · Setup")
                 .collapsible(false)
@@ -6727,15 +7201,15 @@ or Flash (BOOT) with BOOT held + Ready."
                             ui.add_space(8.0);
                             ui.label(
                                 RichText::new(
-                                    "Update board lets you choose Push update (USB), Push update (Wi‑Fi), or Flash with BOOT (blank / full rewrite).",
+                                    "Open the Flash tab for Push (USB), Push (Wi‑Fi), or Flash with BOOT (blank / full rewrite).",
                                 )
                                 .color(C_MUTED)
                                 .size(13.0),
                             );
                             ui.add_space(8.0);
                             ui.horizontal(|ui| {
-                                if soft_button(ui, "Update board", 130.0).clicked() {
-                                    self.request_board_update();
+                                if soft_button(ui, "Open Flash tab", 130.0).clicked() {
+                                    self.go_flash_tab();
                                 }
                                 if soft_button(ui, "Fetch latest FW", 140.0).clicked() {
                                     self.start_firmware_fetch();
@@ -6807,236 +7281,6 @@ or Flash (BOOT) with BOOT held + Ready."
                         }
                         if soft_button(ui, "Skip setup", 110.0).clicked() {
                             self.wizard_step = None;
-                        }
-                    });
-                });
-        }
-
-        if self.update_confirm {
-            let wifi_target = Self::is_wifi_ota_endpoint(&self.com_port);
-            let download_only = !wifi_target && self.board_is_download_mode(&self.com_port);
-            let can_push = self.board_supports_live_push(&self.com_port);
-            let can_wifi = self.board_supports_wifi_ota(&self.com_port) || wifi_target;
-            // Always offer Push unless we *know* ROM download-mode — old companion
-            // firmware often isn't linked with a perfect fw tag yet.
-            let show_push = !download_only && !wifi_target;
-            let show_wifi = wifi_target || can_wifi;
-            egui::Window::new("Update board")
-                .collapsible(false)
-                .resizable(false)
-                .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
-                .show(ctx, |ui| {
-                    ui.set_min_width(460.0);
-                    let (st, col) = self.firmware_status_label();
-                    ui.label(RichText::new(st).color(col).size(14.0));
-                    ui.add_space(8.0);
-                    if let Some(fw) = &self.firmware {
-                        let ver = if fw.version.is_empty() {
-                            "unknown".into()
-                        } else {
-                            fw.version.clone()
-                        };
-                        let (show_path, show_kb, label) = if wifi_target {
-                            match resolve_ota_app_image(Some(fw.path.as_path())) {
-                                Ok(app) => (
-                                    app.path.display().to_string(),
-                                    app.bytes / 1024,
-                                    "Wi‑Fi OTA app image",
-                                ),
-                                Err(_) => (
-                                    fw.path.display().to_string(),
-                                    fw.bytes / 1024,
-                                    "Image (need app.bin beside merged for Wi‑Fi)",
-                                ),
-                            }
-                        } else {
-                            (
-                                fw.path.display().to_string(),
-                                fw.bytes / 1024,
-                                "USB flash image",
-                            )
-                        };
-                        ui.label(
-                            RichText::new(format!("{label} · {ver} · {show_kb} KB"))
-                                .color(C_LIME)
-                                .font(mono_ui_font(12.0)),
-                        );
-                        ui.label(
-                            RichText::new(show_path)
-                                .color(C_DIM)
-                                .font(mono_ui_font(10.0)),
-                        );
-                    }
-                    ui.add_space(6.0);
-                    {
-                        let choices = self.flash_target_choices();
-                        ui.label(
-                            RichText::new("Which worker / COM / Wi‑Fi to update")
-                                .color(C_MUTED)
-                                .size(12.0),
-                        );
-                        let selected = if self.com_port.is_empty() {
-                            "— select board —".to_string()
-                        } else {
-                            choices
-                                .iter()
-                                .find(|(e, _)| port_names_match(e, &self.com_port))
-                                .map(|(_, l)| l.clone())
-                                .unwrap_or_else(|| self.com_port.clone())
-                        };
-                        egui::ComboBox::from_id_source("update_confirm_flash_target")
-                            .width(420.0)
-                            .selected_text(RichText::new(selected).color(C_TEXT).size(13.0))
-                            .show_ui(ui, |ui| {
-                                if choices.is_empty() {
-                                    ui.label(
-                                        RichText::new(
-                                            "No targets — Link a USB or Wi‑Fi board on Mine, then retry.",
-                                        )
-                                        .color(C_WARN)
-                                        .size(12.0),
-                                    );
-                                }
-                                for (ep, label) in &choices {
-                                    if ui
-                                        .selectable_label(
-                                            port_names_match(ep, &self.com_port),
-                                            label,
-                                        )
-                                        .clicked()
-                                    {
-                                        self.com_port = ep.clone();
-                                        if let Some(w) = self
-                                            .connected_workers
-                                            .iter()
-                                            .find(|w| port_names_match(&w.endpoint, ep))
-                                        {
-                                            if !w.fw.is_empty() {
-                                                self.fw_label = w.fw.clone();
-                                            }
-                                            if !w.mac.is_empty() {
-                                                self.board_mac = w.mac.clone();
-                                            }
-                                        }
-                                    }
-                                }
-                            });
-                    }
-                    ui.add_space(6.0);
-                    ui.label(
-                        RichText::new(format!(
-                            "Board fw · {}  ·  Target · {}  ·  {}",
-                            if self.fw_label.is_empty() {
-                                "—"
-                            } else {
-                                &self.fw_label
-                            },
-                            self.com_port,
-                            if wifi_target {
-                                "Wi‑Fi OTA"
-                            } else {
-                                "@ 0x0 USB"
-                            }
-                        ))
-                        .color(C_MUTED)
-                        .font(mono_ui_font(11.0)),
-                    );
-                    ui.add_space(10.0);
-                    if wifi_target {
-                        ui.label(
-                            RichText::new(
-                                "Wi‑Fi board selected — Push update (Wi‑Fi) streams the app image over TCP (no BOOT, no USB).",
-                            )
-                            .color(C_TEXT)
-                            .size(13.0),
-                        );
-                        ui.add_space(6.0);
-                        ui.label(
-                            RichText::new(
-                                "Board must already run companion firmware with Wi‑Fi. Blank chips still need USB Flash (BOOT).",
-                            )
-                            .color(C_MUTED)
-                            .size(12.0),
-                        );
-                    } else if download_only {
-                        ui.label(
-                            RichText::new(
-                                "This COM is in download mode (BOOT held / blank chip). Use Flash with BOOT held, then Ready when asked.",
-                            )
-                            .color(C_MUTED)
-                            .size(13.0),
-                        );
-                    } else if can_push {
-                        ui.label(
-                            RichText::new(
-                                "Companion firmware detected on this COM (including older builds).",
-                            )
-                            .color(C_TEXT)
-                            .size(13.0),
-                        );
-                        ui.add_space(6.0);
-                        ui.label(
-                            RichText::new(
-                                "· Push update — USB app OTA, no BOOT / no hold (usual for live boards)\n· Push update (Wi‑Fi) — if a Wi‑Fi worker is linked/scanned\n· Flash (BOOT) — full rewrite; hold BOOT → tap RESET → Ready when asked",
-                            )
-                            .color(C_MUTED)
-                            .size(12.0),
-                        );
-                    } else {
-                        ui.label(
-                            RichText::new(
-                                "Board not linked yet — Connect first if you can. You can still try Push update (USB or Wi‑Fi when companion firmware is running), or Flash (BOOT) for blank chips.",
-                            )
-                            .color(C_MUTED)
-                            .size(13.0),
-                        );
-                    }
-                    ui.add_space(14.0);
-                    let up_to_date = update_needed(
-                        &self.fw_label,
-                        &self
-                            .firmware
-                            .as_ref()
-                            .map(|f| f.version.clone())
-                            .unwrap_or_default(),
-                    ) == Some(false);
-                    ui.horizontal(|ui| {
-                        if show_wifi {
-                            let wifi_label = if up_to_date {
-                                "Push Wi‑Fi anyway"
-                            } else {
-                                "Push update (Wi‑Fi)"
-                            };
-                            if cta_button(ui, wifi_label, true, 170.0).clicked() {
-                                self.begin_board_update_wifi();
-                            }
-                        }
-                        if show_push {
-                            let push_label = if up_to_date {
-                                "Push anyway"
-                            } else {
-                                "Push update"
-                            };
-                            if soft_button(ui, push_label, 130.0).clicked() {
-                                self.begin_board_update(true);
-                            }
-                        }
-                        if !wifi_target {
-                            let flash_label = if up_to_date {
-                                "Flash anyway"
-                            } else {
-                                "Flash (BOOT)"
-                            };
-                            if show_push || show_wifi {
-                                if soft_button(ui, flash_label, 130.0).clicked() {
-                                    self.begin_board_update(false);
-                                }
-                            } else if cta_button(ui, flash_label, true, 140.0).clicked() {
-                                self.begin_board_update(false);
-                            }
-                        }
-                        if soft_button(ui, "Cancel", 100.0).clicked() {
-                            self.update_confirm = false;
                         }
                     });
                 });
@@ -7128,6 +7372,8 @@ or Flash (BOOT) with BOOT held + Ready."
                                 "Flash complete — reconnecting"
                             } else if awaiting_boot {
                                 "Download mode — click Ready"
+                            } else if self.flash_phase.to_ascii_lowercase().contains("eras") {
+                                "Erasing board flash"
                             } else if self.flash_phase.to_ascii_lowercase().contains("push") {
                                 "Pushing firmware update"
                             } else {
@@ -7333,6 +7579,9 @@ or Flash (BOOT) with BOOT held + Ready."
                         match self.tab {
                             Tab::Mine => self.ui_mine(ui),
                             Tab::Setup => self.ui_setup(ui),
+                            Tab::Flash => self.ui_flash(ui),
+                            Tab::Erase => self.ui_erase(ui),
+                            Tab::Reset => self.ui_reset(ui),
                             Tab::Settings => self.ui_settings(ui),
                         }
                         ui.add_space(28.0);
@@ -10273,6 +10522,131 @@ Blank boards need Flash (BOOT)."
                             reopen: reopen_port,
                         });
                     });
+                }
+                NetCmd::EraseFlash {
+                    port,
+                    cancel,
+                    need_boot,
+                    boot_ready,
+                    hold,
+                } => {
+                    flash_hold = Some((port.clone(), hold.clone()));
+                    USB_FLASH_PREEMPT.store(false, Ordering::SeqCst);
+                    if let Some(idx) = boards
+                        .iter()
+                        .position(|b| port_names_match(&b.name, &port))
+                    {
+                        let mut b = boards.remove(idx);
+                        let _ = usb_cmd(&mut b.port, &mut b.rx, "cmp stop");
+                    }
+                    if boards.is_empty() {
+                        mining = false;
+                        if let Some(mut s) = stratum.take() {
+                            s.disconnect();
+                        }
+                    } else {
+                        for b in boards.iter_mut() {
+                            let _ = usb_cmd(&mut b.port, &mut b.rx, "cmp stop");
+                        }
+                    }
+                    publish_live(&msg_tx, &boards);
+                    log_msg(
+                        &msg_tx,
+                        LogKind::Usb,
+                        format!("Released {port} for full-chip erase…"),
+                    );
+                    thread::sleep(Duration::from_millis(900));
+                    let progress_tx = msg_tx.clone();
+                    let done_tx = msg_tx.clone();
+                    let hold_clear = hold.clone();
+                    thread::spawn(move || {
+                        let progress = move |line: String| {
+                            let _ = progress_tx.send(NetMsg::FlashProgress(line));
+                        };
+                        let result: Result<String, String> = match std::panic::catch_unwind(
+                            std::panic::AssertUnwindSafe(|| -> Result<String, String> {
+                                if cancel.load(Ordering::SeqCst) {
+                                    return Err("erase cancelled".into());
+                                }
+                                let ctrl = FlashControl {
+                                    cancel,
+                                    need_boot,
+                                    boot_ready,
+                                };
+                                erase_flash_bin(&port, &progress, &ctrl)?;
+                                Ok(format!("Flash erased on {port} — use Flash (BOOT) to reinstall"))
+                            }),
+                        ) {
+                            Ok(r) => r,
+                            Err(_) => Err(
+                                "Erase thread panicked (see cyd-companion-crash.log). Retry Erase flash."
+                                    .into(),
+                            ),
+                        };
+                        hold_clear.store(false, Ordering::SeqCst);
+                        USB_FLASH_PREEMPT.store(false, Ordering::SeqCst);
+                        let _ = done_tx.send(NetMsg::FlashDone {
+                            result,
+                            reopen: None,
+                        });
+                    });
+                }
+                NetCmd::RebootBoard { endpoint } => {
+                    let ep = endpoint.trim().to_string();
+                    if ep.is_empty() {
+                        let _ = msg_tx.send(NetMsg::Action(Err(
+                            "Reset board: no endpoint.".into(),
+                        )));
+                        continue;
+                    }
+                    if let Some(idx) = boards.iter().position(|b| port_names_match(&b.name, &ep)) {
+                        let b = &mut boards[idx];
+                        match usb_cmd(&mut b.port, &mut b.rx, "cmp reboot") {
+                            Ok(_) => {
+                                log_msg(
+                                    &msg_tx,
+                                    LogKind::Usb,
+                                    format!("cmp reboot sent to {ep}"),
+                                );
+                                let _ = msg_tx.send(NetMsg::Action(Ok(format!(
+                                    "Board reset: {ep}"
+                                ))));
+                            }
+                            Err(e) => {
+                                log_msg(
+                                    &msg_tx,
+                                    LogKind::Warn,
+                                    format!("cmp reboot failed on {ep}: {e}"),
+                                );
+                                let _ = msg_tx.send(NetMsg::Action(Err(format!(
+                                    "Reset failed on {ep}: {e}"
+                                ))));
+                            }
+                        }
+                    } else {
+                        match send_cmp_reboot(&ep) {
+                            Ok(()) => {
+                                log_msg(
+                                    &msg_tx,
+                                    LogKind::Usb,
+                                    format!("cmp reboot sent to {ep} (one-shot)"),
+                                );
+                                let _ = msg_tx.send(NetMsg::Action(Ok(format!(
+                                    "Board reset: {ep}"
+                                ))));
+                            }
+                            Err(e) => {
+                                log_msg(
+                                    &msg_tx,
+                                    LogKind::Warn,
+                                    format!("cmp reboot failed on {ep}: {e}"),
+                                );
+                                let _ = msg_tx.send(NetMsg::Action(Err(format!(
+                                    "Reset failed on {ep}: {e}"
+                                ))));
+                            }
+                        }
+                    }
                 }
                 NetCmd::PullApiFeed(feed) => {
                     let outcome = pull_feed(&feed);
