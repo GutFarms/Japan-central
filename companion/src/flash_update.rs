@@ -777,6 +777,7 @@ pub const REPO_NAME: &str = "Japan-central";
 /// Branches probed for Companion/firmware updates (newest VERSION wins).
 /// Tip first — apps still on older builds may only hit the legacy CYD branch.
 pub const REPO_REFS: &[&str] = &[
+    "cursor/flash-cohesion-e801",
     "cursor/mine-stability-e801",
     "cursor/flash-ready-noreset-e801",
     "cursor/flash-nostub-boot-e801",
@@ -1218,16 +1219,11 @@ const MAX_PORT_BUSY: u8 = 1;
 /// Quiet gap between tool launches so Windows/CH340 can release the COM handle.
 /// Too short (≤250ms) looks like connect↔disconnect thrash in Device Manager.
 const ATTEMPT_GAP: Duration = Duration::from_millis(1200);
-/// Preferred write baud when the USB-UART (often CH340) tolerates it — ~3–4× faster
-/// than 115200 for a ~1.7 MB merged image.
-const FLASH_FAST_BAUD: &str = "460800";
 const FLASH_SAFE_BAUD: &str = "115200";
-/// No useful output at all → stuck before connect.
-const IDLE_TIMEOUT: Duration = Duration::from_secs(18);
-/// Chip MAC/connect seen but no write progress yet.
-/// Keep short — MAC-then-stall (UI stuck ~14% "Chip connected") must fail
-/// fast so we escalate to no-stub / BOOT Ready, not sit for minutes.
-const IDLE_AFTER_CONNECT: Duration = Duration::from_secs(14);
+/// No useful output at all → stuck before connect (silent Push fail-fast).
+const IDLE_TIMEOUT: Duration = Duration::from_secs(16);
+/// Chip MAC/connect seen but no write progress yet — fail fast on silent Push.
+const IDLE_AFTER_CONNECT: Duration = Duration::from_secs(12);
 /// After BOOT Ready, ROM/no-stub can take longer before the first Writing % tick.
 const IDLE_AFTER_CONNECT_PATIENT: Duration = Duration::from_secs(40);
 /// Stub upload after MAC is not real write progress — kill fast and try no-stub.
@@ -1704,11 +1700,11 @@ fn append_flash_log(line: &str) {
 /// Blank / download-mode boards keep the Ready + BOOT path.
 /// Flash merged firmware @ 0x0 via USB.
 ///
-/// Strategy:
-/// 1) Live push: **one** espflash **no-stub @ 115200** (auto-reset). Never stub@460800.
-/// 2) If that fails → BOOT Ready, then write with **`--before no-reset` only**
-///    (default-reset after Ready kicks CH340 out of download mode → Ready then fail).
-/// 3) Blank Flash (BOOT): Ready first, then no-reset write.
+/// Strategy (one smooth flow):
+/// 1) Live Push: **one** fail-fast `no-stub @ 115200` with `default-reset` (no BOOT).
+/// 2) If that stalls → Ready CTA quickly, then **`no-reset` only** writes (patient).
+/// 3) Flash (BOOT): Ready first, then the same no-reset write path.
+/// Never stub@460800. Never default-reset after Ready (CH340 leaves download mode).
 pub fn flash_merged_bin(
     port: &str,
     image: &Path,
@@ -1780,7 +1776,7 @@ Available: {hint}. Unplug/replug the CYD, pick the COM again, then Update board.
         );
     }
     append_flash_log(&format!(
-        "begin port={port} arg={port_arg} live_push={live_push} fast_baud={FLASH_FAST_BAUD} image={}",
+        "begin port={port} arg={port_arg} live_push={live_push} baud={FLASH_SAFE_BAUD} image={}",
         image.display()
     ));
 
@@ -1866,7 +1862,6 @@ Available: {hint}. Unplug/replug the CYD, pick the COM again, then Update board.
     let run_attempt_matrix = |need_ready: bool,
                               round_label: &str,
                               prefer_default_reset: bool,
-                              compact: bool,
                               esp_err: &mut String,
                               py_err: &mut String,
                               saw_chip_connect: &mut bool,
@@ -1878,47 +1873,15 @@ Available: {hint}. Unplug/replug the CYD, pick the COM again, then Update board.
         if need_ready {
             wait_for_boot_ready(ctrl, progress, round_label)?;
         }
-        // Compact + prefer_default_reset = silent Push (auto-reset, no user BOOT).
-        // Compact + !prefer_default_reset = after Ready: **no-reset only**.
-        // default-reset after Ready toggles DTR and ejects download mode → Ready then fail.
+        // Two live matrices only:
+        // - prefer_default_reset: silent Push (auto-reset)
+        // - !prefer_default_reset: after Ready / Flash BOOT (no-reset)
         // Tuple: (label, before, no_stub, compress, use_esptool, baud)
-        let attempts: &[(&str, &str, bool, bool, bool, &str)] = if prefer_default_reset && compact {
+        let attempts: &[(&str, &str, bool, bool, bool, &str)] = if prefer_default_reset {
             &[
                 (
                     "espflash no-stub default-reset @115200",
                     "default-reset",
-                    true,
-                    false,
-                    false,
-                    FLASH_SAFE_BAUD,
-                ),
-            ]
-        } else if prefer_default_reset {
-            &[
-                (
-                    "espflash no-stub default-reset @115200",
-                    "default-reset",
-                    true,
-                    false,
-                    false,
-                    FLASH_SAFE_BAUD,
-                ),
-                (
-                    "espflash no-stub default-reset @115200 (retry)",
-                    "default-reset",
-                    true,
-                    false,
-                    false,
-                    FLASH_SAFE_BAUD,
-                ),
-            ]
-        } else if compact {
-            // Post-Ready / Flash (BOOT): chip already in download mode — do not reset.
-            // One write per Ready click; outer loop can ask Ready again.
-            &[
-                (
-                    "espflash no-stub no-reset @115200",
-                    "no-reset",
                     true,
                     false,
                     false,
@@ -1926,6 +1889,7 @@ Available: {hint}. Unplug/replug the CYD, pick the COM again, then Update board.
                 ),
             ]
         } else {
+            // Post-Ready: chip already in download mode — do not reset.
             &[
                 (
                     "espflash no-stub no-reset @115200",
@@ -1933,14 +1897,6 @@ Available: {hint}. Unplug/replug the CYD, pick the COM again, then Update board.
                     true,
                     false,
                     false,
-                    FLASH_SAFE_BAUD,
-                ),
-                (
-                    "esptool no-stub no_compress no_reset @115200",
-                    "no_reset",
-                    true,
-                    false,
-                    true,
                     FLASH_SAFE_BAUD,
                 ),
             ]
@@ -1949,8 +1905,8 @@ Available: {hint}. Unplug/replug the CYD, pick the COM again, then Update board.
         let mut esptool_usable = true;
         let round_stall_start = *stall_hits;
         for &(label, before, no_stub, compress, use_esptool, baud) in attempts {
-            // no-stub (ROM) needs a little patience after MAC; stub hangs must die fast.
-            let patient = if compact { no_stub } else { true };
+            // Silent Push must fail-fast into Ready. Ready/BOOT writes stay patient.
+            let patient = need_ready;
             if flash_cancelled(cancel) {
                 ctrl.need_boot.store(false, Ordering::SeqCst);
                 return Err("flash cancelled".into());
@@ -2020,8 +1976,8 @@ Available: {hint}. Unplug/replug the CYD, pick the COM again, then Update board.
             };
             match result {
                 Ok(()) => {
-                    let _ =
-                        run_espflash_reset(&espflash, &port_arg, progress, budget_left(), cancel);
+                    // write-bin already uses --after hard-reset — skip a second reset
+                    // that only reopens the COM and looks like connect/disconnect thrash.
                     append_flash_log(&format!("success {label}"));
                     ctrl.need_boot.store(false, Ordering::SeqCst);
                     return Ok(true);
@@ -2059,7 +2015,6 @@ Available: {hint}. Unplug/replug the CYD, pick the COM again, then Update board.
             false,
             "push",
             true,
-            true,
             &mut esp_err,
             &mut py_err,
             &mut saw_chip_connect,
@@ -2077,9 +2032,9 @@ Available: {hint}. Unplug/replug the CYD, pick the COM again, then Update board.
                 "Update failed — COM port busy (close other Terminal/Arduino/flash tools), then try again. {tip}"
             ));
         }
-        // Silent auto-reset stalled. One user-gated BOOT Ready, then no-reset write.
+        // Silent auto-reset stalled — escalate to Ready without a long patient wait.
         progress(
-            "Silent push stalled — Hold BOOT, tap RESET, keep BOOT held, click Ready…"
+            "Auto-reset push stalled — Hold BOOT, tap RESET, keep BOOT held, click Ready…"
                 .into(),
         );
         // Fresh stall budget for the Ready round (don't inherit silent-push stalls).
@@ -2102,7 +2057,6 @@ Available: {hint}. Unplug/replug the CYD, pick the COM again, then Update board.
             true,
             &format!("ready {round}/{ready_rounds}"),
             false, // no-reset after BOOT Ready
-            true,  // compact: one no-stub @ 115200
             &mut esp_err,
             &mut py_err,
             &mut saw_chip_connect,
@@ -2200,11 +2154,8 @@ Hold BOOT, tap RESET, keep BOOT held, click Ready. Use a short data USB cable \
                         .into(),
                 );
                 wait_for_boot_ready(ctrl, progress, "rewrite after erase")?;
-                for (before, tool) in [
-                    ("no-reset", "espflash"),
-                    ("default-reset", "espflash"),
-                    ("no_reset", "esptool"),
-                ] {
+                // After Ready: no-reset only (default-reset ejects download mode).
+                for (before, tool) in [("no-reset", "espflash"), ("no_reset", "esptool")] {
                     if ensure_budget(progress).is_err() {
                         break;
                     }
@@ -2237,13 +2188,6 @@ Hold BOOT, tap RESET, keep BOOT held, click Ready. Use a short data USB cable \
                     };
                     match result {
                         Ok(()) => {
-                            let _ = run_espflash_reset(
-                                &espflash,
-                                &port_arg,
-                                progress,
-                                budget_left(),
-                                cancel,
-                            );
                             append_flash_log("success erase+write");
                             ctrl.need_boot.store(false, Ordering::SeqCst);
                             return Ok(());

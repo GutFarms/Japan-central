@@ -3751,11 +3751,10 @@ impl CompanionApp {
             return;
         }
 
-        let (phase, floor) = if lower.contains("cancelled") {
-            ("Cancelled", self.flash_progress)
-        } else if lower.contains("waiting for ready")
+        let (phase, floor) = if lower.contains("waiting for ready")
             || lower.contains("hold boot")
             || lower.contains("click ready")
+            || lower.contains("auto-reset push stalled")
             || lower.contains("silent push stalled")
         {
             ("Hold BOOT — click Ready", 0.08)
@@ -3764,8 +3763,51 @@ impl CompanionApp {
             || lower.contains("keep boot held until writing")
         {
             ("Writing after Ready", 0.12)
-        } else if lower.contains("rom sync") || lower.contains("syncing esp rom") {
-            ("Syncing download mode", 0.10)
+        } else if lower.contains("chip seen")
+            || (lower.contains("mac") && lower.contains("connect"))
+            || lower.contains("chip connected")
+        {
+            ("Chip connected", 0.14)
+        } else if lower.contains("write-bin")
+            || lower.contains("write_flash")
+            || lower.contains("writing firmware")
+            || lower.contains("writing after")
+            || lower.contains("patient write")
+            || lower.contains("auto-reset")
+            || lower.contains("push update round")
+        {
+            ("Pushing / writing", 0.12)
+        } else if lower.contains("connecting to chip")
+            || lower.contains("espflash write")
+            || lower.contains("esptool write")
+        {
+            ("Connecting to chip", 0.10)
+        } else if lower.contains("released")
+            || lower.contains("releasing")
+            || lower.contains("waiting for com")
+        {
+            ("Releasing USB", 0.05)
+        } else if lower.contains("staging firmware") || lower.contains("flash staging")
+        {
+            ("Staging firmware", 0.07)
+        } else if lower.contains("espflash")
+            && (lower.contains("found") || lower.contains("download"))
+        {
+            ("Preparing flash tool", 0.08)
+        } else if lower.contains("download") && (lower.contains("firmware") || lower.contains("kb"))
+        {
+            ("Downloading firmware", 0.06)
+        } else if lower.contains("flash budget") {
+            ("Preparing flash", 0.09)
+        } else if lower.contains("wifi ota") || lower.contains("wi‑fi ota") || lower.contains("wi-fi ota")
+        {
+            ("Wi‑Fi OTA", 0.12)
+        } else if lower.contains("board ready") {
+            ("Board ready for OTA", 0.15)
+        } else if lower.contains("upload complete") || lower.contains("pushed over wi") {
+            ("Wi‑Fi push complete", 0.88)
+        } else if lower.contains("cancelled") {
+            ("Cancelled", self.flash_progress)
         } else if lower.contains("verif")
             || lower.contains("reading board config")
             || lower.contains("usb linked after flash")
@@ -3781,52 +3823,6 @@ impl CompanionApp {
             ("Write complete", 0.86)
         } else if lower.contains("erase") {
             ("Erasing flash", 0.08)
-        } else if lower.contains("chip seen")
-            || (lower.contains("mac") && lower.contains("connect"))
-            || lower.contains("chip connected")
-        {
-            (
-                "Chip connected — starting write (BOOT+Ready if stuck)",
-                0.14,
-            )
-        } else if lower.contains("write-bin")
-            || lower.contains("write_flash")
-            || lower.contains("writing firmware")
-            || lower.contains("writing after")
-            || lower.contains("patient write")
-            || lower.contains("auto-reset")
-            || lower.contains("push update round")
-        {
-            ("Writing firmware", 0.12)
-        } else if lower.contains("connecting to chip")
-            || lower.contains("espflash write")
-            || lower.contains("esptool write")
-        {
-            ("Connecting to chip", 0.10)
-        } else if lower.contains("released")
-            || lower.contains("releasing")
-            || lower.contains("waiting for com")
-        {
-            ("Releasing USB", 0.05)
-        } else if lower.contains("staging firmware") || lower.contains("flash staging")
-        {
-            ("Staging firmware", 0.07)
-        } else if lower.contains("espflash")
-            && (lower.contains("found") || lower.contains("ready") || lower.contains("download"))
-        {
-            ("Preparing flash tool", 0.08)
-        } else if lower.contains("download") && (lower.contains("firmware") || lower.contains("kb"))
-        {
-            ("Downloading firmware", 0.06)
-        } else if lower.contains("flash budget") {
-            ("Preparing flash", 0.09)
-        } else if lower.contains("wifi ota") || lower.contains("wi‑fi ota") || lower.contains("wi-fi ota")
-        {
-            ("Wi‑Fi OTA", 0.12)
-        } else if lower.contains("board ready") {
-            ("Board ready for OTA", 0.15)
-        } else if lower.contains("upload complete") || lower.contains("pushed over wi") {
-            ("Wi‑Fi push complete", 0.88)
         } else {
             // Keep status text moving even when phase is unknown — avoids frozen 2%.
             return;
@@ -3896,7 +3892,7 @@ impl CompanionApp {
             )
         } else {
             format!(
-                "{reason} Hold BOOT, tap RESET, keep BOOT held, click Ready, then Update board again."
+                "{reason} Flash image is on the board — wait a few seconds, unplug/replug USB if needed, then Connect. Do not re-flash unless the board stays silent."
             )
         };
         self.update_status = tip.clone();
@@ -4808,7 +4804,7 @@ hashrate with Continuous watch. Optional: Ollama on this PC, or a cloud API.",
             );
             ui.add_space(8.0);
             ui.label(
-                RichText::new("Tip: Update board → Push (USB) / Push (Wi‑Fi) / Flash (BOOT). Hold BOOT + Ready only for the Flash path.")
+                RichText::new("Tip: Push (USB) tries silent update first, then Ready if needed. Flash (BOOT) asks Ready first. Keep BOOT held until Writing %.")
                     .color(C_DIM)
                     .size(12.0),
             );
@@ -8267,17 +8263,29 @@ or Flash (BOOT) with BOOT held + Ready."
                                         if let Some(r) = &self.flash_boot_ready {
                                             r.store(true, Ordering::SeqCst);
                                         }
-                                        self.flash_phase = "Syncing download mode".into();
+                                        self.flash_phase = "Writing after Ready".into();
                                         self.update_status =
-                                            "Ready — syncing ROM, then writing…".into();
+                                            "Ready — keep BOOT held until Writing % appears…".into();
                                     }
-                                } else {
+                                } else if self.flash_phase.to_ascii_lowercase().contains("push")
+                                    || self.update_status.to_ascii_lowercase().contains("auto-reset")
+                                    || self
+                                        .update_status
+                                        .to_ascii_lowercase()
+                                        .contains("push update")
+                                {
                                     ui.label(
                                         RichText::new(
-                                            "Keep USB connected · hold BOOT + tap RESET if needed",
+                                            "Silent Push — no BOOT yet. Ready appears only if auto-reset stalls.",
                                         )
                                         .color(C_DIM)
                                         .size(12.0),
+                                    );
+                                } else {
+                                    ui.label(
+                                        RichText::new("Keep USB connected")
+                                            .color(C_DIM)
+                                            .size(12.0),
                                     );
                                 }
                             },
