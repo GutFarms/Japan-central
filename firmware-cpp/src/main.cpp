@@ -372,13 +372,18 @@ static void serviceCompanion() {
   // Pool connect / mesh / snap work can stall RX long enough to fail right
   // after "Board ready" (UI ~15%) before the first upload tick.
   if (g_cmp.otaBusy()) {
+    // USB/TCP OTA binary only — skip Wi‑Fi/mesh/pool (NVS + radio work races
+    // Update.write → CMPERR ota write mid-upload after Board ready).
     auto onApply = applyConfig;
     auto job = onJobFromCompanion;
     auto stop = onStopFromCompanion;
     auto stats = onStats;
-    for (int i = 0; i < 8; i++) {
+    for (int i = 0; i < 16; i++) {
       g_cmp.poll(g_cfg, g_snap, onApply, &g_net, job, stop, stats);
-      g_wifi.poll(g_cmp, g_cfg, g_snap, onApply, &g_net, job, stop, stats);
+      // SoftAP/TCP OTA still needs wifi drain; USB OTA stays on Serial.poll.
+      if (g_wifi.tcpRxPending()) {
+        g_wifi.poll(g_cmp, g_cfg, g_snap, onApply, &g_net, job, stop, stats);
+      }
       if (!g_cmp.otaBusy()) break;
     }
     return;
@@ -632,7 +637,17 @@ void setup() {
   g_cmp.setWifiApply([]() { g_wifi.applyConfig(g_cfg); });
   g_cmp.setMiningHold([](bool hold) {
     g_otaHoldMining = hold;
-    if (hold) onStop();
+    if (hold) {
+      onStop();
+      // Park hash lanes so flash erase/write is not preempted mid-sector.
+      if (g_mineTaskA) vTaskSuspend(g_mineTaskA);
+      if (g_mineTaskB) vTaskSuspend(g_mineTaskB);
+      if (g_usbTask) vTaskPrioritySet(g_usbTask, 5);
+    } else {
+      if (g_mineTaskA) vTaskResume(g_mineTaskA);
+      if (g_mineTaskB) vTaskResume(g_mineTaskB);
+      syncMinePriorities();
+    }
   });
   // Phone SoftAP portal uses the same NVS + SoftAP/STA apply path.
   g_wifi.setPersist([]() {

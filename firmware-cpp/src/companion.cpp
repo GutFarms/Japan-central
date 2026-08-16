@@ -4,13 +4,14 @@
 #include <Update.h>
 #include <cstring>
 #include <esp_system.h>
+#include <esp_task_wdt.h>
 
 extern "C" float cyd_run_bench(uint32_t n, bool tune);
 
 #if CYD_D0_BUILD
-static constexpr const char* kFwTag = "0.8.190-sha256-d0";
+static constexpr const char* kFwTag = "0.8.191-sha256-d0";
 #else
-static constexpr const char* kFwTag = "0.8.190-sha256";
+static constexpr const char* kFwTag = "0.8.191-sha256";
 #endif
 
 void CompanionLink::begin(uint32_t baud) {
@@ -64,10 +65,11 @@ bool CompanionLink::pollOtaBinary(Stream& in, Print& out) {
     return true;
   }
   if (otaRemain_ == 0) return false;
-  uint8_t buf[1024];
+  uint8_t buf[512];
   // Drain aggressively — host can outrun Update.write and overflow the 16 KiB RX
   // buffer (looks like a disconnect / fail at ~82% after host upload 100%).
-  int budget = 512;
+  // Smaller chunks + WDT reset between flash sector writes reduce CMPERR ota write.
+  int budget = 1024;
   while (budget-- > 0 && otaRemain_ > 0 && in.available() > 0) {
     size_t want = otaRemain_ < sizeof(buf) ? otaRemain_ : sizeof(buf);
     int n = in.available();
@@ -76,22 +78,30 @@ bool CompanionLink::pollOtaBinary(Stream& in, Print& out) {
     size_t got = in.readBytes(buf, want);
     if (got == 0) break;
     otaLastRxMs_ = millis();
-    if (Update.write(buf, got) != got) {
+    size_t wrote = Update.write(buf, got);
+    if (wrote != got) {
+      int err = Update.getError();
       Update.abort();
       otaActive_ = false;
       otaRemain_ = 0;
       if (onMiningHold_) onMiningHold_(false);
-      out.println("CMPERR ota write");
+      char line[48];
+      snprintf(line, sizeof(line), "CMPERR ota write err=%d", err);
+      out.println(line);
       out.flush();
       return true;
     }
     otaRemain_ -= got;
+    esp_task_wdt_reset();
   }
   if (otaRemain_ == 0) {
     otaActive_ = false;
     if (!Update.end(true)) {
+      int err = Update.getError();
       if (onMiningHold_) onMiningHold_(false);
-      out.println("CMPERR ota end");
+      char line[48];
+      snprintf(line, sizeof(line), "CMPERR ota end err=%d", err);
+      out.println(line);
       out.flush();
       return true;
     }
@@ -585,6 +595,8 @@ void CompanionLink::handleLine(const String& line, AppConfig& cfg, const MinerSn
     otaLastRxMs_ = millis();
     out_->println("CMPACK ota ready");
     out_->flush();
+    // Brief settle so miners are fully suspended before the host streams bytes.
+    delay(40);
     return;
   }
 

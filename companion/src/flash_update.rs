@@ -403,10 +403,9 @@ fn push_firmware_ota_stream<S: Read + Write + ?Sized>(
         label,
     )?;
     progress(format!("Board ready · {ready}"));
-    // Let the board leave the command path and enter pollOtaBinary before the
-    // first chunk — starting immediately was a common fail-at-~15% (UI maps
-    // "Board ready" to 15% and never reached the first upload tick).
-    std::thread::sleep(Duration::from_millis(80));
+    // Let the board leave the command path, suspend miners, and enter binary
+    // drain before the first chunk — racing Update.write caused CMPERR ota write.
+    std::thread::sleep(Duration::from_millis(220));
     let mut drain = [0u8; 512];
     while let Ok(n) = stream.read(&mut drain) {
         if n == 0 {
@@ -425,9 +424,9 @@ fn push_firmware_ota_stream<S: Read + Write + ?Sized>(
     }
     progress(format!("{label} streaming app image…"));
 
-    // Match firmware pollOtaBinary buf[1024]. Unpaced 4 KiB blasts fill the 16 KiB
-    // USB RX buffer while Update.write stalls → host hits 100% (UI ~82%) with no ACK.
-    const CHUNK: usize = 1024;
+    // Match firmware pollOtaBinary buf[512]. Unpaced blasts fill the 16 KiB
+    // USB RX buffer while flash sector erase stalls → CMPERR ota write.
+    const CHUNK: usize = 512;
     let total = bytes.len();
     let mut sent = 0usize;
     let mut last_pct = 0u32;
@@ -443,40 +442,41 @@ fn push_firmware_ota_stream<S: Read + Write + ?Sized>(
         sent = end;
         chunks = chunks.wrapping_add(1);
         // Pace so the board can drain flash writes; slower at start (board settling)
-        // and near the end (commit phase).
+        // and near the end (commit phase). Keep a floor so sector erase cannot
+        // overflow the CH340 RX FIFO.
         let pct_now = ((sent as u64 * 100) / total as u64) as u32;
-        let pace_ms = if pct_now < 15 {
-            10u64
+        let pace_ms = if pct_now < 20 {
+            14u64
         } else if pct_now >= 90 {
-            18
+            22
         } else if pct_now >= 80 {
-            12
+            16
         } else if pct_now >= 70 {
-            8
+            12
         } else {
-            3
+            8
         };
-        if chunks % 4 == 0 {
-            let _ = stream.flush();
-            // Abort early on CMPERR ota write instead of blasting the rest blind.
-            let mut tmp = [0u8; 512];
-            if let Ok(n) = stream.read(&mut tmp) {
-                if n > 0 {
-                    rx.push_str(&String::from_utf8_lossy(&tmp[..n]));
-                    for line in rx.lines() {
-                        let t = line.trim();
-                        let low = t.to_ascii_lowercase();
-                        if low.starts_with("cmperr ota") {
-                            return Err(format!("{label} board rejected mid-upload: {t}"));
-                        }
+        let _ = stream.flush();
+        // Abort early on CMPERR ota write instead of blasting the rest blind.
+        let mut tmp = [0u8; 512];
+        if let Ok(n) = stream.read(&mut tmp) {
+            if n > 0 {
+                rx.push_str(&String::from_utf8_lossy(&tmp[..n]));
+                for line in rx.lines() {
+                    let t = line.trim();
+                    let low = t.to_ascii_lowercase();
+                    if low.starts_with("cmperr ota") {
+                        return Err(format!("{label} board rejected mid-upload: {t}"));
                     }
-                    if rx.len() > 4096 {
-                        crate::utf8_safe::keep_last(&mut rx, 1024);
-                    }
+                }
+                if rx.len() > 4096 {
+                    crate::utf8_safe::keep_last(&mut rx, 1024);
                 }
             }
         }
-        std::thread::sleep(Duration::from_millis(pace_ms));
+        // Extra breather every few chunks so erase windows catch up.
+        let extra = if chunks % 8 == 0 { 6 } else { 0 };
+        std::thread::sleep(Duration::from_millis(pace_ms + extra));
         if pct_now >= last_pct + 5 || sent == total {
             last_pct = pct_now;
             progress(format!("{label} upload {pct_now}% ({sent}/{total})"));
@@ -1653,6 +1653,7 @@ pub const REPO_NAME: &str = "Japan-central";
 /// Tip first — apps still on older builds may only hit the legacy CYD branch.
 pub const REPO_REFS: &[&str] = &[
     // Tip agent branches first — newest VERSION wins for Fetch firmware / app update.
+    "cursor/ota-write-fail-e801",
     "cursor/share-counter-reset-e801",
     "cursor/project-cleanup-e801",
     "cursor/demote-fighting-systems-e801",
