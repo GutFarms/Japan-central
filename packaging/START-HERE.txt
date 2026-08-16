@@ -1,0 +1,70 @@
+CYD Miner Kit for Windows
+=========================
+Version: see VERSION.txt
+
+This package has everything needed to run the ESP32-2432S028 (CYD)
+USB Bitcoin SHA-256 miner from a Windows PC.
+
+What is installed
+-----------------
+1. Njörðr Seas' CYD miner          — pool + USB mining control app
+2. Firmware\*.merged.bin  — board firmware (flash @ 0x0)
+3. Tools\espflash.exe     — used by in-app "Update board"
+4. Flash-Firmware.bat     — optional flash helper
+5. Docs                   — this file + FLASH-WINDOWS.txt
+6. Desktop / Start Menu shortcuts (branded app icon)
+   Companion also auto-creates a Desktop shortcut with the logo on first launch.
+
+First-time setup (about 5 minutes)
+----------------------------------
+A) USB driver (if Windows does not see a COM port)
+   - Most CYD boards use a CH340 USB-serial chip.
+   - Install a CH340 driver if Device Manager shows an unknown device.
+
+B) Flash / update the board
+   Option 1 (recommended): open Njörðr Seas' CYD miner → select COM → Update board
+   Option 2: run "Flash Firmware" (Start Menu) OR Flash-Firmware.bat
+   If flash fails: hold BOOT, tap RESET, release BOOT, then retry.
+   SAFETY: if erase ran but rewrite failed, the board may be blank — keep USB
+   plugged in and Update / Flash-Firmware.bat again until it succeeds.
+   Browser fallback: https://espressif.github.io/esptool-js/ (merged.bin @ 0x0).
+   Image: esp32-2432s028-sha256-miner-merged.bin @ 0x0 (DIO, 4 MB, 40 MHz).
+   After a successful write, Companion reconnects and verifies the board
+   over USB (cmp ping + config fw tag) before clearing the update overlay.
+   After flash, power-cycle without holding BOOT if verify keeps failing.
+
+C) Mine
+   1. Run Njörðr Seas' CYD miner (Desktop shortcut or Start Menu).
+   2. Complete the in-app setup wizard (or Settings → Show setup wizard).
+   3. Select the COM port → Connect.
+   4. Stratum:  stratum+tcp://btc.hmpool.io:3337
+   5. Worker:   your Bitcoin address
+   6. Password: x
+   7. Start mining.
+
+D) Best path on this board (not a different algorithm)
+   Bitcoin mining here is SHA-256d only — do not switch to Scrypt/RandomX.
+   What’s left for the best path on this board:
+   1. D0 firmware + Bench boards (D0) → lock Full HW (HW / HW+ / HW/SW)
+   2. Set CPU clock to 240 MHz
+   3. Add more CYD boards for more hashrate (one ESP32 is ~1 MH/s class)
+   The ceiling is ESP32 SHA silicon + how many boards you run, not the algorithm.
+
+Notes
+-----
+- Pool traffic stays on this PC (USB preferred). Board SoftAP/STA Wi-Fi is optional for Companion TCP / phone monitor.
+- Expect tens–hundreds of kH/s. Solo BTC is a lottery.
+- Always match Companion + firmware versions (see VERSION.txt).
+- Keep the Firmware folder; you only need to reflash after updates.
+
+Windows SmartScreen / "unknown publisher"
+-----------------------------------------
+Unsigned builds may show a SmartScreen prompt until Microsoft reputation
+builds (or until the publisher Authenticode-signs the release).
+
+If Windows blocks the download or marks it as unsafe:
+1. Right-click cyd-companion.exe (or the Setup) → Properties
+2. Check Unblock (if shown) → Apply → OK
+3. Confirm integrity: compare SHA-256 against Firmware\SHA256SUMS.txt
+   or the repo file flash/downloads/SHA256SUMS.txt
+   (PowerShell: Get-FileHash .\cyd-companion.exe -Algorithm SHA256)
