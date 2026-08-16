@@ -553,11 +553,11 @@ pub fn tool_definitions() -> Value {
             "type": "function",
             "function": {
                 "name": "set_clock",
-                "description": "Set board CPU clock to 80, 160, or 240 MHz. Prefer 240 for max hashrate.",
+                "description": "Set board CPU clock to an ESP32 lock point: 10, 20, 40, 80, 160, or 240 MHz. Prefer 240 for max hashrate.",
                 "parameters": {
                     "type": "object",
                     "properties": {
-                        "mhz": { "type": "integer", "enum": [80, 160, 240] }
+                        "mhz": { "type": "integer", "enum": [10, 20, 40, 80, 160, 240] }
                     },
                     "required": ["mhz"]
                 }
@@ -939,13 +939,20 @@ pub fn parse_action(name: &str, arguments: &str) -> Result<AssistAction, String>
         "start_mining" => Ok(AssistAction::StartMining),
         "stop_mining" => Ok(AssistAction::StopMining),
         "set_clock" => {
-            let mhz = args
+            let raw = args
                 .get("mhz")
                 .and_then(|v| v.as_u64())
                 .ok_or_else(|| "set_clock needs mhz".to_string())? as u8;
-            if !matches!(mhz, 80 | 160 | 240) {
-                return Err("mhz must be 80, 160, or 240".into());
-            }
+            // Snap to ESP32 lock points (same ladder as Companion/firmware).
+            let mhz = match raw {
+                10 | 20 | 40 | 80 | 160 | 240 => raw,
+                m if m >= 200 => 240,
+                m if m >= 120 => 160,
+                m if m >= 60 => 80,
+                m if m >= 30 => 40,
+                m if m >= 15 => 20,
+                _ => 10,
+            };
             Ok(AssistAction::SetClock { mhz })
         }
         "bench_boards" => Ok(AssistAction::BenchBoards),
@@ -1100,6 +1107,10 @@ pub fn local_assist(user: &str, snap: &AssistSnapshot) -> (String, Vec<PendingTo
     if low.contains("80") && (low.contains("mhz") || low.contains("clock")) {
         push(&mut tools, AssistAction::SetClock { mhz: 80 });
         return ("Built-in AI · setting clock to 80 MHz…".into(), tools);
+    }
+    if low.contains("40") && (low.contains("mhz") || low.contains("clock")) {
+        push(&mut tools, AssistAction::SetClock { mhz: 40 });
+        return ("Built-in AI · setting clock to 40 MHz…".into(), tools);
     }
     if low.contains("help") || low.contains("what can") || low == "?" {
         return (

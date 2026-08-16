@@ -626,6 +626,35 @@ fn default_mhz() -> u8 {
     240
 }
 
+/// ESP32 `setCpuFrequencyMhz` lock points (Arduino-ESP32).
+const CPU_MHZ_STEPS: &[u8] = &[10, 20, 40, 80, 160, 240];
+
+fn normalize_cpu_mhz(mhz: u8) -> u8 {
+    if mhz == 0 {
+        return 240;
+    }
+    CPU_MHZ_STEPS
+        .iter()
+        .copied()
+        .min_by_key(|&s| (s as i16 - mhz as i16).unsigned_abs())
+        .unwrap_or(240)
+}
+
+fn cpu_mhz_nudge(current: u8, up: bool) -> u8 {
+    let cur = normalize_cpu_mhz(current);
+    if let Some(i) = CPU_MHZ_STEPS.iter().position(|&s| s == cur) {
+        if up {
+            CPU_MHZ_STEPS[(i + 1).min(CPU_MHZ_STEPS.len() - 1)]
+        } else {
+            CPU_MHZ_STEPS[i.saturating_sub(1)]
+        }
+    } else if up {
+        240
+    } else {
+        160
+    }
+}
+
 #[derive(Clone)]
 struct ShareRow {
     time: String,
@@ -965,8 +994,8 @@ impl CompanionApp {
                         edit_password = p.password;
                     }
                     target_mhz = match p.cpu_mhz {
-                        80 | 160 | 240 => p.cpu_mhz,
-                        _ => 240,
+                        m if CPU_MHZ_STEPS.contains(&m) => m,
+                        other => normalize_cpu_mhz(other),
                     };
                     com_port = p.com_port;
                     auto_connect = p.auto_connect;
@@ -1862,6 +1891,7 @@ impl CompanionApp {
                 self.last_ok.clone()
             }
             AssistAction::SetClock { mhz } => {
+                let mhz = normalize_cpu_mhz(mhz);
                 self.target_mhz = mhz;
                 let _ = self.cmd_tx.send(NetCmd::SetClock(mhz));
                 format!("Set clock → {mhz} MHz")
@@ -5573,7 +5603,18 @@ hashrate with Continuous watch. Optional: Ollama on this PC, or a cloud API.",
                 );
                 ui.separator();
                 ui.label(RichText::new("Clock").color(C_MUTED).size(12.0));
-                for mhz in [80_u8, 160, 240] {
+                // ESP32 only locks discrete MHz — step through them with − / + and chips.
+                if soft_button(ui, "−", 28.0).clicked() {
+                    let mhz = cpu_mhz_nudge(self.target_mhz, false);
+                    self.target_mhz = mhz;
+                    let _ = self.cmd_tx.send(NetCmd::SetClock(mhz));
+                    self.push_log(LogKind::Usb, format!("Clock request {mhz} MHz"));
+                }
+                for &mhz in CPU_MHZ_STEPS {
+                    // Skip ultra-low for the chip row; still reachable via −.
+                    if mhz < 40 {
+                        continue;
+                    }
                     let selected = self.target_mhz == mhz;
                     if clock_chip(ui, mhz, selected).clicked() {
                         self.target_mhz = mhz;
@@ -5581,7 +5622,25 @@ hashrate with Continuous watch. Optional: Ollama on this PC, or a cloud API.",
                         self.push_log(LogKind::Usb, format!("Clock request {mhz} MHz"));
                     }
                 }
+                if soft_button(ui, "+", 28.0).clicked() {
+                    let mhz = cpu_mhz_nudge(self.target_mhz, true);
+                    self.target_mhz = mhz;
+                    let _ = self.cmd_tx.send(NetCmd::SetClock(mhz));
+                    self.push_log(LogKind::Usb, format!("Clock request {mhz} MHz"));
+                }
+                ui.label(
+                    RichText::new(format!("{} MHz", self.target_mhz))
+                        .color(C_DIM)
+                        .font(mono_ui_font(11.0)),
+                );
             });
+            ui.label(
+                RichText::new(
+                    "ESP32 clock steps: 10·20·40·80·160·240 MHz (hardware lock points — not continuous).",
+                )
+                .color(C_MUTED)
+                .size(11.0),
+            );
         });
     }
 
@@ -7199,8 +7258,10 @@ impl App for CompanionApp {
                     if !c.mac.is_empty() {
                         self.board_mac = normalize_mac(&c.mac);
                     }
-                    if c.cpu_mhz == 80 || c.cpu_mhz == 160 || c.cpu_mhz == 240 {
+                    if CPU_MHZ_STEPS.contains(&c.cpu_mhz) {
                         self.target_mhz = c.cpu_mhz;
+                    } else if c.cpu_mhz > 0 {
+                        self.target_mhz = normalize_cpu_mhz(c.cpu_mhz);
                     }
                     self.push_log(
                         LogKind::Usb,
@@ -9533,7 +9594,7 @@ fn clock_chip(ui: &mut egui::Ui, mhz: u8, selected: bool) -> egui::Response {
             if selected { rgba(C_LIME, 120) } else { C_STROKE },
         ))
         .rounding(Rounding::same(999.0))
-        .min_size(Vec2::new(48.0, 30.0)),
+        .min_size(Vec2::new(42.0, 30.0)),
     )
 }
 
@@ -11630,6 +11691,7 @@ Power a 2nd board nearby with wall/power-bank only (no PC cable)."
                     }));
                 }
                 NetCmd::SetClock(mhz) => {
+                    let mhz = normalize_cpu_mhz(mhz);
                     let mut any = false;
                     for b in boards.iter_mut() {
                         let cmd = format!("cmp clock cpu_mhz={mhz}");

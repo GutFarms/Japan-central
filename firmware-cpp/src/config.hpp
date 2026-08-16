@@ -22,9 +22,19 @@ struct AppConfig {
   bool pathTuned = false;
 
   uint8_t normalizeCpu(uint8_t mhz) const {
-    if (mhz == 0 || mhz >= 200) return 240;
-    if (mhz <= 100) return 80;
-    return 160;
+    // ESP32 Arduino setCpuFrequencyMhz only locks these rates.
+    static const uint8_t kSteps[] = {10, 20, 40, 80, 160, 240};
+    if (mhz == 0) return 240;
+    uint8_t best = 240;
+    uint16_t bestDist = 255;
+    for (uint8_t s : kSteps) {
+      uint16_t d = (mhz > s) ? (uint16_t)(mhz - s) : (uint16_t)(s - mhz);
+      if (d < bestDist) {
+        bestDist = d;
+        best = s;
+      }
+    }
+    return best;
   }
 
   bool poolConfigured() const {

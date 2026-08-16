@@ -69,7 +69,6 @@ static bool g_labelsReady = false;
 static void flushShareQueue();
 static void applyCpu(uint8_t mhz) {
   mhz = g_cfg.normalizeCpu(mhz);
-  if (mhz < 240) mhz = 240;
   setCpuFrequencyMhz(mhz);
   g_cfg.cpuMhz = mhz;
 }
@@ -203,7 +202,8 @@ static void fillSnap() {
 }
 
 static bool applyConfig(AppConfig& updated, bool& reboot) {
-  updated.cpuMhz = 240;
+  // Honor caller cpu_mhz (cmp clock); default / corrupt → 240.
+  updated.cpuMhz = updated.normalizeCpu(updated.cpuMhz ? updated.cpuMhz : 240);
   updated.hashFocus = true;
   g_cfg = updated;
   g_store.save(g_cfg);
@@ -213,7 +213,7 @@ static bool applyConfig(AppConfig& updated, bool& reboot) {
     delay(60);
     ESP.restart();
   }
-  applyCpu(240);
+  applyCpu(g_cfg.cpuMhz);
   return true;
 }
 
@@ -585,10 +585,10 @@ void setup() {
   g_ui.showSplash();
 
   g_store.load(g_cfg);
-  g_cfg.cpuMhz = 240;
+  g_cfg.cpuMhz = g_cfg.normalizeCpu(g_cfg.cpuMhz ? g_cfg.cpuMhz : 240);
   g_cfg.hashFocus = true;
   g_cfg.wifiEnabled = true;
-  applyCpu(240);
+  applyCpu(g_cfg.cpuMhz);
   cyd_sha_hw::set_preferred_mode(g_cfg.shaPath);
   g_wifi.begin(g_macStr, g_cfg);
   g_mesh.begin(mac);

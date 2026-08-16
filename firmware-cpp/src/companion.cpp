@@ -10,9 +10,9 @@
 extern "C" float cyd_run_bench(uint32_t n, bool tune);
 
 #if CYD_D0_BUILD
-static constexpr const char* kFwTag = "0.8.177-sha256-d0";
+static constexpr const char* kFwTag = "0.8.178-sha256-d0";
 #else
-static constexpr const char* kFwTag = "0.8.177-sha256";
+static constexpr const char* kFwTag = "0.8.178-sha256";
 #endif
 
 void CompanionLink::begin(uint32_t baud) {
