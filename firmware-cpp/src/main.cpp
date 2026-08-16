@@ -258,7 +258,9 @@ static void onJobFromCompanion(const UsbJob& job) {
   if (g_pool.authorized()) return;
   onJob(job);
   // First Companion-fed job: lock D0 high-rate path once (same as indep).
-  if (g_hwSha && !(g_cfg.pathTuned && g_cfg.shaPath > 0)) {
+  // FullHw == shaPath 0 is a valid lock — do NOT require shaPath > 0 or every
+  // job re-runs a 60s bench and share finds go to zero at ESP diffs.
+  if (g_hwSha && !g_cfg.pathTuned) {
     g_needIndepTune = true;
   }
 }
@@ -279,8 +281,10 @@ static void onStop() {
 }
 
 static void onStopFromCompanion() {
-  // Always honor Companion stop — OTA/Push must pause hashing even while the
-  // onboard indep pool is authorized (guard used to ignore stop → RX overflow).
+  // Indep-authorized boards own their work — ignore routine Companion stop/re-arm
+  // (unique-en2 job push). OTA/Push calls setMiningHold(true) first so
+  // g_otaHoldMining forces a real pause even while authorized.
+  if (g_pool.authorized() && !g_otaHoldMining) return;
   onStop();
 }
 
@@ -299,7 +303,8 @@ static void onPoolStats(uint32_t accepted, uint32_t rejected) {
 static void onIndepTune() {
   // Defer heavy D0 Bench off the USB/pool poll path (blocks tens of seconds).
   if (!g_hwSha) return;
-  if (g_cfg.pathTuned && g_cfg.shaPath > 0) {
+  if (g_cfg.pathTuned) {
+    // shaPath 0 (FullHw) is a valid tuned lock.
     cyd_sha_hw::set_preferred_mode(g_cfg.shaPath);
     return;
   }

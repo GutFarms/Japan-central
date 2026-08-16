@@ -5971,10 +5971,12 @@ Phone: join SoftAP — Board Setup opens automatically to set home Wi‑Fi.",
             ui.add_space(6.0);
             if soft_button(ui, "Copy stratum snapshot", 180.0).clicked() {
                 let snap = format!(
-                    "endpoint={} phase={} diff={} acc={} rej={} job={}\nTX {}\nRX {}\n",
+                    "endpoint={} phase={} diff={} submits={} pending={} acc={} rej={} job={}\nTX {}\nRX {}\n",
                     s.endpoint,
                     s.phase,
                     s.difficulty,
+                    s.submits,
+                    s.pending,
                     acc,
                     rej,
                     s.last_job,
@@ -11323,12 +11325,13 @@ fn is_warmup_job_id(job: &str) -> bool {
     lower == "warmup" || lower.starts_with("warm")
 }
 
-/// Board owns stratum only after onboard pool authorize (phase ok).
+/// Board owns stratum only after onboard pool authorize (phase ok / mine).
 fn board_indep_live(st: &StatusJson) -> bool {
     if !st.mine_indep {
         return false;
     }
-    st.pool_phase.eq_ignore_ascii_case("ok")
+    let p = st.pool_phase.as_str();
+    p.eq_ignore_ascii_case("ok") || p.eq_ignore_ascii_case("mine")
 }
 
 /// HMPool-style `address.worker` label.
