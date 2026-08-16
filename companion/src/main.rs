@@ -5008,11 +5008,15 @@ impl CompanionApp {
             ui.add_space(12.0);
             ui.horizontal_wrapped(|ui| {
                 let bench_label = if self.bench_busy {
-                    "Benching…"
+                    let secs = self
+                        .bench_busy_since
+                        .map(|t| t.elapsed().as_secs())
+                        .unwrap_or(0);
+                    format!("Benching… {secs}s")
                 } else {
-                    "Bench boards (D0)"
+                    "Bench boards (D0)".into()
                 };
-                if soft_button(ui, bench_label, 168.0).clicked() && !self.bench_busy {
+                if soft_button(ui, &bench_label, 168.0).clicked() && !self.bench_busy {
                     self.request_bench();
                 }
                 let fetch_label = if self.fetch_busy {
@@ -7049,8 +7053,16 @@ Phone: join SoftAP — Board Setup opens automatically to set home Wi‑Fi.",
                     self.term_input = "cmp stop".into();
                     self.send_term();
                 }
-                let bench_label = if self.bench_busy { "Benching…" } else { "Bench D0" };
-                if soft_button(ui, bench_label, 96.0).clicked() && !self.bench_busy {
+                let bench_label = if self.bench_busy {
+                    let secs = self
+                        .bench_busy_since
+                        .map(|t| t.elapsed().as_secs())
+                        .unwrap_or(0);
+                    format!("Bench…{secs}s")
+                } else {
+                    "Bench D0".into()
+                };
+                if soft_button(ui, &bench_label, 96.0).clicked() && !self.bench_busy {
                     self.request_bench();
                 }
                 if soft_button(ui, "Reboot", 92.0).clicked() {
