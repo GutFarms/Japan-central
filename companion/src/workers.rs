@@ -1066,8 +1066,7 @@ fn drain(port: &mut dyn SerialPort, buf: &mut String) {
         }
     }
     if buf.len() > 16_000 {
-        let keep = buf[buf.len() - 8_000..].to_string();
-        *buf = keep;
+        crate::utf8_safe::keep_last(buf, 8_000);
     }
 }
 

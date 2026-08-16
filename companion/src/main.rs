@@ -11,6 +11,7 @@ mod flash_update;
 mod live_bar;
 mod monitor_api;
 mod stratum;
+mod utf8_safe;
 mod workers;
 
 use std::collections::VecDeque;
@@ -953,7 +954,20 @@ impl CompanionApp {
         let (cmd_tx, cmd_rx) = mpsc::channel::<NetCmd>();
         let (msg_tx, msg_rx) = mpsc::channel::<NetMsg>();
         let msg_tx_ui = msg_tx.clone();
-        thread::spawn(move || mine_worker(cmd_rx, msg_tx));
+        thread::spawn(move || {
+            // A panic in the mine-worker must not tear down the GUI process.
+            let err_tx = msg_tx.clone();
+            if std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                mine_worker(cmd_rx, msg_tx)
+            }))
+            .is_err()
+            {
+                let _ = err_tx.send(NetMsg::Action(Err(
+                    "Mine worker stopped after an internal panic (see cyd-companion-crash.log next to the exe). Restart Companion, then re-link."
+                        .into(),
+                )));
+            }
+        });
         let _ = cmd_tx.send(NetCmd::ListPorts);
 
         // Port 3337 = HM Pool IoT/ESP32 (start diff ~0.01). Port 3335 is CPU/GPU (diff 128)
@@ -8727,10 +8741,8 @@ fn local_host_hint() -> String {
 fn trunc(s: &str, n: usize) -> String {
     if s.is_empty() {
         "—".into()
-    } else if s.len() > n {
-        format!("{}…", &s[..n])
     } else {
-        s.to_string()
+        utf8_safe::trunc(s, n)
     }
 }
 
@@ -9724,7 +9736,7 @@ impl BoardIo {
                 Ok(n) => {
                     buf.push_str(&String::from_utf8_lossy(&tmp[..n]));
                     if buf.len() > 24576 {
-                        *buf = buf[buf.len() - 8192..].to_string();
+                        utf8_safe::keep_last(buf, 8192);
                     }
                 }
             }
@@ -12461,7 +12473,9 @@ Power a 2nd board nearby with wall/power-bank only (no PC cable)."
                         progress(format!(
                             "Released {port} — preparing flash tool…"
                         ));
-                        let result = (|| {
+                        // UTF-8 mid-char panics in OTA/flash must not kill the GUI.
+                        let result: Result<String, String> = match std::panic::catch_unwind(
+                            std::panic::AssertUnwindSafe(|| -> Result<String, String> {
                             if cancel.load(Ordering::SeqCst) {
                                 return Err("flash cancelled".into());
                             }
@@ -12580,7 +12594,14 @@ Power a 2nd board nearby with wall/power-bank only (no PC cable)."
                                 },
                                 if live_push { "pushed" } else { "flashed" }
                             ))
-                        })();
+                            }),
+                        ) {
+                            Ok(r) => r,
+                            Err(_) => Err(
+                                "Flash/OTA thread panicked (see cyd-companion-crash.log next to the exe). Retry Push."
+                                    .into(),
+                            ),
+                        };
                         hold_clear.store(false, Ordering::SeqCst);
                         // Allow mine-worker USB again after flash thread finishes.
                         USB_FLASH_PREEMPT.store(false, Ordering::SeqCst);

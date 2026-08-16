@@ -324,7 +324,7 @@ fn ota_wait_line<R: Read + ?Sized>(
             Ok(n) => {
                 rx.push_str(&String::from_utf8_lossy(&tmp[..n]));
                 if rx.len() > 32768 {
-                    *rx = rx[rx.len() - 8192..].to_string();
+                    crate::utf8_safe::keep_last(rx, 8192);
                 }
             }
             Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {}
@@ -445,7 +445,7 @@ fn push_firmware_ota_stream<S: Read + Write + ?Sized>(
                         }
                     }
                     if rx.len() > 4096 {
-                        rx = rx[rx.len() - 1024..].to_string();
+                        crate::utf8_safe::keep_last(&mut rx, 1024);
                     }
                 }
             }
@@ -910,11 +910,7 @@ fn usb_ota_soft_verify_on<S: Read + Write + ?Sized>(
 }
 
 fn trunc_flash_line(s: &str, max: usize) -> String {
-    if s.len() <= max {
-        s.to_string()
-    } else {
-        format!("{}…", &s[..max])
-    }
+    crate::utf8_safe::trunc(s, max)
 }
 
 /// Soft reboot a live USB board so the next silent ROM auto-reset has a clean edge.
@@ -2890,12 +2886,7 @@ fn ensure_python_esptool(
 }
 
 fn trunc(s: &str, max: usize) -> String {
-    let t = s.trim();
-    if t.len() <= max {
-        t.to_string()
-    } else {
-        format!("{}…", &t[..max])
-    }
+    crate::utf8_safe::trunc(s.trim(), max)
 }
 
 fn best_effort_reset(
@@ -3311,8 +3302,7 @@ fn run_streaming_timeout(
                 }
                 tail.push_str(&line);
                 if tail.len() > 400 {
-                    let keep = tail[tail.len() - 400..].to_string();
-                    tail = keep;
+                    crate::utf8_safe::keep_last(&mut tail, 400);
                 }
             }
             Err(RecvTimeoutError::Timeout) => match child.try_wait() {
@@ -3412,7 +3402,9 @@ fn trunc_tail(tail: &str) -> String {
     if tail.len() <= 400 {
         tail.to_string()
     } else {
-        tail[tail.len() - 400..].to_string()
+        let mut t = tail.to_string();
+        crate::utf8_safe::keep_last(&mut t, 400);
+        t
     }
 }
 

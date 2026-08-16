@@ -565,11 +565,7 @@ fn sanitize_filename(raw: &str) -> String {
 }
 
 fn truncate(s: &str, max: usize) -> String {
-    if s.len() <= max {
-        s.to_string()
-    } else {
-        format!("{}…", &s[..max])
-    }
+    crate::utf8_safe::trunc(s, max)
 }
 
 fn looks_like_json(body: &str) -> bool {

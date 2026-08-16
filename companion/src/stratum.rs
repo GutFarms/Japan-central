@@ -440,7 +440,7 @@ impl StratumClient {
             self.lines_rx += 1;
             self.last_rx = line.clone();
             let preview = if line.len() > 160 {
-                format!("{}…", &line[..160])
+                crate::utf8_safe::trunc(&line, 160)
             } else {
                 line.clone()
             };
@@ -630,7 +630,7 @@ impl StratumClient {
         let trimmed = s.trim().to_string();
         self.last_tx = trimmed.clone();
         let preview = if trimmed.len() > 160 {
-            format!("{}…", &trimmed[..160])
+            crate::utf8_safe::trunc(&trimmed, 160)
         } else {
             trimmed
         };
