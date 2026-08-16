@@ -249,6 +249,14 @@ impl StratumClient {
         self.stream.is_some() && self.authorized
     }
 
+    pub fn worker(&self) -> &str {
+        &self.worker
+    }
+
+    pub fn endpoint(&self) -> &str {
+        &self.endpoint
+    }
+
     pub fn stream_connected(&self) -> bool {
         self.stream.is_some()
     }
@@ -465,15 +473,18 @@ impl StratumClient {
             return Err("pool requested reconnect".into());
         }
         self.release_held_job_if_ready();
-        // Always re-suggest the ESP share difficulty. Echoing the pool's current
-        // (often high) difficulty kept vardiff hard → ~1 accept/h @ 200 kH/s.
-        // When pool is already hard, nudge more often so vardiff can ease.
+        // Always re-suggest the ESP share difficulty when the pool climbed hard.
+        // Soft sessions already at suggest (0.01) do not need a TX every 35s —
+        // that filled Event log and looked like a stuck counter loop.
         let suggest_every = if self.difficulty > 0.05 {
             Duration::from_secs(12)
         } else {
-            Duration::from_secs(35)
+            Duration::from_secs(120)
         };
-        if self.authorized && self.last_tx_at.elapsed() >= suggest_every {
+        if self.authorized
+            && self.difficulty > self.suggest_difficulty * 5.0
+            && self.last_tx_at.elapsed() >= suggest_every
+        {
             let _ = self.send_suggest_difficulty(self.suggest_difficulty);
         }
         Ok(())

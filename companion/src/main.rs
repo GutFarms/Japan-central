@@ -774,6 +774,8 @@ struct CompanionApp {
     edit_stratum: String,
     edit_worker: String,
     edit_password: String,
+    /// Pool username of the active session (for Start debounce — keep A/R).
+    active_mine_worker: String,
     target_mhz: u8,
     status: StatusJson,
     fw_label: String,
@@ -1073,6 +1075,7 @@ impl CompanionApp {
             edit_stratum,
             edit_worker,
             edit_password,
+            active_mine_worker: String::new(),
             target_mhz,
             status: StatusJson::default(),
             fw_label: "—".into(),
@@ -1883,15 +1886,25 @@ impl CompanionApp {
                 password,
             } => {
                 let mut parts = Vec::new();
+                let mut changed = false;
                 if let Some(s) = stratum {
+                    if s.trim() != self.edit_stratum.trim() {
+                        changed = true;
+                    }
                     self.edit_stratum = s;
                     parts.push(format!("stratum={}", self.edit_stratum));
                 }
                 if let Some(w) = worker {
+                    if w.trim() != self.edit_worker.trim() {
+                        changed = true;
+                    }
                     self.edit_worker = w;
                     parts.push(format!("worker={}", self.edit_worker));
                 }
                 if let Some(pw) = password {
+                    if pw != self.edit_password {
+                        changed = true;
+                    }
                     self.edit_password = pw;
                     parts.push("password=(set)".into());
                 }
@@ -1902,15 +1915,22 @@ impl CompanionApp {
                     if self.edit_stratum.contains(":3337") {
                         self.assist_memory.preferred_stratum = self.edit_stratum.clone();
                     }
-                    // Apply immediately — watch SetPoolConfig used to only edit fields.
-                    if self.usb_open || !self.connected_workers.is_empty() {
+                    // Only restart when credentials actually changed — otherwise Keep A/R.
+                    if changed && (self.usb_open || !self.connected_workers.is_empty()) {
                         self.start_mine();
                         format!(
                             "Pool config updated: {} — restarting mine",
                             parts.join(", ")
                         )
-                    } else {
+                    } else if !changed && self.mining && self.stratum_live.authorized {
+                        format!(
+                            "Pool config unchanged ({}) — already mining, counters kept",
+                            parts.join(", ")
+                        )
+                    } else if changed {
                         format!("Pool config updated: {}", parts.join(", "))
+                    } else {
+                        format!("Pool config unchanged: {}", parts.join(", "))
                     }
                 }
             }
@@ -3150,12 +3170,30 @@ impl CompanionApp {
         }
         let pool_user = stratum_worker_for_companion(self.edit_worker.trim());
         let pool_pass = stratum_password(&self.edit_password);
+        let stratum = self.edit_stratum.trim().to_string();
+        // Same pool session already running — do not reconnect / wipe Accept·Reject.
+        // Assist watch + SetPoolConfig were double-firing Start and resetting A/R to 0.
+        if self.mining
+            && self.stratum_live.authorized
+            && stratum_endpoints_match(&self.stratum_live.endpoint, &stratum)
+            && self
+                .active_mine_worker
+                .eq_ignore_ascii_case(&pool_user)
+        {
+            self.last_ok = format!(
+                "Already mining {stratum} as {pool_user} — counters kept (A={} R={})",
+                self.session_accepted, self.session_rejected
+            );
+            self.push_log(LogKind::Info, self.last_ok.clone());
+            return;
+        }
         let _ = self.cmd_tx.send(NetCmd::StartMine {
-            stratum: self.edit_stratum.trim().to_string(),
+            stratum: stratum.clone(),
             worker: self.edit_worker.trim().to_string(),
             password: pool_pass,
         });
         self.mining = true;
+        self.active_mine_worker = pool_user.clone();
         self.session_started = Some(Instant::now());
         self.session_hash_start = self.status.hashes;
         self.reset_share_session_ui();
@@ -3163,8 +3201,7 @@ impl CompanionApp {
         self.push_log(
             LogKind::Info,
             format!(
-                "Start mining → {} as {pool_user} · linked USB/Wi‑Fi={} · mesh peers from gateways",
-                self.edit_stratum.trim(),
+                "Start mining → {stratum} as {pool_user} · linked USB/Wi‑Fi={} · mesh peers from gateways",
                 self.connected_workers.len().max(usize::from(self.usb_open)),
             ),
         );
@@ -3195,6 +3232,7 @@ impl CompanionApp {
         let rej = self.session_rejected;
         let pool = self.edit_stratum.trim().to_string();
         self.mining = false;
+        self.active_mine_worker.clear();
         self.session_started = None;
         self.clear_hash_display();
         self.last_ok = "Mining stopped.".into();
@@ -9699,7 +9737,7 @@ fn mine_worker(cmd_rx: Receiver<NetCmd>, msg_tx: Sender<NetMsg>) {
                 let mut due = true;
                 if let Ok(mut g) = LAST_EMPTY.lock() {
                     if let Some(t) = *g {
-                        if t.elapsed() < Duration::from_secs(12) {
+                        if t.elapsed() < Duration::from_secs(90) {
                             due = false;
                         }
                     }
@@ -10945,6 +10983,27 @@ Power a 2nd board nearby with wall/power-bank only (no PC cable)."
                     // Boards get the SAME username (not a MAC .cydXXXX) so the dashboard
                     // shows one worker whether Companion or the board submits.
                     let pool_worker = stratum_worker_for_companion(&worker);
+                    // Already authorized on this pool — skip reconnect (keeps Accept/Reject).
+                    // Duplicate StartMine (Assist + UI) was wiping counters every few seconds.
+                    if mining
+                        && stratum
+                            .as_ref()
+                            .map(|c| {
+                                c.authorized()
+                                    && stratum_endpoints_match(c.endpoint(), &endpoint)
+                                    && c.worker().eq_ignore_ascii_case(&pool_worker)
+                            })
+                            .unwrap_or(false)
+                    {
+                        log_msg(
+                            &msg_tx,
+                            LogKind::Info,
+                            format!(
+                                "Start mining ignored — already authorized on {endpoint} as {pool_worker} (share counters kept)"
+                            ),
+                        );
+                        continue;
+                    }
                     mine_worker_name = pool_worker.clone();
                     mine_password = stratum_password(&password);
                     reconnect_backoff = Duration::from_secs(1);
@@ -13040,6 +13099,19 @@ fn stratum_worker_for_companion(base: &str) -> String {
         return w.to_string();
     }
     format!("{w}.companion")
+}
+
+/// Compare stratum URLs ignoring scheme / trailing slash noise.
+fn stratum_endpoints_match(a: &str, b: &str) -> bool {
+    let norm = |s: &str| {
+        s.trim()
+            .trim_end_matches('/')
+            .trim_start_matches("stratum+tcp://")
+            .trim_start_matches("stratum+ssl://")
+            .trim_start_matches("tcp://")
+            .to_ascii_lowercase()
+    };
+    norm(a) == norm(b)
 }
 
 /// Board onboard stratum uses the same pool username as Companion (no MAC suffix).

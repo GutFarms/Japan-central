@@ -1653,6 +1653,7 @@ pub const REPO_NAME: &str = "Japan-central";
 /// Tip first — apps still on older builds may only hit the legacy CYD branch.
 pub const REPO_REFS: &[&str] = &[
     // Tip agent branches first — newest VERSION wins for Fetch firmware / app update.
+    "cursor/share-counter-reset-e801",
     "cursor/project-cleanup-e801",
     "cursor/demote-fighting-systems-e801",
     "cursor/ota-fail-15pct-e801",
