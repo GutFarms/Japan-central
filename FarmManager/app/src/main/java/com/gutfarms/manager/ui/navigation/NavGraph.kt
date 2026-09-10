@@ -19,6 +19,7 @@ import com.gutfarms.manager.ui.screens.InventoryScreen
 import com.gutfarms.manager.ui.screens.JournalScreen
 import com.gutfarms.manager.ui.screens.ProfitsScreen
 import com.gutfarms.manager.ui.screens.RecordsHubScreen
+import com.gutfarms.manager.ui.screens.SettingsScreen
 import com.gutfarms.manager.ui.viewmodel.FarmViewModel
 
 object Routes {
@@ -34,6 +35,7 @@ object Routes {
     const val INVENTORY = "inventory"
     const val JOURNAL = "journal"
     const val CONTACTS = "contacts"
+    const val SETTINGS = "settings"
 }
 
 @Composable
@@ -68,7 +70,8 @@ fun FarmNavHost(
                 onOpenFeeding = { navController.navigate(Routes.FEEDING) },
                 onOpenBreeding = { navController.navigate(Routes.BREEDING) },
                 onOpenProfits = { navController.navigate(Routes.PROFITS) },
-                onOpenRecords = { navController.navigate(Routes.RECORDS) }
+                onOpenRecords = { navController.navigate(Routes.RECORDS) },
+                onOpenSettings = { navController.navigate(Routes.SETTINGS) }
             )
         }
         composable(Routes.ANIMALS) {
@@ -177,6 +180,12 @@ fun FarmNavHost(
                 contacts = viewModel.contacts,
                 onSave = viewModel::saveContact,
                 onDelete = viewModel::deleteContact,
+                onBack = { navController.popBackStack() }
+            )
+        }
+        composable(Routes.SETTINGS) {
+            SettingsScreen(
+                farmName = viewModel.farmName,
                 onBack = { navController.popBackStack() }
             )
         }

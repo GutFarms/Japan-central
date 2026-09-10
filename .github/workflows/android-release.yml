@@ -3,7 +3,7 @@ name: Build downloadable Gut Farms APK
 on:
   push:
     branches: [master, "cursor/**"]
-    tags: ["v*"]
+    tags: ["v*", "gutfarms-v*"]
   pull_request:
     paths:
       - "FarmManager/**"
@@ -36,32 +36,61 @@ jobs:
       - name: Build release APK
         run: ./gradlew assembleRelease --no-daemon
 
-      - name: Stage downloadable APK
+      - name: Stage downloadable APK + update manifest
         run: |
           mkdir -p dist
           cp app/build/outputs/apk/release/app-release.apk dist/GutFarms-FarmManager.apk
           cp app/build/outputs/apk/release/app-release.apk "dist/GutFarms-FarmManager-${{ github.ref_name }}.apk" || true
+          VERSION_NAME=$(grep 'versionName' app/build.gradle.kts | head -1 | sed -E 's/.*"([^"]+)".*/\1/')
+          VERSION_CODE=$(grep 'versionCode' app/build.gradle.kts | head -1 | sed -E 's/[^0-9]//g')
+          TAG_NAME="${{ github.ref_name }}"
+          if [[ "${{ github.ref }}" == refs/tags/* ]]; then
+            APK_URL="https://github.com/${{ github.repository }}/releases/download/${TAG_NAME}/GutFarms-FarmManager.apk"
+          else
+            APK_URL="https://github.com/${{ github.repository }}/raw/${TAG_NAME}/FarmManager/dist/GutFarms-FarmManager.apk"
+          fi
+          cat > dist/update-manifest.json <<EOF
+          {
+            "versionCode": ${VERSION_CODE},
+            "versionName": "${VERSION_NAME}",
+            "apkUrl": "${APK_URL}",
+            "releaseNotes": "Gut Farms ${VERSION_NAME} — open Settings → Check for updates to install."
+          }
+          EOF
+          # Keep a clean copy in-repo style (unindent for valid JSON consumers)
+          python3 - <<'PY'
+          import json, pathlib
+          p = pathlib.Path("dist/update-manifest.json")
+          data = json.loads(p.read_text())
+          p.write_text(json.dumps(data, indent=2) + "\n")
+          print(p.read_text())
+          PY
           ls -lh dist/
 
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
           name: GutFarms-FarmManager-apk
-          path: FarmManager/dist/GutFarms-FarmManager.apk
+          path: |
+            FarmManager/dist/GutFarms-FarmManager.apk
+            FarmManager/dist/update-manifest.json
           if-no-files-found: error
 
-      - name: Publish GitHub Release (tags only)
-        if: startsWith(github.ref, 'refs/tags/')
+      - name: Publish GitHub Release (Gut Farms tags)
+        if: startsWith(github.ref, 'refs/tags/gutfarms-v')
         uses: softprops/action-gh-release@v2
         with:
-          files: FarmManager/dist/GutFarms-FarmManager.apk
+          files: |
+            FarmManager/dist/GutFarms-FarmManager.apk
+            FarmManager/dist/update-manifest.json
           generate_release_notes: true
           body: |
-            ## Gut Farms — Android install
+            ## Gut Farms — Android install / update
 
-            1. Download **GutFarms-FarmManager.apk** below
-            2. On your phone: allow install from this source / unknown apps
-            3. Open the APK and install
+            1. Download **GutFarms-FarmManager.apk** below (first install), or
+            2. In the app: **Home → Settings → Check for updates → Download & install**
+
+            On Android: allow install from this source / unknown apps.
 
             Requires Android 8.0+ (API 26).
         env:

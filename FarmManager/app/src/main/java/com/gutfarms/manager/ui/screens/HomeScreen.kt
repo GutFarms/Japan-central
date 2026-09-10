@@ -72,7 +72,8 @@ fun HomeScreen(
     onOpenFeeding: () -> Unit,
     onOpenBreeding: () -> Unit,
     onOpenProfits: () -> Unit,
-    onOpenRecords: () -> Unit
+    onOpenRecords: () -> Unit,
+    onOpenSettings: () -> Unit
 ) {
     val context = LocalContext.current
     val brand by farmName.collectAsState()
@@ -298,6 +299,7 @@ fun HomeScreen(
                     modifier = Modifier.fillMaxWidth()
                 ) {
                     QuickAction("Profits", onOpenProfits, Modifier.weight(1f))
+                    QuickAction("Settings", onOpenSettings, Modifier.weight(1f))
                 }
 
                 Button(
