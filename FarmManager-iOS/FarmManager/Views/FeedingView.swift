@@ -25,7 +25,7 @@ struct FeedingView: View {
                     ScreenHeader(
                         brand: farmName,
                         title: "Feeding schedules",
-                        subtitle: "Plan rations and see projected feed cost."
+                        subtitle: "Track feed quantity, stock, and projected cost."
                     )
 
                     HStack {
@@ -53,7 +53,10 @@ struct FeedingView: View {
                             HStack {
                                 VStack(alignment: .leading, spacing: 4) {
                                     Text("\(item.timeOfDay) · \(item.feedName)").font(.title3.weight(.semibold))
-                                    Text("\(item.animalGroupName) · \(item.amountKg, specifier: "%.1f") kg · \(item.frequency.displayName)")
+                                    Text("\(item.animalGroupName) · \(item.quantityLabel) · \(item.frequency.displayName)")
+                                        .foregroundStyle(.secondary)
+                                    Text("\(item.animalsFed) animals · \(item.perHeadLabel) · \(item.stockLabel)")
+                                        .font(.caption)
                                         .foregroundStyle(.secondary)
                                     Text("\(item.dailyCost.asCurrency)/day · \(item.monthlyCost.asCurrency)/mo")
                                         .foregroundStyle(FarmTheme.softTeal)
@@ -119,8 +122,11 @@ struct FeedingEditor: View {
 
     @State private var groupName = ""
     @State private var feedName = ""
-    @State private var amount = ""
-    @State private var costPerKg = ""
+    @State private var quantity = ""
+    @State private var unit: FeedUnit = .kg
+    @State private var costPerUnit = ""
+    @State private var animalsFed = "1"
+    @State private var stockOnHand = ""
     @State private var frequency: FeedFrequency = .daily
     @State private var timeOfDay = "08:00"
     @State private var notes = ""
@@ -147,8 +153,11 @@ struct FeedingEditor: View {
                     }
 
                     TextField("Feed name", text: $feedName)
-                    TextField("Amount (kg)", text: $amount).keyboardType(.decimalPad)
-                    TextField("Cost per kg", text: $costPerKg).keyboardType(.decimalPad)
+                    TextField("Quantity per feeding", text: $quantity).keyboardType(.decimalPad)
+                    ChoicePicker(label: "Unit", options: FeedUnit.allCases, selection: $unit) { $0.label }
+                    TextField("Cost per \(unit.label)", text: $costPerUnit).keyboardType(.decimalPad)
+                    TextField("Animals fed", text: $animalsFed).keyboardType(.numberPad)
+                    TextField("Stock on hand (\(unit.label))", text: $stockOnHand).keyboardType(.decimalPad)
                     ChoicePicker(label: "Frequency", options: FeedFrequency.allCases, selection: $frequency) { $0.displayName }
                     TextField("Time (HH:mm)", text: $timeOfDay)
                     TextField("Notes", text: $notes, axis: .vertical)
@@ -159,14 +168,17 @@ struct FeedingEditor: View {
                 ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Save") {
-                        guard let amountKg = Double(amount), amountKg > 0, !feedName.isEmpty else { return }
+                        guard let qty = Double(quantity), qty > 0, !feedName.isEmpty else { return }
                         let group = animals.first(where: { $0.name == groupName }) ?? animals.first
                         guard let group else { return }
                         if let schedule {
                             schedule.animalGroupName = group.name
                             schedule.feedName = feedName.trimmingCharacters(in: .whitespaces)
-                            schedule.amountKg = amountKg
-                            schedule.costPerKg = Double(costPerKg) ?? 0
+                            schedule.feedQuantity = qty
+                            schedule.quantityUnit = unit
+                            schedule.costPerUnit = Double(costPerUnit) ?? 0
+                            schedule.animalsFed = max(Int(animalsFed) ?? 1, 1)
+                            schedule.stockOnHand = Double(stockOnHand) ?? 0
                             schedule.frequency = frequency
                             schedule.timeOfDay = timeOfDay.trimmingCharacters(in: .whitespaces)
                             schedule.notes = notes.trimmingCharacters(in: .whitespaces)
@@ -175,8 +187,11 @@ struct FeedingEditor: View {
                                 FeedingSchedule(
                                     animalGroupName: group.name,
                                     feedName: feedName.trimmingCharacters(in: .whitespaces),
-                                    amountKg: amountKg,
-                                    costPerKg: Double(costPerKg) ?? 0,
+                                    feedQuantity: qty,
+                                    quantityUnit: unit,
+                                    costPerUnit: Double(costPerUnit) ?? 0,
+                                    animalsFed: max(Int(animalsFed) ?? group.count, 1),
+                                    stockOnHand: Double(stockOnHand) ?? 0,
                                     frequency: frequency,
                                     timeOfDay: timeOfDay.trimmingCharacters(in: .whitespaces),
                                     notes: notes.trimmingCharacters(in: .whitespaces)
@@ -186,17 +201,25 @@ struct FeedingEditor: View {
                         try? context.save()
                         dismiss()
                     }
-                    .disabled(animals.isEmpty || feedName.isEmpty || Double(amount) == nil)
+                    .disabled(animals.isEmpty || feedName.isEmpty || Double(quantity) == nil)
                 }
             }
             .onAppear {
                 groupName = schedule?.animalGroupName ?? animals.first?.name ?? ""
                 feedName = schedule?.feedName ?? ""
-                amount = schedule.map { String($0.amountKg) } ?? ""
-                costPerKg = schedule.map { String($0.costPerKg) } ?? ""
+                quantity = schedule.map { String($0.feedQuantity) } ?? ""
+                unit = schedule?.quantityUnit ?? .kg
+                costPerUnit = schedule.map { String($0.costPerUnit) } ?? ""
+                animalsFed = schedule.map { String($0.animalsFed) } ?? String(animals.first?.count ?? 1)
+                stockOnHand = schedule.map { String($0.stockOnHand) } ?? ""
                 frequency = schedule?.frequency ?? .daily
                 timeOfDay = schedule?.timeOfDay ?? "08:00"
                 notes = schedule?.notes ?? ""
+            }
+            .onChange(of: groupName) { _, newValue in
+                if schedule == nil, let animal = animals.first(where: { $0.name == newValue }) {
+                    animalsFed = String(animal.count)
+                }
             }
         }
     }

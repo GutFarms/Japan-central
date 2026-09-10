@@ -37,8 +37,11 @@ enum SeedData {
             FeedingSchedule(
                 animalGroupName: cattle.name,
                 feedName: "Hay + Grain mix",
-                amountKg: 140,
-                costPerKg: 0.28,
+                feedQuantity: 140,
+                quantityUnit: .kg,
+                costPerUnit: 0.28,
+                animalsFed: 12,
+                stockOnHand: 900,
                 frequency: .daily,
                 timeOfDay: "07:00",
                 notes: "Morning pasture top-up"
@@ -48,8 +51,11 @@ enum SeedData {
             FeedingSchedule(
                 animalGroupName: cattle.name,
                 feedName: "Mineral lick check",
-                amountKg: 2,
-                costPerKg: 1.10,
+                feedQuantity: 2,
+                quantityUnit: .kg,
+                costPerUnit: 1.10,
+                animalsFed: 12,
+                stockOnHand: 40,
                 frequency: .daily,
                 timeOfDay: "17:30"
             )
@@ -58,8 +64,11 @@ enum SeedData {
             FeedingSchedule(
                 animalGroupName: chickens.name,
                 feedName: "Layer pellets",
-                amountKg: 10,
-                costPerKg: 0.55,
+                feedQuantity: 10,
+                quantityUnit: .kg,
+                costPerUnit: 0.55,
+                animalsFed: 80,
+                stockOnHand: 200,
                 frequency: .twiceDaily,
                 timeOfDay: "08:00"
             )
@@ -137,6 +146,66 @@ enum SeedData {
         context.insert(FarmTransaction(type: .income, amount: 2400, detail: "Two steers sold", incomeCategory: .livestockSale))
         context.insert(FarmTransaction(type: .expense, amount: 310, detail: "Bulk feed delivery", expenseCategory: .feed))
         context.insert(FarmTransaction(type: .expense, amount: 150, detail: "Vet visit — herd check", expenseCategory: .veterinary))
+
+        context.insert(
+            HealthRecord(
+                animalGroupName: cattle.name,
+                animalLabel: "Cow #14",
+                type: .vaccination,
+                title: "Clostridial booster",
+                date: Calendar.current.date(byAdding: .day, value: -20, to: now) ?? now,
+                provider: "Valley Vet",
+                cost: 85,
+                notes: "Annual herd round"
+            )
+        )
+        context.insert(
+            InventoryItem(
+                name: "Layer pellets",
+                category: .feed,
+                quantity: 200,
+                unit: "kg",
+                reorderLevel: 50,
+                unitCost: 0.55,
+                location: "Feed shed"
+            )
+        )
+        context.insert(
+            InventoryItem(
+                name: "Ivermectin",
+                category: .medicine,
+                quantity: 4,
+                unit: "bottles",
+                reorderLevel: 2,
+                unitCost: 32,
+                location: "Med cabinet"
+            )
+        )
+        context.insert(
+            JournalEntry(
+                title: "Pasture rotation",
+                category: .pasture,
+                body: "Moved herd A to east paddock. Grass height good.",
+                date: Calendar.current.date(byAdding: .day, value: -1, to: now) ?? now
+            )
+        )
+        context.insert(
+            FarmContact(
+                name: "Dr. Helen Park",
+                role: .veterinarian,
+                phone: "555-0142",
+                email: "helen@valleyvet.example",
+                organization: "Valley Vet"
+            )
+        )
+        context.insert(
+            FarmContact(
+                name: "Midwest Feed Co.",
+                role: .supplier,
+                phone: "555-0199",
+                organization: "Midwest Feed"
+            )
+        )
 
         try? context.save()
     }

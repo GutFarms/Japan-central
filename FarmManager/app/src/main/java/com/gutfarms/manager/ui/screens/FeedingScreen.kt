@@ -44,6 +44,7 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import com.gutfarms.manager.data.model.Animal
 import com.gutfarms.manager.data.model.FeedFrequency
+import com.gutfarms.manager.data.model.FeedUnit
 import com.gutfarms.manager.data.model.FeedingSchedule
 import com.gutfarms.manager.data.model.FeedingScheduleWithAnimal
 import com.gutfarms.manager.ui.components.EmptyHint
@@ -99,7 +100,7 @@ fun FeedingScreen(
             ScreenHeader(
                 brand = brand,
                 title = "Feeding schedules",
-                subtitle = "Plan rations and see projected feed cost."
+                subtitle = "Track feed quantity, stock, and projected cost."
             )
 
             LazyColumn(
@@ -150,8 +151,15 @@ fun FeedingScreen(
                                 )
                                 Spacer(Modifier.height(4.dp))
                                 Text(
-                                    "${item.animalName} · ${schedule.amountKg} kg · ${schedule.frequency.name.lowercase().replace('_', ' ')}",
+                                    "${item.animalName} · ${schedule.quantityLabel} · ${
+                                        schedule.frequency.name.lowercase().replace('_', ' ')
+                                    }",
                                     style = MaterialTheme.typography.bodyMedium,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                                Text(
+                                    "${schedule.animalsFed} animals · ${schedule.perHeadLabel} · ${schedule.stockLabel}",
+                                    style = MaterialTheme.typography.bodySmall,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant
                                 )
                                 Text(
@@ -220,8 +228,17 @@ private fun FeedingForm(
         mutableStateOf(initial?.animalId ?: animals.first().id)
     }
     var feedName by remember { mutableStateOf(initial?.feedName.orEmpty()) }
-    var amount by remember { mutableStateOf(initial?.amountKg?.toString().orEmpty()) }
-    var costPerKg by remember { mutableStateOf(initial?.costPerKg?.toString().orEmpty()) }
+    var quantity by remember { mutableStateOf(initial?.feedQuantity?.toString().orEmpty()) }
+    var unit by remember { mutableStateOf(initial?.quantityUnit ?: FeedUnit.KG) }
+    var costPerUnit by remember { mutableStateOf(initial?.costPerUnit?.toString().orEmpty()) }
+    var animalsFed by remember {
+        mutableStateOf(
+            initial?.animalsFed?.toString()
+                ?: animals.firstOrNull { it.id == (initial?.animalId ?: animals.first().id) }?.count?.toString()
+                ?: "1"
+        )
+    }
+    var stockOnHand by remember { mutableStateOf(initial?.stockOnHand?.toString().orEmpty()) }
     var frequency by remember { mutableStateOf(initial?.frequency ?: FeedFrequency.DAILY) }
     var timeOfDay by remember { mutableStateOf(initial?.timeOfDay ?: "08:00") }
     var notes by remember { mutableStateOf(initial?.notes.orEmpty()) }
@@ -235,8 +252,11 @@ private fun FeedingForm(
                     id = initial?.id ?: 0,
                     animalId = animalId,
                     feedName = feedName.trim(),
-                    amountKg = amount.toDoubleOrNull() ?: 0.0,
-                    costPerKg = costPerKg.toDoubleOrNull() ?: 0.0,
+                    feedQuantity = quantity.toDoubleOrNull() ?: 0.0,
+                    quantityUnit = unit,
+                    costPerUnit = costPerUnit.toDoubleOrNull() ?: 0.0,
+                    animalsFed = animalsFed.toIntOrNull()?.coerceAtLeast(1) ?: 1,
+                    stockOnHand = stockOnHand.toDoubleOrNull() ?: 0.0,
                     frequency = frequency,
                     timeOfDay = timeOfDay.trim(),
                     notes = notes.trim(),
@@ -245,14 +265,17 @@ private fun FeedingForm(
             )
         },
         saveEnabled = feedName.isNotBlank() &&
-            (amount.toDoubleOrNull() ?: 0.0) > 0 &&
+            (quantity.toDoubleOrNull() ?: 0.0) > 0 &&
             timeOfDay.isNotBlank()
     ) {
         SimpleDropdown(
             label = "Livestock group",
             options = animals,
             selected = animals.firstOrNull { it.id == animalId } ?: animals.first(),
-            onSelected = { animalId = it.id },
+            onSelected = {
+                animalId = it.id
+                if (initial == null) animalsFed = it.count.toString()
+            },
             optionLabel = { "${it.name} (${it.type.name.lowercase()})" }
         )
         OutlinedTextField(
@@ -263,14 +286,43 @@ private fun FeedingForm(
             modifier = Modifier.fillMaxWidth()
         )
         OutlinedTextField(
-            value = amount,
-            onValueChange = { if (it.isEmpty() || it.matches(Regex("^\\d*\\.?\\d{0,2}$"))) amount = it },
-            label = { Text("Amount (kg)") },
+            value = quantity,
+            onValueChange = { if (it.isEmpty() || it.matches(Regex("^\\d*\\.?\\d{0,2}$"))) quantity = it },
+            label = { Text("Quantity per feeding") },
             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
             singleLine = true,
             modifier = Modifier.fillMaxWidth()
         )
-        MoneyField(label = "Cost per kg", value = costPerKg, onValueChange = { costPerKg = it })
+        SimpleDropdown(
+            label = "Unit",
+            options = FeedUnit.entries,
+            selected = unit,
+            onSelected = { unit = it },
+            optionLabel = { it.label }
+        )
+        MoneyField(
+            label = "Cost per ${unit.label}",
+            value = costPerUnit,
+            onValueChange = { costPerUnit = it }
+        )
+        OutlinedTextField(
+            value = animalsFed,
+            onValueChange = { if (it.isEmpty() || it.matches(Regex("^\\d{0,5}$"))) animalsFed = it },
+            label = { Text("Animals fed") },
+            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+            singleLine = true,
+            modifier = Modifier.fillMaxWidth()
+        )
+        OutlinedTextField(
+            value = stockOnHand,
+            onValueChange = {
+                if (it.isEmpty() || it.matches(Regex("^\\d*\\.?\\d{0,2}$"))) stockOnHand = it
+            },
+            label = { Text("Stock on hand (${unit.label})") },
+            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+            singleLine = true,
+            modifier = Modifier.fillMaxWidth()
+        )
         SimpleDropdown(
             label = "Frequency",
             options = FeedFrequency.entries,

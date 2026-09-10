@@ -3,18 +3,26 @@ package com.gutfarms.manager.data.repository
 import com.gutfarms.manager.data.dao.AnimalArrivalDao
 import com.gutfarms.manager.data.dao.AnimalDao
 import com.gutfarms.manager.data.dao.BreedingScheduleDao
+import com.gutfarms.manager.data.dao.FarmContactDao
 import com.gutfarms.manager.data.dao.FarmProfileDao
 import com.gutfarms.manager.data.dao.FeedingScheduleDao
+import com.gutfarms.manager.data.dao.HealthRecordDao
+import com.gutfarms.manager.data.dao.InventoryItemDao
+import com.gutfarms.manager.data.dao.JournalEntryDao
 import com.gutfarms.manager.data.dao.TransactionDao
 import com.gutfarms.manager.data.model.Animal
 import com.gutfarms.manager.data.model.AnimalArrival
 import com.gutfarms.manager.data.model.AnimalArrivalWithGroup
 import com.gutfarms.manager.data.model.BreedingSchedule
 import com.gutfarms.manager.data.model.BreedingScheduleWithAnimal
+import com.gutfarms.manager.data.model.FarmContact
 import com.gutfarms.manager.data.model.FarmProfile
 import com.gutfarms.manager.data.model.FarmTransaction
 import com.gutfarms.manager.data.model.FeedingSchedule
 import com.gutfarms.manager.data.model.FeedingScheduleWithAnimal
+import com.gutfarms.manager.data.model.HealthRecord
+import com.gutfarms.manager.data.model.InventoryItem
+import com.gutfarms.manager.data.model.JournalEntry
 import com.gutfarms.manager.data.model.ProfitSummary
 import com.gutfarms.manager.data.model.TransactionType
 import kotlinx.coroutines.flow.Flow
@@ -27,10 +35,18 @@ class FarmRepository(
     private val breedingScheduleDao: BreedingScheduleDao,
     private val animalArrivalDao: AnimalArrivalDao,
     private val transactionDao: TransactionDao,
-    private val farmProfileDao: FarmProfileDao
+    private val farmProfileDao: FarmProfileDao,
+    private val healthRecordDao: HealthRecordDao,
+    private val inventoryItemDao: InventoryItemDao,
+    private val journalEntryDao: JournalEntryDao,
+    private val farmContactDao: FarmContactDao
 ) {
-    val farmName: Flow<String> = farmProfileDao.observe().map { profile ->
-        profile?.farmName?.takeIf { it.isNotBlank() } ?: "Gut Farms"
+    val farmProfile: Flow<FarmProfile> = farmProfileDao.observe().map { profile ->
+        profile ?: FarmProfile(farmName = "Gut Farms")
+    }
+
+    val farmName: Flow<String> = farmProfile.map { profile ->
+        profile.farmName.takeIf { it.isNotBlank() } ?: "Gut Farms"
     }
 
     val animals: Flow<List<Animal>> = animalDao.observeAll()
@@ -38,6 +54,10 @@ class FarmRepository(
     val breedingSchedules: Flow<List<BreedingSchedule>> = breedingScheduleDao.observeAll()
     val arrivals: Flow<List<AnimalArrival>> = animalArrivalDao.observeAll()
     val transactions: Flow<List<FarmTransaction>> = transactionDao.observeAll()
+    val healthRecords: Flow<List<HealthRecord>> = healthRecordDao.observeAll()
+    val inventoryItems: Flow<List<InventoryItem>> = inventoryItemDao.observeAll()
+    val journalEntries: Flow<List<JournalEntry>> = journalEntryDao.observeAll()
+    val contacts: Flow<List<FarmContact>> = farmContactDao.observeAll()
 
     val schedulesWithAnimals: Flow<List<FeedingScheduleWithAnimal>> =
         combine(schedules, animals) { scheduleList, animalList ->
@@ -96,8 +116,18 @@ class FarmRepository(
         }
 
     suspend fun updateFarmName(name: String) {
+        val existing = farmProfileDao.get() ?: FarmProfile()
         val trimmed = name.trim().ifBlank { "Gut Farms" }
-        farmProfileDao.upsert(FarmProfile(id = 1, farmName = trimmed))
+        farmProfileDao.upsert(existing.copy(farmName = trimmed))
+    }
+
+    suspend fun saveFarmProfile(profile: FarmProfile) {
+        farmProfileDao.upsert(
+            profile.copy(
+                id = 1,
+                farmName = profile.farmName.trim().ifBlank { "Gut Farms" }
+            )
+        )
     }
 
     suspend fun saveAnimal(animal: Animal) = animalDao.upsert(animal)
@@ -118,4 +148,16 @@ class FarmRepository(
 
     suspend fun saveTransaction(transaction: FarmTransaction) = transactionDao.upsert(transaction)
     suspend fun deleteTransaction(transaction: FarmTransaction) = transactionDao.delete(transaction)
+
+    suspend fun saveHealthRecord(record: HealthRecord) = healthRecordDao.upsert(record)
+    suspend fun deleteHealthRecord(record: HealthRecord) = healthRecordDao.delete(record)
+
+    suspend fun saveInventoryItem(item: InventoryItem) = inventoryItemDao.upsert(item)
+    suspend fun deleteInventoryItem(item: InventoryItem) = inventoryItemDao.delete(item)
+
+    suspend fun saveJournalEntry(entry: JournalEntry) = journalEntryDao.upsert(entry)
+    suspend fun deleteJournalEntry(entry: JournalEntry) = journalEntryDao.delete(entry)
+
+    suspend fun saveContact(contact: FarmContact) = farmContactDao.upsert(contact)
+    suspend fun deleteContact(contact: FarmContact) = farmContactDao.delete(contact)
 }

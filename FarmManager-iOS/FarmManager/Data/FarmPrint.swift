@@ -73,7 +73,7 @@ enum FarmPrint {
             html += "<tr><td colspan='5'>None</td></tr>"
         } else {
             for f in activeFeeds {
-                html += "<tr><td>\(esc(f.timeOfDay))</td><td>\(esc(f.animalGroupName))</td><td>\(esc(f.feedName))</td><td>\(f.amountKg) kg</td><td>\(f.dailyCost.asCurrency)</td></tr>"
+                html += "<tr><td>\(esc(f.timeOfDay))</td><td>\(esc(f.animalGroupName))</td><td>\(esc(f.feedName))</td><td>\(esc(f.quantityLabel))</td><td>\(f.dailyCost.asCurrency)</td></tr>"
             }
         }
         html += "</table>"

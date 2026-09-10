@@ -8,9 +8,14 @@ import com.gutfarms.manager.data.model.AnimalArrival
 import com.gutfarms.manager.data.model.AnimalArrivalWithGroup
 import com.gutfarms.manager.data.model.BreedingSchedule
 import com.gutfarms.manager.data.model.BreedingScheduleWithAnimal
+import com.gutfarms.manager.data.model.FarmContact
+import com.gutfarms.manager.data.model.FarmProfile
 import com.gutfarms.manager.data.model.FarmTransaction
 import com.gutfarms.manager.data.model.FeedingSchedule
 import com.gutfarms.manager.data.model.FeedingScheduleWithAnimal
+import com.gutfarms.manager.data.model.HealthRecord
+import com.gutfarms.manager.data.model.InventoryItem
+import com.gutfarms.manager.data.model.JournalEntry
 import com.gutfarms.manager.data.model.ProfitSummary
 import com.gutfarms.manager.data.repository.FarmRepository
 import kotlinx.coroutines.flow.SharingStarted
@@ -21,6 +26,10 @@ import kotlinx.coroutines.launch
 class FarmViewModel(private val repository: FarmRepository) : ViewModel() {
     val farmName: StateFlow<String> = repository.farmName.stateIn(
         viewModelScope, SharingStarted.WhileSubscribed(5_000), "Gut Farms"
+    )
+
+    val farmProfile: StateFlow<FarmProfile> = repository.farmProfile.stateIn(
+        viewModelScope, SharingStarted.WhileSubscribed(5_000), FarmProfile()
     )
 
     val animals: StateFlow<List<Animal>> = repository.animals.stateIn(
@@ -44,6 +53,22 @@ class FarmViewModel(private val repository: FarmRepository) : ViewModel() {
         viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList()
     )
 
+    val healthRecords: StateFlow<List<HealthRecord>> = repository.healthRecords.stateIn(
+        viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList()
+    )
+
+    val inventoryItems: StateFlow<List<InventoryItem>> = repository.inventoryItems.stateIn(
+        viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList()
+    )
+
+    val journalEntries: StateFlow<List<JournalEntry>> = repository.journalEntries.stateIn(
+        viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList()
+    )
+
+    val contacts: StateFlow<List<FarmContact>> = repository.contacts.stateIn(
+        viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList()
+    )
+
     val profitSummary: StateFlow<ProfitSummary> = repository.profitSummary.stateIn(
         viewModelScope,
         SharingStarted.WhileSubscribed(5_000),
@@ -52,6 +77,9 @@ class FarmViewModel(private val repository: FarmRepository) : ViewModel() {
 
     fun updateFarmName(name: String) =
         viewModelScope.launch { repository.updateFarmName(name) }
+
+    fun saveFarmProfile(profile: FarmProfile) =
+        viewModelScope.launch { repository.saveFarmProfile(profile) }
 
     fun saveAnimal(animal: Animal) = viewModelScope.launch { repository.saveAnimal(animal) }
     fun deleteAnimal(animal: Animal) = viewModelScope.launch { repository.deleteAnimal(animal) }
@@ -85,6 +113,30 @@ class FarmViewModel(private val repository: FarmRepository) : ViewModel() {
 
     fun deleteTransaction(transaction: FarmTransaction) =
         viewModelScope.launch { repository.deleteTransaction(transaction) }
+
+    fun saveHealthRecord(record: HealthRecord) =
+        viewModelScope.launch { repository.saveHealthRecord(record) }
+
+    fun deleteHealthRecord(record: HealthRecord) =
+        viewModelScope.launch { repository.deleteHealthRecord(record) }
+
+    fun saveInventoryItem(item: InventoryItem) =
+        viewModelScope.launch { repository.saveInventoryItem(item) }
+
+    fun deleteInventoryItem(item: InventoryItem) =
+        viewModelScope.launch { repository.deleteInventoryItem(item) }
+
+    fun saveJournalEntry(entry: JournalEntry) =
+        viewModelScope.launch { repository.saveJournalEntry(entry) }
+
+    fun deleteJournalEntry(entry: JournalEntry) =
+        viewModelScope.launch { repository.deleteJournalEntry(entry) }
+
+    fun saveContact(contact: FarmContact) =
+        viewModelScope.launch { repository.saveContact(contact) }
+
+    fun deleteContact(contact: FarmContact) =
+        viewModelScope.launch { repository.deleteContact(contact) }
 }
 
 class FarmViewModelFactory(

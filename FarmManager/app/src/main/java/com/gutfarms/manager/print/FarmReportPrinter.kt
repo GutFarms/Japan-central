@@ -159,7 +159,7 @@ object FarmReportPrinter {
         if (active.isEmpty()) return "<h2>Feeding schedules</h2><p>No active feeding schedules.</p>"
         val rows = active.joinToString("") {
             val s = it.schedule
-            "<tr><td>${esc(s.timeOfDay)}</td><td>${esc(it.animalName)}</td><td>${esc(s.feedName)}</td><td>${s.amountKg} kg</td><td>${formatMoney(s.dailyCost)}/day</td></tr>"
+            "<tr><td>${esc(s.timeOfDay)}</td><td>${esc(it.animalName)}</td><td>${esc(s.feedName)}</td><td>${esc(s.quantityLabel)}</td><td>${formatMoney(s.dailyCost)}/day</td></tr>"
         }
         return """
             <h2>Active feeding schedules</h2>

@@ -116,7 +116,7 @@ struct HomeView: View {
                             ForEach(Array(upcoming)) { item in
                                 card {
                                     Text("\(item.timeOfDay) · \(item.feedName)").font(.headline)
-                                    Text("\(item.animalGroupName) · \(item.amountKg, specifier: "%.1f") kg · \(item.dailyCost.asCurrency)/day")
+                                    Text("\(item.animalGroupName) · \(item.quantityLabel) · \(item.dailyCost.asCurrency)/day")
                                         .font(.subheadline)
                                         .foregroundStyle(.secondary)
                                 }
@@ -133,6 +133,19 @@ struct HomeView: View {
                             .padding()
                             .background(FarmTheme.forest)
                             .foregroundStyle(FarmTheme.wheat)
+                            .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                    }
+                    .padding(.horizontal, 16)
+
+                    NavigationLink {
+                        RecordsHubView(farmName: farmName)
+                    } label: {
+                        Text("Farm records")
+                            .font(.headline)
+                            .frame(maxWidth: .infinity)
+                            .padding()
+                            .background(FarmTheme.softTeal)
+                            .foregroundStyle(.white)
                             .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
                     }
                     .padding(.horizontal, 16)

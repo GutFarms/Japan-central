@@ -15,7 +15,9 @@ Android app for farm management with livestock tracking, feeding schedules, and 
 - **Feeding schedules** — timed rations per group with frequency, kg amounts, and cost-per-kg; projected daily/monthly feed cost
 - **Breeding schedules** — mating/AI records with status, sire, expected offspring, and due dates (gestation defaults by species)
 - **Profit margins** — income/expense ledger; net profit and margin % including projected monthly feed from active schedules
-- **Home dashboard** — livestock head count, active feeds, breeding count, pending arrivals, margin snapshot, recent arrivals, upcoming due dates, and today's feeding list
+- **Home dashboard** — livestock head count, active feeds, breeding count, pending arrivals, margin snapshot, recent arrivals, upcoming due dates, today's feeding list, and a records hub entry
+- **Feeding schedules** — quantity per feeding with units (kg/lb/bag/scoop/bale/gallon), animals fed, stock on hand, and projected cost
+- **Farm records** — farm info, health log, inventory with reorder alerts, journal, and contacts
 
 ## Stack
 

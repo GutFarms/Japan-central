@@ -9,8 +9,12 @@ import androidx.room.TypeConverters
 import com.gutfarms.manager.data.dao.AnimalArrivalDao
 import com.gutfarms.manager.data.dao.AnimalDao
 import com.gutfarms.manager.data.dao.BreedingScheduleDao
+import com.gutfarms.manager.data.dao.FarmContactDao
 import com.gutfarms.manager.data.dao.FarmProfileDao
 import com.gutfarms.manager.data.dao.FeedingScheduleDao
+import com.gutfarms.manager.data.dao.HealthRecordDao
+import com.gutfarms.manager.data.dao.InventoryItemDao
+import com.gutfarms.manager.data.dao.JournalEntryDao
 import com.gutfarms.manager.data.dao.TransactionDao
 import com.gutfarms.manager.data.model.Animal
 import com.gutfarms.manager.data.model.AnimalArrival
@@ -19,12 +23,21 @@ import com.gutfarms.manager.data.model.ArrivalOrigin
 import com.gutfarms.manager.data.model.BreedingMethod
 import com.gutfarms.manager.data.model.BreedingSchedule
 import com.gutfarms.manager.data.model.BreedingStatus
+import com.gutfarms.manager.data.model.ContactRole
 import com.gutfarms.manager.data.model.ExpenseCategory
+import com.gutfarms.manager.data.model.FarmContact
 import com.gutfarms.manager.data.model.FarmProfile
 import com.gutfarms.manager.data.model.FarmTransaction
 import com.gutfarms.manager.data.model.FeedFrequency
+import com.gutfarms.manager.data.model.FeedUnit
 import com.gutfarms.manager.data.model.FeedingSchedule
+import com.gutfarms.manager.data.model.HealthRecord
+import com.gutfarms.manager.data.model.HealthRecordType
 import com.gutfarms.manager.data.model.IncomeCategory
+import com.gutfarms.manager.data.model.InventoryCategory
+import com.gutfarms.manager.data.model.InventoryItem
+import com.gutfarms.manager.data.model.JournalCategory
+import com.gutfarms.manager.data.model.JournalEntry
 import com.gutfarms.manager.data.model.RegistrationStatus
 import com.gutfarms.manager.data.model.TransactionType
 
@@ -34,6 +47,10 @@ class Converters {
 
     @TypeConverter fun fromFeedFrequency(value: FeedFrequency): String = value.name
     @TypeConverter fun toFeedFrequency(value: String): FeedFrequency = FeedFrequency.valueOf(value)
+
+    @TypeConverter fun fromFeedUnit(value: FeedUnit): String = value.name
+    @TypeConverter fun toFeedUnit(value: String): FeedUnit =
+        runCatching { FeedUnit.valueOf(value) }.getOrDefault(FeedUnit.KG)
 
     @TypeConverter fun fromTransactionType(value: TransactionType): String = value.name
     @TypeConverter fun toTransactionType(value: String): TransactionType = TransactionType.valueOf(value)
@@ -58,6 +75,21 @@ class Converters {
     @TypeConverter fun fromRegistrationStatus(value: RegistrationStatus): String = value.name
     @TypeConverter fun toRegistrationStatus(value: String): RegistrationStatus =
         RegistrationStatus.valueOf(value)
+
+    @TypeConverter fun fromHealthRecordType(value: HealthRecordType): String = value.name
+    @TypeConverter fun toHealthRecordType(value: String): HealthRecordType =
+        HealthRecordType.valueOf(value)
+
+    @TypeConverter fun fromInventoryCategory(value: InventoryCategory): String = value.name
+    @TypeConverter fun toInventoryCategory(value: String): InventoryCategory =
+        InventoryCategory.valueOf(value)
+
+    @TypeConverter fun fromJournalCategory(value: JournalCategory): String = value.name
+    @TypeConverter fun toJournalCategory(value: String): JournalCategory =
+        JournalCategory.valueOf(value)
+
+    @TypeConverter fun fromContactRole(value: ContactRole): String = value.name
+    @TypeConverter fun toContactRole(value: String): ContactRole = ContactRole.valueOf(value)
 }
 
 @Database(
@@ -67,9 +99,13 @@ class Converters {
         BreedingSchedule::class,
         AnimalArrival::class,
         FarmTransaction::class,
-        FarmProfile::class
+        FarmProfile::class,
+        HealthRecord::class,
+        InventoryItem::class,
+        JournalEntry::class,
+        FarmContact::class
     ],
-    version = 4,
+    version = 5,
     exportSchema = false
 )
 @TypeConverters(Converters::class)
@@ -80,6 +116,10 @@ abstract class FarmDatabase : RoomDatabase() {
     abstract fun animalArrivalDao(): AnimalArrivalDao
     abstract fun transactionDao(): TransactionDao
     abstract fun farmProfileDao(): FarmProfileDao
+    abstract fun healthRecordDao(): HealthRecordDao
+    abstract fun inventoryItemDao(): InventoryItemDao
+    abstract fun journalEntryDao(): JournalEntryDao
+    abstract fun farmContactDao(): FarmContactDao
 
     companion object {
         @Volatile private var INSTANCE: FarmDatabase? = null
@@ -135,8 +175,11 @@ suspend fun seedSampleDataIfEmpty(database: FarmDatabase) {
         FeedingSchedule(
             animalId = cattleId,
             feedName = "Hay + Grain mix",
-            amountKg = 140.0,
-            costPerKg = 0.28,
+            feedQuantity = 140.0,
+            quantityUnit = FeedUnit.KG,
+            costPerUnit = 0.28,
+            animalsFed = 12,
+            stockOnHand = 900.0,
             frequency = FeedFrequency.DAILY,
             timeOfDay = "07:00",
             notes = "Morning pasture top-up"
@@ -146,8 +189,11 @@ suspend fun seedSampleDataIfEmpty(database: FarmDatabase) {
         FeedingSchedule(
             animalId = cattleId,
             feedName = "Mineral lick check",
-            amountKg = 2.0,
-            costPerKg = 1.10,
+            feedQuantity = 2.0,
+            quantityUnit = FeedUnit.KG,
+            costPerUnit = 1.10,
+            animalsFed = 12,
+            stockOnHand = 40.0,
             frequency = FeedFrequency.DAILY,
             timeOfDay = "17:30"
         )
@@ -156,8 +202,11 @@ suspend fun seedSampleDataIfEmpty(database: FarmDatabase) {
         FeedingSchedule(
             animalId = chickenId,
             feedName = "Layer pellets",
-            amountKg = 10.0,
-            costPerKg = 0.55,
+            feedQuantity = 10.0,
+            quantityUnit = FeedUnit.KG,
+            costPerUnit = 0.55,
+            animalsFed = 80,
+            stockOnHand = 200.0,
             frequency = FeedFrequency.TWICE_DAILY,
             timeOfDay = "08:00"
         )
@@ -258,6 +307,66 @@ suspend fun seedSampleDataIfEmpty(database: FarmDatabase) {
             amount = 150.0,
             description = "Vet visit — herd check",
             expenseCategory = ExpenseCategory.VETERINARY
+        )
+    )
+
+    database.healthRecordDao().upsert(
+        HealthRecord(
+            animalId = cattleId,
+            animalLabel = "Cow #14",
+            type = HealthRecordType.VACCINATION,
+            title = "Clostridial booster",
+            dateMillis = now - (20L * BreedingSchedule.DayMillis),
+            provider = "Valley Vet",
+            cost = 85.0,
+            notes = "Annual herd round"
+        )
+    )
+    database.inventoryItemDao().upsert(
+        InventoryItem(
+            name = "Layer pellets",
+            category = InventoryCategory.FEED,
+            quantity = 200.0,
+            unit = "kg",
+            reorderLevel = 50.0,
+            unitCost = 0.55,
+            location = "Feed shed"
+        )
+    )
+    database.inventoryItemDao().upsert(
+        InventoryItem(
+            name = "Ivermectin",
+            category = InventoryCategory.MEDICINE,
+            quantity = 4.0,
+            unit = "bottles",
+            reorderLevel = 2.0,
+            unitCost = 32.0,
+            location = "Med cabinet"
+        )
+    )
+    database.journalEntryDao().upsert(
+        JournalEntry(
+            title = "Pasture rotation",
+            category = JournalCategory.PASTURE,
+            body = "Moved herd A to east paddock. Grass height good.",
+            dateMillis = now - BreedingSchedule.DayMillis
+        )
+    )
+    database.farmContactDao().upsert(
+        FarmContact(
+            name = "Dr. Helen Park",
+            role = ContactRole.VETERINARIAN,
+            phone = "555-0142",
+            email = "helen@valleyvet.example",
+            organization = "Valley Vet"
+        )
+    )
+    database.farmContactDao().upsert(
+        FarmContact(
+            name = "Midwest Feed Co.",
+            role = ContactRole.SUPPLIER,
+            phone = "555-0199",
+            organization = "Midwest Feed"
         )
     )
 }

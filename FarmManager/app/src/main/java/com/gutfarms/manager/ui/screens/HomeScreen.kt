@@ -71,7 +71,8 @@ fun HomeScreen(
     onOpenArrivals: () -> Unit,
     onOpenFeeding: () -> Unit,
     onOpenBreeding: () -> Unit,
-    onOpenProfits: () -> Unit
+    onOpenProfits: () -> Unit,
+    onOpenRecords: () -> Unit
 ) {
     val context = LocalContext.current
     val brand by farmName.collectAsState()
@@ -274,7 +275,7 @@ fun HomeScreen(
                             )
                             Spacer(Modifier.height(4.dp))
                             Text(
-                                "${item.animalName} · ${item.schedule.amountKg} kg · ${formatMoney(item.schedule.dailyCost)}/day",
+                                "${item.animalName} · ${item.schedule.quantityLabel} · ${formatMoney(item.schedule.dailyCost)}/day",
                                 style = MaterialTheme.typography.bodyMedium,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
@@ -290,6 +291,12 @@ fun HomeScreen(
                     QuickAction("Arrive", onOpenArrivals, Modifier.weight(1f))
                     QuickAction("Feed", onOpenFeeding, Modifier.weight(1f))
                     QuickAction("Breed", onOpenBreeding, Modifier.weight(1f))
+                    QuickAction("Records", onOpenRecords, Modifier.weight(1f))
+                }
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
                     QuickAction("Profits", onOpenProfits, Modifier.weight(1f))
                 }
 

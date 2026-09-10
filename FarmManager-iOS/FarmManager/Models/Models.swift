@@ -75,6 +75,22 @@ enum FeedFrequency: String, Codable, CaseIterable, Identifiable {
     }
 }
 
+enum FeedUnit: String, Codable, CaseIterable, Identifiable {
+    case kg, lb, bag, scoop, bale, gallon, hayBale
+    var id: String { rawValue }
+    var label: String {
+        switch self {
+        case .kg: return "kg"
+        case .lb: return "lb"
+        case .bag: return "bags"
+        case .scoop: return "scoops"
+        case .bale: return "bales"
+        case .gallon: return "gallons"
+        case .hayBale: return "hay bales"
+        }
+    }
+}
+
 enum BreedingMethod: String, Codable, CaseIterable, Identifiable {
     case natural, artificialInsemination, embryoTransfer
     var id: String { rawValue }
@@ -160,8 +176,23 @@ enum IncomeCategory: String, Codable, CaseIterable, Identifiable {
 @Model
 final class FarmProfile {
     var farmName: String
-    init(farmName: String = "Gut Farms") {
+    var location: String
+    var ownerName: String
+    var phone: String
+    var notes: String
+
+    init(
+        farmName: String = "Gut Farms",
+        location: String = "",
+        ownerName: String = "",
+        phone: String = "",
+        notes: String = ""
+    ) {
         self.farmName = farmName
+        self.location = location
+        self.ownerName = ownerName
+        self.phone = phone
+        self.notes = notes
     }
 }
 
@@ -201,8 +232,11 @@ final class FeedingSchedule {
     var animalGroupId: PersistentIdentifier?
     var animalGroupName: String
     var feedName: String
-    var amountKg: Double
-    var costPerKg: Double
+    var feedQuantity: Double
+    var quantityUnitRaw: String
+    var costPerUnit: Double
+    var animalsFed: Int
+    var stockOnHand: Double
     var frequencyRaw: String
     var timeOfDay: String
     var notes: String
@@ -213,12 +247,30 @@ final class FeedingSchedule {
         set { frequencyRaw = newValue.rawValue }
     }
 
+    var quantityUnit: FeedUnit {
+        get { FeedUnit(rawValue: quantityUnitRaw) ?? .kg }
+        set { quantityUnitRaw = newValue.rawValue }
+    }
+
+    var quantityLabel: String {
+        "\(Self.trimQty(feedQuantity)) \(quantityUnit.label)"
+    }
+
+    var stockLabel: String {
+        "\(Self.trimQty(stockOnHand)) \(quantityUnit.label) on hand"
+    }
+
+    var perHeadLabel: String {
+        guard animalsFed > 0 else { return quantityLabel }
+        return "\(Self.trimQty(feedQuantity / Double(animalsFed))) \(quantityUnit.label)/head"
+    }
+
     var dailyCost: Double {
         switch frequency {
-        case .daily: return amountKg * costPerKg
-        case .twiceDaily: return amountKg * costPerKg * 2
-        case .weekly: return (amountKg * costPerKg) / 7.0
-        case .custom: return amountKg * costPerKg
+        case .daily: return feedQuantity * costPerUnit
+        case .twiceDaily: return feedQuantity * costPerUnit * 2
+        case .weekly: return (feedQuantity * costPerUnit) / 7.0
+        case .custom: return feedQuantity * costPerUnit
         }
     }
 
@@ -228,8 +280,11 @@ final class FeedingSchedule {
         animalGroupId: PersistentIdentifier? = nil,
         animalGroupName: String,
         feedName: String,
-        amountKg: Double,
-        costPerKg: Double,
+        feedQuantity: Double,
+        quantityUnit: FeedUnit = .kg,
+        costPerUnit: Double = 0,
+        animalsFed: Int = 1,
+        stockOnHand: Double = 0,
         frequency: FeedFrequency,
         timeOfDay: String,
         notes: String = "",
@@ -238,12 +293,19 @@ final class FeedingSchedule {
         self.animalGroupId = animalGroupId
         self.animalGroupName = animalGroupName
         self.feedName = feedName
-        self.amountKg = amountKg
-        self.costPerKg = costPerKg
+        self.feedQuantity = feedQuantity
+        self.quantityUnitRaw = quantityUnit.rawValue
+        self.costPerUnit = costPerUnit
+        self.animalsFed = animalsFed
+        self.stockOnHand = stockOnHand
         self.frequencyRaw = frequency.rawValue
         self.timeOfDay = timeOfDay
         self.notes = notes
         self.active = active
+    }
+
+    static func trimQty(_ value: Double) -> String {
+        value == Double(Int(value)) ? String(Int(value)) : String(format: "%.2f", value)
     }
 }
 
@@ -402,5 +464,172 @@ final class FarmTransaction {
         self.expenseCategoryRaw = expenseCategory?.rawValue
         self.incomeCategoryRaw = incomeCategory?.rawValue
         self.date = date
+    }
+}
+
+enum HealthRecordType: String, Codable, CaseIterable, Identifiable {
+    case vaccination, treatment, checkup, injury, illness, other
+    var id: String { rawValue }
+    var displayName: String { rawValue.replacingOccurrences(of: "_", with: " ").capitalized }
+}
+
+@Model
+final class HealthRecord {
+    var animalGroupName: String
+    var animalLabel: String
+    var typeRaw: String
+    var title: String
+    var date: Date
+    var provider: String
+    var cost: Double
+    var notes: String
+
+    var type: HealthRecordType {
+        get { HealthRecordType(rawValue: typeRaw) ?? .checkup }
+        set { typeRaw = newValue.rawValue }
+    }
+
+    init(
+        animalGroupName: String = "",
+        animalLabel: String = "",
+        type: HealthRecordType = .checkup,
+        title: String,
+        date: Date = .now,
+        provider: String = "",
+        cost: Double = 0,
+        notes: String = ""
+    ) {
+        self.animalGroupName = animalGroupName
+        self.animalLabel = animalLabel
+        self.typeRaw = type.rawValue
+        self.title = title
+        self.date = date
+        self.provider = provider
+        self.cost = cost
+        self.notes = notes
+    }
+}
+
+enum InventoryCategory: String, Codable, CaseIterable, Identifiable {
+    case feed, medicine, equipment, supplies, fuel, other
+    var id: String { rawValue }
+    var displayName: String { rawValue.capitalized }
+}
+
+@Model
+final class InventoryItem {
+    var name: String
+    var categoryRaw: String
+    var quantity: Double
+    var unit: String
+    var reorderLevel: Double
+    var unitCost: Double
+    var location: String
+    var notes: String
+    var updatedAt: Date
+
+    var category: InventoryCategory {
+        get { InventoryCategory(rawValue: categoryRaw) ?? .supplies }
+        set { categoryRaw = newValue.rawValue }
+    }
+
+    var needsReorder: Bool { reorderLevel > 0 && quantity <= reorderLevel }
+
+    init(
+        name: String,
+        category: InventoryCategory = .supplies,
+        quantity: Double = 0,
+        unit: String = "units",
+        reorderLevel: Double = 0,
+        unitCost: Double = 0,
+        location: String = "",
+        notes: String = "",
+        updatedAt: Date = .now
+    ) {
+        self.name = name
+        self.categoryRaw = category.rawValue
+        self.quantity = quantity
+        self.unit = unit
+        self.reorderLevel = reorderLevel
+        self.unitCost = unitCost
+        self.location = location
+        self.notes = notes
+        self.updatedAt = updatedAt
+    }
+}
+
+enum JournalCategory: String, Codable, CaseIterable, Identifiable {
+    case dailyLog, weather, pasture, observation, task, other
+    var id: String { rawValue }
+    var displayName: String {
+        switch self {
+        case .dailyLog: return "Daily log"
+        default: return rawValue.capitalized
+        }
+    }
+}
+
+@Model
+final class JournalEntry {
+    var title: String
+    var categoryRaw: String
+    var body: String
+    var date: Date
+    var tags: String
+
+    var category: JournalCategory {
+        get { JournalCategory(rawValue: categoryRaw) ?? .dailyLog }
+        set { categoryRaw = newValue.rawValue }
+    }
+
+    init(
+        title: String,
+        category: JournalCategory = .dailyLog,
+        body: String = "",
+        date: Date = .now,
+        tags: String = ""
+    ) {
+        self.title = title
+        self.categoryRaw = category.rawValue
+        self.body = body
+        self.date = date
+        self.tags = tags
+    }
+}
+
+enum ContactRole: String, Codable, CaseIterable, Identifiable {
+    case veterinarian, supplier, buyer, worker, advisor, other
+    var id: String { rawValue }
+    var displayName: String { rawValue.capitalized }
+}
+
+@Model
+final class FarmContact {
+    var name: String
+    var roleRaw: String
+    var phone: String
+    var email: String
+    var organization: String
+    var notes: String
+
+    var role: ContactRole {
+        get { ContactRole(rawValue: roleRaw) ?? .other }
+        set { roleRaw = newValue.rawValue }
+    }
+
+    init(
+        name: String,
+        role: ContactRole = .other,
+        phone: String = "",
+        email: String = "",
+        organization: String = "",
+        notes: String = ""
+    ) {
+        self.name = name
+        self.roleRaw = role.rawValue
+        self.phone = phone
+        self.email = email
+        self.organization = organization
+        self.notes = notes
     }
 }

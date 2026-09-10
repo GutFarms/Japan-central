@@ -9,9 +9,13 @@ import androidx.room.Update
 import com.gutfarms.manager.data.model.Animal
 import com.gutfarms.manager.data.model.AnimalArrival
 import com.gutfarms.manager.data.model.BreedingSchedule
+import com.gutfarms.manager.data.model.FarmContact
 import com.gutfarms.manager.data.model.FarmProfile
 import com.gutfarms.manager.data.model.FarmTransaction
 import com.gutfarms.manager.data.model.FeedingSchedule
+import com.gutfarms.manager.data.model.HealthRecord
+import com.gutfarms.manager.data.model.InventoryItem
+import com.gutfarms.manager.data.model.JournalEntry
 import com.gutfarms.manager.data.model.RegistrationStatus
 import com.gutfarms.manager.data.model.TransactionType
 import kotlinx.coroutines.flow.Flow
@@ -119,4 +123,52 @@ interface TransactionDao {
 
     @Query("SELECT COALESCE(SUM(amount), 0) FROM transactions WHERE type = :type")
     fun observeSum(type: TransactionType): Flow<Double>
+}
+
+@Dao
+interface HealthRecordDao {
+    @Query("SELECT * FROM health_records ORDER BY dateMillis DESC")
+    fun observeAll(): Flow<List<HealthRecord>>
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun upsert(record: HealthRecord): Long
+
+    @Delete
+    suspend fun delete(record: HealthRecord)
+}
+
+@Dao
+interface InventoryItemDao {
+    @Query("SELECT * FROM inventory_items ORDER BY name ASC")
+    fun observeAll(): Flow<List<InventoryItem>>
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun upsert(item: InventoryItem): Long
+
+    @Delete
+    suspend fun delete(item: InventoryItem)
+}
+
+@Dao
+interface JournalEntryDao {
+    @Query("SELECT * FROM journal_entries ORDER BY dateMillis DESC")
+    fun observeAll(): Flow<List<JournalEntry>>
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun upsert(entry: JournalEntry): Long
+
+    @Delete
+    suspend fun delete(entry: JournalEntry)
+}
+
+@Dao
+interface FarmContactDao {
+    @Query("SELECT * FROM farm_contacts ORDER BY name ASC")
+    fun observeAll(): Flow<List<FarmContact>>
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun upsert(contact: FarmContact): Long
+
+    @Delete
+    suspend fun delete(contact: FarmContact)
 }

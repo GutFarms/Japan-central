@@ -49,6 +49,21 @@ enum class FeedFrequency {
     DAILY, TWICE_DAILY, WEEKLY, CUSTOM
 }
 
+enum class FeedUnit {
+    KG, LB, BAG, SCOOP, BALE, GALLON, BALE_HAY;
+
+    val label: String
+        get() = when (this) {
+            KG -> "kg"
+            LB -> "lb"
+            BAG -> "bags"
+            SCOOP -> "scoops"
+            BALE -> "bales"
+            GALLON -> "gallons"
+            BALE_HAY -> "hay bales"
+        }
+}
+
 @Entity(
     tableName = "feeding_schedules",
     foreignKeys = [
@@ -65,23 +80,48 @@ data class FeedingSchedule(
     @PrimaryKey(autoGenerate = true) val id: Long = 0,
     val animalId: Long,
     val feedName: String,
-    val amountKg: Double,
-    val costPerKg: Double,
+    /** Quantity of feed given each feeding. */
+    val feedQuantity: Double,
+    val quantityUnit: FeedUnit = FeedUnit.KG,
+    val costPerUnit: Double = 0.0,
+    /** How many animals this ration covers. */
+    val animalsFed: Int = 1,
+    /** Remaining stock of this feed on hand. */
+    val stockOnHand: Double = 0.0,
     val frequency: FeedFrequency,
     val timeOfDay: String,
     val notes: String = "",
     val active: Boolean = true
 ) {
+    val quantityLabel: String
+        get() = "${trimQty(feedQuantity)} ${quantityUnit.label}"
+
+    val stockLabel: String
+        get() = "${trimQty(stockOnHand)} ${quantityUnit.label} on hand"
+
+    val perHeadLabel: String
+        get() = if (animalsFed > 0) {
+            "${trimQty(feedQuantity / animalsFed)} ${quantityUnit.label}/head"
+        } else {
+            quantityLabel
+        }
+
     val dailyCost: Double
         get() = when (frequency) {
-            FeedFrequency.DAILY -> amountKg * costPerKg
-            FeedFrequency.TWICE_DAILY -> amountKg * costPerKg * 2
-            FeedFrequency.WEEKLY -> (amountKg * costPerKg) / 7.0
-            FeedFrequency.CUSTOM -> amountKg * costPerKg
+            FeedFrequency.DAILY -> feedQuantity * costPerUnit
+            FeedFrequency.TWICE_DAILY -> feedQuantity * costPerUnit * 2
+            FeedFrequency.WEEKLY -> (feedQuantity * costPerUnit) / 7.0
+            FeedFrequency.CUSTOM -> feedQuantity * costPerUnit
         }
 
     val monthlyCost: Double
         get() = dailyCost * 30.0
+
+    companion object {
+        fun trimQty(value: Double): String =
+            if (value == value.toLong().toDouble()) value.toLong().toString()
+            else String.format("%.2f", value)
+    }
 }
 
 enum class TransactionType {
@@ -259,5 +299,87 @@ data class AnimalArrivalWithGroup(
 @Entity(tableName = "farm_profile")
 data class FarmProfile(
     @PrimaryKey val id: Int = 1,
-    val farmName: String = "Gut Farms"
+    val farmName: String = "Gut Farms",
+    val location: String = "",
+    val ownerName: String = "",
+    val phone: String = "",
+    val notes: String = ""
+)
+
+enum class HealthRecordType {
+    VACCINATION, TREATMENT, CHECKUP, INJURY, ILLNESS, OTHER
+}
+
+@Entity(
+    tableName = "health_records",
+    foreignKeys = [
+        ForeignKey(
+            entity = Animal::class,
+            parentColumns = ["id"],
+            childColumns = ["animalId"],
+            onDelete = ForeignKey.SET_NULL
+        )
+    ],
+    indices = [Index("animalId"), Index("dateMillis")]
+)
+data class HealthRecord(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    val animalId: Long? = null,
+    val animalLabel: String = "",
+    val type: HealthRecordType = HealthRecordType.CHECKUP,
+    val title: String,
+    val dateMillis: Long = System.currentTimeMillis(),
+    val provider: String = "",
+    val cost: Double = 0.0,
+    val notes: String = ""
+)
+
+enum class InventoryCategory {
+    FEED, MEDICINE, EQUIPMENT, SUPPLIES, FUEL, OTHER
+}
+
+@Entity(tableName = "inventory_items")
+data class InventoryItem(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    val name: String,
+    val category: InventoryCategory = InventoryCategory.SUPPLIES,
+    val quantity: Double = 0.0,
+    val unit: String = "units",
+    val reorderLevel: Double = 0.0,
+    val unitCost: Double = 0.0,
+    val location: String = "",
+    val notes: String = "",
+    val updatedAt: Long = System.currentTimeMillis()
+) {
+    val needsReorder: Boolean
+        get() = reorderLevel > 0 && quantity <= reorderLevel
+}
+
+enum class JournalCategory {
+    DAILY_LOG, WEATHER, PASTURE, OBSERVATION, TASK, OTHER
+}
+
+@Entity(tableName = "journal_entries")
+data class JournalEntry(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    val title: String,
+    val category: JournalCategory = JournalCategory.DAILY_LOG,
+    val body: String = "",
+    val dateMillis: Long = System.currentTimeMillis(),
+    val tags: String = ""
+)
+
+enum class ContactRole {
+    VETERINARIAN, SUPPLIER, BUYER, WORKER, ADVISOR, OTHER
+}
+
+@Entity(tableName = "farm_contacts")
+data class FarmContact(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    val name: String,
+    val role: ContactRole = ContactRole.OTHER,
+    val phone: String = "",
+    val email: String = "",
+    val organization: String = "",
+    val notes: String = ""
 )
