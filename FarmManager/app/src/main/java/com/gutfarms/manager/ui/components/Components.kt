@@ -13,12 +13,16 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -29,6 +33,7 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -43,11 +48,14 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.window.DialogWindowProvider
+import android.view.WindowManager
 import com.gutfarms.manager.ui.theme.CreamLeaf
 import com.gutfarms.manager.ui.theme.Forest
 import com.gutfarms.manager.ui.theme.ForestDeep
@@ -385,10 +393,29 @@ fun FormSheet(
     saveEnabled: Boolean = true,
     content: @Composable ColumnScope.() -> Unit
 ) {
+    val scrollState = rememberScrollState()
+    val view = LocalView.current
+
+    // Bottom sheets use a dialog window; resize it so the keypad does not cover fields.
+    DisposableEffect(view) {
+        val window = (view.parent as? DialogWindowProvider)?.window
+        val previousMode = window?.attributes?.softInputMode
+        window?.setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE)
+        onDispose {
+            if (window != null && previousMode != null) {
+                window.setSoftInputMode(previousMode)
+            }
+        }
+    }
+
     Column(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(20.dp),
+            .navigationBarsPadding()
+            .imePadding()
+            .verticalScroll(scrollState)
+            .padding(horizontal = 20.dp, vertical = 16.dp)
+            .padding(bottom = 32.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
         Text(title, style = MaterialTheme.typography.headlineMedium)
