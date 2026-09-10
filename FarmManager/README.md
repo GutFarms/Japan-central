@@ -25,6 +25,19 @@ Android app for farm management with livestock tracking, feeding schedules, and 
 - Room database (offline-first, sample data on first launch)
 - Navigation Compose + ViewModel
 
+## Install on a phone via Android Studio
+
+1. On the phone: enable **Developer options** → turn on **USB debugging**
+2. Plug the phone into your computer (accept the “Allow USB debugging?” prompt)
+3. Open **Android Studio** → **File → Open** → select the `FarmManager` folder (not the repo root)
+4. Wait for Gradle sync to finish
+5. Top toolbar: pick your phone in the device dropdown
+6. Click **Run** (green ▶) or press **Shift+F10** / **Ctrl+R**
+
+Android Studio builds and installs/updates the app on the phone (`com.gutfarms.manager`).
+
+**Release APK (no Studio):** use [`dist/GutFarms-FarmManager.apk`](./dist/GutFarms-FarmManager.apk), or after install use **Home → Settings → Check for updates**.
+
 ## Build
 
 Requirements: JDK 17+, Android SDK 34
