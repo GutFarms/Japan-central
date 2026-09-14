@@ -102,17 +102,60 @@ cp desktop/Cargo.toml "$DESK_DIR/BUILD.txt" 2>/dev/null || true
   zip -r -q "${DESK_NAME}.zip" "$DESK_NAME"
 )
 
-# --- 4) Full toolkit (API + model + corpus + iOS + web + desktop sources) ---
+# --- 4) Android sideload APK (offline WebView learner) ---
+APK_NAME="Boriken-Learner-${VERSION}.apk"
+APK_OUT="$ROOT/android/app/build/outputs/apk/release/app-release.apk"
+echo "==> Syncing webapp into Android assets"
+mkdir -p "$ROOT/android/app/src/main/assets/www"
+cp "$ROOT/webapp/index.html" "$ROOT/android/app/src/main/assets/www/index.html"
+if [[ -x "$ROOT/android/gradlew" ]] && [[ -n "${ANDROID_HOME:-}${ANDROID_SDK_ROOT:-}" || -d /workspace/android-sdk ]]; then
+  export ANDROID_HOME="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-/workspace/android-sdk}}"
+  echo "sdk.dir=${ANDROID_HOME}" > "$ROOT/android/local.properties"
+  echo "==> Building Android release APK"
+  (
+    cd "$ROOT/android"
+    ./gradlew assembleRelease --quiet
+  )
+  if [[ -f "$APK_OUT" ]]; then
+    cp "$APK_OUT" "$DIST/$APK_NAME"
+    cp "$APK_OUT" "$DIST/Boriken-Learner.apk"
+    cp "$APK_OUT" "$ART/$APK_NAME"
+    cp "$APK_OUT" "$ART/Boriken-Learner.apk"
+    SIDE_DIR="$DIST/Boriken-Android-Sideload-${VERSION}"
+    rm -rf "$SIDE_DIR"
+    mkdir -p "$SIDE_DIR"
+    cp "$APK_OUT" "$SIDE_DIR/Boriken-Learner.apk"
+    cp "$ROOT/android/README.md" "$SIDE_DIR/README.md"
+    cat > "$SIDE_DIR/SIDELOAD.txt" <<EOF
+Borikén Learner ${VERSION} — Android sideload
+1. Copy Boriken-Learner.apk to your phone.
+2. Allow Install unknown apps for Files/Chrome/Drive.
+3. Tap the APK → Install → Open.
+Offline. Package: com.boriken.learner
+EOF
+    (
+      cd "$DIST"
+      zip -r -q "Boriken-Android-Sideload-${VERSION}.zip" "Boriken-Android-Sideload-${VERSION}"
+    )
+    cp "$DIST/Boriken-Android-Sideload-${VERSION}.zip" "$DIST/Boriken-Android-Sideload.zip"
+    cp "$DIST/Boriken-Android-Sideload-${VERSION}.zip" "$ART/Boriken-Android-Sideload.zip"
+    cp "$DIST/Boriken-Android-Sideload-${VERSION}.zip" "$ART/Boriken-Android-Sideload-${VERSION}.zip"
+  fi
+else
+  echo "==> Skipping Android APK (set ANDROID_HOME and ensure android/gradlew exists)"
+fi
+
+# --- 5) Full toolkit (API + model + corpus + iOS + web + desktop sources) ---
 TOOL_NAME="BorikenLLM-Toolkit-${VERSION}"
 TOOL_DIR="$DIST/$TOOL_NAME"
 rm -rf "$TOOL_DIR"
 mkdir -p "$TOOL_DIR"
-for item in api corpus engine ios models prompts train tests webapp desktop \
+for item in api corpus engine ios models prompts train tests webapp desktop android \
             requirements.txt README.md DOWNLOAD.md Makefile scripts; do
   cp -R "$item" "$TOOL_DIR/" 2>/dev/null || true
 done
 # drop heavy target/ from toolkit if copied
-rm -rf "$TOOL_DIR/desktop/target"
+rm -rf "$TOOL_DIR/desktop/target" "$TOOL_DIR/android/.gradle" "$TOOL_DIR/android/app/build" "$TOOL_DIR/android/build"
 # lightweight start helpers
 cat > "$TOOL_DIR/START.txt" <<EOF
 BorikenLLM Toolkit ${VERSION}
@@ -122,16 +165,19 @@ Option A — Offline learner (no install)
   open webapp/index.html
   (on iPhone: copy zip → Files → open index.html → Share → Add to Home Screen)
 
-Option B — High-graphics desktop
+Option B — Android sideload APK
+  Install dist/Boriken-Learner.apk (see android/README.md)
+
+Option C — High-graphics desktop
   cd desktop && cargo run --release
   # or use the prebuilt: dist/Boriken-Desktop-*-linux.tar.gz
 
-Option C — Local API for the iOS app
+Option D — Local API for the iOS app
   python3 -m pip install -r requirements.txt
   python3 -m uvicorn api.server:app --host 0.0.0.0 --port 8080
   # then point BorikenKit at http://<your-lan-ip>:8080
 
-Option D — Rebuild model
+Option E — Rebuild model
   make train
 
 Fun endpoints: http://127.0.0.1:8080/v1/fun/menu
@@ -165,4 +211,4 @@ cp "$DIST/${DESK_NAME}.tar.gz" "$DIST/Boriken-Desktop-linux.tar.gz"
 cp "$DIST/${DESK_NAME}.zip" "$DIST/Boriken-Desktop-linux.zip"
 
 echo "==> Downloadables ready"
-ls -lh "$DIST"/Boriken*.{zip,tar.gz} "$ART"/Boriken*.{zip,tar.gz} 2>/dev/null | sed 's|/workspace/boriken-llm/||'
+ls -lh "$DIST"/Boriken*.{zip,tar.gz,apk} "$ART"/Boriken*.{zip,tar.gz,apk} 2>/dev/null | sed 's|/workspace/boriken-llm/||'

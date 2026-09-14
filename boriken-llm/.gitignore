@@ -9,5 +9,12 @@ venv/
 dist/*/
 !dist/*.zip
 !dist/*.tar.gz
+!dist/*.apk
 !dist/.gitkeep
 desktop/target/
+android/.gradle/
+android/build/
+android/app/build/
+android/local.properties
+android/.idea/
+*.iml

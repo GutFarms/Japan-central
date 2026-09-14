@@ -12,6 +12,7 @@ A language reconstruction **LLM + API + iOS client** for rebuilding **Borikén T
 | `api/` | FastAPI server the iOS app calls |
 | `ios/BorikenKit` | Swift package client |
 | `ios/SampleApp` | SwiftUI starter screen |
+| `android/` | Sideload APK (offline WebView learner for phones) |
 
 This is a **community language-rebuilding toolkit**. Attested colonial forms are preferred and labeled `attested`. Neo-Taíno / comparative reconstructions are labeled clearly so the app never pretends certainty.
 
@@ -23,12 +24,16 @@ See **[DOWNLOAD.md](DOWNLOAD.md)** for packages:
 
 | Package | File |
 |---|---|
+| **Android APK (sideload)** | `dist/Boriken-Learner.apk` |
 | **High-graphics desktop** | `dist/Boriken-Desktop-linux.tar.gz` |
 | Offline learner (iPhone) | `dist/Boriken-Offline-Learner.zip` |
 | iOS Xcode content bundle | `dist/Boriken-iOS-ContentBundle.zip` |
 | Full API + model toolkit | `dist/BorikenLLM-Toolkit.zip` |
 
 ```bash
+# Sideload on Android
+# copy dist/Boriken-Learner.apk to phone → Install unknown apps → Install
+
 # Desktop from source
 cd desktop && cargo run --release
 
