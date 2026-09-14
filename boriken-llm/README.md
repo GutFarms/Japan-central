@@ -13,6 +13,7 @@ A language reconstruction **LLM + API + iOS client** for rebuilding **Borikén T
 | `ios/BorikenKit` | Swift package client |
 | `ios/SampleApp` | SwiftUI starter screen |
 | `android/` | Sideload APK (offline WebView learner for phones) |
+| `bridge/` | Cursor ↔ Android Studio mailbox + JetBrains ACP guide |
 
 This is a **community language-rebuilding toolkit**. Attested colonial forms are preferred and labeled `attested`. Neo-Taíno / comparative reconstructions are labeled clearly so the app never pretends certainty.
 
@@ -30,9 +31,14 @@ See **[DOWNLOAD.md](DOWNLOAD.md)** for packages:
 | iOS Xcode content bundle | `dist/Boriken-iOS-ContentBundle.zip` |
 | Full API + model toolkit | `dist/BorikenLLM-Toolkit.zip` |
 
+**Cursor ↔ Android Studio:** [`bridge/README.md`](bridge/README.md)
+
 ```bash
 # Sideload on Android
 # copy dist/Boriken-Learner.apk to phone → Install unknown apps → Install
+
+# Bridge (on PC with Android Studio)
+python3 bridge/studio_watcher.py --watch
 
 # Desktop from source
 cd desktop && cargo run --release

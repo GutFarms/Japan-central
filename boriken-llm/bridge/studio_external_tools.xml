@@ -1,0 +1,32 @@
+<toolSet>
+  <tool name="Boriken: Sync web assets" description="Copy webapp/index.html into Android assets" showInMainMenu="true">
+    <program>$ProjectFileDir$/../bridge/run_tool.sh</program>
+    <parameters>sync_assets</parameters>
+    <workingDirectory>$ProjectFileDir$/..</workingDirectory>
+  </tool>
+  <tool name="Boriken: Build release APK" description="Gradle assembleRelease + copy to dist/" showInMainMenu="true">
+    <program>$ProjectFileDir$/../bridge/run_tool.sh</program>
+    <parameters>build_release</parameters>
+    <workingDirectory>$ProjectFileDir$/..</workingDirectory>
+  </tool>
+  <tool name="Boriken: ADB install" description="adb install -r latest APK" showInMainMenu="true">
+    <program>$ProjectFileDir$/../bridge/run_tool.sh</program>
+    <parameters>adb_install</parameters>
+    <workingDirectory>$ProjectFileDir$/..</workingDirectory>
+  </tool>
+  <tool name="Boriken: Bridge watcher" description="Start Cursor↔Studio mailbox watcher" showInMainMenu="true">
+    <program>$ProjectFileDir$/../bridge/run_tool.sh</program>
+    <parameters>watch</parameters>
+    <workingDirectory>$ProjectFileDir$/..</workingDirectory>
+  </tool>
+  <tool name="Boriken: Bridge status" description="Show bridge status.json" showInMainMenu="true">
+    <program>$ProjectFileDir$/../bridge/run_tool.sh</program>
+    <parameters>status</parameters>
+    <workingDirectory>$ProjectFileDir$/..</workingDirectory>
+  </tool>
+  <tool name="Boriken: Drain mailbox once" description="Process pending Cursor commands once" showInMainMenu="true">
+    <program>$ProjectFileDir$/../bridge/run_tool.sh</program>
+    <parameters>once</parameters>
+    <workingDirectory>$ProjectFileDir$/..</workingDirectory>
+  </tool>
+</toolSet>
