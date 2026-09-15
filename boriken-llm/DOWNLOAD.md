@@ -38,21 +38,21 @@ python3 bridge/cursor_to_studio.py status
 Full guide: [`bridge/README.md`](bridge/README.md)  
 Official Cursor-in-JetBrains (ACP): https://cursor.com/docs/integrations/jetbrains
 
-## Android phone (sideload APK)
+## Android phone (sideload APK) — v0.3.3 fixed
 
-1. Download **`Boriken-Learner.apk`** (or unzip `Boriken-Android-Sideload.zip`).
-2. Copy it to your Android phone (Drive, USB, Bluetooth, Messages…).
-3. On the phone: **Settings → Security / Apps → Install unknown apps**  
-   and allow **Files**, **Chrome**, or **Drive**.
-4. Tap **Boriken-Learner.apk → Install → Open**.
-5. Play offline: Word of the Day, Batey Match, Island Time Machine, sentences.
+**If download/install failed before, use this build.**
 
-- Package ID: `com.boriken.learner`
-- Needs Android **7.0+**
-- Signed with the debug keystore for immediate sideload (resign for Play Store)
+1. On your phone download **`Boriken-Learner.apk`** from Cursor Artifacts  
+   (or open `install-android.html` in Artifacts and tap Download).
+2. Chrome may say the file is unsafe → tap **Download anyway / Keep**.
+3. Settings → Apps → Special app access → **Install unknown apps** → allow Chrome or Files.
+4. Open **Downloads** → `Boriken-Learner.apk` → **Install** → **Open**.
+5. Toast should say: **Borikén offline — classroom ready**.
 
-Direct link (this branch):  
+Direct raw link (also OK after “Keep”):  
 https://raw.githubusercontent.com/GutFarms/Japan-central/cursor/boriken-language-llm-404a/boriken-llm/dist/Boriken-Learner.apk
+
+Uninstall any older Borikén build first. Package: `com.boriken.learner` · Android 7+.
 
 ## Desktop (highest graphics)
 

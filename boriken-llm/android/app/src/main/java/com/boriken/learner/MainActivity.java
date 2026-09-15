@@ -2,8 +2,10 @@ package com.boriken.learner;
 
 import android.annotation.SuppressLint;
 import android.os.Bundle;
+import android.util.Log;
 import android.webkit.WebChromeClient;
 import android.webkit.WebResourceRequest;
+import android.webkit.WebResourceResponse;
 import android.webkit.WebSettings;
 import android.webkit.WebView;
 import android.webkit.WebViewClient;
@@ -11,12 +13,18 @@ import android.widget.Toast;
 
 import androidx.activity.OnBackPressedCallback;
 import androidx.appcompat.app.AppCompatActivity;
+import androidx.webkit.WebViewAssetLoader;
 
 /**
- * Offline Borikén learner — loads the packaged web classroom from assets.
- * No network required. Sideload the APK and tap Time Machine / games.
+ * Offline Borikén learner.
+ * Uses WebViewAssetLoader so packaged HTML/JS runs on modern Android
+ * without fragile file:// loading.
  */
 public class MainActivity extends AppCompatActivity {
+    private static final String TAG = "BorikenLearner";
+    private static final String START_URL =
+            "https://appassets.androidplatform.net/assets/www/index.html";
+
     private WebView webView;
 
     @SuppressLint("SetJavaScriptEnabled")
@@ -26,6 +34,11 @@ public class MainActivity extends AppCompatActivity {
         setContentView(R.layout.activity_main);
 
         webView = findViewById(R.id.webview);
+
+        final WebViewAssetLoader assetLoader = new WebViewAssetLoader.Builder()
+                .addPathHandler("/assets/", new WebViewAssetLoader.AssetsPathHandler(this))
+                .build();
+
         WebSettings settings = webView.getSettings();
         settings.setJavaScriptEnabled(true);
         settings.setDomStorageEnabled(true);
@@ -37,14 +50,25 @@ public class MainActivity extends AppCompatActivity {
         settings.setDisplayZoomControls(false);
         settings.setLoadWithOverviewMode(true);
         settings.setUseWideViewPort(true);
+        settings.setMixedContentMode(WebSettings.MIXED_CONTENT_COMPATIBILITY_MODE);
 
         webView.setWebChromeClient(new WebChromeClient());
         webView.setWebViewClient(new WebViewClient() {
             @Override
+            public WebResourceResponse shouldInterceptRequest(WebView view, WebResourceRequest request) {
+                return assetLoader.shouldInterceptRequest(request.getUrl());
+            }
+
+            @Override
             public boolean shouldOverrideUrlLoading(WebView view, WebResourceRequest request) {
-                // Stay inside the offline package.
                 String url = request.getUrl().toString();
-                return !(url.startsWith("file:///android_asset/") || url.startsWith("about:"));
+                return !(url.startsWith("https://appassets.androidplatform.net/")
+                        || url.startsWith("about:"));
+            }
+
+            @Override
+            public void onPageFinished(WebView view, String url) {
+                Log.i(TAG, "Loaded: " + url);
             }
         });
 
@@ -60,13 +84,20 @@ public class MainActivity extends AppCompatActivity {
             }
         });
 
-        webView.loadUrl("file:///android_asset/www/index.html");
-        Toast.makeText(this, "Borikén offline — Time Machine ready", Toast.LENGTH_SHORT).show();
+        try {
+            webView.loadUrl(START_URL);
+            Toast.makeText(this, "Borikén offline — classroom ready", Toast.LENGTH_SHORT).show();
+        } catch (Exception e) {
+            Log.e(TAG, "Failed to start WebView", e);
+            Toast.makeText(this, "Startup failed: " + e.getMessage(), Toast.LENGTH_LONG).show();
+        }
     }
 
     @Override
     protected void onDestroy() {
         if (webView != null) {
+            webView.loadUrl("about:blank");
+            webView.stopLoading();
             webView.destroy();
             webView = null;
         }

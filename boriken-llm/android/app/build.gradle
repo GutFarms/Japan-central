@@ -10,18 +10,29 @@ android {
         applicationId "com.boriken.learner"
         minSdk 24
         targetSdk 34
-        versionCode 32
-        versionName "0.3.2"
+        versionCode 33
+        versionName "0.3.3"
         resConfigs "en", "es"
+    }
+
+    signingConfigs {
+        release {
+            storeFile file("${System.properties['user.home']}/.android/debug.keystore")
+            storePassword "android"
+            keyAlias "androiddebugkey"
+            keyPassword "android"
+        }
     }
 
     buildTypes {
         release {
             minifyEnabled false
-            signingConfig signingConfigs.debug
+            signingConfig signingConfigs.release
+            debuggable false
         }
         debug {
             applicationIdSuffix ""
+            signingConfig signingConfigs.release
         }
     }
 
@@ -40,5 +51,6 @@ android {
 dependencies {
     implementation "androidx.appcompat:appcompat:1.6.1"
     implementation "androidx.activity:activity:1.8.2"
+    implementation "androidx.webkit:webkit:1.10.0"
     implementation "com.google.android.material:material:1.11.0"
 }
