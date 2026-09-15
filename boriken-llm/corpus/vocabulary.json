@@ -1,0 +1,2703 @@
+{
+  "meta": {
+    "language": "Boriken (Taíno-Borikenaíki)",
+    "iso": "tnq",
+    "dialect": "Classic Taíno / Borikén reconstruction",
+    "orthography": "modern regularized Latin (Granberry-style)",
+    "notes": "attested=true means documented in colonial Spanish records as Taíno/Antillean, or a widely accepted Taíno→Spanish loan (hamaca, canoa, huracán, etc.). attested=false covers Neo-Taíno/community revival forms, comparative reconstructions, disputed Caribbean Spanish etymologies, and ethnohistoric names that are not Taíno lexemes. Classic Taíno is extinct (ISO tnq); revival mixes ages and invents forms—see ACCURACY.md. Learner SVO is pedagogical Neo-Taíno, not proven classical word order.",
+    "version": "0.3.2",
+    "has_definitions": true,
+    "has_history": true,
+    "accuracy_audit": "2026-08",
+    "disclaimer": "This toolkit prefers colonial anchors and labels uncertainty. It is not a claim that reconstructed forms are Classical Taíno."
+  },
+  "entries": [
+    {
+      "id": "boriken",
+      "boriken": "borikén",
+      "english": "Puerto Rico; native land",
+      "spanish": "Puerto Rico; tierra nativa",
+      "pos": "proper_noun",
+      "attested": true,
+      "etymology": "bori 'native' + -ken/-ke 'land'",
+      "tags": [
+        "place",
+        "identity"
+      ],
+      "definition_en": "The Taíno name for Puerto Rico—literally 'native land' (bori + -ken).",
+      "definition_es": "El nombre taíno de Puerto Rico: literalmente 'tierra nativa' (bori + -ken).",
+      "fun_fact": "Saying Borikén is a tiny act of reclaiming the island's first name.",
+      "example": "borikén"
+    },
+    {
+      "id": "taino",
+      "boriken": "taíno",
+      "english": "good / noble (people)",
+      "spanish": "bueno / noble",
+      "pos": "adjective",
+      "attested": true,
+      "tags": [
+        "identity"
+      ],
+      "definition_en": "Originally meant 'good' or 'noble'; later used as the ethnonym for the people.",
+      "definition_es": "Originalmente significaba 'bueno' o 'noble'; luego se usó como nombre del pueblo.",
+      "fun_fact": "Columbus heard 'Taíno, Taíno' and thought it was their tribal name—it was a greeting of goodness.",
+      "example": "Taíno daka"
+    },
+    {
+      "id": "yucayeke",
+      "boriken": "yukayeke",
+      "english": "village; settlement",
+      "spanish": "aldea; poblado",
+      "pos": "noun",
+      "attested": true,
+      "tags": [
+        "place"
+      ],
+      "definition_en": "A noun meaning 'village'. This form is attested in colonial records.",
+      "definition_es": "Sustantivo que significa 'aldea'. Forma atestiguada en crónicas coloniales.",
+      "fun_fact": "High-confidence classic—flashcard gold.",
+      "example": "da-yukayeke"
+    },
+    {
+      "id": "cacique",
+      "boriken": "kasike",
+      "english": "chief; leader",
+      "spanish": "cacique; jefe",
+      "pos": "noun",
+      "attested": true,
+      "tags": [
+        "society"
+      ],
+      "definition_en": "A community leader or chief responsible for guidance, diplomacy, and ceremony.",
+      "definition_es": "Líder o jefe comunitario responsable de guía, diplomacia y ceremonia.",
+      "fun_fact": "Spanish kept the word 'cacique' and still uses it today.",
+      "example": "da-kasike"
+    },
+    {
+      "id": "bohio",
+      "boriken": "bohío",
+      "english": "house; dwelling",
+      "spanish": "bohío; casa",
+      "pos": "noun",
+      "attested": true,
+      "tags": [
+        "home"
+      ],
+      "definition_en": "A round thatched house—the classic Taíno family dwelling.",
+      "definition_es": "Casa redonda de techo de paja—la vivienda familiar taína clásica.",
+      "fun_fact": "Walk into a bohío and you're inside island architecture 101.",
+      "example": "da-bohío",
+      "accuracy_note": "Ethnohistoric / colonial lexical item widely cited for Taíno culture; orthography regularized.",
+      "confidence": "high"
+    },
+    {
+      "id": "canoa",
+      "boriken": "kanowa",
+      "english": "canoe",
+      "spanish": "canoa",
+      "pos": "noun",
+      "attested": true,
+      "tags": [
+        "travel",
+        "loanword_to_spanish"
+      ],
+      "definition_en": "A dugout boat carved from a single tree trunk, used for fishing and island travel.",
+      "definition_es": "Una embarcación tallada de un solo tronco, usada para pescar y viajar entre islas.",
+      "fun_fact": "'Canoe' entered European languages from Taíno kanowa.",
+      "example": "da-kanowa"
+    },
+    {
+      "id": "hamaca",
+      "boriken": "hamaka",
+      "english": "hammock",
+      "spanish": "hamaca",
+      "pos": "noun",
+      "attested": true,
+      "tags": [
+        "home",
+        "loanword_to_spanish"
+      ],
+      "definition_en": "A hanging bed woven from plant fiber—perfect for island naps and trade voyages.",
+      "definition_es": "Una cama colgante tejida de fibra vegetal—ideal para siestas y viajes.",
+      "fun_fact": "Europeans had never seen hammocks before meeting Taíno communities.",
+      "example": "da-hamaka"
+    },
+    {
+      "id": "huracan",
+      "boriken": "hurakán",
+      "english": "hurricane; storm spirit",
+      "spanish": "huracán",
+      "pos": "noun",
+      "attested": true,
+      "tags": [
+        "nature",
+        "spirit",
+        "loanword_to_spanish"
+      ],
+      "definition_en": "A powerful storm; also linked to a fierce wind/storm spirit in Taíno cosmology.",
+      "definition_es": "Una tormenta poderosa; también ligada a un espíritu del viento en la cosmología taína.",
+      "fun_fact": "English 'hurricane' and Spanish 'huracán' both come from this word.",
+      "example": "da-hurakán"
+    },
+    {
+      "id": "barbacoa",
+      "boriken": "barabakoa",
+      "english": "barbecue; raised grill",
+      "spanish": "barbacoa",
+      "pos": "noun",
+      "attested": true,
+      "tags": [
+        "food",
+        "loanword_to_spanish"
+      ],
+      "definition_en": "A raised wooden grill or frame for slow-cooking food over fire.",
+      "definition_es": "Una parrilla elevada de madera para cocinar lento sobre el fuego.",
+      "fun_fact": "Yes—barbecue is a Caribbean gift to the world.",
+      "example": "da-barabakoa"
+    },
+    {
+      "id": "tabaco",
+      "boriken": "tabako",
+      "english": "tobacco",
+      "spanish": "tabaco",
+      "pos": "noun",
+      "attested": true,
+      "tags": [
+        "plant",
+        "loanword_to_spanish"
+      ],
+      "definition_en": "A noun meaning 'tobacco'. This form is attested in colonial records. It entered Spanish (and often English) from Taíno.",
+      "definition_es": "Sustantivo que significa 'tabaco'. Forma atestiguada en crónicas coloniales. It entered Spanish (and often English) from Taíno.",
+      "fun_fact": "You already know a cousin of this word in Spanish: tabaco.",
+      "example": "da-tabako"
+    },
+    {
+      "id": "maiz",
+      "boriken": "maísi",
+      "english": "maize; corn",
+      "spanish": "maíz",
+      "pos": "noun",
+      "attested": true,
+      "tags": [
+        "food",
+        "plant"
+      ],
+      "definition_en": "A noun meaning 'maize'. This form is attested in colonial records.",
+      "definition_es": "Sustantivo que significa 'maíz'. Forma atestiguada en crónicas coloniales.",
+      "fun_fact": "Flavor unlock: say it before your next bite.",
+      "example": "da-maísi"
+    },
+    {
+      "id": "yuca",
+      "boriken": "yuka",
+      "english": "cassava; yuca",
+      "spanish": "yuca",
+      "pos": "noun",
+      "attested": true,
+      "tags": [
+        "food",
+        "plant"
+      ],
+      "definition_en": "Cassava root; the foundation of kasabi bread and a sacred crop linked to Yokahú.",
+      "definition_es": "Raíz de yuca/casava; base del casabe y cultivo sagrado ligado a Yokahú.",
+      "fun_fact": "Yuka wasn't just food—it was spiritual technology for survival.",
+      "example": "da-yuka"
+    },
+    {
+      "id": "casabe",
+      "boriken": "kasabi",
+      "english": "cassava bread",
+      "spanish": "casabe",
+      "pos": "noun",
+      "attested": true,
+      "tags": [
+        "food"
+      ],
+      "definition_en": "Flat bread made from grated and pressed cassava (yuka), a staple food of Borikén.",
+      "definition_es": "Pan plano de yuca rallada y prensada; alimento básico de Borikén.",
+      "fun_fact": "Kasabi travels well—voyagers packed it for long canoe journeys.",
+      "example": "da-kasabi"
+    },
+    {
+      "id": "batata",
+      "boriken": "batata",
+      "english": "sweet potato",
+      "spanish": "batata",
+      "pos": "noun",
+      "attested": true,
+      "tags": [
+        "food"
+      ],
+      "definition_en": "A noun meaning 'sweet potato'. This form is attested in colonial records.",
+      "definition_es": "Sustantivo que significa 'batata'. Forma atestiguada en crónicas coloniales.",
+      "fun_fact": "Flavor unlock: say it before your next bite.",
+      "example": "da-batata"
+    },
+    {
+      "id": "aji",
+      "boriken": "ají",
+      "english": "chili pepper",
+      "spanish": "ají",
+      "pos": "noun",
+      "attested": true,
+      "tags": [
+        "food"
+      ],
+      "definition_en": "A noun meaning 'chili pepper'. This form is attested in colonial records.",
+      "definition_es": "Sustantivo que significa 'ají'. Forma atestiguada en crónicas coloniales.",
+      "fun_fact": "Flavor unlock: say it before your next bite.",
+      "example": "da-ají"
+    },
+    {
+      "id": "mani",
+      "boriken": "maní",
+      "english": "peanut",
+      "spanish": "maní",
+      "pos": "noun",
+      "attested": true,
+      "tags": [
+        "food"
+      ],
+      "definition_en": "A noun meaning 'peanut'. This form is attested in colonial records.",
+      "definition_es": "Sustantivo que significa 'maní'. Forma atestiguada en crónicas coloniales.",
+      "fun_fact": "Flavor unlock: say it before your next bite.",
+      "example": "da-maní"
+    },
+    {
+      "id": "guayaba",
+      "boriken": "wayaba",
+      "english": "guava",
+      "spanish": "guayaba",
+      "pos": "noun",
+      "attested": true,
+      "tags": [
+        "food",
+        "plant"
+      ],
+      "definition_en": "A noun meaning 'guava'. This form is attested in colonial records.",
+      "definition_es": "Sustantivo que significa 'guayaba'. Forma atestiguada en crónicas coloniales.",
+      "fun_fact": "Flavor unlock: say it before your next bite.",
+      "example": "da-wayaba"
+    },
+    {
+      "id": "maguey",
+      "boriken": "magey",
+      "english": "maguey; agave",
+      "spanish": "maguey",
+      "pos": "noun",
+      "attested": true,
+      "tags": [
+        "plant"
+      ],
+      "definition_en": "A noun meaning 'maguey'. This form is attested in colonial records.",
+      "definition_es": "Sustantivo que significa 'maguey'. Forma atestiguada en crónicas coloniales.",
+      "fun_fact": "High-confidence classic—flashcard gold.",
+      "example": "da-magey"
+    },
+    {
+      "id": "ceiba",
+      "boriken": "seyba",
+      "english": "ceiba tree",
+      "spanish": "ceiba",
+      "pos": "noun",
+      "attested": true,
+      "tags": [
+        "plant",
+        "spirit"
+      ],
+      "definition_en": "The great silk-cotton tree, often treated as a sacred axis connecting earth and sky.",
+      "definition_es": "El gran árbol de ceiba, a menudo visto como eje sagrado entre tierra y cielo.",
+      "fun_fact": "Many Caribbean communities still gather under the ceiba.",
+      "example": "da-seyba"
+    },
+    {
+      "id": "iguana",
+      "boriken": "iwana",
+      "english": "iguana",
+      "spanish": "iguana",
+      "pos": "noun",
+      "attested": true,
+      "tags": [
+        "animal"
+      ],
+      "definition_en": "A noun meaning 'iguana'. This form is attested in colonial records.",
+      "definition_es": "Sustantivo que significa 'iguana'. Forma atestiguada en crónicas coloniales.",
+      "fun_fact": "Nature bingo: spot it, say it.",
+      "example": "da-iwana"
+    },
+    {
+      "id": "manati",
+      "boriken": "manatí",
+      "english": "manatee",
+      "spanish": "manatí",
+      "pos": "noun",
+      "attested": true,
+      "tags": [
+        "animal"
+      ],
+      "definition_en": "A noun meaning 'manatee'. This form is attested in colonial records.",
+      "definition_es": "Sustantivo que significa 'manatí'. Forma atestiguada en crónicas coloniales.",
+      "fun_fact": "Nature bingo: spot it, say it.",
+      "example": "da-manatí"
+    },
+    {
+      "id": "tiburon",
+      "boriken": "tiburón",
+      "english": "shark (Caribbean Spanish; Taíno origin uncertain)",
+      "spanish": "tiburón (origen taíno incierto)",
+      "pos": "noun",
+      "attested": false,
+      "tags": [
+        "animal",
+        "accuracy_flag",
+        "etymology_uncertain"
+      ],
+      "definition_en": "Shark (Caribbean Spanish tiburón; Taíno origin uncertain—low confidence).",
+      "definition_es": "Tiburón (español caribeño; origen taíno incierto—baja confianza).",
+      "fun_fact": "Useful island vocabulary—don't present it as a proven colonial Taíno citation.",
+      "example": "da-tiburón",
+      "source": "caribbean_spanish_uncertain",
+      "confidence": "low",
+      "accuracy_note": "Spanish tiburón 'shark'. Indigenous Antillean origin is sometimes claimed but not securely demonstrated as a Classic Taíno lexeme in this corpus."
+    },
+    {
+      "id": "caiman",
+      "boriken": "kaymán",
+      "english": "caiman; alligator",
+      "spanish": "caimán",
+      "pos": "noun",
+      "attested": true,
+      "tags": [
+        "animal"
+      ],
+      "definition_en": "A noun meaning 'caiman'. This form is attested in colonial records.",
+      "definition_es": "Sustantivo que significa 'caimán'. Forma atestiguada en crónicas coloniales.",
+      "fun_fact": "Nature bingo: spot it, say it.",
+      "example": "da-kaymán"
+    },
+    {
+      "id": "jutia",
+      "boriken": "hutía",
+      "english": "hutia (rodent)",
+      "spanish": "jutía",
+      "pos": "noun",
+      "attested": true,
+      "tags": [
+        "animal"
+      ],
+      "definition_en": "A noun meaning 'hutia (rodent)'. This form is attested in colonial records.",
+      "definition_es": "Sustantivo que significa 'jutía'. Forma atestiguada en crónicas coloniales.",
+      "fun_fact": "Nature bingo: spot it, say it.",
+      "example": "da-hutía"
+    },
+    {
+      "id": "nigua",
+      "boriken": "niwa",
+      "english": "chigger; sand flea",
+      "spanish": "nigua",
+      "pos": "noun",
+      "attested": true,
+      "tags": [
+        "animal"
+      ],
+      "definition_en": "A noun meaning 'chigger'. This form is attested in colonial records.",
+      "definition_es": "Sustantivo que significa 'nigua'. Forma atestiguada en crónicas coloniales.",
+      "fun_fact": "Nature bingo: spot it, say it.",
+      "example": "da-niwa"
+    },
+    {
+      "id": "sabana",
+      "boriken": "sabana",
+      "english": "savanna; plain",
+      "spanish": "sabana",
+      "pos": "noun",
+      "attested": true,
+      "tags": [
+        "place"
+      ],
+      "definition_en": "A noun meaning 'savanna'. This form is attested in colonial records.",
+      "definition_es": "Sustantivo que significa 'sabana'. Forma atestiguada en crónicas coloniales.",
+      "fun_fact": "High-confidence classic—flashcard gold.",
+      "example": "da-sabana"
+    },
+    {
+      "id": "cayo",
+      "boriken": "kayo",
+      "english": "key; small island",
+      "spanish": "cayo",
+      "pos": "noun",
+      "attested": true,
+      "tags": [
+        "place"
+      ],
+      "definition_en": "A noun meaning 'key'. This form is attested in colonial records.",
+      "definition_es": "Sustantivo que significa 'cayo'. Forma atestiguada en crónicas coloniales.",
+      "fun_fact": "High-confidence classic—flashcard gold.",
+      "example": "da-kayo"
+    },
+    {
+      "id": "coa",
+      "boriken": "koa",
+      "english": "digging stick",
+      "spanish": "coa",
+      "pos": "noun",
+      "attested": true,
+      "tags": [
+        "tool"
+      ],
+      "definition_en": "A noun meaning 'digging stick'. This form is attested in colonial records.",
+      "definition_es": "Sustantivo que significa 'coa'. Forma atestiguada en crónicas coloniales.",
+      "fun_fact": "High-confidence classic—flashcard gold.",
+      "example": "da-koa"
+    },
+    {
+      "id": "macana",
+      "boriken": "makana",
+      "english": "wooden club; war club",
+      "spanish": "macana",
+      "pos": "noun",
+      "attested": true,
+      "tags": [
+        "tool"
+      ],
+      "definition_en": "A noun meaning 'wooden club'. This form is attested in colonial records.",
+      "definition_es": "Sustantivo que significa 'macana'. Forma atestiguada en crónicas coloniales.",
+      "fun_fact": "High-confidence classic—flashcard gold.",
+      "example": "da-makana"
+    },
+    {
+      "id": "duho",
+      "boriken": "duho",
+      "english": "ceremonial stool",
+      "spanish": "dujo",
+      "pos": "noun",
+      "attested": true,
+      "tags": [
+        "ceremony"
+      ],
+      "definition_en": "A noun meaning 'ceremonial stool'. This form is attested in colonial records.",
+      "definition_es": "Sustantivo que significa 'dujo'. Forma atestiguada en crónicas coloniales.",
+      "fun_fact": "High-confidence classic—flashcard gold.",
+      "example": "da-duho"
+    },
+    {
+      "id": "zemi",
+      "boriken": "semí",
+      "english": "spirit; sacred figure",
+      "spanish": "cemí",
+      "pos": "noun",
+      "attested": true,
+      "tags": [
+        "spirit"
+      ],
+      "definition_en": "A sacred figure or spirit presence—carved, kept, and honored in the home and ceremony.",
+      "definition_es": "Figura o presencia sagrada—tallada, guardada y honrada en el hogar y la ceremonia.",
+      "fun_fact": "Every family could keep semí that protected health, harvest, and journeys.",
+      "example": "da-semí",
+      "accuracy_note": "Ethnohistoric / colonial lexical item widely cited for Taíno culture; orthography regularized.",
+      "confidence": "high"
+    },
+    {
+      "id": "atabey",
+      "boriken": "atabey",
+      "english": "mother goddess of fresh water & fertility",
+      "spanish": "Atabey",
+      "pos": "proper_noun",
+      "attested": true,
+      "tags": [
+        "spirit"
+      ],
+      "definition_en": "Mother spirit of fresh water, fertility, and the moon—source of life on the islands.",
+      "definition_es": "Espíritu madre del agua dulce, la fertilidad y la luna—fuente de vida en las islas.",
+      "fun_fact": "She is often honored as the feminine counterpart to Yokahú.",
+      "example": "atabey",
+      "accuracy_note": "Ethnohistoric / colonial lexical item widely cited for Taíno culture; orthography regularized.",
+      "confidence": "high"
+    },
+    {
+      "id": "yocahu",
+      "boriken": "yokahú",
+      "english": "spirit of cassava / sky",
+      "spanish": "Yocahú",
+      "pos": "proper_noun",
+      "attested": true,
+      "tags": [
+        "spirit"
+      ],
+      "definition_en": "Spirit associated with cassava and the sky—provider of staple food and life.",
+      "definition_es": "Espíritu asociado a la yuca y el cielo—proveedor de alimento y vida.",
+      "fun_fact": "When you eat kasabi, you're tasting a story older than the colony.",
+      "example": "yokahú",
+      "accuracy_note": "Ethnohistoric / colonial lexical item widely cited for Taíno culture; orthography regularized.",
+      "confidence": "high"
+    },
+    {
+      "id": "guasabara",
+      "boriken": "wasábara",
+      "english": "war; battle",
+      "spanish": "guerra",
+      "pos": "noun",
+      "attested": true,
+      "tags": [
+        "society"
+      ],
+      "definition_en": "A noun meaning 'war'. This form is attested in colonial records.",
+      "definition_es": "Sustantivo que significa 'guerra'. Forma atestiguada en crónicas coloniales.",
+      "fun_fact": "High-confidence classic—flashcard gold.",
+      "example": "da-wasábara"
+    },
+    {
+      "id": "naboria",
+      "boriken": "naboriya",
+      "english": "worker; servant; commoner",
+      "spanish": "naboría",
+      "pos": "noun",
+      "attested": true,
+      "tags": [
+        "society"
+      ],
+      "definition_en": "A noun meaning 'worker'. This form is attested in colonial records.",
+      "definition_es": "Sustantivo que significa 'naboría'. Forma atestiguada en crónicas coloniales.",
+      "fun_fact": "High-confidence classic—flashcard gold.",
+      "example": "da-naboriya"
+    },
+    {
+      "id": "areito",
+      "boriken": "areyto",
+      "english": "ceremonial song and dance",
+      "spanish": "areíto",
+      "pos": "noun",
+      "attested": true,
+      "tags": [
+        "ceremony"
+      ],
+      "definition_en": "A communal ceremony of song, dance, and storytelling that preserved history.",
+      "definition_es": "Ceremonia comunal de canto, baile y relato que preservaba la historia.",
+      "fun_fact": "Areytos were living libraries—history you could dance.",
+      "example": "da-areyto",
+      "accuracy_note": "Ethnohistoric / colonial lexical item widely cited for Taíno culture; orthography regularized.",
+      "confidence": "high"
+    },
+    {
+      "id": "batey",
+      "boriken": "batey",
+      "english": "plaza; ball court",
+      "spanish": "batey",
+      "pos": "noun",
+      "attested": true,
+      "tags": [
+        "place",
+        "ceremony"
+      ],
+      "definition_en": "The village plaza and ceremonial ball court—where community, sport, and ritual met.",
+      "definition_es": "La plaza y cancha ceremonial del pueblo—donde se unían comunidad, deporte y rito.",
+      "fun_fact": "Think town square + sacred arena in one word.",
+      "example": "da-batey",
+      "accuracy_note": "Ethnohistoric / colonial lexical item widely cited for Taíno culture; orthography regularized.",
+      "confidence": "high"
+    },
+    {
+      "id": "guanin",
+      "boriken": "wanín",
+      "english": "gold-copper alloy ornament",
+      "spanish": "guanín",
+      "pos": "noun",
+      "attested": true,
+      "tags": [
+        "material"
+      ],
+      "definition_en": "A noun meaning 'gold-copper alloy ornament'. This form is attested in colonial records.",
+      "definition_es": "Sustantivo que significa 'guanín'. Forma atestiguada en crónicas coloniales.",
+      "fun_fact": "High-confidence classic—flashcard gold.",
+      "example": "da-wanín"
+    },
+    {
+      "id": "caona",
+      "boriken": "kawóna",
+      "english": "gold",
+      "spanish": "oro",
+      "pos": "noun",
+      "attested": true,
+      "tags": [
+        "material"
+      ],
+      "definition_en": "A noun meaning 'gold'. This form is attested in colonial records.",
+      "definition_es": "Sustantivo que significa 'oro'. Forma atestiguada en crónicas coloniales.",
+      "fun_fact": "High-confidence classic—flashcard gold.",
+      "example": "da-kawóna"
+    },
+    {
+      "id": "yari",
+      "boriken": "yari",
+      "english": "jewel; precious object",
+      "spanish": "joya",
+      "pos": "noun",
+      "attested": true,
+      "tags": [
+        "material"
+      ],
+      "definition_en": "A noun meaning 'jewel'. This form is attested in colonial records.",
+      "definition_es": "Sustantivo que significa 'joya'. Forma atestiguada en crónicas coloniales.",
+      "fun_fact": "High-confidence classic—flashcard gold.",
+      "example": "da-yari"
+    },
+    {
+      "id": "turey",
+      "boriken": "turey",
+      "english": "sky; heaven",
+      "spanish": "cielo",
+      "pos": "noun",
+      "attested": false,
+      "tags": [
+        "nature",
+        "accuracy_flag",
+        "community_revival"
+      ],
+      "definition_en": "Sky or heaven in community Neo-Taíno materials (medium confidence).",
+      "definition_es": "Cielo en materiales neo-taínos comunitarios (confianza media).",
+      "fun_fact": "Use turey in poems and prayers—and keep the revival label visible.",
+      "example": "da-turey",
+      "source": "community_revival",
+      "confidence": "medium",
+      "accuracy_note": "Sky/heaven form common in revival materials; not a colonial-sentence anchor here."
+    },
+    {
+      "id": "guey",
+      "boriken": "wey",
+      "english": "sun",
+      "spanish": "sol",
+      "pos": "noun",
+      "attested": false,
+      "tags": [
+        "nature",
+        "accuracy_flag",
+        "community_revival"
+      ],
+      "definition_en": "Sun in community Neo-Taíno (wey/guey). Medium confidence revival form.",
+      "definition_es": "Sol en neo-taíno comunitario (wey/guey). Forma de revival de confianza media.",
+      "fun_fact": "Taí wey ('good day') is a modern greeting built on this community form.",
+      "example": "da-wey",
+      "source": "community_revival",
+      "confidence": "medium",
+      "accuracy_note": "wey/guey 'sun' is frequent in Neo-Taíno greetings (e.g. taí wey) but is not itself one of the six colonial spoken sentence anchors."
+    },
+    {
+      "id": "karaya",
+      "boriken": "karaya",
+      "english": "moon",
+      "spanish": "luna",
+      "pos": "noun",
+      "attested": false,
+      "source": "neo_reconstruction",
+      "tags": [
+        "nature"
+      ],
+      "definition_en": "A noun meaning 'moon'. This form is used in Neo-Taíno / reconstruction teaching. Source label: neo_reconstruction.",
+      "definition_es": "Sustantivo que significa 'luna'. Forma usada en enseñanza neo-taína / reconstrucción. Source label: neo_reconstruction.",
+      "fun_fact": "Reconstruction practice—label it, learn it, keep it humble.",
+      "example": "da-karaya"
+    },
+    {
+      "id": "yukubia",
+      "boriken": "yukubiya",
+      "english": "rain",
+      "spanish": "lluvia",
+      "pos": "noun",
+      "attested": false,
+      "tags": [
+        "nature",
+        "accuracy_flag",
+        "community_revival"
+      ],
+      "definition_en": "Rain in community Neo-Taíno usage (medium confidence).",
+      "definition_es": "Lluvia en uso neo-taíno comunitario (confianza media).",
+      "fun_fact": "Great weather vocabulary for learners—label it reconstructed.",
+      "example": "da-yukubiya",
+      "source": "community_revival",
+      "confidence": "medium",
+      "accuracy_note": "Rain gloss appears in community lists; treat as revival, not colonial certainty."
+    },
+    {
+      "id": "bara",
+      "boriken": "bara",
+      "english": "sea; ocean",
+      "spanish": "mar",
+      "pos": "noun",
+      "attested": false,
+      "tags": [
+        "nature",
+        "accuracy_flag",
+        "community_revival"
+      ],
+      "definition_en": "Sea or ocean in community Neo-Taíno usage—medium confidence, not classical proof.",
+      "definition_es": "Mar u océano en uso neo-taíno comunitario: confianza media, no prueba clásica.",
+      "fun_fact": "Pair with kanowa (canoe)—a firmly attested loan—when talking about the sea.",
+      "example": "da-bara",
+      "source": "community_revival",
+      "confidence": "medium",
+      "accuracy_note": "Sea/ocean gloss circulates in community dictionaries; not anchored in the six colonial spoken sentences. Keep for learning; label as revival."
+    },
+    {
+      "id": "ni",
+      "boriken": "ni",
+      "english": "water",
+      "spanish": "agua",
+      "pos": "noun",
+      "attested": false,
+      "tags": [
+        "nature",
+        "accuracy_flag",
+        "community_revival"
+      ],
+      "definition_en": "Water (Neo-Taíno / community form). Used widely in modern Boriken learning materials; not a high-certainty Classic Taíno colonial citation in this toolkit.",
+      "definition_es": "Agua (forma neo-taína / comunitaria). Muy usada en materiales modernos de Boriken; no es una cita colonial clásica de alta certeza en este kit.",
+      "fun_fact": "Learners still practice ma-ni ('without water')—just remember the label is reconstructed.",
+      "example": "da-ni",
+      "source": "community_revival",
+      "confidence": "medium",
+      "accuracy_note": "Common in Neo-Taíno / community primers for 'water'. Not among the six best-attested colonial spoken sentences; treat as revival lexicon, not classical certainty."
+    },
+    {
+      "id": "konuko",
+      "boriken": "konuko",
+      "english": "farm plot; garden",
+      "spanish": "conuco",
+      "pos": "noun",
+      "attested": true,
+      "tags": [
+        "food",
+        "place"
+      ],
+      "definition_en": "A noun meaning 'farm plot'. This form is attested in colonial records.",
+      "definition_es": "Sustantivo que significa 'conuco'. Forma atestiguada en crónicas coloniales.",
+      "fun_fact": "Flavor unlock: say it before your next bite.",
+      "example": "da-konuko"
+    },
+    {
+      "id": "guayacan",
+      "boriken": "wayakán",
+      "english": "lignum vitae tree",
+      "spanish": "guayacán",
+      "pos": "noun",
+      "attested": true,
+      "tags": [
+        "plant"
+      ],
+      "definition_en": "A noun meaning 'lignum vitae tree'. This form is attested in colonial records.",
+      "definition_es": "Sustantivo que significa 'guayacán'. Forma atestiguada en crónicas coloniales.",
+      "fun_fact": "High-confidence classic—flashcard gold.",
+      "example": "da-wayakán"
+    },
+    {
+      "id": "mabi",
+      "boriken": "mabí",
+      "english": "mabi drink (tree bark beverage)",
+      "spanish": "mabí",
+      "pos": "noun",
+      "attested": true,
+      "tags": [
+        "food"
+      ],
+      "definition_en": "A noun meaning 'mabi drink (tree bark beverage)'. This form is attested in colonial records.",
+      "definition_es": "Sustantivo que significa 'mabí'. Forma atestiguada en crónicas coloniales.",
+      "fun_fact": "Flavor unlock: say it before your next bite.",
+      "example": "da-mabí"
+    },
+    {
+      "id": "enriquillo",
+      "boriken": "Guarocuya",
+      "english": "Guarocuya (cacique; Spanish baptismal name Enriquillo)",
+      "spanish": "Guarocuya (cacique; nombre de bautismo español Enriquillo)",
+      "pos": "proper_noun",
+      "attested": false,
+      "tags": [
+        "identity",
+        "historical_note",
+        "not_taino_lexeme",
+        "accuracy_flag"
+      ],
+      "definition_en": "Historical cacique of Hispaniola known in Spanish sources as Enriquillo (a baptismal name). His Indigenous name is often given as Guarocuya. This is ethnohistory, not a Taíno dictionary word.",
+      "definition_es": "Cacique histórico de La Española conocido en fuentes españolas como Enriquillo (nombre de bautismo). Su nombre indígena suele darse como Guarocuya. Es etnohistoria, no un lexema taíno de diccionario.",
+      "fun_fact": "Teaching tip: say Guarocuya for the person; never list Enriquillo as a Taíno stem.",
+      "example": "Guarocuya (Enriquillo)",
+      "source": "ethnohistoric_spanish_name",
+      "confidence": "medium",
+      "accuracy_note": "Enriquillo / enrikíyo is a Spanish baptismal name, not a Taíno lexeme. Later tradition often gives the Indigenous name Guarocuya. Do not teach 'enrikíyo' as a Boriken vocabulary word.",
+      "etymology": "Spanish Enrique + diminutive; Indigenous name traditionally Guarocuya"
+    },
+    {
+      "id": "guarico",
+      "boriken": "wariko",
+      "english": "come!",
+      "spanish": "¡ven!",
+      "pos": "verb",
+      "attested": true,
+      "tags": [
+        "speech"
+      ],
+      "definition_en": "A verb meaning 'come!'. This form is attested in colonial records.",
+      "definition_es": "Verbo que significa '¡ven!'. Forma atestiguada en crónicas coloniales.",
+      "fun_fact": "High-confidence classic—flashcard gold.",
+      "example": "wariko"
+    },
+    {
+      "id": "daka",
+      "boriken": "daka",
+      "english": "I am",
+      "spanish": "yo soy",
+      "pos": "verb",
+      "attested": true,
+      "tags": [
+        "grammar"
+      ],
+      "definition_en": "First-person identity verb: 'I am'—the keystone of introducing yourself.",
+      "definition_es": "Verbo de identidad en primera persona: 'yo soy'—clave para presentarte.",
+      "fun_fact": "Start with 'Taíno daka' and you've already begun reclaiming voice.",
+      "example": "Taíno daka"
+    },
+    {
+      "id": "waiba",
+      "boriken": "waibá",
+      "english": "we go; let's go",
+      "spanish": "vamos",
+      "pos": "verb",
+      "attested": true,
+      "tags": [
+        "grammar",
+        "travel"
+      ],
+      "definition_en": "Hortative/motion form meaning 'we go' or 'let's go'.",
+      "definition_es": "Forma de movimiento/exhortación: 'vamos' o 'vámonos'.",
+      "fun_fact": "The perfect quest-start button in Boriken.",
+      "example": "waibá"
+    },
+    {
+      "id": "warike",
+      "boriken": "warikẽ",
+      "english": "we see",
+      "spanish": "vemos",
+      "pos": "verb",
+      "attested": true,
+      "tags": [
+        "grammar"
+      ],
+      "definition_en": "A verb meaning 'we see'. This form is attested in colonial records. Learn the morphology—prefixes like da-/wa-/ma-/ka- unlock dozens of phrases.",
+      "definition_es": "Verbo que significa 'vemos'. Forma atestiguada en crónicas coloniales. Learn the morphology—prefixes like da-/wa-/ma-/ka- unlock dozens of phrases.",
+      "fun_fact": "Grammar combo move: swap the prefix and invent a new phrase.",
+      "example": "warikẽ"
+    },
+    {
+      "id": "kama",
+      "boriken": "kãma",
+      "english": "hear! (imperative)",
+      "spanish": "¡oye!",
+      "pos": "verb",
+      "attested": true,
+      "tags": [
+        "speech"
+      ],
+      "definition_en": "A verb meaning 'hear! (imperative)'. This form is attested in colonial records.",
+      "definition_es": "Verbo que significa '¡oye!'. Forma atestiguada en crónicas coloniales.",
+      "fun_fact": "High-confidence classic—flashcard gold.",
+      "example": "kãma"
+    },
+    {
+      "id": "ahiyakawo",
+      "boriken": "ahiyakawo",
+      "english": "speak to us",
+      "spanish": "háblanos",
+      "pos": "verb",
+      "attested": true,
+      "tags": [
+        "speech"
+      ],
+      "definition_en": "A verb meaning 'speak to us'. This form is attested in colonial records.",
+      "definition_es": "Verbo que significa 'háblanos'. Forma atestiguada en crónicas coloniales.",
+      "fun_fact": "High-confidence classic—flashcard gold.",
+      "example": "ahiyakawo"
+    },
+    {
+      "id": "makabuka",
+      "boriken": "makabuka",
+      "english": "it is not important",
+      "spanish": "no importa",
+      "pos": "phrase",
+      "attested": true,
+      "tags": [
+        "speech"
+      ],
+      "definition_en": "A set phrase meaning 'it is not important'. This form is attested in colonial records.",
+      "definition_es": "Frase hecha que significa 'no importa'. Forma atestiguada en crónicas coloniales.",
+      "fun_fact": "High-confidence classic—flashcard gold.",
+      "example": "makabuka"
+    },
+    {
+      "id": "mayani",
+      "boriken": "mayani",
+      "english": "do not kill",
+      "spanish": "no mates",
+      "pos": "phrase",
+      "attested": true,
+      "tags": [
+        "speech"
+      ],
+      "definition_en": "A set phrase meaning 'do not kill'. This form is attested in colonial records.",
+      "definition_es": "Frase hecha que significa 'no mates'. Forma atestiguada en crónicas coloniales.",
+      "fun_fact": "High-confidence classic—flashcard gold.",
+      "example": "mayani"
+    },
+    {
+      "id": "taiguey",
+      "boriken": "taí wey",
+      "english": "good day",
+      "spanish": "buenos días",
+      "pos": "phrase",
+      "attested": false,
+      "source": "neo_common",
+      "tags": [
+        "greeting"
+      ],
+      "definition_en": "A set phrase meaning 'good day'. This form is used in Neo-Taíno / reconstruction teaching. Source label: neo_common.",
+      "definition_es": "Frase hecha que significa 'buenos días'. Forma usada en enseñanza neo-taína / reconstrucción. Source label: neo_common.",
+      "fun_fact": "Use it on a friend today—greetings stick fastest.",
+      "example": "taí wey"
+    },
+    {
+      "id": "tainoti",
+      "boriken": "taíno tí",
+      "english": "good spirit be with you",
+      "spanish": "que el buen espíritu te acompañe",
+      "pos": "phrase",
+      "attested": false,
+      "source": "neo_common",
+      "tags": [
+        "greeting"
+      ],
+      "definition_en": "A set phrase meaning 'good spirit be with you'. This form is used in Neo-Taíno / reconstruction teaching. Source label: neo_common.",
+      "definition_es": "Frase hecha que significa 'que el buen espíritu te acompañe'. Forma usada en enseñanza neo-taína / reconstrucción. Source label: neo_common.",
+      "fun_fact": "Use it on a friend today—greetings stick fastest.",
+      "example": "taíno tí"
+    },
+    {
+      "id": "aneke",
+      "boriken": "anéke",
+      "english": "why?",
+      "spanish": "¿por qué?",
+      "pos": "adverb",
+      "attested": false,
+      "source": "neo_common",
+      "tags": [
+        "speech"
+      ],
+      "definition_en": "An adverb meaning 'why?'. This form is used in Neo-Taíno / reconstruction teaching. Source label: neo_common.",
+      "definition_es": "Adverbio que significa '¿por qué?'. Forma usada en enseñanza neo-taína / reconstrucción. Source label: neo_common.",
+      "fun_fact": "Reconstruction practice—label it, learn it, keep it humble.",
+      "example": "anéke"
+    },
+    {
+      "id": "han",
+      "boriken": "han",
+      "english": "yes",
+      "spanish": "sí",
+      "pos": "particle",
+      "attested": false,
+      "source": "neo_common",
+      "tags": [
+        "speech"
+      ],
+      "definition_en": "A particle meaning 'yes'. This form is used in Neo-Taíno / reconstruction teaching. Source label: neo_common.",
+      "definition_es": "Partícula que significa 'sí'. Forma usada en enseñanza neo-taína / reconstrucción. Source label: neo_common.",
+      "fun_fact": "Reconstruction practice—label it, learn it, keep it humble.",
+      "example": "han"
+    },
+    {
+      "id": "ua",
+      "boriken": "ua",
+      "english": "no",
+      "spanish": "no",
+      "pos": "particle",
+      "attested": false,
+      "source": "neo_common",
+      "tags": [
+        "speech"
+      ],
+      "definition_en": "A particle meaning 'no'. This form is used in Neo-Taíno / reconstruction teaching. Source label: neo_common.",
+      "definition_es": "Partícula que significa 'no'. Forma usada en enseñanza neo-taína / reconstrucción. Source label: neo_common.",
+      "fun_fact": "Reconstruction practice—label it, learn it, keep it humble.",
+      "example": "ua"
+    },
+    {
+      "id": "guakia",
+      "boriken": "wakía",
+      "english": "us; our (independent)",
+      "spanish": "nosotros",
+      "pos": "pronoun",
+      "attested": true,
+      "tags": [
+        "grammar"
+      ],
+      "definition_en": "A pronoun meaning 'us'. This form is attested in colonial records. Learn the morphology—prefixes like da-/wa-/ma-/ka- unlock dozens of phrases.",
+      "definition_es": "Pronombre que significa 'nosotros'. Forma atestiguada en crónicas coloniales. Learn the morphology—prefixes like da-/wa-/ma-/ka- unlock dozens of phrases.",
+      "fun_fact": "Grammar combo move: swap the prefix and invent a new phrase.",
+      "example": "wakía"
+    },
+    {
+      "id": "baba",
+      "boriken": "baba",
+      "english": "father",
+      "spanish": "padre",
+      "pos": "noun",
+      "attested": true,
+      "tags": [
+        "kinship"
+      ],
+      "definition_en": "A noun meaning 'father'. This form is attested in colonial records.",
+      "definition_es": "Sustantivo que significa 'padre'. Forma atestiguada en crónicas coloniales.",
+      "fun_fact": "High-confidence classic—flashcard gold.",
+      "example": "da-baba"
+    },
+    {
+      "id": "nana",
+      "boriken": "nana",
+      "english": "mother",
+      "spanish": "madre",
+      "pos": "noun",
+      "attested": false,
+      "source": "neo_arawakan",
+      "tags": [
+        "kinship"
+      ],
+      "definition_en": "A noun meaning 'mother'. This form is used in Neo-Taíno / reconstruction teaching. Source label: neo_arawakan.",
+      "definition_es": "Sustantivo que significa 'madre'. Forma usada en enseñanza neo-taína / reconstrucción. Source label: neo_arawakan.",
+      "fun_fact": "Reconstruction practice—label it, learn it, keep it humble.",
+      "example": "da-nana"
+    },
+    {
+      "id": "iti",
+      "boriken": "ití",
+      "english": "blood; kin",
+      "spanish": "sangre; pariente",
+      "pos": "noun",
+      "attested": false,
+      "source": "neo_arawakan",
+      "tags": [
+        "kinship"
+      ],
+      "definition_en": "A noun meaning 'blood'. This form is used in Neo-Taíno / reconstruction teaching. Source label: neo_arawakan.",
+      "definition_es": "Sustantivo que significa 'sangre'. Forma usada en enseñanza neo-taína / reconstrucción. Source label: neo_arawakan.",
+      "fun_fact": "Reconstruction practice—label it, learn it, keep it humble.",
+      "example": "da-ití"
+    },
+    {
+      "id": "waroko",
+      "boriken": "waroko",
+      "english": "grandfather (our grandfather stem)",
+      "spanish": "abuelo",
+      "pos": "noun",
+      "attested": true,
+      "tags": [
+        "kinship"
+      ],
+      "definition_en": "A noun meaning 'grandfather (our grandfather stem)'. This form is attested in colonial records.",
+      "definition_es": "Sustantivo que significa 'abuelo'. Forma atestiguada en crónicas coloniales.",
+      "fun_fact": "High-confidence classic—flashcard gold.",
+      "example": "da-waroko"
+    },
+    {
+      "id": "guaxeri",
+      "boriken": "waxeri",
+      "english": "sir; noble man",
+      "spanish": "señor",
+      "pos": "noun",
+      "attested": true,
+      "tags": [
+        "society"
+      ],
+      "definition_en": "A noun meaning 'sir'. This form is attested in colonial records.",
+      "definition_es": "Sustantivo que significa 'señor'. Forma atestiguada en crónicas coloniales.",
+      "fun_fact": "High-confidence classic—flashcard gold.",
+      "example": "da-waxeri"
+    },
+    {
+      "id": "guamechina",
+      "boriken": "wamekina",
+      "english": "our master / lord",
+      "spanish": "nuestro señor",
+      "pos": "noun",
+      "attested": true,
+      "tags": [
+        "society"
+      ],
+      "definition_en": "A noun meaning 'our master / lord'. This form is attested in colonial records.",
+      "definition_es": "Sustantivo que significa 'nuestro señor'. Forma atestiguada en crónicas coloniales.",
+      "fun_fact": "High-confidence classic—flashcard gold.",
+      "example": "da-wamekina"
+    },
+    {
+      "id": "sinato",
+      "boriken": "sinato",
+      "english": "angry; upset",
+      "spanish": "enojado",
+      "pos": "adjective",
+      "attested": true,
+      "tags": [
+        "emotion"
+      ],
+      "definition_en": "An adjective meaning 'angry'. This form is attested in colonial records.",
+      "definition_es": "Adjetivo que significa 'enojado'. Forma atestiguada en crónicas coloniales.",
+      "fun_fact": "High-confidence classic—flashcard gold.",
+      "example": "sinato"
+    },
+    {
+      "id": "teketa",
+      "boriken": "teketa",
+      "english": "greatly; very",
+      "spanish": "muy; grandemente",
+      "pos": "adverb",
+      "attested": true,
+      "tags": [
+        "grammar"
+      ],
+      "definition_en": "An adverb meaning 'greatly'. This form is attested in colonial records. Learn the morphology—prefixes like da-/wa-/ma-/ka- unlock dozens of phrases.",
+      "definition_es": "Adverbio que significa 'muy'. Forma atestiguada en crónicas coloniales. Learn the morphology—prefixes like da-/wa-/ma-/ka- unlock dozens of phrases.",
+      "fun_fact": "Grammar combo move: swap the prefix and invent a new phrase.",
+      "example": "teketa"
+    },
+    {
+      "id": "oka",
+      "boriken": "oka",
+      "english": "eye",
+      "spanish": "ojo",
+      "pos": "noun",
+      "attested": false,
+      "source": "neo_arawakan",
+      "tags": [
+        "body"
+      ],
+      "definition_en": "A noun meaning 'eye'. This form is used in Neo-Taíno / reconstruction teaching. Source label: neo_arawakan.",
+      "definition_es": "Sustantivo que significa 'ojo'. Forma usada en enseñanza neo-taína / reconstrucción. Source label: neo_arawakan.",
+      "fun_fact": "Reconstruction practice—label it, learn it, keep it humble.",
+      "example": "da-oka"
+    },
+    {
+      "id": "ari",
+      "boriken": "ari",
+      "english": "tooth",
+      "spanish": "diente",
+      "pos": "noun",
+      "attested": false,
+      "source": "neo_arawakan",
+      "tags": [
+        "body"
+      ],
+      "definition_en": "A noun meaning 'tooth'. This form is used in Neo-Taíno / reconstruction teaching. Source label: neo_arawakan.",
+      "definition_es": "Sustantivo que significa 'diente'. Forma usada en enseñanza neo-taína / reconstrucción. Source label: neo_arawakan.",
+      "fun_fact": "Reconstruction practice—label it, learn it, keep it humble.",
+      "example": "da-ari"
+    },
+    {
+      "id": "kaku",
+      "boriken": "kaku",
+      "english": "ear",
+      "spanish": "oreja",
+      "pos": "noun",
+      "attested": false,
+      "source": "neo_arawakan",
+      "tags": [
+        "body"
+      ],
+      "definition_en": "A noun meaning 'ear'. This form is used in Neo-Taíno / reconstruction teaching. Source label: neo_arawakan.",
+      "definition_es": "Sustantivo que significa 'oreja'. Forma usada en enseñanza neo-taína / reconstrucción. Source label: neo_arawakan.",
+      "fun_fact": "Reconstruction practice—label it, learn it, keep it humble.",
+      "example": "da-kaku"
+    },
+    {
+      "id": "dama",
+      "boriken": "dama",
+      "english": "hand",
+      "spanish": "mano",
+      "pos": "noun",
+      "attested": false,
+      "source": "neo_arawakan",
+      "tags": [
+        "body"
+      ],
+      "definition_en": "A noun meaning 'hand'. This form is used in Neo-Taíno / reconstruction teaching. Source label: neo_arawakan.",
+      "definition_es": "Sustantivo que significa 'mano'. Forma usada en enseñanza neo-taína / reconstrucción. Source label: neo_arawakan.",
+      "fun_fact": "Reconstruction practice—label it, learn it, keep it humble.",
+      "example": "da-dama"
+    },
+    {
+      "id": "kuti",
+      "boriken": "kutí",
+      "english": "foot",
+      "spanish": "pie",
+      "pos": "noun",
+      "attested": false,
+      "source": "neo_arawakan",
+      "tags": [
+        "body"
+      ],
+      "definition_en": "A noun meaning 'foot'. This form is used in Neo-Taíno / reconstruction teaching. Source label: neo_arawakan.",
+      "definition_es": "Sustantivo que significa 'pie'. Forma usada en enseñanza neo-taína / reconstrucción. Source label: neo_arawakan.",
+      "fun_fact": "Reconstruction practice—label it, learn it, keep it humble.",
+      "example": "da-kutí"
+    },
+    {
+      "id": "isa",
+      "boriken": "isa",
+      "english": "child",
+      "spanish": "niño/a",
+      "pos": "noun",
+      "attested": false,
+      "source": "neo_arawakan",
+      "tags": [
+        "kinship"
+      ],
+      "definition_en": "A noun meaning 'child'. This form is used in Neo-Taíno / reconstruction teaching. Source label: neo_arawakan.",
+      "definition_es": "Sustantivo que significa 'niño/a'. Forma usada en enseñanza neo-taína / reconstrucción. Source label: neo_arawakan.",
+      "fun_fact": "Reconstruction practice—label it, learn it, keep it humble.",
+      "example": "da-isa"
+    },
+    {
+      "id": "hiaro",
+      "boriken": "hiaro",
+      "english": "woman",
+      "spanish": "mujer",
+      "pos": "noun",
+      "attested": false,
+      "source": "neo_arawakan",
+      "tags": [
+        "society"
+      ],
+      "definition_en": "A noun meaning 'woman'. This form is used in Neo-Taíno / reconstruction teaching. Source label: neo_arawakan.",
+      "definition_es": "Sustantivo que significa 'mujer'. Forma usada en enseñanza neo-taína / reconstrucción. Source label: neo_arawakan.",
+      "fun_fact": "Reconstruction practice—label it, learn it, keep it humble.",
+      "example": "da-hiaro"
+    },
+    {
+      "id": "wori",
+      "boriken": "wori",
+      "english": "man",
+      "spanish": "hombre",
+      "pos": "noun",
+      "attested": false,
+      "source": "neo_arawakan",
+      "tags": [
+        "society"
+      ],
+      "definition_en": "A noun meaning 'man'. This form is used in Neo-Taíno / reconstruction teaching. Source label: neo_arawakan.",
+      "definition_es": "Sustantivo que significa 'hombre'. Forma usada en enseñanza neo-taína / reconstrucción. Source label: neo_arawakan.",
+      "fun_fact": "Reconstruction practice—label it, learn it, keep it humble.",
+      "example": "da-wori"
+    },
+    {
+      "id": "kati",
+      "boriken": "kati",
+      "english": "moon (alt. neo form)",
+      "spanish": "luna",
+      "pos": "noun",
+      "attested": false,
+      "source": "neo_arawakan",
+      "tags": [
+        "nature"
+      ],
+      "definition_en": "A noun meaning 'moon (alt. neo form)'. This form is used in Neo-Taíno / reconstruction teaching. Source label: neo_arawakan.",
+      "definition_es": "Sustantivo que significa 'luna'. Forma usada en enseñanza neo-taína / reconstrucción. Source label: neo_arawakan.",
+      "fun_fact": "Reconstruction practice—label it, learn it, keep it humble.",
+      "example": "da-kati"
+    },
+    {
+      "id": "kamu",
+      "boriken": "kamú",
+      "english": "sun (alt. neo form)",
+      "spanish": "sol",
+      "pos": "noun",
+      "attested": false,
+      "source": "neo_arawakan",
+      "tags": [
+        "nature"
+      ],
+      "definition_en": "A noun meaning 'sun (alt. neo form)'. This form is used in Neo-Taíno / reconstruction teaching. Source label: neo_arawakan.",
+      "definition_es": "Sustantivo que significa 'sol'. Forma usada en enseñanza neo-taína / reconstrucción. Source label: neo_arawakan.",
+      "fun_fact": "Reconstruction practice—label it, learn it, keep it humble.",
+      "example": "da-kamú"
+    },
+    {
+      "id": "oni",
+      "boriken": "oni",
+      "english": "rain (alt.)",
+      "spanish": "lluvia",
+      "pos": "noun",
+      "attested": false,
+      "source": "neo_arawakan",
+      "tags": [
+        "nature"
+      ],
+      "definition_en": "A noun meaning 'rain (alt.)'. This form is used in Neo-Taíno / reconstruction teaching. Source label: neo_arawakan.",
+      "definition_es": "Sustantivo que significa 'lluvia'. Forma usada en enseñanza neo-taína / reconstrucción. Source label: neo_arawakan.",
+      "fun_fact": "Reconstruction practice—label it, learn it, keep it humble.",
+      "example": "da-oni"
+    },
+    {
+      "id": "shyba",
+      "boriken": "shíba",
+      "english": "stone; rock",
+      "spanish": "piedra",
+      "pos": "noun",
+      "attested": false,
+      "source": "neo_arawakan",
+      "tags": [
+        "nature"
+      ],
+      "definition_en": "A noun meaning 'stone'. This form is used in Neo-Taíno / reconstruction teaching. Source label: neo_arawakan.",
+      "definition_es": "Sustantivo que significa 'piedra'. Forma usada en enseñanza neo-taína / reconstrucción. Source label: neo_arawakan.",
+      "fun_fact": "Reconstruction practice—label it, learn it, keep it humble.",
+      "example": "da-shíba"
+    },
+    {
+      "id": "uka",
+      "boriken": "uka",
+      "english": "house (neo stem)",
+      "spanish": "casa",
+      "pos": "noun",
+      "attested": false,
+      "source": "neo_arawakan",
+      "tags": [
+        "home"
+      ],
+      "definition_en": "A noun meaning 'house (neo stem)'. This form is used in Neo-Taíno / reconstruction teaching. Source label: neo_arawakan.",
+      "definition_es": "Sustantivo que significa 'casa'. Forma usada en enseñanza neo-taína / reconstrucción. Source label: neo_arawakan.",
+      "fun_fact": "Reconstruction practice—label it, learn it, keep it humble.",
+      "example": "da-uka"
+    },
+    {
+      "id": "eda",
+      "boriken": "eda",
+      "english": "path; road",
+      "spanish": "camino",
+      "pos": "noun",
+      "attested": false,
+      "source": "neo_arawakan",
+      "tags": [
+        "travel"
+      ],
+      "definition_en": "A noun meaning 'path'. This form is used in Neo-Taíno / reconstruction teaching. Source label: neo_arawakan.",
+      "definition_es": "Sustantivo que significa 'camino'. Forma usada en enseñanza neo-taína / reconstrucción. Source label: neo_arawakan.",
+      "fun_fact": "Reconstruction practice—label it, learn it, keep it humble.",
+      "example": "da-eda"
+    },
+    {
+      "id": "yana",
+      "boriken": "yana",
+      "english": "tree",
+      "spanish": "árbol",
+      "pos": "noun",
+      "attested": false,
+      "source": "neo_arawakan",
+      "tags": [
+        "plant"
+      ],
+      "definition_en": "A noun meaning 'tree'. This form is used in Neo-Taíno / reconstruction teaching. Source label: neo_arawakan.",
+      "definition_es": "Sustantivo que significa 'árbol'. Forma usada en enseñanza neo-taína / reconstrucción. Source label: neo_arawakan.",
+      "fun_fact": "Reconstruction practice—label it, learn it, keep it humble.",
+      "example": "da-yana"
+    },
+    {
+      "id": "kabo",
+      "boriken": "kabo",
+      "english": "fire",
+      "spanish": "fuego",
+      "pos": "noun",
+      "attested": false,
+      "source": "neo_arawakan",
+      "tags": [
+        "nature"
+      ],
+      "definition_en": "A noun meaning 'fire'. This form is used in Neo-Taíno / reconstruction teaching. Source label: neo_arawakan.",
+      "definition_es": "Sustantivo que significa 'fuego'. Forma usada en enseñanza neo-taína / reconstrucción. Source label: neo_arawakan.",
+      "fun_fact": "Reconstruction practice—label it, learn it, keep it humble.",
+      "example": "da-kabo"
+    },
+    {
+      "id": "inabo",
+      "boriken": "inabo",
+      "english": "earth; soil",
+      "spanish": "tierra",
+      "pos": "noun",
+      "attested": false,
+      "source": "neo_arawakan",
+      "tags": [
+        "nature"
+      ],
+      "definition_en": "A noun meaning 'earth'. This form is used in Neo-Taíno / reconstruction teaching. Source label: neo_arawakan.",
+      "definition_es": "Sustantivo que significa 'tierra'. Forma usada en enseñanza neo-taína / reconstrucción. Source label: neo_arawakan.",
+      "fun_fact": "Reconstruction practice—label it, learn it, keep it humble.",
+      "example": "da-inabo"
+    },
+    {
+      "id": "abay",
+      "boriken": "abay",
+      "english": "home; dwelling place",
+      "spanish": "hogar",
+      "pos": "noun",
+      "attested": false,
+      "source": "neo_reconstruction",
+      "tags": [
+        "home"
+      ],
+      "definition_en": "A noun meaning 'home'. This form is used in Neo-Taíno / reconstruction teaching. Source label: neo_reconstruction.",
+      "definition_es": "Sustantivo que significa 'hogar'. Forma usada en enseñanza neo-taína / reconstrucción. Source label: neo_reconstruction.",
+      "fun_fact": "Reconstruction practice—label it, learn it, keep it humble.",
+      "example": "da-abay"
+    },
+    {
+      "id": "guatu",
+      "boriken": "watu",
+      "english": "fire (alt.)",
+      "spanish": "fuego",
+      "pos": "noun",
+      "attested": false,
+      "source": "neo_common",
+      "tags": [
+        "nature"
+      ],
+      "definition_en": "A noun meaning 'fire (alt.)'. This form is used in Neo-Taíno / reconstruction teaching. Source label: neo_common.",
+      "definition_es": "Sustantivo que significa 'fuego'. Forma usada en enseñanza neo-taína / reconstrucción. Source label: neo_common.",
+      "fun_fact": "Reconstruction practice—label it, learn it, keep it humble.",
+      "example": "da-watu"
+    },
+    {
+      "id": "bagua",
+      "boriken": "bagua",
+      "english": "sea (alt. neo)",
+      "spanish": "mar",
+      "pos": "noun",
+      "attested": false,
+      "source": "neo_common",
+      "tags": [
+        "nature"
+      ],
+      "definition_en": "A noun meaning 'sea (alt. neo)'. This form is used in Neo-Taíno / reconstruction teaching. Source label: neo_common.",
+      "definition_es": "Sustantivo que significa 'mar'. Forma usada en enseñanza neo-taína / reconstrucción. Source label: neo_common.",
+      "fun_fact": "Reconstruction practice—label it, learn it, keep it humble.",
+      "example": "da-bagua"
+    },
+    {
+      "id": "yuke",
+      "boriken": "yuke",
+      "english": "mountain; white mountain spirit",
+      "spanish": "montaña",
+      "pos": "noun",
+      "attested": true,
+      "tags": [
+        "place",
+        "spirit"
+      ],
+      "definition_en": "A noun meaning 'mountain'. This form is attested in colonial records. It belongs to the spiritual and ceremonial vocabulary of the islands.",
+      "definition_es": "Sustantivo que significa 'montaña'. Forma atestiguada en crónicas coloniales. It belongs to the spiritual and ceremonial vocabulary of the islands.",
+      "fun_fact": "High-confidence classic—flashcard gold.",
+      "example": "da-yuke"
+    },
+    {
+      "id": "coabey",
+      "boriken": "koabey",
+      "english": "land of the dead / spirit land",
+      "spanish": "tierra de los muertos",
+      "pos": "noun",
+      "attested": true,
+      "tags": [
+        "spirit"
+      ],
+      "definition_en": "A noun meaning 'land of the dead / spirit land'. This form is attested in colonial records. It belongs to the spiritual and ceremonial vocabulary of the islands.",
+      "definition_es": "Sustantivo que significa 'tierra de los muertos'. Forma atestiguada en crónicas coloniales. It belongs to the spiritual and ceremonial vocabulary of the islands.",
+      "fun_fact": "High-confidence classic—flashcard gold.",
+      "example": "da-koabey"
+    },
+    {
+      "id": "opias",
+      "boriken": "opías",
+      "english": "spirits of the dead",
+      "spanish": "espíritus de los muertos",
+      "pos": "noun",
+      "attested": true,
+      "tags": [
+        "spirit"
+      ],
+      "definition_en": "A noun meaning 'spirits of the dead'. This form is attested in colonial records. It belongs to the spiritual and ceremonial vocabulary of the islands.",
+      "definition_es": "Sustantivo que significa 'espíritus de los muertos'. Forma atestiguada en crónicas coloniales. It belongs to the spiritual and ceremonial vocabulary of the islands.",
+      "fun_fact": "High-confidence classic—flashcard gold.",
+      "example": "da-opías"
+    },
+    {
+      "id": "toa",
+      "boriken": "toa",
+      "english": "mother (alt. attested root in names)",
+      "spanish": "madre",
+      "pos": "noun",
+      "attested": false,
+      "tags": [
+        "kinship"
+      ],
+      "definition_en": "A noun meaning 'mother (alt. attested root in names)'. This form is attested in colonial records.",
+      "definition_es": "Sustantivo que significa 'madre'. Forma atestiguada en crónicas coloniales.",
+      "fun_fact": "High-confidence classic—flashcard gold.",
+      "example": "da-toa",
+      "accuracy_note": "Mother root often cited from personal names / comparative notes; treat as medium unless citing a specific colonial passage.",
+      "confidence": "medium",
+      "source": "name_element_uncertain"
+    },
+    {
+      "id": "one",
+      "boriken": "abán",
+      "english": "one",
+      "spanish": "uno",
+      "pos": "numeral",
+      "attested": false,
+      "source": "neo_arawakan",
+      "tags": [
+        "number"
+      ],
+      "definition_en": "A number word for 'one'. This form is used in Neo-Taíno / reconstruction teaching. Source label: neo_arawakan.",
+      "definition_es": "Numeral para 'uno'. Forma usada en enseñanza neo-taína / reconstrucción. Source label: neo_arawakan.",
+      "fun_fact": "Reconstruction practice—label it, learn it, keep it humble.",
+      "example": "abán"
+    },
+    {
+      "id": "two",
+      "boriken": "biama",
+      "english": "two",
+      "spanish": "dos",
+      "pos": "numeral",
+      "attested": false,
+      "source": "neo_arawakan",
+      "tags": [
+        "number"
+      ],
+      "definition_en": "A number word for 'two'. This form is used in Neo-Taíno / reconstruction teaching. Source label: neo_arawakan.",
+      "definition_es": "Numeral para 'dos'. Forma usada en enseñanza neo-taína / reconstrucción. Source label: neo_arawakan.",
+      "fun_fact": "Reconstruction practice—label it, learn it, keep it humble.",
+      "example": "biama"
+    },
+    {
+      "id": "three",
+      "boriken": "kabuin",
+      "english": "three",
+      "spanish": "tres",
+      "pos": "numeral",
+      "attested": false,
+      "source": "neo_arawakan",
+      "tags": [
+        "number"
+      ],
+      "definition_en": "A number word for 'three'. This form is used in Neo-Taíno / reconstruction teaching. Source label: neo_arawakan.",
+      "definition_es": "Numeral para 'tres'. Forma usada en enseñanza neo-taína / reconstrucción. Source label: neo_arawakan.",
+      "fun_fact": "Reconstruction practice—label it, learn it, keep it humble.",
+      "example": "kabuin"
+    },
+    {
+      "id": "four",
+      "boriken": "biri",
+      "english": "four",
+      "spanish": "cuatro",
+      "pos": "numeral",
+      "attested": false,
+      "source": "neo_arawakan",
+      "tags": [
+        "number"
+      ],
+      "definition_en": "A number word for 'four'. This form is used in Neo-Taíno / reconstruction teaching. Source label: neo_arawakan.",
+      "definition_es": "Numeral para 'cuatro'. Forma usada en enseñanza neo-taína / reconstrucción. Source label: neo_arawakan.",
+      "fun_fact": "Reconstruction practice—label it, learn it, keep it humble.",
+      "example": "biri"
+    },
+    {
+      "id": "five",
+      "boriken": "abare",
+      "english": "five",
+      "spanish": "cinco",
+      "pos": "numeral",
+      "attested": false,
+      "source": "neo_arawakan",
+      "tags": [
+        "number"
+      ],
+      "definition_en": "A number word for 'five'. This form is used in Neo-Taíno / reconstruction teaching. Source label: neo_arawakan.",
+      "definition_es": "Numeral para 'cinco'. Forma usada en enseñanza neo-taína / reconstrucción. Source label: neo_arawakan.",
+      "fun_fact": "Reconstruction practice—label it, learn it, keep it humble.",
+      "example": "abare"
+    },
+    {
+      "id": "see",
+      "boriken": "arika",
+      "english": "to see",
+      "spanish": "ver",
+      "pos": "verb",
+      "attested": false,
+      "source": "neo_from_warike",
+      "tags": [
+        "grammar"
+      ],
+      "definition_en": "A verb meaning 'to see'. This form is used in Neo-Taíno / reconstruction teaching. Learn the morphology—prefixes like da-/wa-/ma-/ka- unlock dozens of phrases.",
+      "definition_es": "Verbo que significa 'ver'. Forma usada en enseñanza neo-taína / reconstrucción. Learn the morphology—prefixes like da-/wa-/ma-/ka- unlock dozens of phrases.",
+      "fun_fact": "Grammar combo move: swap the prefix and invent a new phrase.",
+      "example": "arika"
+    },
+    {
+      "id": "go",
+      "boriken": "iba",
+      "english": "to go",
+      "spanish": "ir",
+      "pos": "verb",
+      "attested": false,
+      "source": "neo_from_waiba",
+      "tags": [
+        "travel"
+      ],
+      "definition_en": "A verb meaning 'to go'. This form is used in Neo-Taíno / reconstruction teaching. Source label: neo_from_waiba.",
+      "definition_es": "Verbo que significa 'ir'. Forma usada en enseñanza neo-taína / reconstrucción. Source label: neo_from_waiba.",
+      "fun_fact": "Reconstruction practice—label it, learn it, keep it humble.",
+      "example": "iba"
+    },
+    {
+      "id": "speak",
+      "boriken": "ahiya",
+      "english": "to speak",
+      "spanish": "hablar",
+      "pos": "verb",
+      "attested": false,
+      "source": "neo_from_ahiyakawo",
+      "tags": [
+        "speech"
+      ],
+      "definition_en": "A verb meaning 'to speak'. This form is used in Neo-Taíno / reconstruction teaching. Source label: neo_from_ahiyakawo.",
+      "definition_es": "Verbo que significa 'hablar'. Forma usada en enseñanza neo-taína / reconstrucción. Source label: neo_from_ahiyakawo.",
+      "fun_fact": "Reconstruction practice—label it, learn it, keep it humble.",
+      "example": "ahiya"
+    },
+    {
+      "id": "hear_v",
+      "boriken": "kama",
+      "english": "to hear",
+      "spanish": "oír",
+      "pos": "verb",
+      "attested": true,
+      "tags": [
+        "speech"
+      ],
+      "definition_en": "A verb meaning 'to hear'. This form is attested in colonial records.",
+      "definition_es": "Verbo que significa 'oír'. Forma atestiguada en crónicas coloniales.",
+      "fun_fact": "High-confidence classic—flashcard gold.",
+      "example": "kama"
+    },
+    {
+      "id": "give",
+      "boriken": "busika",
+      "english": "to give",
+      "spanish": "dar",
+      "pos": "verb",
+      "attested": false,
+      "source": "neo_common",
+      "tags": [
+        "grammar"
+      ],
+      "definition_en": "A verb meaning 'to give'. This form is used in Neo-Taíno / reconstruction teaching. Learn the morphology—prefixes like da-/wa-/ma-/ka- unlock dozens of phrases.",
+      "definition_es": "Verbo que significa 'dar'. Forma usada en enseñanza neo-taína / reconstrucción. Learn the morphology—prefixes like da-/wa-/ma-/ka- unlock dozens of phrases.",
+      "fun_fact": "Grammar combo move: swap the prefix and invent a new phrase.",
+      "example": "busika"
+    },
+    {
+      "id": "eat",
+      "boriken": "aka",
+      "english": "to eat",
+      "spanish": "comer",
+      "pos": "verb",
+      "attested": false,
+      "source": "neo_arawakan",
+      "tags": [
+        "food"
+      ],
+      "definition_en": "A verb meaning 'to eat'. This form is used in Neo-Taíno / reconstruction teaching. Source label: neo_arawakan.",
+      "definition_es": "Verbo que significa 'comer'. Forma usada en enseñanza neo-taína / reconstrucción. Source label: neo_arawakan.",
+      "fun_fact": "Flavor unlock: say it before your next bite.",
+      "example": "aka"
+    },
+    {
+      "id": "drink",
+      "boriken": "sá",
+      "english": "to drink",
+      "spanish": "beber",
+      "pos": "verb",
+      "attested": false,
+      "source": "neo_arawakan",
+      "tags": [
+        "food"
+      ],
+      "definition_en": "A verb meaning 'to drink'. This form is used in Neo-Taíno / reconstruction teaching. Source label: neo_arawakan.",
+      "definition_es": "Verbo que significa 'beber'. Forma usada en enseñanza neo-taína / reconstrucción. Source label: neo_arawakan.",
+      "fun_fact": "Flavor unlock: say it before your next bite.",
+      "example": "sá"
+    },
+    {
+      "id": "love",
+      "boriken": "anichi",
+      "english": "to love; heart",
+      "spanish": "amar; corazón",
+      "pos": "verb",
+      "attested": false,
+      "source": "neo_common",
+      "tags": [
+        "emotion"
+      ],
+      "definition_en": "A verb meaning 'to love'. This form is used in Neo-Taíno / reconstruction teaching. Source label: neo_common.",
+      "definition_es": "Verbo que significa 'amar'. Forma usada en enseñanza neo-taína / reconstrucción. Source label: neo_common.",
+      "fun_fact": "Reconstruction practice—label it, learn it, keep it humble.",
+      "example": "anichi"
+    },
+    {
+      "id": "live",
+      "boriken": "kaké",
+      "english": "to live; to be alive",
+      "spanish": "vivir",
+      "pos": "verb",
+      "attested": false,
+      "source": "neo_reconstruction",
+      "tags": [
+        "grammar"
+      ],
+      "definition_en": "A verb meaning 'to live'. This form is used in Neo-Taíno / reconstruction teaching. Learn the morphology—prefixes like da-/wa-/ma-/ka- unlock dozens of phrases.",
+      "definition_es": "Verbo que significa 'vivir'. Forma usada en enseñanza neo-taína / reconstrucción. Learn the morphology—prefixes like da-/wa-/ma-/ka- unlock dozens of phrases.",
+      "fun_fact": "Grammar combo move: swap the prefix and invent a new phrase.",
+      "example": "kaké"
+    },
+    {
+      "id": "know",
+      "boriken": "shímaka",
+      "english": "to know",
+      "spanish": "saber",
+      "pos": "verb",
+      "attested": false,
+      "source": "neo_reconstruction",
+      "tags": [
+        "grammar"
+      ],
+      "definition_en": "A verb meaning 'to know'. This form is used in Neo-Taíno / reconstruction teaching. Learn the morphology—prefixes like da-/wa-/ma-/ka- unlock dozens of phrases.",
+      "definition_es": "Verbo que significa 'saber'. Forma usada en enseñanza neo-taína / reconstrucción. Learn the morphology—prefixes like da-/wa-/ma-/ka- unlock dozens of phrases.",
+      "fun_fact": "Grammar combo move: swap the prefix and invent a new phrase.",
+      "example": "shímaka"
+    },
+    {
+      "id": "good",
+      "boriken": "taí",
+      "english": "good",
+      "spanish": "bueno",
+      "pos": "adjective",
+      "attested": true,
+      "tags": [
+        "quality"
+      ],
+      "definition_en": "An adjective meaning 'good'. This form is attested in colonial records.",
+      "definition_es": "Adjetivo que significa 'bueno'. Forma atestiguada en crónicas coloniales.",
+      "fun_fact": "High-confidence classic—flashcard gold.",
+      "example": "taí"
+    },
+    {
+      "id": "big",
+      "boriken": "wa",
+      "english": "large; big",
+      "spanish": "grande",
+      "pos": "adjective",
+      "attested": false,
+      "source": "neo_from_place_names",
+      "tags": [
+        "quality"
+      ],
+      "definition_en": "An adjective meaning 'large'. This form is used in Neo-Taíno / reconstruction teaching. Source label: neo_from_place_names.",
+      "definition_es": "Adjetivo que significa 'grande'. Forma usada en enseñanza neo-taína / reconstrucción. Source label: neo_from_place_names.",
+      "fun_fact": "Reconstruction practice—label it, learn it, keep it humble.",
+      "example": "wa"
+    },
+    {
+      "id": "small",
+      "boriken": "i",
+      "english": "small",
+      "spanish": "pequeño",
+      "pos": "adjective",
+      "attested": false,
+      "source": "neo_from_place_names",
+      "tags": [
+        "quality"
+      ],
+      "definition_en": "An adjective meaning 'small'. This form is used in Neo-Taíno / reconstruction teaching. Source label: neo_from_place_names.",
+      "definition_es": "Adjetivo que significa 'pequeño'. Forma usada en enseñanza neo-taína / reconstrucción. Source label: neo_from_place_names.",
+      "fun_fact": "Reconstruction practice—label it, learn it, keep it humble.",
+      "example": "i"
+    },
+    {
+      "id": "happy",
+      "boriken": "chali",
+      "english": "happy; joyful",
+      "spanish": "feliz",
+      "pos": "adjective",
+      "attested": false,
+      "source": "neo_common",
+      "tags": [
+        "emotion"
+      ],
+      "definition_en": "An adjective meaning 'happy'. This form is used in Neo-Taíno / reconstruction teaching. Source label: neo_common.",
+      "definition_es": "Adjetivo que significa 'feliz'. Forma usada en enseñanza neo-taína / reconstrucción. Source label: neo_common.",
+      "fun_fact": "Reconstruction practice—label it, learn it, keep it humble.",
+      "example": "chali"
+    },
+    {
+      "id": "still",
+      "boriken": "teitoka",
+      "english": "be still; quiet",
+      "spanish": "estáte quieto",
+      "pos": "phrase",
+      "attested": false,
+      "source": "neo_common",
+      "tags": [
+        "speech"
+      ],
+      "definition_en": "A set phrase meaning 'be still'. This form is used in Neo-Taíno / reconstruction teaching. Source label: neo_common.",
+      "definition_es": "Frase hecha que significa 'estáte quieto'. Forma usada en enseñanza neo-taína / reconstrucción. Source label: neo_common.",
+      "fun_fact": "Reconstruction practice—label it, learn it, keep it humble.",
+      "example": "teitoka"
+    },
+    {
+      "id": "people",
+      "boriken": "naboriya-táino",
+      "english": "the good people",
+      "spanish": "la buena gente",
+      "pos": "phrase",
+      "attested": false,
+      "source": "neo_composition",
+      "tags": [
+        "identity"
+      ],
+      "definition_en": "A set phrase meaning 'the good people'. This form is used in Neo-Taíno / reconstruction teaching. Source label: neo_composition.",
+      "definition_es": "Frase hecha que significa 'la buena gente'. Forma usada en enseñanza neo-taína / reconstrucción. Source label: neo_composition.",
+      "fun_fact": "Reconstruction practice—label it, learn it, keep it humble.",
+      "example": "naboriya-táino"
+    },
+    {
+      "id": "my_house",
+      "boriken": "da-bohío",
+      "english": "my house",
+      "spanish": "mi casa",
+      "pos": "phrase",
+      "attested": false,
+      "source": "grammar_demo",
+      "tags": [
+        "grammar",
+        "home"
+      ],
+      "definition_en": "A set phrase meaning 'my house'. This form is used in Neo-Taíno / reconstruction teaching. Learn the morphology—prefixes like da-/wa-/ma-/ka- unlock dozens of phrases.",
+      "definition_es": "Frase hecha que significa 'mi casa'. Forma usada en enseñanza neo-taína / reconstrucción. Learn the morphology—prefixes like da-/wa-/ma-/ka- unlock dozens of phrases.",
+      "fun_fact": "Grammar combo move: swap the prefix and invent a new phrase.",
+      "example": "da-bohío"
+    },
+    {
+      "id": "our_land",
+      "boriken": "wa-borikén",
+      "english": "our native land",
+      "spanish": "nuestra tierra nativa",
+      "pos": "phrase",
+      "attested": false,
+      "source": "grammar_demo",
+      "tags": [
+        "grammar",
+        "identity"
+      ],
+      "definition_en": "A set phrase meaning 'our native land'. This form is used in Neo-Taíno / reconstruction teaching. Learn the morphology—prefixes like da-/wa-/ma-/ka- unlock dozens of phrases.",
+      "definition_es": "Frase hecha que significa 'nuestra tierra nativa'. Forma usada en enseñanza neo-taína / reconstrucción. Learn the morphology—prefixes like da-/wa-/ma-/ka- unlock dozens of phrases.",
+      "fun_fact": "Grammar combo move: swap the prefix and invent a new phrase.",
+      "example": "wa-borikén"
+    },
+    {
+      "id": "her_child",
+      "boriken": "to-isa",
+      "english": "her child",
+      "spanish": "su hijo/a (de ella)",
+      "pos": "phrase",
+      "attested": false,
+      "source": "grammar_demo",
+      "tags": [
+        "grammar",
+        "kinship"
+      ],
+      "definition_en": "A set phrase meaning 'her child'. This form is used in Neo-Taíno / reconstruction teaching. Learn the morphology—prefixes like da-/wa-/ma-/ka- unlock dozens of phrases.",
+      "definition_es": "Frase hecha que significa 'su hijo/a (de ella)'. Forma usada en enseñanza neo-taína / reconstrucción. Learn the morphology—prefixes like da-/wa-/ma-/ka- unlock dozens of phrases.",
+      "fun_fact": "Grammar combo move: swap the prefix and invent a new phrase.",
+      "example": "to-isa"
+    },
+    {
+      "id": "his_canoe",
+      "boriken": "li-kanowa",
+      "english": "his canoe",
+      "spanish": "su canoa (de él)",
+      "pos": "phrase",
+      "attested": false,
+      "source": "grammar_demo",
+      "tags": [
+        "grammar",
+        "travel"
+      ],
+      "definition_en": "A set phrase meaning 'his canoe'. This form is used in Neo-Taíno / reconstruction teaching. Learn the morphology—prefixes like da-/wa-/ma-/ka- unlock dozens of phrases.",
+      "definition_es": "Frase hecha que significa 'su canoa (de él)'. Forma usada en enseñanza neo-taína / reconstrucción. Learn the morphology—prefixes like da-/wa-/ma-/ka- unlock dozens of phrases.",
+      "fun_fact": "Grammar combo move: swap the prefix and invent a new phrase.",
+      "example": "li-kanowa"
+    },
+    {
+      "id": "no_water",
+      "boriken": "ma-ni",
+      "english": "without water; no water",
+      "spanish": "sin agua",
+      "pos": "phrase",
+      "attested": false,
+      "source": "grammar_demo",
+      "tags": [
+        "grammar"
+      ],
+      "definition_en": "A set phrase meaning 'without water'. This form is used in Neo-Taíno / reconstruction teaching. Learn the morphology—prefixes like da-/wa-/ma-/ka- unlock dozens of phrases.",
+      "definition_es": "Frase hecha que significa 'sin agua'. Forma usada en enseñanza neo-taína / reconstrucción. Learn the morphology—prefixes like da-/wa-/ma-/ka- unlock dozens of phrases.",
+      "fun_fact": "Grammar combo move: swap the prefix and invent a new phrase.",
+      "example": "ma-ni"
+    },
+    {
+      "id": "with_gold",
+      "boriken": "ka-kawóna",
+      "english": "having gold; with gold",
+      "spanish": "con oro",
+      "pos": "phrase",
+      "attested": false,
+      "source": "grammar_demo",
+      "tags": [
+        "grammar"
+      ],
+      "definition_en": "A set phrase meaning 'having gold'. This form is used in Neo-Taíno / reconstruction teaching. Learn the morphology—prefixes like da-/wa-/ma-/ka- unlock dozens of phrases.",
+      "definition_es": "Frase hecha que significa 'con oro'. Forma usada en enseñanza neo-taína / reconstrucción. Learn the morphology—prefixes like da-/wa-/ma-/ka- unlock dozens of phrases.",
+      "fun_fact": "Grammar combo move: swap the prefix and invent a new phrase.",
+      "example": "ka-kawóna"
+    },
+    {
+      "id": "i_drink_water",
+      "boriken": "da-sá ni",
+      "english": "I drink water",
+      "spanish": "yo bebo agua",
+      "pos": "phrase",
+      "attested": false,
+      "source": "grammar_demo",
+      "tags": [
+        "grammar",
+        "food"
+      ],
+      "definition_en": "A set phrase meaning 'I drink water'. This form is used in Neo-Taíno / reconstruction teaching. Learn the morphology—prefixes like da-/wa-/ma-/ka- unlock dozens of phrases.",
+      "definition_es": "Frase hecha que significa 'yo bebo agua'. Forma usada en enseñanza neo-taína / reconstrucción. Learn the morphology—prefixes like da-/wa-/ma-/ka- unlock dozens of phrases.",
+      "fun_fact": "Flavor unlock: say it before your next bite.",
+      "example": "da-sá ni"
+    },
+    {
+      "id": "we_eat_cassava",
+      "boriken": "wa-aka kasabi",
+      "english": "we eat cassava bread",
+      "spanish": "comemos casabe",
+      "pos": "phrase",
+      "attested": false,
+      "source": "grammar_demo",
+      "tags": [
+        "grammar",
+        "food"
+      ],
+      "definition_en": "A set phrase meaning 'we eat cassava bread'. This form is used in Neo-Taíno / reconstruction teaching. Learn the morphology—prefixes like da-/wa-/ma-/ka- unlock dozens of phrases.",
+      "definition_es": "Frase hecha que significa 'comemos casabe'. Forma usada en enseñanza neo-taína / reconstrucción. Learn the morphology—prefixes like da-/wa-/ma-/ka- unlock dozens of phrases.",
+      "fun_fact": "Flavor unlock: say it before your next bite.",
+      "example": "wa-aka kasabi"
+    },
+    {
+      "id": "hear_sir",
+      "boriken": "o kãma, waxeri",
+      "english": "O hear, sir",
+      "spanish": "oh oye, señor",
+      "pos": "phrase",
+      "attested": true,
+      "tags": [
+        "speech"
+      ],
+      "definition_en": "A set phrase meaning 'O hear, sir'. This form is attested in colonial records.",
+      "definition_es": "Frase hecha que significa 'oh oye, señor'. Forma atestiguada en crónicas coloniales.",
+      "fun_fact": "High-confidence classic—flashcard gold.",
+      "example": "o kãma, waxeri"
+    },
+    {
+      "id": "gods_worker",
+      "boriken": "Dios naboriya daka",
+      "english": "I am God's worker",
+      "spanish": "soy siervo de Dios",
+      "pos": "phrase",
+      "attested": true,
+      "tags": [
+        "speech"
+      ],
+      "definition_en": "A set phrase meaning 'I am God's worker'. This form is attested in colonial records.",
+      "definition_es": "Frase hecha que significa 'soy siervo de Dios'. Forma atestiguada en crónicas coloniales.",
+      "fun_fact": "High-confidence classic—flashcard gold.",
+      "example": "Dios naboriya daka"
+    },
+    {
+      "id": "speak_grandfather",
+      "boriken": "ahiyakawo, warokoel",
+      "english": "speak to us, our grandfather",
+      "spanish": "háblanos, nuestro abuelo",
+      "pos": "phrase",
+      "attested": true,
+      "tags": [
+        "speech",
+        "kinship"
+      ],
+      "definition_en": "A set phrase meaning 'speak to us, our grandfather'. This form is attested in colonial records.",
+      "definition_es": "Frase hecha que significa 'háblanos, nuestro abuelo'. Forma atestiguada en crónicas coloniales.",
+      "fun_fact": "High-confidence classic—flashcard gold.",
+      "example": "ahiyakawo, warokoel"
+    },
+    {
+      "id": "lets_go",
+      "boriken": "waibá",
+      "english": "let's go",
+      "spanish": "vámonos",
+      "pos": "phrase",
+      "attested": true,
+      "tags": [
+        "travel"
+      ],
+      "definition_en": "A set phrase meaning 'let's go'. This form is attested in colonial records.",
+      "definition_es": "Frase hecha que significa 'vámonos'. Forma atestiguada en crónicas coloniales.",
+      "fun_fact": "High-confidence classic—flashcard gold.",
+      "example": "waibá"
+    },
+    {
+      "id": "guaraguao",
+      "boriken": "warawáo",
+      "english": "red-tailed hawk",
+      "spanish": "guaraguao",
+      "pos": "noun",
+      "attested": true,
+      "tags": [
+        "animal"
+      ],
+      "definition_en": "A noun meaning 'red-tailed hawk'. This form is attested in colonial records.",
+      "definition_es": "Sustantivo que significa 'guaraguao'. Forma atestiguada en crónicas coloniales.",
+      "fun_fact": "Nature bingo: spot it, say it.",
+      "example": "da-warawáo"
+    },
+    {
+      "id": "jaiba",
+      "boriken": "haíba",
+      "english": "river crab",
+      "spanish": "jaiba",
+      "pos": "noun",
+      "attested": true,
+      "tags": [
+        "animal"
+      ],
+      "definition_en": "A noun meaning 'river crab'. This form is attested in colonial records.",
+      "definition_es": "Sustantivo que significa 'jaiba'. Forma atestiguada en crónicas coloniales.",
+      "fun_fact": "Nature bingo: spot it, say it.",
+      "example": "da-haíba"
+    },
+    {
+      "id": "loro",
+      "boriken": "loro",
+      "english": "parrot (Spanish; not Taíno)",
+      "spanish": "loro (español; no taíno)",
+      "pos": "noun",
+      "attested": false,
+      "tags": [
+        "animal",
+        "accuracy_flag",
+        "etymology_uncertain",
+        "not_taino_lexeme"
+      ],
+      "definition_en": "Parrot (Spanish loro—not a Taíno word; kept only as regional vocabulary caution).",
+      "definition_es": "Loro (español—no es palabra taína; se conserva solo como aviso de vocabulario regional).",
+      "fun_fact": "If you need a bird word for drills, prefer clearly labeled reconstructed forms.",
+      "example": "da-loro",
+      "source": "caribbean_spanish_uncertain",
+      "confidence": "low",
+      "accuracy_note": "Spanish loro 'parrot' (ultimately Latin/Romance). Not a Taíno lexeme."
+    },
+    {
+      "id": "mucaro",
+      "boriken": "múcaro",
+      "english": "owl",
+      "spanish": "múcaro",
+      "pos": "noun",
+      "attested": true,
+      "tags": [
+        "animal"
+      ],
+      "definition_en": "A noun meaning 'owl'. This form is attested in colonial records.",
+      "definition_es": "Sustantivo que significa 'múcaro'. Forma atestiguada en crónicas coloniales.",
+      "fun_fact": "Nature bingo: spot it, say it.",
+      "example": "da-múcaro"
+    },
+    {
+      "id": "caoba",
+      "boriken": "kaoba",
+      "english": "mahogany",
+      "spanish": "caoba",
+      "pos": "noun",
+      "attested": true,
+      "tags": [
+        "plant"
+      ],
+      "definition_en": "A noun meaning 'mahogany'. This form is attested in colonial records.",
+      "definition_es": "Sustantivo que significa 'caoba'. Forma atestiguada en crónicas coloniales.",
+      "fun_fact": "High-confidence classic—flashcard gold.",
+      "example": "da-kaoba"
+    },
+    {
+      "id": "guanabana",
+      "boriken": "wanábana",
+      "english": "soursop",
+      "spanish": "guanábana",
+      "pos": "noun",
+      "attested": true,
+      "tags": [
+        "food",
+        "plant"
+      ],
+      "definition_en": "A noun meaning 'soursop'. This form is attested in colonial records.",
+      "definition_es": "Sustantivo que significa 'guanábana'. Forma atestiguada en crónicas coloniales.",
+      "fun_fact": "Flavor unlock: say it before your next bite.",
+      "example": "da-wanábana"
+    },
+    {
+      "id": "auyama",
+      "boriken": "auyama",
+      "english": "pumpkin; squash",
+      "spanish": "auyama",
+      "pos": "noun",
+      "attested": true,
+      "tags": [
+        "food"
+      ],
+      "definition_en": "A noun meaning 'pumpkin'. This form is attested in colonial records.",
+      "definition_es": "Sustantivo que significa 'auyama'. Forma atestiguada en crónicas coloniales.",
+      "fun_fact": "Flavor unlock: say it before your next bite.",
+      "example": "da-auyama"
+    },
+    {
+      "id": "mangles",
+      "boriken": "manglar",
+      "english": "mangrove (Caribbean Spanish; origin uncertain)",
+      "spanish": "manglar",
+      "pos": "noun",
+      "attested": false,
+      "tags": [
+        "plant",
+        "accuracy_flag",
+        "etymology_uncertain"
+      ],
+      "definition_en": "Mangrove (Caribbean Spanish manglar; Indigenous origin uncertain).",
+      "definition_es": "Manglar (español caribeño; origen indígena incierto).",
+      "fun_fact": "Coastal ecology word—keep the uncertain label on.",
+      "example": "da-manglar",
+      "source": "caribbean_spanish_uncertain",
+      "confidence": "low",
+      "accuracy_note": "Mangrove (mangle/manglar): Caribbean Spanish; Indigenous etymology uncertain."
+    },
+    {
+      "id": "cimarron",
+      "boriken": "simarón",
+      "english": "wild; runaway (etymology disputed)",
+      "spanish": "cimarrón",
+      "pos": "adjective",
+      "attested": false,
+      "tags": [
+        "society",
+        "accuracy_flag",
+        "etymology_uncertain"
+      ],
+      "definition_en": "Wild / runaway (Spanish cimarrón; possible Taíno link disputed—low confidence).",
+      "definition_es": "Cimarrón / salvaje (vínculo taíno disputado—baja confianza).",
+      "fun_fact": "Historically powerful word in the Caribbean—etymology remains debated.",
+      "example": "simarón",
+      "source": "etymology_disputed",
+      "confidence": "low",
+      "accuracy_note": "Spanish cimarrón. Sometimes linked to a Taíno form; etymology is disputed. Do not present simarón as a secure Classic Taíno citation."
+    },
+    {
+      "id": "xaguey",
+      "boriken": "shagüey",
+      "english": "cave",
+      "spanish": "cueva",
+      "pos": "noun",
+      "attested": true,
+      "tags": [
+        "place"
+      ],
+      "definition_en": "A noun meaning 'cave'. This form is attested in colonial records.",
+      "definition_es": "Sustantivo que significa 'cueva'. Forma atestiguada en crónicas coloniales.",
+      "fun_fact": "High-confidence classic—flashcard gold.",
+      "example": "da-shagüey"
+    },
+    {
+      "id": "isubara",
+      "boriken": "isúbara",
+      "english": "sword (from Spanish espada)",
+      "spanish": "espada",
+      "pos": "noun",
+      "attested": true,
+      "tags": [
+        "loan_from_spanish"
+      ],
+      "definition_en": "A noun meaning 'sword (from Spanish espada)'. This form is attested in colonial records.",
+      "definition_es": "Sustantivo que significa 'espada'. Forma atestiguada en crónicas coloniales.",
+      "fun_fact": "High-confidence classic—flashcard gold.",
+      "example": "da-isúbara",
+      "accuracy_note": "Attested colonial-era adaptation of a Spanish loan into Taíno phonology (espada→isúbara, espejo→isíbuse).",
+      "confidence": "high"
+    },
+    {
+      "id": "isibuse",
+      "boriken": "isíbuse",
+      "english": "mirror (from Spanish espejo)",
+      "spanish": "espejo",
+      "pos": "noun",
+      "attested": true,
+      "tags": [
+        "loan_from_spanish"
+      ],
+      "definition_en": "A noun meaning 'mirror (from Spanish espejo)'. This form is attested in colonial records.",
+      "definition_es": "Sustantivo que significa 'espejo'. Forma atestiguada en crónicas coloniales.",
+      "fun_fact": "High-confidence classic—flashcard gold.",
+      "example": "da-isíbuse",
+      "accuracy_note": "Attested colonial-era adaptation of a Spanish loan into Taíno phonology (espada→isúbara, espejo→isíbuse).",
+      "confidence": "high"
+    },
+    {
+      "id": "tanama",
+      "boriken": "tanama",
+      "english": "butterfly",
+      "spanish": "mariposa",
+      "pos": "noun",
+      "attested": false,
+      "source": "neo_common",
+      "tags": [
+        "animal"
+      ],
+      "definition_en": "A noun meaning 'butterfly'. This form is used in Neo-Taíno / reconstruction teaching. Source label: neo_common.",
+      "definition_es": "Sustantivo que significa 'mariposa'. Forma usada en enseñanza neo-taína / reconstrucción. Source label: neo_common.",
+      "fun_fact": "Nature bingo: spot it, say it.",
+      "example": "da-tanama"
+    },
+    {
+      "id": "wayuco",
+      "boriken": "wayuko",
+      "english": "loincloth",
+      "spanish": "taparrabo",
+      "pos": "noun",
+      "attested": true,
+      "tags": [
+        "clothing"
+      ],
+      "definition_en": "A noun meaning 'loincloth'. This form is attested in colonial records.",
+      "definition_es": "Sustantivo que significa 'taparrabo'. Forma atestiguada en crónicas coloniales.",
+      "fun_fact": "High-confidence classic—flashcard gold.",
+      "example": "da-wayuko"
+    },
+    {
+      "id": "nagua",
+      "boriken": "nagua",
+      "english": "skirt; wrap",
+      "spanish": "nagua",
+      "pos": "noun",
+      "attested": true,
+      "tags": [
+        "clothing"
+      ],
+      "definition_en": "A noun meaning 'skirt'. This form is attested in colonial records.",
+      "definition_es": "Sustantivo que significa 'nagua'. Forma atestiguada en crónicas coloniales.",
+      "fun_fact": "High-confidence classic—flashcard gold.",
+      "example": "da-nagua"
+    },
+    {
+      "id": "guayiza",
+      "boriken": "wayíza",
+      "english": "face; facial ornament",
+      "spanish": "rostro; máscara facial",
+      "pos": "noun",
+      "attested": true,
+      "tags": [
+        "body"
+      ],
+      "definition_en": "A noun meaning 'face'. This form is attested in colonial records.",
+      "definition_es": "Sustantivo que significa 'rostro'. Forma atestiguada en crónicas coloniales.",
+      "fun_fact": "High-confidence classic—flashcard gold.",
+      "example": "da-wayíza"
+    },
+    {
+      "id": "behique",
+      "boriken": "behíke",
+      "english": "shaman; healer",
+      "spanish": "behíque",
+      "pos": "noun",
+      "attested": true,
+      "tags": [
+        "society",
+        "spirit"
+      ],
+      "definition_en": "A noun meaning 'shaman'. This form is attested in colonial records. It belongs to the spiritual and ceremonial vocabulary of the islands.",
+      "definition_es": "Sustantivo que significa 'behíque'. Forma atestiguada en crónicas coloniales. It belongs to the spiritual and ceremonial vocabulary of the islands.",
+      "fun_fact": "High-confidence classic—flashcard gold.",
+      "example": "da-behíke",
+      "accuracy_note": "Ethnohistoric / colonial lexical item widely cited for Taíno culture; orthography regularized.",
+      "confidence": "high"
+    },
+    {
+      "id": "caney",
+      "boriken": "kaney",
+      "english": "rectangular chiefly house",
+      "spanish": "caney",
+      "pos": "noun",
+      "attested": true,
+      "tags": [
+        "home"
+      ],
+      "definition_en": "A noun meaning 'rectangular chiefly house'. This form is attested in colonial records.",
+      "definition_es": "Sustantivo que significa 'caney'. Forma atestiguada en crónicas coloniales.",
+      "fun_fact": "High-confidence classic—flashcard gold.",
+      "example": "da-kaney",
+      "accuracy_note": "Ethnohistoric / colonial lexical item widely cited for Taíno culture; orthography regularized.",
+      "confidence": "high"
+    },
+    {
+      "id": "cobo",
+      "boriken": "kobo",
+      "english": "conch shell",
+      "spanish": "cobo",
+      "pos": "noun",
+      "attested": true,
+      "tags": [
+        "nature"
+      ],
+      "definition_en": "A noun meaning 'conch shell'. This form is attested in colonial records.",
+      "definition_es": "Sustantivo que significa 'cobo'. Forma atestiguada en crónicas coloniales.",
+      "fun_fact": "High-confidence classic—flashcard gold.",
+      "example": "da-kobo"
+    },
+    {
+      "id": "higüera",
+      "boriken": "higüera",
+      "english": "calabash tree/gourd",
+      "spanish": "higüera",
+      "pos": "noun",
+      "attested": true,
+      "tags": [
+        "plant"
+      ],
+      "definition_en": "A noun meaning 'calabash tree/gourd'. This form is attested in colonial records.",
+      "definition_es": "Sustantivo que significa 'higüera'. Forma atestiguada en crónicas coloniales.",
+      "fun_fact": "High-confidence classic—flashcard gold.",
+      "example": "da-higüera"
+    },
+    {
+      "id": "jobo",
+      "boriken": "hobo",
+      "english": "hog plum",
+      "spanish": "jobo",
+      "pos": "noun",
+      "attested": true,
+      "tags": [
+        "food",
+        "plant"
+      ],
+      "definition_en": "A noun meaning 'hog plum'. This form is attested in colonial records.",
+      "definition_es": "Sustantivo que significa 'jobo'. Forma atestiguada en crónicas coloniales.",
+      "fun_fact": "Flavor unlock: say it before your next bite.",
+      "example": "da-hobo"
+    },
+    {
+      "id": "mamey",
+      "boriken": "mamey",
+      "english": "mamey fruit",
+      "spanish": "mamey",
+      "pos": "noun",
+      "attested": true,
+      "tags": [
+        "food"
+      ],
+      "definition_en": "A noun meaning 'mamey fruit'. This form is attested in colonial records.",
+      "definition_es": "Sustantivo que significa 'mamey'. Forma atestiguada en crónicas coloniales.",
+      "fun_fact": "Flavor unlock: say it before your next bite.",
+      "example": "da-mamey"
+    },
+    {
+      "id": "anon",
+      "boriken": "anón",
+      "english": "sugar apple",
+      "spanish": "anón",
+      "pos": "noun",
+      "attested": true,
+      "tags": [
+        "food"
+      ],
+      "definition_en": "A noun meaning 'sugar apple'. This form is attested in colonial records.",
+      "definition_es": "Sustantivo que significa 'anón'. Forma atestiguada en crónicas coloniales.",
+      "fun_fact": "Flavor unlock: say it before your next bite.",
+      "example": "da-anón"
+    },
+    {
+      "id": "quenepa",
+      "boriken": "kenepa",
+      "english": "Spanish lime (Caribbean Spanish; Taíno link uncertain)",
+      "spanish": "quenepa",
+      "pos": "noun",
+      "attested": false,
+      "tags": [
+        "food",
+        "accuracy_flag",
+        "etymology_uncertain"
+      ],
+      "definition_en": "Spanish lime / genip (Caribbean Spanish quenepa; Taíno link uncertain).",
+      "definition_es": "Quenepa (español caribeño; vínculo taíno incierto).",
+      "fun_fact": "Delicious island fruit—etymology still soft.",
+      "example": "da-kenepa",
+      "source": "caribbean_spanish_uncertain",
+      "confidence": "low",
+      "accuracy_note": "Quenepa/kenepa is Caribbean Spanish for Spanish lime; Taíno attribution uncertain."
+    },
+    {
+      "id": "coqui",
+      "boriken": "kokí",
+      "english": "coquí frog (Puerto Rican Spanish; etymology uncertain)",
+      "spanish": "coquí",
+      "pos": "noun",
+      "attested": false,
+      "tags": [
+        "animal",
+        "boriken",
+        "accuracy_flag",
+        "etymology_uncertain"
+      ],
+      "definition_en": "Coquí frog (Puerto Rican Spanish; Indigenous etymology uncertain in this corpus).",
+      "definition_es": "Rana coquí (español puertorriqueño; etimología indígena incierta en este corpus).",
+      "fun_fact": "Island mascot energy—still label etymology as uncertain here.",
+      "example": "da-kokí",
+      "source": "caribbean_spanish_uncertain",
+      "confidence": "low",
+      "accuracy_note": "Coquí is iconic Puerto Rican Spanish for the frog; often assumed Indigenous but not securely attested as Classic Taíno in colonial lexical lists used here."
+    },
+    {
+      "id": "pitirre",
+      "boriken": "pitirre",
+      "english": "gray kingbird (Puerto Rican Spanish; origin uncertain)",
+      "spanish": "pitirre",
+      "pos": "noun",
+      "attested": false,
+      "tags": [
+        "animal",
+        "boriken",
+        "accuracy_flag",
+        "etymology_uncertain"
+      ],
+      "definition_en": "Gray kingbird (Puerto Rican Spanish pitirre; Taíno origin not shown here).",
+      "definition_es": "Pitirre (español puertorriqueño; origen taíno no demostrado aquí).",
+      "fun_fact": "Fierce little bird—soft etymology label.",
+      "example": "da-pitirre",
+      "source": "caribbean_spanish_uncertain",
+      "confidence": "low",
+      "accuracy_note": "Pitirre (gray kingbird) is Puerto Rican Spanish; Taíno origin not demonstrated here."
+    },
+    {
+      "id": "carey",
+      "boriken": "karey",
+      "english": "sea turtle",
+      "spanish": "carey",
+      "pos": "noun",
+      "attested": true,
+      "tags": [
+        "animal"
+      ],
+      "definition_en": "A noun meaning 'sea turtle'. This form is attested in colonial records.",
+      "definition_es": "Sustantivo que significa 'carey'. Forma atestiguada en crónicas coloniales.",
+      "fun_fact": "Nature bingo: spot it, say it.",
+      "example": "da-karey"
+    },
+    {
+      "id": "ditas",
+      "boriken": "ditas",
+      "english": "gourd bowl",
+      "spanish": "dita",
+      "pos": "noun",
+      "attested": true,
+      "tags": [
+        "tool"
+      ],
+      "definition_en": "A noun meaning 'gourd bowl'. This form is attested in colonial records.",
+      "definition_es": "Sustantivo que significa 'dita'. Forma atestiguada en crónicas coloniales.",
+      "fun_fact": "High-confidence classic—flashcard gold.",
+      "example": "da-ditas"
+    },
+    {
+      "id": "fotuto",
+      "boriken": "fotuto",
+      "english": "conch trumpet",
+      "spanish": "fotuto",
+      "pos": "noun",
+      "attested": true,
+      "tags": [
+        "ceremony"
+      ],
+      "definition_en": "A noun meaning 'conch trumpet'. This form is attested in colonial records.",
+      "definition_es": "Sustantivo que significa 'fotuto'. Forma atestiguada en crónicas coloniales.",
+      "fun_fact": "High-confidence classic—flashcard gold.",
+      "example": "da-fotuto"
+    },
+    {
+      "id": "maraca",
+      "boriken": "maraka",
+      "english": "rattle",
+      "spanish": "maraca",
+      "pos": "noun",
+      "attested": true,
+      "tags": [
+        "ceremony"
+      ],
+      "definition_en": "A noun meaning 'rattle'. This form is attested in colonial records.",
+      "definition_es": "Sustantivo que significa 'maraca'. Forma atestiguada en crónicas coloniales.",
+      "fun_fact": "High-confidence classic—flashcard gold.",
+      "example": "da-maraka"
+    },
+    {
+      "id": "guiro",
+      "boriken": "güiro",
+      "english": "gourd scraper instrument",
+      "spanish": "güiro",
+      "pos": "noun",
+      "attested": true,
+      "tags": [
+        "ceremony"
+      ],
+      "definition_en": "A noun meaning 'gourd scraper instrument'. This form is attested in colonial records.",
+      "definition_es": "Sustantivo que significa 'güiro'. Forma atestiguada en crónicas coloniales.",
+      "fun_fact": "High-confidence classic—flashcard gold.",
+      "example": "da-güiro"
+    },
+    {
+      "id": "i_am_taino",
+      "boriken": "taíno daka",
+      "english": "I am Taíno / I am good",
+      "spanish": "soy taíno / soy bueno",
+      "pos": "phrase",
+      "attested": false,
+      "source": "composition",
+      "tags": [
+        "identity"
+      ],
+      "definition_en": "A set phrase meaning 'I am Taíno / I am good'. This form is used in Neo-Taíno / reconstruction teaching. Source label: composition.",
+      "definition_es": "Frase hecha que significa 'soy taíno / soy bueno'. Forma usada en enseñanza neo-taína / reconstrucción. Source label: composition.",
+      "fun_fact": "Reconstruction practice—label it, learn it, keep it humble.",
+      "example": "taíno daka"
+    },
+    {
+      "id": "our_father",
+      "boriken": "wakía baba",
+      "english": "our father",
+      "spanish": "nuestro padre",
+      "pos": "phrase",
+      "attested": true,
+      "tags": [
+        "kinship"
+      ],
+      "definition_en": "A set phrase meaning 'our father'. This form is attested in colonial records.",
+      "definition_es": "Frase hecha que significa 'nuestro padre'. Forma atestiguada en crónicas coloniales.",
+      "fun_fact": "High-confidence classic—flashcard gold.",
+      "example": "wakía baba"
+    },
+    {
+      "id": "give_to_us",
+      "boriken": "busika wakía",
+      "english": "give to us",
+      "spanish": "danos",
+      "pos": "phrase",
+      "attested": false,
+      "source": "neo_common",
+      "tags": [
+        "speech"
+      ],
+      "definition_en": "A set phrase meaning 'give to us'. This form is used in Neo-Taíno / reconstruction teaching. Source label: neo_common.",
+      "definition_es": "Frase hecha que significa 'danos'. Forma usada en enseñanza neo-taína / reconstrucción. Source label: neo_common.",
+      "fun_fact": "Reconstruction practice—label it, learn it, keep it humble.",
+      "example": "busika wakía"
+    },
+    {
+      "id": "come_to_us",
+      "boriken": "wariko wakía",
+      "english": "come to us",
+      "spanish": "ven a nosotros",
+      "pos": "phrase",
+      "attested": false,
+      "source": "neo_common",
+      "tags": [
+        "speech"
+      ],
+      "definition_en": "A set phrase meaning 'come to us'. This form is used in Neo-Taíno / reconstruction teaching. Source label: neo_common.",
+      "definition_es": "Frase hecha que significa 'ven a nosotros'. Forma usada en enseñanza neo-taína / reconstrucción. Source label: neo_common.",
+      "fun_fact": "Reconstruction practice—label it, learn it, keep it humble.",
+      "example": "wariko wakía"
+    },
+    {
+      "id": "island_blood",
+      "boriken": "oubao moín",
+      "english": "island of blood",
+      "spanish": "isla de sangre",
+      "pos": "phrase",
+      "attested": true,
+      "tags": [
+        "place"
+      ],
+      "definition_en": "A set phrase meaning 'island of blood'. This form is attested in colonial records.",
+      "definition_es": "Frase hecha que significa 'isla de sangre'. Forma atestiguada en crónicas coloniales.",
+      "fun_fact": "High-confidence classic—flashcard gold.",
+      "example": "oubao moín",
+      "accuracy_note": "Phrase reported in Spanish chronicles for Hispaniola naming traditions; gloss 'island of blood' follows common modern rendering and may be interpretive.",
+      "confidence": "medium"
+    },
+    {
+      "id": "lord_earth_waters",
+      "boriken": "guami kení",
+      "english": "lord of earth and waters",
+      "spanish": "señor de tierra y aguas",
+      "pos": "phrase",
+      "attested": false,
+      "source": "neo_common",
+      "tags": [
+        "spirit"
+      ],
+      "definition_en": "A set phrase meaning 'lord of earth and waters'. This form is used in Neo-Taíno / reconstruction teaching. It belongs to the spiritual and ceremonial vocabulary of the islands.",
+      "definition_es": "Frase hecha que significa 'señor de tierra y aguas'. Forma usada en enseñanza neo-taína / reconstrucción. It belongs to the spiritual and ceremonial vocabulary of the islands.",
+      "fun_fact": "Reconstruction practice—label it, learn it, keep it humble.",
+      "example": "guami kení"
+    },
+    {
+      "id": "lord_moon_sun",
+      "boriken": "guami karaya wey",
+      "english": "lord of moon and sun",
+      "spanish": "señor de luna y sol",
+      "pos": "phrase",
+      "attested": false,
+      "source": "neo_common",
+      "tags": [
+        "spirit"
+      ],
+      "definition_en": "A set phrase meaning 'lord of moon and sun'. This form is used in Neo-Taíno / reconstruction teaching. It belongs to the spiritual and ceremonial vocabulary of the islands.",
+      "definition_es": "Frase hecha que significa 'señor de luna y sol'. Forma usada en enseñanza neo-taína / reconstrucción. It belongs to the spiritual and ceremonial vocabulary of the islands.",
+      "fun_fact": "Reconstruction practice—label it, learn it, keep it humble.",
+      "example": "guami karaya wey"
+    }
+  ]
+}

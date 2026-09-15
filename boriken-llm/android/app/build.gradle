@@ -1,0 +1,56 @@
+plugins {
+    id "com.android.application"
+}
+
+android {
+    namespace "com.boriken.learner"
+    compileSdk 34
+
+    defaultConfig {
+        applicationId "com.boriken.learner"
+        minSdk 24
+        targetSdk 34
+        versionCode 33
+        versionName "0.3.3"
+        resConfigs "en", "es"
+    }
+
+    signingConfigs {
+        release {
+            storeFile file("${System.properties['user.home']}/.android/debug.keystore")
+            storePassword "android"
+            keyAlias "androiddebugkey"
+            keyPassword "android"
+        }
+    }
+
+    buildTypes {
+        release {
+            minifyEnabled false
+            signingConfig signingConfigs.release
+            debuggable false
+        }
+        debug {
+            applicationIdSuffix ""
+            signingConfig signingConfigs.release
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+
+    packaging {
+        resources {
+            excludes += ["/META-INF/{AL2.0,LGPL2.1}"]
+        }
+    }
+}
+
+dependencies {
+    implementation "androidx.appcompat:appcompat:1.6.1"
+    implementation "androidx.activity:activity:1.8.2"
+    implementation "androidx.webkit:webkit:1.10.0"
+    implementation "com.google.android.material:material:1.11.0"
+}

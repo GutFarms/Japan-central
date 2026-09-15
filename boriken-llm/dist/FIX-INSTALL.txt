@@ -1,0 +1,20 @@
+# Fix Android install / blank screen (v0.3.3)
+
+## What was wrong
+1. **Download:** Chrome often blocks raw `.apk` links as “unsafe”.
+2. **Run / blank screen:** loading `file:///android_asset/...` is fragile on newer Android WebView.
+
+## What we changed
+- WebView now uses **WebViewAssetLoader** (`https://appassets.androidplatform.net/assets/www/index.html`).
+- APK rebuilt as **0.3.3**, signed with **v1 + v2 + v3**.
+- Added phone-friendly **`dist/install-android.html`**.
+
+## Install on your phone (do this)
+1. On the phone, open Artifacts and download **`Boriken-Learner.apk`**  
+   (or open `install-android.html` then tap Download).
+2. If Chrome blocks it → **Download anyway / Keep**.
+3. Settings → Apps → Special app access → **Install unknown apps** → allow Chrome or Files.
+4. Open the APK → **Install** → **Open**.
+5. You should see toast: **“Borikén offline — classroom ready”**.
+
+If an older Borikén build is installed, **uninstall it first**, then install 0.3.3.

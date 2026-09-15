@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <style name="Theme.BorikenLearner" parent="Theme.MaterialComponents.DayNight.NoActionBar">
+        <item name="colorPrimary">@color/boriken_teal</item>
+        <item name="colorPrimaryVariant">@color/boriken_teal</item>
+        <item name="colorOnPrimary">@color/boriken_ink</item>
+        <item name="colorSecondary">@color/boriken_gold</item>
+        <item name="android:statusBarColor">@color/boriken_teal</item>
+        <item name="android:navigationBarColor">@color/boriken_teal</item>
+        <item name="android:windowBackground">@color/boriken_teal</item>
+    </style>
+</resources>

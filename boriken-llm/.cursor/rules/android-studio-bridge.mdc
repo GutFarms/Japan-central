@@ -1,0 +1,13 @@
+# Borikén Android / Studio bridge
+
+When working on `boriken-llm/android/**` or `boriken-llm/webapp/**`:
+
+1. Prefer communicating with Android Studio through the **mailbox bridge**:
+   - Enqueue: `python3 bridge/cursor_to_studio.py enqueue <action>`
+   - Actions: `ping`, `sync_assets`, `build_debug`, `build_release`, `adb_devices`, `adb_install`, `git_pull`
+   - Status: `python3 bridge/cursor_to_studio.py status`
+2. The user's laptop must run `python3 bridge/studio_watcher.py --watch` (or Studio External Tool **Boriken: Bridge watcher**).
+3. Cloud agents cannot talk to USB devices directly — always go through the watcher for `adb_*`.
+4. After HTML/JS learner changes, enqueue `sync_assets` before `build_release`.
+5. Document JetBrains ACP (Cursor inside Android Studio) is also valid: see `bridge/README.md`.
+6. Never commit `bridge/mailbox/*` runtime files or `android/local.properties`.

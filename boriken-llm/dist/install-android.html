@@ -1,0 +1,66 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>Install Borikén Learner (Android)</title>
+<style>
+  body { font-family: system-ui, sans-serif; max-width: 40rem; margin: 2rem auto; padding: 0 1rem;
+         background: #072820; color: #f7fff8; line-height: 1.45; }
+  a.btn { display: block; text-align: center; background: #f2c75a; color: #152015;
+          font-weight: 700; padding: 1rem; text-decoration: none; margin: 1rem 0; border-radius: 8px; }
+  .card { background: rgba(0,0,0,.28); border: 1px solid rgba(242,199,90,.35); padding: 1rem; margin: 1rem 0; border-radius: 8px; }
+  code { background: rgba(255,255,255,.1); padding: .1rem .35rem; }
+  h1 { letter-spacing: .12em; }
+  ol { padding-left: 1.2rem; }
+  .muted { opacity: .85; font-size: .95rem; }
+</style>
+</head>
+<body>
+  <h1>BORIKÉN</h1>
+  <p>Android sideload — offline language classroom (v0.3.3)</p>
+
+  <a class="btn" id="dl" href="./Boriken-Learner.apk" download="Boriken-Learner.apk">
+    Download Boriken-Learner.apk
+  </a>
+  <p class="muted">If the button fails, use the GitHub link below, or open this page from Files after saving it.</p>
+
+  <div class="card">
+    <h3>Install steps (phone)</h3>
+    <ol>
+      <li>Tap <strong>Download</strong> above (or the raw GitHub link).</li>
+      <li>If Chrome says “blocked for safety”, tap <strong>Download anyway</strong> / <strong>Details → Keep</strong>.</li>
+      <li>Open <strong>Settings → Apps → Special app access → Install unknown apps</strong> → allow <strong>Chrome</strong> or <strong>Files</strong>.</li>
+      <li>Open <strong>Downloads</strong> → tap <code>Boriken-Learner.apk</code> → <strong>Install</strong> → <strong>Open</strong>.</li>
+    </ol>
+  </div>
+
+  <div class="card">
+    <h3>If it still won’t download</h3>
+    <ul>
+      <li>Open this direct file link in Chrome:<br/>
+        <a style="color:#f2c75a" href="https://raw.githubusercontent.com/GutFarms/Japan-central/cursor/boriken-language-llm-404a/boriken-llm/dist/Boriken-Learner.apk">
+          raw.githubusercontent.com … /Boriken-Learner.apk
+        </a>
+      </li>
+      <li>Or download from the Cursor agent Artifacts panel: <code>Boriken-Learner.apk</code></li>
+      <li>Or transfer the APK over USB / Drive / Nearby Share, then open it in <strong>Files</strong>.</li>
+    </ul>
+  </div>
+
+  <div class="card">
+    <h3>If it installs but won’t open / blank screen</h3>
+    <ol>
+      <li>Uninstall any old <strong>Borikén</strong> app.</li>
+      <li>Install <strong>v0.3.3</strong> (this build uses a fixed WebView loader).</li>
+      <li>You should see a short toast: “Borikén offline — classroom ready”.</li>
+    </ol>
+    <p class="muted">Package ID: <code>com.boriken.learner</code> · Android 7.0+</p>
+  </div>
+
+  <script>
+    // Prefer same-directory APK when this page is opened from dist/ or artifacts/
+    document.getElementById('dl').href = new URL('Boriken-Learner.apk', location.href).href;
+  </script>
+</body>
+</html>
