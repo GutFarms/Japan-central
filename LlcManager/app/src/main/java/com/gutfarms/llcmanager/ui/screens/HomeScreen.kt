@@ -20,14 +20,17 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Business
 import androidx.compose.material.icons.outlined.ChevronRight
 import androidx.compose.material.icons.outlined.Delete
+import androidx.compose.material.icons.outlined.WarningAmber
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -47,6 +50,7 @@ import com.gutfarms.llcmanager.ui.components.SimpleFormDialog
 import com.gutfarms.llcmanager.ui.components.formatMoney
 import com.gutfarms.llcmanager.ui.theme.DeepTeal
 import com.gutfarms.llcmanager.ui.theme.MistLine
+import com.gutfarms.llcmanager.ui.theme.SoftCoral
 import com.gutfarms.llcmanager.ui.viewmodel.LlcViewModel
 
 @Composable
@@ -55,6 +59,8 @@ fun HomeScreen(
     onOpenLlc: (Long) -> Unit
 ) {
     val summaries by viewModel.summaries.collectAsStateWithLifecycle()
+    val allSummaries by viewModel.allSummaries.collectAsStateWithLifecycle()
+    val search by viewModel.searchQuery.collectAsState()
     var showAdd by remember { mutableStateOf(false) }
     var pendingDelete by remember { mutableStateOf<LlcSummary?>(null) }
 
@@ -81,28 +87,52 @@ fun HomeScreen(
                     )
                     Spacer(Modifier.height(6.dp))
                     Text(
-                        text = "Track entities, deductions, and inventory in one place.",
+                        text = "Entities, income, deductions, and inventory — together.",
                         style = MaterialTheme.typography.bodyLarge,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
-                    Spacer(Modifier.height(8.dp))
-                    val totalDed = summaries.sumOf { it.deductionTotal }
-                    val totalInv = summaries.sumOf { it.inventoryValue }
+                    Spacer(Modifier.height(10.dp))
+                    val totalIncome = allSummaries.sumOf { it.incomeTotal }
+                    val totalDed = allSummaries.sumOf { it.deductionTotal }
+                    val totalInv = allSummaries.sumOf { it.inventoryValue }
+                    val lowStock = allSummaries.sumOf { it.lowStockCount }
                     Row(
                         Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(28.dp)
+                        horizontalArrangement = Arrangement.spacedBy(20.dp)
                     ) {
-                        MetricChip("Entities", summaries.size.toString())
+                        MetricChip("Net", formatMoney(totalIncome - totalDed))
+                        MetricChip("Income", formatMoney(totalIncome))
                         MetricChip("Deductions", formatMoney(totalDed))
-                        MetricChip("Inventory", formatMoney(totalInv))
                     }
+                    Spacer(Modifier.height(8.dp))
+                    Row(
+                        Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(20.dp)
+                    ) {
+                        MetricChip("Entities", allSummaries.size.toString())
+                        MetricChip("Inventory", formatMoney(totalInv))
+                        if (lowStock > 0) {
+                            MetricChip("Low stock", lowStock.toString())
+                        }
+                    }
+                    Spacer(Modifier.height(10.dp))
+                    OutlinedTextField(
+                        value = search,
+                        onValueChange = viewModel::setSearchQuery,
+                        label = { Text("Search LLCs") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth()
+                    )
                     Spacer(Modifier.height(4.dp))
                     HorizontalDivider(color = MistLine)
                 }
 
                 if (summaries.isEmpty()) {
                     item {
-                        EmptyHint("No LLCs yet. Tap + to add your first entity.")
+                        EmptyHint(
+                            if (search.isNotBlank()) "No LLCs match \"$search\"."
+                            else "No LLCs yet. Tap + to add your first entity."
+                        )
                     }
                 }
 
@@ -140,7 +170,7 @@ fun HomeScreen(
     pendingDelete?.let { target ->
         ConfirmDialog(
             title = "Remove LLC?",
-            message = "\"${target.llc.name}\" and all of its deductions and inventory will be deleted.",
+            message = "\"${target.llc.name}\" and all of its income, deductions, and inventory will be deleted.",
             onConfirm = {
                 viewModel.deleteLlc(target.llc.id)
                 pendingDelete = null
@@ -179,7 +209,21 @@ private fun LlcRow(
                     .weight(1f)
                     .padding(horizontal = 12.dp)
             ) {
-                Text(summary.llc.name, style = MaterialTheme.typography.titleLarge)
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        summary.llc.name,
+                        style = MaterialTheme.typography.titleLarge,
+                        modifier = Modifier.weight(1f, fill = false)
+                    )
+                    if (summary.lowStockCount > 0) {
+                        Icon(
+                            Icons.Outlined.WarningAmber,
+                            contentDescription = "Low stock",
+                            tint = SoftCoral,
+                            modifier = Modifier.padding(start = 6.dp)
+                        )
+                    }
+                }
                 val meta = listOfNotNull(
                     summary.llc.state.takeIf { it.isNotBlank() },
                     summary.llc.ein.takeIf { it.isNotBlank() }?.let { "EIN $it" }
@@ -193,8 +237,9 @@ private fun LlcRow(
                 }
                 Spacer(Modifier.height(6.dp))
                 Text(
-                    "${summary.deductionCount} deductions · ${formatMoney(summary.deductionTotal)}  ·  " +
-                        "${summary.inventoryCount} items · ${formatMoney(summary.inventoryValue)}",
+                    "Net ${formatMoney(summary.net)}  ·  " +
+                        "${summary.incomeCount} income · ${summary.deductionCount} deductions  ·  " +
+                        "${summary.inventoryCount} items",
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )

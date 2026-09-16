@@ -4,6 +4,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import com.gutfarms.llcmanager.data.model.Deduction
+import com.gutfarms.llcmanager.data.model.Income
 import com.gutfarms.llcmanager.data.model.InventoryItem
 import com.gutfarms.llcmanager.data.model.Llc
 import com.gutfarms.llcmanager.data.model.LlcSummary
@@ -12,14 +13,33 @@ import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
+import java.util.Calendar
 
 class LlcViewModel(private val repository: LlcRepository) : ViewModel() {
 
-    val summaries: StateFlow<List<LlcSummary>> = repository.observeSummaries()
+    val searchQuery = MutableStateFlow("")
+    val yearFilter = MutableStateFlow(Calendar.getInstance().get(Calendar.YEAR))
+
+    val summaries: StateFlow<List<LlcSummary>> = combine(
+        repository.observeSummaries(),
+        searchQuery
+    ) { list, query ->
+        val q = query.trim()
+        if (q.isEmpty()) list
+        else list.filter {
+            it.llc.name.contains(q, ignoreCase = true) ||
+                it.llc.ein.contains(q, ignoreCase = true) ||
+                it.llc.state.contains(q, ignoreCase = true) ||
+                it.llc.notes.contains(q, ignoreCase = true)
+        }
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+
+    val allSummaries: StateFlow<List<LlcSummary>> = repository.observeSummaries()
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
 
     private val selectedLlcId = MutableStateFlow<Long?>(null)
@@ -32,11 +52,16 @@ class LlcViewModel(private val repository: LlcRepository) : ViewModel() {
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
 
     @OptIn(ExperimentalCoroutinesApi::class)
-    val deductions: StateFlow<List<Deduction>> = selectedLlcId
+    private val rawDeductions = selectedLlcId
         .flatMapLatest { id ->
             if (id == null) flowOf(emptyList()) else repository.observeDeductions(id)
         }
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+
+    @OptIn(ExperimentalCoroutinesApi::class)
+    private val rawIncomes = selectedLlcId
+        .flatMapLatest { id ->
+            if (id == null) flowOf(emptyList()) else repository.observeIncomes(id)
+        }
 
     @OptIn(ExperimentalCoroutinesApi::class)
     val inventory: StateFlow<List<InventoryItem>> = selectedLlcId
@@ -45,8 +70,37 @@ class LlcViewModel(private val repository: LlcRepository) : ViewModel() {
         }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
 
+    val deductions: StateFlow<List<Deduction>> = combine(rawDeductions, yearFilter) { list, year ->
+        list.filter { yearOf(it.dateEpochMs) == year }
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+
+    val incomes: StateFlow<List<Income>> = combine(rawIncomes, yearFilter) { list, year ->
+        list.filter { yearOf(it.dateEpochMs) == year }
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+
+    val availableYears: StateFlow<List<Int>> = combine(rawDeductions, rawIncomes) { d, i ->
+        val years = (d.map { yearOf(it.dateEpochMs) } + i.map { yearOf(it.dateEpochMs) } +
+            Calendar.getInstance().get(Calendar.YEAR)).distinct().sortedDescending()
+        years
+    }.stateIn(
+        viewModelScope,
+        SharingStarted.WhileSubscribed(5_000),
+        listOf(Calendar.getInstance().get(Calendar.YEAR))
+    )
+
+    val llcsForMove: StateFlow<List<Llc>> = repository.observeLlcs()
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+
     fun selectLlc(id: Long?) {
         selectedLlcId.value = id
+    }
+
+    fun setSearchQuery(query: String) {
+        searchQuery.value = query
+    }
+
+    fun setYearFilter(year: Int) {
+        yearFilter.value = year
     }
 
     fun saveLlc(
@@ -79,21 +133,27 @@ class LlcViewModel(private val repository: LlcRepository) : ViewModel() {
         }
     }
 
-    fun addDeduction(
+    fun saveDeduction(
+        id: Long = 0,
         llcId: Long,
         name: String,
         category: String,
+        vendor: String,
         amount: Double,
+        dateEpochMs: Long,
         notes: String,
         onDone: () -> Unit = {}
     ) {
         viewModelScope.launch {
             repository.saveDeduction(
                 Deduction(
+                    id = id,
                     llcId = llcId,
                     name = name.trim(),
                     category = category.trim().ifBlank { "General" },
+                    vendor = vendor.trim(),
                     amount = amount,
+                    dateEpochMs = dateEpochMs,
                     notes = notes.trim()
                 )
             )
@@ -105,6 +165,38 @@ class LlcViewModel(private val repository: LlcRepository) : ViewModel() {
         viewModelScope.launch { repository.deleteDeduction(id) }
     }
 
+    fun saveIncome(
+        id: Long = 0,
+        llcId: Long,
+        name: String,
+        category: String,
+        source: String,
+        amount: Double,
+        dateEpochMs: Long,
+        notes: String,
+        onDone: () -> Unit = {}
+    ) {
+        viewModelScope.launch {
+            repository.saveIncome(
+                Income(
+                    id = id,
+                    llcId = llcId,
+                    name = name.trim(),
+                    category = category.trim().ifBlank { "Sales" },
+                    source = source.trim(),
+                    amount = amount,
+                    dateEpochMs = dateEpochMs,
+                    notes = notes.trim()
+                )
+            )
+            onDone()
+        }
+    }
+
+    fun removeIncome(id: Long) {
+        viewModelScope.launch { repository.deleteIncome(id) }
+    }
+
     fun saveInventoryItem(
         id: Long = 0,
         llcId: Long,
@@ -113,6 +205,7 @@ class LlcViewModel(private val repository: LlcRepository) : ViewModel() {
         quantity: Double,
         unit: String,
         unitCost: Double,
+        reorderLevel: Double,
         location: String,
         notes: String,
         onDone: () -> Unit = {}
@@ -127,6 +220,7 @@ class LlcViewModel(private val repository: LlcRepository) : ViewModel() {
                     quantity = quantity,
                     unit = unit.trim().ifBlank { "ea" },
                     unitCost = unitCost,
+                    reorderLevel = reorderLevel,
                     location = location.trim(),
                     notes = notes.trim(),
                     updatedAt = System.currentTimeMillis()
@@ -142,6 +236,26 @@ class LlcViewModel(private val repository: LlcRepository) : ViewModel() {
 
     fun adjustInventory(item: InventoryItem, delta: Double) {
         viewModelScope.launch { repository.adjustInventoryQuantity(item, delta) }
+    }
+
+    fun moveInventory(item: InventoryItem, targetLlcId: Long, onDone: () -> Unit = {}) {
+        viewModelScope.launch {
+            repository.moveInventoryItem(item, targetLlcId)
+            onDone()
+        }
+    }
+
+    fun buildShareText(
+        llc: Llc,
+        deductions: List<Deduction>,
+        incomes: List<Income>,
+        inventory: List<InventoryItem>
+    ): String = repository.formatReport(llc, deductions, incomes, inventory)
+
+    private fun yearOf(epochMs: Long): Int {
+        val cal = Calendar.getInstance()
+        cal.timeInMillis = epochMs
+        return cal.get(Calendar.YEAR)
     }
 }
 

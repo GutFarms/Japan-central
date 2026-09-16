@@ -32,6 +32,31 @@ data class Deduction(
     val llcId: Long,
     val name: String,
     val category: String = "General",
+    val vendor: String = "",
+    val amount: Double,
+    val dateEpochMs: Long = System.currentTimeMillis(),
+    val notes: String = "",
+    val createdAt: Long = System.currentTimeMillis()
+)
+
+@Entity(
+    tableName = "incomes",
+    foreignKeys = [
+        ForeignKey(
+            entity = Llc::class,
+            parentColumns = ["id"],
+            childColumns = ["llcId"],
+            onDelete = ForeignKey.CASCADE
+        )
+    ],
+    indices = [Index("llcId")]
+)
+data class Income(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    val llcId: Long,
+    val name: String,
+    val category: String = "Sales",
+    val source: String = "",
     val amount: Double,
     val dateEpochMs: Long = System.currentTimeMillis(),
     val notes: String = "",
@@ -58,6 +83,7 @@ data class InventoryItem(
     val quantity: Double = 0.0,
     val unit: String = "ea",
     val unitCost: Double = 0.0,
+    val reorderLevel: Double = 0.0,
     val location: String = "",
     val notes: String = "",
     val updatedAt: Long = System.currentTimeMillis(),
@@ -65,12 +91,32 @@ data class InventoryItem(
 ) {
     val totalValue: Double
         get() = quantity * unitCost
+
+    val isLowStock: Boolean
+        get() = reorderLevel > 0.0 && quantity <= reorderLevel
 }
 
 data class LlcSummary(
     val llc: Llc,
     val deductionCount: Int,
     val deductionTotal: Double,
+    val incomeCount: Int,
+    val incomeTotal: Double,
     val inventoryCount: Int,
-    val inventoryValue: Double
-)
+    val inventoryValue: Double,
+    val lowStockCount: Int
+) {
+    val net: Double
+        get() = incomeTotal - deductionTotal
+}
+
+object DeductionCategories {
+    val defaults = listOf(
+        "General", "Office", "Travel", "Supplies", "Utilities",
+        "Insurance", "Professional", "Vehicle", "Marketing", "Other"
+    )
+}
+
+object IncomeCategories {
+    val defaults = listOf("Sales", "Services", "Interest", "Other")
+}

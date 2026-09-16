@@ -33,10 +33,16 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import android.app.DatePickerDialog
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.material3.FilterChip
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
@@ -45,7 +51,10 @@ import com.gutfarms.llcmanager.ui.theme.Paper
 import com.gutfarms.llcmanager.ui.theme.Sand
 import com.gutfarms.llcmanager.ui.theme.Seafoam
 import java.text.NumberFormat
+import java.text.SimpleDateFormat
+import java.util.Calendar
 import java.util.Currency
+import java.util.Date
 import java.util.Locale
 
 private val moneyFormat: NumberFormat = NumberFormat.getCurrencyInstance(Locale.US).apply {
@@ -252,4 +261,70 @@ fun ScreenPadding(
 @Composable
 fun TinySpacer(width: Int = 8) {
     Spacer(modifier = Modifier.width(width.dp).size(width.dp))
+}
+
+@Composable
+fun DateField(
+    epochMs: Long,
+    onDateChange: (Long) -> Unit,
+    label: String = "Date",
+    modifier: Modifier = Modifier
+) {
+    val context = LocalContext.current
+    val fmt = remember { SimpleDateFormat("MMM d, yyyy", Locale.US) }
+    val display = fmt.format(Date(epochMs))
+    fun openPicker() {
+        val cal = Calendar.getInstance().apply { timeInMillis = epochMs }
+        DatePickerDialog(
+            context,
+            { _, y, m, d ->
+                val picked = Calendar.getInstance().apply {
+                    set(Calendar.YEAR, y)
+                    set(Calendar.MONTH, m)
+                    set(Calendar.DAY_OF_MONTH, d)
+                    set(Calendar.HOUR_OF_DAY, 12)
+                    set(Calendar.MINUTE, 0)
+                    set(Calendar.SECOND, 0)
+                    set(Calendar.MILLISECOND, 0)
+                }
+                onDateChange(picked.timeInMillis)
+            },
+            cal.get(Calendar.YEAR),
+            cal.get(Calendar.MONTH),
+            cal.get(Calendar.DAY_OF_MONTH)
+        ).show()
+    }
+    OutlinedTextField(
+        value = display,
+        onValueChange = {},
+        readOnly = true,
+        label = { Text(label) },
+        trailingIcon = {
+            TextButton(onClick = { openPicker() }) { Text("Change") }
+        },
+        modifier = modifier.fillMaxWidth()
+    )
+}
+
+@Composable
+fun CategoryChipRow(
+    categories: List<String>,
+    selected: String,
+    onSelect: (String) -> Unit,
+    modifier: Modifier = Modifier
+) {
+    Row(
+        modifier = modifier
+            .fillMaxWidth()
+            .horizontalScroll(rememberScrollState()),
+        horizontalArrangement = Arrangement.spacedBy(6.dp)
+    ) {
+        categories.forEach { cat ->
+            FilterChip(
+                selected = selected.equals(cat, ignoreCase = true),
+                onClick = { onSelect(cat) },
+                label = { Text(cat) }
+            )
+        }
+    }
 }

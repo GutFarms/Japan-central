@@ -7,6 +7,11 @@ import com.gutfarms.llcmanager.data.repository.LlcRepository
 class LlcManagerApplication : Application() {
     val repository: LlcRepository by lazy {
         val db = LlcDatabase.get(this)
-        LlcRepository(db.llcDao(), db.deductionDao(), db.inventoryDao())
+        LlcRepository(
+            db.llcDao(),
+            db.deductionDao(),
+            db.incomeDao(),
+            db.inventoryDao()
+        )
     }
 }

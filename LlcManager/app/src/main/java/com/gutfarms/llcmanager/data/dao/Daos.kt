@@ -7,6 +7,7 @@ import androidx.room.OnConflictStrategy
 import androidx.room.Query
 import androidx.room.Update
 import com.gutfarms.llcmanager.data.model.Deduction
+import com.gutfarms.llcmanager.data.model.Income
 import com.gutfarms.llcmanager.data.model.InventoryItem
 import com.gutfarms.llcmanager.data.model.Llc
 import kotlinx.coroutines.flow.Flow
@@ -43,9 +44,6 @@ interface DeductionDao {
     @Query("SELECT * FROM deductions ORDER BY dateEpochMs DESC")
     fun observeAll(): Flow<List<Deduction>>
 
-    @Query("SELECT COALESCE(SUM(amount), 0) FROM deductions WHERE llcId = :llcId")
-    fun observeTotalForLlc(llcId: Long): Flow<Double>
-
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun upsert(deduction: Deduction): Long
 
@@ -53,6 +51,24 @@ interface DeductionDao {
     suspend fun delete(deduction: Deduction)
 
     @Query("DELETE FROM deductions WHERE id = :id")
+    suspend fun deleteById(id: Long)
+}
+
+@Dao
+interface IncomeDao {
+    @Query("SELECT * FROM incomes WHERE llcId = :llcId ORDER BY dateEpochMs DESC, id DESC")
+    fun observeForLlc(llcId: Long): Flow<List<Income>>
+
+    @Query("SELECT * FROM incomes ORDER BY dateEpochMs DESC")
+    fun observeAll(): Flow<List<Income>>
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun upsert(income: Income): Long
+
+    @Delete
+    suspend fun delete(income: Income)
+
+    @Query("DELETE FROM incomes WHERE id = :id")
     suspend fun deleteById(id: Long)
 }
 

@@ -1,12 +1,15 @@
 # LLC Manager
 
-Android app for managing multiple LLCs with deductions and inventory.
+Android app for managing multiple LLCs with income, deductions, and inventory.
 
 ## Features
 
 - **Multiple LLCs** — add, edit, and remove entities (name, EIN, state, notes)
-- **Deductions** — quick add/remove per LLC with category and amount totals
-- **Inventory** — item list with quantity adjust (+/−), unit cost, and value
+- **Search** — filter entities from the home screen
+- **Income & deductions** — add/edit/remove with categories, vendors/sources, and dates
+- **Tax year filter** — view net / income / deductions by year
+- **Inventory** — quantity adjust (+/−), reorder level with low-stock alerts, move items between LLCs
+- **Share report** — export a text summary of an LLC via the system share sheet
 
 Data is stored locally on the phone with Room (SQLite).
 
@@ -30,4 +33,5 @@ export ANDROID_HOME="$HOME/Android/Sdk"
 ./gradlew assembleDebug
 ```
 
-APK output: `app/build/outputs/apk/debug/app-debug.apk`
+APK output: `app/build/outputs/apk/debug/app-debug.apk`  
+Also copied to: `dist/LlcManager-debug.apk`
