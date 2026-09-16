@@ -7,6 +7,7 @@ Android app for managing multiple LLCs with income, deductions, and inventory.
 - **Multiple LLCs** — add, edit, and remove entities (name, EIN, state, notes)
 - **Search** — filter entities from the home screen
 - **Employees** — per-LLC staff list with role, contact, pay, hire date, and status
+- **1099 tax savings calculator** — employer W-2 vs 1099 cost savings, plus 1099 recipient SE/income tax savings from deductions
 - **Income & deductions** — add/edit/remove with categories, vendors/sources, and dates
 - **Tax year filter** — view net / income / deductions by year
 - **Inventory** — quantity adjust (+/−), reorder level with low-stock alerts, move items between LLCs

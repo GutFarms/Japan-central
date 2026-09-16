@@ -22,6 +22,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.ArrowBack
 import androidx.compose.material.icons.outlined.Add
+import androidx.compose.material.icons.outlined.Calculate
 import androidx.compose.material.icons.outlined.Delete
 import androidx.compose.material.icons.outlined.Edit
 import androidx.compose.material.icons.outlined.Remove
@@ -90,7 +91,8 @@ private enum class DetailTab { Employees, Income, Deductions, Inventory }
 fun LlcDetailScreen(
     llcId: Long,
     viewModel: LlcViewModel,
-    onBack: () -> Unit
+    onBack: () -> Unit,
+    onOpenTaxCalculator: (gross: Double, deductions: Double) -> Unit = { _, _ -> }
 ) {
     LaunchedEffect(llcId) { viewModel.selectLlc(llcId) }
 
@@ -148,6 +150,16 @@ fun LlcDetailScreen(
                         }
                     },
                     actions = {
+                        IconButton(
+                            onClick = {
+                                onOpenTaxCalculator(
+                                    incomes.sumOf { it.amount },
+                                    deductions.sumOf { it.amount }
+                                )
+                            }
+                        ) {
+                            Icon(Icons.Outlined.Calculate, contentDescription = "1099 tax calculator")
+                        }
                         IconButton(
                             onClick = {
                                 val entity = current ?: return@IconButton

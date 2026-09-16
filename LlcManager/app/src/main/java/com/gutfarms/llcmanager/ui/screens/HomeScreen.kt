@@ -18,6 +18,7 @@ import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Business
+import androidx.compose.material.icons.outlined.Calculate
 import androidx.compose.material.icons.outlined.ChevronRight
 import androidx.compose.material.icons.outlined.Delete
 import androidx.compose.material.icons.outlined.WarningAmber
@@ -25,6 +26,7 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
@@ -56,7 +58,8 @@ import com.gutfarms.llcmanager.ui.viewmodel.LlcViewModel
 @Composable
 fun HomeScreen(
     viewModel: LlcViewModel,
-    onOpenLlc: (Long) -> Unit
+    onOpenLlc: (Long) -> Unit,
+    onOpenTaxCalculator: () -> Unit = {}
 ) {
     val summaries by viewModel.summaries.collectAsStateWithLifecycle()
     val allSummaries by viewModel.allSummaries.collectAsStateWithLifecycle()
@@ -125,6 +128,15 @@ fun HomeScreen(
                         singleLine = true,
                         modifier = Modifier.fillMaxWidth()
                     )
+                    Spacer(Modifier.height(4.dp))
+                    OutlinedButton(
+                        onClick = onOpenTaxCalculator,
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Icon(Icons.Outlined.Calculate, contentDescription = null)
+                        Spacer(modifier = Modifier.padding(start = 8.dp))
+                        Text("1099 tax savings calculator")
+                    }
                     Spacer(Modifier.height(4.dp))
                     HorizontalDivider(color = MistLine)
                 }
