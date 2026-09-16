@@ -1,0 +1,39 @@
+# LLC Manager
+
+Android app for managing multiple LLCs with income, deductions, and inventory.
+
+## Features
+
+- **Multiple LLCs** — add, edit, and remove entities (name, EIN, state, notes)
+- **Search** — filter entities from the home screen
+- **Employees** — per-LLC staff list with role, contact, pay, hire date, and status
+- **1099 tax savings calculator** — employer W-2 vs 1099 cost savings, plus 1099 recipient SE/income tax savings from deductions
+- **Income & deductions** — add/edit/remove with categories, vendors/sources, and dates
+- **Tax year filter** — view net / income / deductions by year
+- **Inventory** — quantity adjust (+/−), reorder level with low-stock alerts, move items between LLCs
+- **Share report** — export a text summary of an LLC via the system share sheet
+
+Data is stored locally on the phone with Room (SQLite).
+
+## Open in Android Studio
+
+1. Open the `LlcManager` folder (File → Open).
+2. Let Gradle sync finish.
+3. Run on a phone or emulator (API 26+).
+
+### USB install
+
+1. Enable **Developer options** and **USB debugging** on the phone.
+2. Plug in USB and accept the debugging prompt.
+3. In Android Studio: Run ▶ `app`.
+
+## Build from CLI
+
+```bash
+cd LlcManager
+export ANDROID_HOME="$HOME/Android/Sdk"
+./gradlew assembleDebug
+```
+
+APK output: `app/build/outputs/apk/debug/app-debug.apk`  
+Also copied to: `dist/LlcManager-debug.apk`
