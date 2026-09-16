@@ -56,10 +56,14 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.gutfarms.llcmanager.data.model.Deduction
 import com.gutfarms.llcmanager.data.model.DeductionCategories
+import com.gutfarms.llcmanager.data.model.Employee
+import com.gutfarms.llcmanager.data.model.EmployeeRoles
+import com.gutfarms.llcmanager.data.model.EmploymentStatus
 import com.gutfarms.llcmanager.data.model.Income
 import com.gutfarms.llcmanager.data.model.IncomeCategories
 import com.gutfarms.llcmanager.data.model.InventoryItem
 import com.gutfarms.llcmanager.data.model.Llc
+import com.gutfarms.llcmanager.data.model.PayType
 import com.gutfarms.llcmanager.ui.components.AddFab
 import com.gutfarms.llcmanager.ui.components.AtmosphereBackground
 import com.gutfarms.llcmanager.ui.components.CategoryChipRow
@@ -72,13 +76,14 @@ import com.gutfarms.llcmanager.ui.components.SimpleFormDialog
 import com.gutfarms.llcmanager.ui.components.formatMoney
 import com.gutfarms.llcmanager.ui.components.formatQty
 import com.gutfarms.llcmanager.ui.theme.DeepTeal
+import com.gutfarms.llcmanager.ui.theme.Olive
 import com.gutfarms.llcmanager.ui.theme.SoftCoral
 import com.gutfarms.llcmanager.ui.viewmodel.LlcViewModel
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 
-private enum class DetailTab { Income, Deductions, Inventory }
+private enum class DetailTab { Employees, Income, Deductions, Inventory }
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -94,11 +99,12 @@ fun LlcDetailScreen(
     val deductions by viewModel.deductions.collectAsStateWithLifecycle()
     val incomes by viewModel.incomes.collectAsStateWithLifecycle()
     val inventory by viewModel.inventory.collectAsStateWithLifecycle()
+    val employees by viewModel.employees.collectAsStateWithLifecycle()
     val year by viewModel.yearFilter.collectAsState()
     val years by viewModel.availableYears.collectAsStateWithLifecycle()
     val allLlcs by viewModel.llcsForMove.collectAsStateWithLifecycle()
 
-    var tab by remember { mutableStateOf(DetailTab.Income) }
+    var tab by remember { mutableStateOf(DetailTab.Employees) }
     var showEditLlc by remember { mutableStateOf(false) }
     var editingDeduction by remember { mutableStateOf<Deduction?>(null) }
     var showAddDeduction by remember { mutableStateOf(false) }
@@ -106,9 +112,12 @@ fun LlcDetailScreen(
     var showAddIncome by remember { mutableStateOf(false) }
     var editingInventory by remember { mutableStateOf<InventoryItem?>(null) }
     var showAddInventory by remember { mutableStateOf(false) }
+    var editingEmployee by remember { mutableStateOf<Employee?>(null) }
+    var showAddEmployee by remember { mutableStateOf(false) }
     var pendingDeductionDelete by remember { mutableStateOf<Deduction?>(null) }
     var pendingIncomeDelete by remember { mutableStateOf<Income?>(null) }
     var pendingInventoryDelete by remember { mutableStateOf<InventoryItem?>(null) }
+    var pendingEmployeeDelete by remember { mutableStateOf<Employee?>(null) }
     var movingItem by remember { mutableStateOf<InventoryItem?>(null) }
 
     val current = llc
@@ -143,7 +152,7 @@ fun LlcDetailScreen(
                             onClick = {
                                 val entity = current ?: return@IconButton
                                 val text = viewModel.buildShareText(
-                                    entity, deductions, incomes, inventory
+                                    entity, deductions, incomes, inventory, employees
                                 )
                                 val send = Intent(Intent.ACTION_SEND).apply {
                                     type = "text/plain"
@@ -166,6 +175,7 @@ fun LlcDetailScreen(
                 AddFab(
                     onClick = {
                         when (tab) {
+                            DetailTab.Employees -> showAddEmployee = true
                             DetailTab.Income -> showAddIncome = true
                             DetailTab.Deductions -> showAddDeduction = true
                             DetailTab.Inventory -> showAddInventory = true
@@ -188,6 +198,14 @@ fun LlcDetailScreen(
                     MetricChip("Income", formatMoney(incomeTotal))
                     MetricChip("Deductions", formatMoney(deductionTotal))
                 }
+                Spacer(Modifier.height(8.dp))
+                Row(horizontalArrangement = Arrangement.spacedBy(20.dp)) {
+                    MetricChip(
+                        "Staff",
+                        "${employees.count { it.status == EmploymentStatus.ACTIVE }}/${employees.size}"
+                    )
+                    MetricChip("Inventory", formatMoney(inventory.sumOf { it.totalValue }))
+                }
                 Spacer(Modifier.height(10.dp))
                 Row(
                     modifier = Modifier.horizontalScroll(rememberScrollState()),
@@ -202,7 +220,15 @@ fun LlcDetailScreen(
                     }
                 }
                 Spacer(Modifier.height(8.dp))
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Row(
+                    modifier = Modifier.horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    FilterChip(
+                        selected = tab == DetailTab.Employees,
+                        onClick = { tab = DetailTab.Employees },
+                        label = { Text("Employees") }
+                    )
                     FilterChip(
                         selected = tab == DetailTab.Income,
                         onClick = { tab = DetailTab.Income },
@@ -227,6 +253,11 @@ fun LlcDetailScreen(
                     label = "detail-tab"
                 ) { currentTab ->
                     when (currentTab) {
+                        DetailTab.Employees -> EmployeeList(
+                            employees = employees,
+                            onEdit = { editingEmployee = it },
+                            onRemove = { pendingEmployeeDelete = it }
+                        )
                         DetailTab.Income -> IncomeList(
                             incomes = incomes,
                             onEdit = { editingIncome = it },
@@ -356,6 +387,39 @@ fun LlcDetailScreen(
         )
     }
 
+    if (showAddEmployee || editingEmployee != null) {
+        val existing = editingEmployee
+        EmployeeEditorDialog(
+            title = if (existing == null) "Add employee" else "Edit employee",
+            confirmLabel = if (existing == null) "Add" else "Save",
+            initial = existing,
+            onDismiss = {
+                showAddEmployee = false
+                editingEmployee = null
+            },
+            onSave = { name, role, department, email, phone, code, payType, payRate, status, hireDate, notes ->
+                viewModel.saveEmployee(
+                    id = existing?.id ?: 0L,
+                    llcId = llcId,
+                    name = name,
+                    role = role,
+                    department = department,
+                    email = email,
+                    phone = phone,
+                    employeeCode = code,
+                    payType = payType,
+                    payRate = payRate,
+                    status = status,
+                    hireDateEpochMs = hireDate,
+                    notes = notes
+                ) {
+                    showAddEmployee = false
+                    editingEmployee = null
+                }
+            }
+        )
+    }
+
     pendingDeductionDelete?.let { item ->
         ConfirmDialog(
             title = "Remove deduction?",
@@ -389,6 +453,18 @@ fun LlcDetailScreen(
                 pendingInventoryDelete = null
             },
             onDismiss = { pendingInventoryDelete = null }
+        )
+    }
+
+    pendingEmployeeDelete?.let { item ->
+        ConfirmDialog(
+            title = "Remove employee?",
+            message = "Remove \"${item.name}\" from this LLC?",
+            onConfirm = {
+                viewModel.removeEmployee(item.id)
+                pendingEmployeeDelete = null
+            },
+            onDismiss = { pendingEmployeeDelete = null }
         )
     }
 
@@ -802,4 +878,171 @@ private fun MoveInventoryDialog(
             TextButton(onClick = onDismiss) { Text("Cancel") }
         }
     )
+}
+
+@Composable
+private fun EmployeeList(
+    employees: List<Employee>,
+    onEdit: (Employee) -> Unit,
+    onRemove: (Employee) -> Unit
+) {
+    if (employees.isEmpty()) {
+        EmptyHint("No employees yet. Tap + to add staff for this LLC.")
+        return
+    }
+    val dateFmt = remember { SimpleDateFormat("MMM d, yyyy", Locale.US) }
+    LazyColumn(
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+        modifier = Modifier.fillMaxSize()
+    ) {
+        items(employees, key = { it.id }) { employee ->
+            val statusColor = when (employee.status) {
+                EmploymentStatus.ACTIVE -> Olive
+                EmploymentStatus.ON_LEAVE -> SoftCoral
+                EmploymentStatus.TERMINATED -> MaterialTheme.colorScheme.onSurfaceVariant
+            }
+            Surface(
+                color = MaterialTheme.colorScheme.surface.copy(alpha = 0.78f),
+                shape = RoundedCornerShape(6.dp),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable { onEdit(employee) }
+            ) {
+                Row(
+                    modifier = Modifier.padding(horizontal = 14.dp, vertical = 12.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(employee.name, style = MaterialTheme.typography.titleMedium)
+                        Text(
+                            listOfNotNull(
+                                employee.role.takeIf { it.isNotBlank() },
+                                employee.department.takeIf { it.isNotBlank() },
+                                employee.employeeCode.takeIf { it.isNotBlank() }?.let { "ID $it" }
+                            ).joinToString(" · ").ifBlank { "No role set" },
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        val contact = listOfNotNull(
+                            employee.email.takeIf { it.isNotBlank() },
+                            employee.phone.takeIf { it.isNotBlank() }
+                        ).joinToString(" · ")
+                        if (contact.isNotBlank()) {
+                            Text(
+                                contact,
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                        val payLabel = when (employee.payType) {
+                            PayType.HOURLY -> "${formatMoney(employee.payRate)}/hr"
+                            PayType.SALARY -> "${formatMoney(employee.payRate)}/yr"
+                        }
+                        Text(
+                            "${employee.status.name.replace('_', ' ')} · $payLabel · hired ${dateFmt.format(Date(employee.hireDateEpochMs))}",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = statusColor
+                        )
+                    }
+                    IconButton(onClick = { onRemove(employee) }) {
+                        Icon(Icons.Outlined.Delete, contentDescription = "Remove employee")
+                    }
+                }
+            }
+        }
+        item { Spacer(Modifier.height(72.dp)) }
+    }
+}
+
+@Composable
+private fun EmployeeEditorDialog(
+    title: String,
+    confirmLabel: String,
+    initial: Employee?,
+    onDismiss: () -> Unit,
+    onSave: (
+        name: String,
+        role: String,
+        department: String,
+        email: String,
+        phone: String,
+        employeeCode: String,
+        payType: PayType,
+        payRate: Double,
+        status: EmploymentStatus,
+        hireDateEpochMs: Long,
+        notes: String
+    ) -> Unit
+) {
+    var name by remember { mutableStateOf(initial?.name.orEmpty()) }
+    var role by remember { mutableStateOf(initial?.role.orEmpty()) }
+    var department by remember { mutableStateOf(initial?.department.orEmpty()) }
+    var email by remember { mutableStateOf(initial?.email.orEmpty()) }
+    var phone by remember { mutableStateOf(initial?.phone.orEmpty()) }
+    var code by remember { mutableStateOf(initial?.employeeCode.orEmpty()) }
+    var payType by remember { mutableStateOf(initial?.payType ?: PayType.HOURLY) }
+    var payText by remember {
+        mutableStateOf(initial?.payRate?.takeIf { it > 0 }?.toString().orEmpty())
+    }
+    var status by remember { mutableStateOf(initial?.status ?: EmploymentStatus.ACTIVE) }
+    var hireDate by remember {
+        mutableStateOf(initial?.hireDateEpochMs ?: System.currentTimeMillis())
+    }
+    var notes by remember { mutableStateOf(initial?.notes.orEmpty()) }
+    val payRate = payText.toDoubleOrNull() ?: 0.0
+
+    SimpleFormDialog(
+        title = title,
+        confirmLabel = confirmLabel,
+        confirmEnabled = name.isNotBlank(),
+        onDismiss = onDismiss,
+        onConfirm = {
+            onSave(
+                name, role, department, email, phone, code,
+                payType, payRate, status, hireDate, notes
+            )
+        }
+    ) {
+        FormField(name, { name = it }, "Full name")
+        CategoryChipRow(
+            categories = EmployeeRoles.defaults,
+            selected = role,
+            onSelect = { role = it }
+        )
+        FormField(role, { role = it }, "Role / title")
+        FormField(department, { department = it }, "Department (optional)")
+        FormField(email, { email = it }, "Email", keyboardType = KeyboardType.Email)
+        FormField(phone, { phone = it }, "Phone", keyboardType = KeyboardType.Phone)
+        FormField(code, { code = it }, "Employee ID (optional)")
+        CategoryChipRow(
+            categories = listOf("Hourly", "Salary"),
+            selected = if (payType == PayType.HOURLY) "Hourly" else "Salary",
+            onSelect = {
+                payType = if (it == "Salary") PayType.SALARY else PayType.HOURLY
+            }
+        )
+        FormField(
+            payText,
+            { payText = it.filter { ch -> ch.isDigit() || ch == '.' } },
+            if (payType == PayType.HOURLY) "Hourly rate" else "Annual salary",
+            keyboardType = KeyboardType.Decimal
+        )
+        CategoryChipRow(
+            categories = listOf("Active", "On leave", "Terminated"),
+            selected = when (status) {
+                EmploymentStatus.ACTIVE -> "Active"
+                EmploymentStatus.ON_LEAVE -> "On leave"
+                EmploymentStatus.TERMINATED -> "Terminated"
+            },
+            onSelect = {
+                status = when (it) {
+                    "On leave" -> EmploymentStatus.ON_LEAVE
+                    "Terminated" -> EmploymentStatus.TERMINATED
+                    else -> EmploymentStatus.ACTIVE
+                }
+            }
+        )
+        DateField(hireDate, onDateChange = { hireDate = it }, label = "Hire date")
+        FormField(notes, { notes = it }, "Notes", singleLine = false)
+    }
 }

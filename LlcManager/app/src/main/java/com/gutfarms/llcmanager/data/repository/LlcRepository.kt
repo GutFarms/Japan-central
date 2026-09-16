@@ -1,14 +1,18 @@
 package com.gutfarms.llcmanager.data.repository
 
 import com.gutfarms.llcmanager.data.dao.DeductionDao
+import com.gutfarms.llcmanager.data.dao.EmployeeDao
 import com.gutfarms.llcmanager.data.dao.IncomeDao
 import com.gutfarms.llcmanager.data.dao.InventoryDao
 import com.gutfarms.llcmanager.data.dao.LlcDao
 import com.gutfarms.llcmanager.data.model.Deduction
+import com.gutfarms.llcmanager.data.model.Employee
+import com.gutfarms.llcmanager.data.model.EmploymentStatus
 import com.gutfarms.llcmanager.data.model.Income
 import com.gutfarms.llcmanager.data.model.InventoryItem
 import com.gutfarms.llcmanager.data.model.Llc
 import com.gutfarms.llcmanager.data.model.LlcSummary
+import com.gutfarms.llcmanager.data.model.PayType
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.combine
 import java.text.SimpleDateFormat
@@ -19,7 +23,8 @@ class LlcRepository(
     private val llcDao: LlcDao,
     private val deductionDao: DeductionDao,
     private val incomeDao: IncomeDao,
-    private val inventoryDao: InventoryDao
+    private val inventoryDao: InventoryDao,
+    private val employeeDao: EmployeeDao
 ) {
     fun observeLlcs(): Flow<List<Llc>> = llcDao.observeAll()
 
@@ -31,17 +36,21 @@ class LlcRepository(
 
     fun observeInventory(llcId: Long): Flow<List<InventoryItem>> = inventoryDao.observeForLlc(llcId)
 
+    fun observeEmployees(llcId: Long): Flow<List<Employee>> = employeeDao.observeForLlc(llcId)
+
     fun observeSummaries(): Flow<List<LlcSummary>> {
         return combine(
             llcDao.observeAll(),
             deductionDao.observeAll(),
             incomeDao.observeAll(),
-            inventoryDao.observeAll()
-        ) { llcs, deductions, incomes, inventory ->
+            inventoryDao.observeAll(),
+            employeeDao.observeAll()
+        ) { llcs, deductions, incomes, inventory, employees ->
             llcs.map { llc ->
                 val llcDeductions = deductions.filter { it.llcId == llc.id }
                 val llcIncomes = incomes.filter { it.llcId == llc.id }
                 val llcInventory = inventory.filter { it.llcId == llc.id }
+                val llcEmployees = employees.filter { it.llcId == llc.id }
                 LlcSummary(
                     llc = llc,
                     deductionCount = llcDeductions.size,
@@ -50,7 +59,9 @@ class LlcRepository(
                     incomeTotal = llcIncomes.sumOf { it.amount },
                     inventoryCount = llcInventory.size,
                     inventoryValue = llcInventory.sumOf { it.totalValue },
-                    lowStockCount = llcInventory.count { it.isLowStock }
+                    lowStockCount = llcInventory.count { it.isLowStock },
+                    employeeCount = llcEmployees.size,
+                    activeEmployeeCount = llcEmployees.count { it.status == EmploymentStatus.ACTIVE }
                 )
             }
         }
@@ -72,6 +83,10 @@ class LlcRepository(
 
     suspend fun deleteInventoryItem(id: Long) = inventoryDao.deleteById(id)
 
+    suspend fun saveEmployee(employee: Employee): Long = employeeDao.upsert(employee)
+
+    suspend fun deleteEmployee(id: Long) = employeeDao.deleteById(id)
+
     suspend fun adjustInventoryQuantity(item: InventoryItem, delta: Double) {
         inventoryDao.update(
             item.copy(
@@ -92,7 +107,8 @@ class LlcRepository(
         llc: Llc,
         deductions: List<Deduction>,
         incomes: List<Income>,
-        inventory: List<InventoryItem>
+        inventory: List<InventoryItem>,
+        employees: List<Employee>
     ): String {
         val dateFmt = SimpleDateFormat("yyyy-MM-dd", Locale.US)
         val money = { v: Double -> String.format(Locale.US, "$%,.2f", v) }
@@ -110,8 +126,28 @@ class LlcRepository(
         sb.appendLine("Deductions: ${money(deductionTotal)} (${deductions.size})")
         sb.appendLine("Net: ${money(incomeTotal - deductionTotal)}")
         sb.appendLine("Inventory value: ${money(inventory.sumOf { it.totalValue })}")
+        sb.appendLine(
+            "Employees: ${employees.size} (${employees.count { it.status == EmploymentStatus.ACTIVE }} active)"
+        )
         sb.appendLine()
 
+        sb.appendLine("=== Employees ===")
+        if (employees.isEmpty()) sb.appendLine("(none)")
+        employees.forEach {
+            val pay = when (it.payType) {
+                PayType.HOURLY -> "${money(it.payRate)}/hr"
+                PayType.SALARY -> "${money(it.payRate)}/yr"
+            }
+            sb.appendLine(
+                "${it.name} | ${it.role.ifBlank { "—" }} | ${it.status.name} | $pay | hired ${dateFmt.format(Date(it.hireDateEpochMs))}"
+            )
+            val contact = listOfNotNull(
+                it.email.takeIf { e -> e.isNotBlank() },
+                it.phone.takeIf { p -> p.isNotBlank() }
+            ).joinToString(" · ")
+            if (contact.isNotBlank()) sb.appendLine("  $contact")
+        }
+        sb.appendLine()
         sb.appendLine("=== Income ===")
         if (incomes.isEmpty()) sb.appendLine("(none)")
         incomes.forEach {

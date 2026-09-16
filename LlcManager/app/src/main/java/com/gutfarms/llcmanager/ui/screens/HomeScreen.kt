@@ -96,6 +96,7 @@ fun HomeScreen(
                     val totalDed = allSummaries.sumOf { it.deductionTotal }
                     val totalInv = allSummaries.sumOf { it.inventoryValue }
                     val lowStock = allSummaries.sumOf { it.lowStockCount }
+                    val staff = allSummaries.sumOf { it.activeEmployeeCount }
                     Row(
                         Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.spacedBy(20.dp)
@@ -110,6 +111,7 @@ fun HomeScreen(
                         horizontalArrangement = Arrangement.spacedBy(20.dp)
                     ) {
                         MetricChip("Entities", allSummaries.size.toString())
+                        MetricChip("Staff", staff.toString())
                         MetricChip("Inventory", formatMoney(totalInv))
                         if (lowStock > 0) {
                             MetricChip("Low stock", lowStock.toString())
@@ -238,6 +240,7 @@ private fun LlcRow(
                 Spacer(Modifier.height(6.dp))
                 Text(
                     "Net ${formatMoney(summary.net)}  ·  " +
+                        "${summary.activeEmployeeCount} staff  ·  " +
                         "${summary.incomeCount} income · ${summary.deductionCount} deductions  ·  " +
                         "${summary.inventoryCount} items",
                     style = MaterialTheme.typography.bodyMedium,

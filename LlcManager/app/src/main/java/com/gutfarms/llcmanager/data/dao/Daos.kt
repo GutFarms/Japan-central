@@ -7,6 +7,7 @@ import androidx.room.OnConflictStrategy
 import androidx.room.Query
 import androidx.room.Update
 import com.gutfarms.llcmanager.data.model.Deduction
+import com.gutfarms.llcmanager.data.model.Employee
 import com.gutfarms.llcmanager.data.model.Income
 import com.gutfarms.llcmanager.data.model.InventoryItem
 import com.gutfarms.llcmanager.data.model.Llc
@@ -90,5 +91,23 @@ interface InventoryDao {
     suspend fun delete(item: InventoryItem)
 
     @Query("DELETE FROM inventory_items WHERE id = :id")
+    suspend fun deleteById(id: Long)
+}
+
+@Dao
+interface EmployeeDao {
+    @Query("SELECT * FROM employees WHERE llcId = :llcId ORDER BY name COLLATE NOCASE ASC")
+    fun observeForLlc(llcId: Long): Flow<List<Employee>>
+
+    @Query("SELECT * FROM employees ORDER BY name COLLATE NOCASE ASC")
+    fun observeAll(): Flow<List<Employee>>
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun upsert(employee: Employee): Long
+
+    @Delete
+    suspend fun delete(employee: Employee)
+
+    @Query("DELETE FROM employees WHERE id = :id")
     suspend fun deleteById(id: Long)
 }

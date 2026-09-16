@@ -11,7 +11,8 @@ class LlcManagerApplication : Application() {
             db.llcDao(),
             db.deductionDao(),
             db.incomeDao(),
-            db.inventoryDao()
+            db.inventoryDao(),
+            db.employeeDao()
         )
     }
 }

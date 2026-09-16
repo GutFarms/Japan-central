@@ -4,10 +4,13 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import com.gutfarms.llcmanager.data.model.Deduction
+import com.gutfarms.llcmanager.data.model.Employee
+import com.gutfarms.llcmanager.data.model.EmploymentStatus
 import com.gutfarms.llcmanager.data.model.Income
 import com.gutfarms.llcmanager.data.model.InventoryItem
 import com.gutfarms.llcmanager.data.model.Llc
 import com.gutfarms.llcmanager.data.model.LlcSummary
+import com.gutfarms.llcmanager.data.model.PayType
 import com.gutfarms.llcmanager.data.repository.LlcRepository
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -67,6 +70,13 @@ class LlcViewModel(private val repository: LlcRepository) : ViewModel() {
     val inventory: StateFlow<List<InventoryItem>> = selectedLlcId
         .flatMapLatest { id ->
             if (id == null) flowOf(emptyList()) else repository.observeInventory(id)
+        }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+
+    @OptIn(ExperimentalCoroutinesApi::class)
+    val employees: StateFlow<List<Employee>> = selectedLlcId
+        .flatMapLatest { id ->
+            if (id == null) flowOf(emptyList()) else repository.observeEmployees(id)
         }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
 
@@ -245,12 +255,55 @@ class LlcViewModel(private val repository: LlcRepository) : ViewModel() {
         }
     }
 
+    fun saveEmployee(
+        id: Long = 0,
+        llcId: Long,
+        name: String,
+        role: String,
+        department: String,
+        email: String,
+        phone: String,
+        employeeCode: String,
+        payType: PayType,
+        payRate: Double,
+        status: EmploymentStatus,
+        hireDateEpochMs: Long,
+        notes: String,
+        onDone: () -> Unit = {}
+    ) {
+        viewModelScope.launch {
+            repository.saveEmployee(
+                Employee(
+                    id = id,
+                    llcId = llcId,
+                    name = name.trim(),
+                    role = role.trim(),
+                    department = department.trim(),
+                    email = email.trim(),
+                    phone = phone.trim(),
+                    employeeCode = employeeCode.trim(),
+                    payType = payType,
+                    payRate = payRate,
+                    status = status,
+                    hireDateEpochMs = hireDateEpochMs,
+                    notes = notes.trim()
+                )
+            )
+            onDone()
+        }
+    }
+
+    fun removeEmployee(id: Long) {
+        viewModelScope.launch { repository.deleteEmployee(id) }
+    }
+
     fun buildShareText(
         llc: Llc,
         deductions: List<Deduction>,
         incomes: List<Income>,
-        inventory: List<InventoryItem>
-    ): String = repository.formatReport(llc, deductions, incomes, inventory)
+        inventory: List<InventoryItem>,
+        employees: List<Employee>
+    ): String = repository.formatReport(llc, deductions, incomes, inventory, employees)
 
     private fun yearOf(epochMs: Long): Int {
         val cal = Calendar.getInstance()

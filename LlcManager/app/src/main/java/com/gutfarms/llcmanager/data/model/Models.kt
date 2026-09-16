@@ -96,6 +96,46 @@ data class InventoryItem(
         get() = reorderLevel > 0.0 && quantity <= reorderLevel
 }
 
+enum class PayType {
+    HOURLY,
+    SALARY
+}
+
+enum class EmploymentStatus {
+    ACTIVE,
+    ON_LEAVE,
+    TERMINATED
+}
+
+@Entity(
+    tableName = "employees",
+    foreignKeys = [
+        ForeignKey(
+            entity = Llc::class,
+            parentColumns = ["id"],
+            childColumns = ["llcId"],
+            onDelete = ForeignKey.CASCADE
+        )
+    ],
+    indices = [Index("llcId")]
+)
+data class Employee(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    val llcId: Long,
+    val name: String,
+    val role: String = "",
+    val department: String = "",
+    val email: String = "",
+    val phone: String = "",
+    val employeeCode: String = "",
+    val payType: PayType = PayType.HOURLY,
+    val payRate: Double = 0.0,
+    val status: EmploymentStatus = EmploymentStatus.ACTIVE,
+    val hireDateEpochMs: Long = System.currentTimeMillis(),
+    val notes: String = "",
+    val createdAt: Long = System.currentTimeMillis()
+)
+
 data class LlcSummary(
     val llc: Llc,
     val deductionCount: Int,
@@ -104,7 +144,9 @@ data class LlcSummary(
     val incomeTotal: Double,
     val inventoryCount: Int,
     val inventoryValue: Double,
-    val lowStockCount: Int
+    val lowStockCount: Int,
+    val employeeCount: Int,
+    val activeEmployeeCount: Int
 ) {
     val net: Double
         get() = incomeTotal - deductionTotal
@@ -119,4 +161,11 @@ object DeductionCategories {
 
 object IncomeCategories {
     val defaults = listOf("Sales", "Services", "Interest", "Other")
+}
+
+object EmployeeRoles {
+    val defaults = listOf(
+        "Owner", "Manager", "Admin", "Bookkeeper",
+        "Sales", "Operations", "Labor", "Contractor", "Other"
+    )
 }
